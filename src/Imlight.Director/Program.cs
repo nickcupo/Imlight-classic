@@ -226,7 +226,48 @@ internal static class Program {
             AuthLevel.Administrator);
 
         Logger.Information("Created admin account.");
+
+        // CLASSIC: a private server's other players get their accounts from Imlight.ini,
+        // so nobody has to create them with in-game commands.
+        CreateSeedAccounts();
+
         Logger.Information("Embedded database accounts created.");
+    }
+
+    // CLASSIC: creates each account listed in Database.SeedAccounts that does not exist yet.
+    // Format: user:password[:authlevel], comma-separated. authlevel is 0-4 (None..Administrator),
+    // default 0. Usernames cannot contain spaces; passwords cannot contain ':' or ','.
+    private static void CreateSeedAccounts() {
+        var entries = ConfigurationManager.Settings["Database.SeedAccounts"].AsList();
+        foreach (var entry in entries) {
+            var parts = entry.Split(':');
+            if (parts.Length is < 2 or > 3 || parts[0].Length == 0 || parts[1].Length == 0
+                    || parts[0].Contains(' ')) {
+                Logger.Warning("Ignoring a malformed Database.SeedAccounts entry (expected user:password[:authlevel]).");
+                continue;
+            }
+
+            var auth = AuthLevel.None;
+            if (parts.Length == 3) {
+                if (!int.TryParse(parts[2], NumberStyles.None, CultureInfo.InvariantCulture, out var level)
+                        || !Enum.IsDefined(typeof(AuthLevel), level)) {
+                    Logger.Warning("Ignoring seed account {Username}: authlevel must be 0-4.",
+                        Logger.Args(parts[0]));
+                    continue;
+                }
+                auth = (AuthLevel) level;
+            }
+
+            var created = DatabaseUtilities.CreateEmbeddedDatabaseAccount(
+                parts[0], $"{parts[0]}@classic.local", parts[1], auth);
+            if (created is null) {
+                Logger.Information("Seed account {Username} already exists.", Logger.Args(parts[0]));
+            }
+            else {
+                Logger.Information("Created seed account {Username} ({AuthLevel}).",
+                    Logger.Args(parts[0], auth));
+            }
+        }
     }
 
     private static void PrintTitle() {

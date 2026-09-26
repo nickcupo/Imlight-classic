@@ -30,6 +30,12 @@ internal class ControlService : MessageService, IHandshakeService {
 
     private readonly byte _keepAliveInterval = ConfigurationManager.Settings["Advanced.KeepAliveInterval"].AsByte();
     private readonly byte _keepAliveRspWaitTime = ConfigurationManager.Settings["Advanced.KeepAliveRspWaitTime"].AsByte();
+    // CLASSIC: the first SessionAccept can take far longer than a heartbeat reply. Started with -L, the
+    // client connects early in startup and answers only once its patcher window is done, which under
+    // CrossOver/Rosetta easily exceeds the heartbeat wait. Advanced.SessionAcceptWaitTime, default 300 s.
+    private readonly ushort _sessionAcceptWaitTime = ConfigurationManager.Settings["Advanced.SessionAcceptWaitTime"].AsUShort() is > 0 and var wait
+        ? wait
+        : (ushort) 300;
 
     private bool _sessionValid;
     private readonly Stopwatch _responseStopwatch;
@@ -78,7 +84,7 @@ internal class ControlService : MessageService, IHandshakeService {
         _responseStopwatch.Restart();
 
         // Send a message to ourselves to check if we've received a response.
-        var timer = TimeSpan.FromSeconds(_keepAliveRspWaitTime);
+        var timer = TimeSpan.FromSeconds(_sessionAcceptWaitTime); // CLASSIC: was _keepAliveRspWaitTime
         Timers.StartSingleTimer("SessionAcceptTimer", "SessionAcceptTimer", timer);
     }
 
@@ -191,7 +197,7 @@ internal class ControlService : MessageService, IHandshakeService {
         // entry / character switch. It needs to be visible in the log so it can be correlated with
         // concurrent zone loads.
         Logger.Warning("SessionActor {SessionID} did not return a SessionAccept within {Wait}s; closing session " +
-                  "(initial-handshake timeout).", Logger.Args(SessionActor.SessionID, _keepAliveRspWaitTime));
+                  "(initial-handshake timeout).", Logger.Args(SessionActor.SessionID, _sessionAcceptWaitTime));
         CloseSession();
     }
 
