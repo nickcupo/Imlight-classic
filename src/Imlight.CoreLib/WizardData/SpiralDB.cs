@@ -555,11 +555,24 @@ public static partial class SpiralDB {
                 ZoneName = zone.ZoneName,
                 Teleports = Imlight.Classic.Travel.ZoneTransferMerge.Apply(loaded?.Teleports, zone.Teleports,
                     teleport => teleport?.TriggerName, teleport => teleport.Teleport is null),
+                Classic = MergeClassicTravel(loaded?.Classic, zone.Classic),
             };
             count++;
         }
 
         return count;
+    }
+
+    // CLASSIC: a merge record's discovery triggers join the loaded ones (a trigger named again takes the new event).
+    private static ClassicZoneTravel MergeClassicTravel(ClassicZoneTravel loaded, ClassicZoneTravel added) {
+        if (added?.DiscoveryTriggers is not { Count: > 0 }) {
+            return loaded;
+        }
+
+        var triggers = Imlight.Classic.Travel.ZoneTransferMerge.Apply(loaded?.DiscoveryTriggers, added.DiscoveryTriggers,
+            trigger => trigger?.Trigger, trigger => string.IsNullOrEmpty(trigger.Event));
+
+        return new ClassicZoneTravel { DiscoveryTriggers = triggers };
     }
 
 }

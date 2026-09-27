@@ -95,6 +95,17 @@ public static class ClassicSchema {
     /// </summary>
     public static ImmutableArray<string> Tutorials { get; } = [ClassicTutorial, "modern-2019"];
 
+    /// <summary>
+    /// The <c>rules.teleport_stones</c> value for the 2009 rule: a stone pair works once the wizard has reached its
+    /// far stone ("discover both points before you can teleport between them", October 2009 update notes).
+    /// </summary>
+    public const string DiscoverTeleportStones = "discover";
+
+    /// <summary>
+    /// The values of <c>rules.teleport_stones</c>.
+    /// </summary>
+    public static ImmutableArray<string> TeleportStoneRules { get; } = [DiscoverTeleportStones, "open"];
+
     private static readonly FrozenSet<string> s_worldIds = WorldIds.ToFrozenSet(StringComparer.Ordinal);
 
     /// <summary>

@@ -158,6 +158,12 @@ public sealed class ProfileRules {
     /// </summary>
     public string? Tutorial { get; init; }
 
+    /// <summary>
+    /// How teleport stones are discovered (<c>discover</c>: by reaching the far stone, as in 2009; <c>open</c>: on
+    /// arriving in the zone, as the r806919 client data has it), if set.
+    /// </summary>
+    public string? TeleportStones { get; init; }
+
 }
 
 /// <summary>
