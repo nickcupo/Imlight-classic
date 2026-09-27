@@ -101,7 +101,7 @@ public sealed class SchemaDriftTests {
         Assert.Equal(EnumValues(rules.GetProperty("power_pips_from_rank")), ClassicSchema.PowerPipRanks.Cast<string?>().Append(null).ToArray());
         Assert.Equal(EnumValues(rules.GetProperty("dragonspyre_difficulty")), ClassicSchema.DragonspyreDifficulties.ToArray());
         Assert.Equal(EnumValues(rules.GetProperty("tutorial")), ClassicSchema.Tutorials.ToArray());
-        Assert.Equal(new[] { "accuracy_table", "xp_table", "power_pips_from_rank", "dragonspyre_difficulty", "tutorial" },
+        Assert.Equal(new[] { "accuracy_table", "xp_table", "mob_rewards", "power_pips_from_rank", "dragonspyre_difficulty", "tutorial" },
             rules.EnumerateObject().Select(rule => rule.Name).ToArray());
     }
 
@@ -182,6 +182,32 @@ public sealed class SchemaDriftTests {
         Assert.Equal(PropertyNames(schema), Sorted(AccuracyTableLoader.s_rootKeys));
         Assert.Equal(PropertyNames(schema.GetProperty("$defs").GetProperty("school")), Sorted(AccuracyTableLoader.s_schoolKeys));
         Assert.Equal(PropertyNames(schema.GetProperty("properties").GetProperty("schools")), Sorted(ClassicSpellSchema.Schools));
+    }
+
+
+    [Fact]
+    public void XpTableKeysMatchXpSchema() {
+        var schema = ReadSchema("xp-table.schema.json");
+
+        Assert.Equal(PropertyNames(schema), Sorted(XpTableLoader.s_rootKeys));
+        Assert.Equal(PropertyNames(schema.GetProperty("$defs").GetProperty("level")), Sorted(XpTableLoader.s_levelKeys));
+    }
+
+    [Fact]
+    public void MobRewardKeysMatchMobRewardSchema() {
+        var schema = ReadSchema("mob-rewards.schema.json");
+        var properties = schema.GetProperty("properties");
+        var defs = schema.GetProperty("$defs");
+
+        Assert.Equal(PropertyNames(schema), Sorted(MobRewardRulesLoader.s_rootKeys));
+        Assert.Equal(PropertyNames(properties.GetProperty("combat_xp")), Sorted(MobRewardRulesLoader.s_combatKeys));
+        Assert.Equal(PropertyNames(properties.GetProperty("gold")), Sorted(MobRewardRulesLoader.s_goldKeys));
+        Assert.Equal(PropertyNames(properties.GetProperty("gold").GetProperty("properties").GetProperty("by_rank").GetProperty("items")),
+            Sorted(MobRewardRulesLoader.s_rankKeys));
+        Assert.Equal(PropertyNames(properties.GetProperty("drops")), Sorted(MobRewardRulesLoader.s_dropKeys));
+        Assert.Equal(PropertyNames(defs.GetProperty("mob")), Sorted(MobRewardRulesLoader.s_mobKeys));
+        Assert.Equal(PropertyNames(defs.GetProperty("mob").GetProperty("properties").GetProperty("drops").GetProperty("items")),
+            Sorted(MobRewardRulesLoader.s_itemKeys));
     }
 
 }

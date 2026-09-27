@@ -59,6 +59,7 @@ public sealed class RealProfilesTests {
         Assert.False(profile.Features.IsEnabled(ClassicFeatures.PetsEnergy));
         Assert.True(profile.Features.IsEnabled(ClassicFeatures.Henchmen));
         Assert.Equal("progression/xp-2009.yaml", profile.Rules.XpTable);
+        Assert.Equal("progression/mob-rewards-2009.yaml", profile.Rules.MobRewards);
         Assert.Equal("rules/accuracy-2009.yaml", profile.Rules.AccuracyTable);
         Assert.Equal("magus", profile.Rules.PowerPipsFromRank);
         Assert.False(profile.IsUnrestricted);

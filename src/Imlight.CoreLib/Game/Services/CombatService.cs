@@ -48,13 +48,17 @@ using Imcodec.IO;
 using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty;
 using Imcodec.ObjectProperty.TypeCache;
+using Imlight.Classic.Rules;
 using Imlight.Common;
+using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.Game.DropTables;
 using Imlight.CoreLib.Shared.Items;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;
+using Imlight.CoreLib.Shared.Resources;
 using Imlight.CoreLib.WizardData.Collections;
 using Imlight.CoreLib.WizardData.Models.Player;
+using Imlight.CoreLib.WizardData.Models.World;
 
 namespace Imlight.CoreLib.Game.Services;
 
@@ -138,6 +142,15 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
             noAggroGraceOverMsg,
             TimeSpan.FromSeconds(NO_AGGRO_EFFECT_DURATION_IN_SECONDS));
 
+        // CLASSIC: under the profile's mob reward rules, XP per pip, gold and drops come from classic-data
+        // and show in one loot popup; SpiralDB mob loot (none for Arc 1) still rolls after it.
+        if (ClassicProgression.MobRewards is { } classicRewards) {
+            GrantClassicCombatRewards(classicRewards, message.UsedPips, message.MobTemplateIds);
+            GrantMobLoot(message.MobTemplateIds);
+
+            return;
+        }
+
         // Gain 3 XP per pip used in the duel.
         var usedPips = message.UsedPips;
         var xpGained = usedPips * 3;
@@ -148,6 +161,33 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
         TellOtherServices(msg);
 
         GrantMobLoot(message.MobTemplateIds);
+    }
+
+    // CLASSIC: XP for the pips this player used, then gold and at most one item per defeated mob.
+    private void GrantClassicCombatRewards(MobRewardRules rules, int usedPips, ulong[] defeatedMobTemplateIds) {
+        var result = new DropTableResult {
+            DropTableId = "classic_mob_rewards",
+            ExperienceAmount = rules.CombatXp.Xp(usedPips),
+        };
+
+        var random = Random.Shared;
+        foreach (var templateId in defeatedMobTemplateIds ?? []) {
+            if (ClassicMobInfo.Of(templateId) is not { } mob) {
+                continue;
+            }
+
+            var loot = rules.Roll(mob, random);
+            result.GoldAmount += loot.Gold;
+            if (loot.Item is { } item && CoreObjectFactory.GetCoreTemplate(item) is not null) {
+                result.Items.Add(new DropItemResult { ItemId = item.ToString(), ItemName = string.Empty, Quantity = 1 });
+            }
+        }
+
+        if (!result.HasRewards) {
+            return;
+        }
+
+        LootGranter.GrantAndDisplay(SessionActor.ActorRef, GetActiveWizard(), result);
     }
 
     private void GrantMobLoot(ulong[] defeatedMobTemplateIds) {
