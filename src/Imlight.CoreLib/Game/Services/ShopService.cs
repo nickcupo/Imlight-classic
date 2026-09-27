@@ -107,6 +107,16 @@ internal class ShopService(SessionActor sessionActor) : MessageService(sessionAc
 
         var playerWizard = GetActiveWizard();
         var template = (WizItemTemplate) CoreObjectFactory.GetCoreTemplate(itemTemplateID);
+
+        // CLASSIC: some vendors in open zones list a jewel; buying one follows the profile's jewels switch.
+        if (template.m_adjectiveList?.Exists(adjective => string.Equals(adjective, "Jewel", StringComparison.OrdinalIgnoreCase)) == true
+            && !ClassicRuntime.Rules.IsFeatureEnabled(ClassicFeatures.Jewels)) {
+            ClassicGate.RefuseFeature(ClassicFeatures.Jewels, playerWizard?.CharId, InformGameClient);
+            SendShopDenyMessage();
+
+            return;
+        }
+
         var item = (WizClientObjectItem) CoreObjectFactory.FinalizeCoreObject(itemTemplateID);
         item.m_primaryColor = message.texture;
         item.m_secondaryColor = message.decal;

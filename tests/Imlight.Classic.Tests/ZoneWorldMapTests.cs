@@ -33,7 +33,7 @@
  * 
  * Created by: Nick with Claude Code (claude-opus-5-5)
  * Version: KALI 1.0
- * Last Updated: 09/26/2026
+ * Last Updated: 09/27/2026
  */
 
 using System;
@@ -260,6 +260,24 @@ public sealed class ZoneWorldMapTests : IDisposable {
         Assert.True(rules.IsHubKeyAllowed("krokotopia"));
         Assert.False(rules.IsHubKeyAllowed("Grizzleheim"));
         Assert.False(rules.IsHubKeyAllowed("Nowhere"));
+    }
+
+    [Fact]
+    public void SpiralDoorRequestNeedsAListedHubKeyAndAnOpenZone() {
+        var rules = Rules(worlds: ["wizard_city", "krokotopia"]);
+
+        Assert.True(rules.IsWorldTeleportAllowed("Krokotopia", "Krokotopia/KT_Hub").Allowed);
+
+        var unlisted = rules.IsWorldTeleportAllowed("KT_Other", "Krokotopia/KT_Other/KT_Hub");
+        Assert.True(rules.IsZoneAllowed("Krokotopia/KT_Other/KT_Hub").Allowed);
+        Assert.False(unlisted.Allowed);
+        Assert.Equal(ClassicRules.HubKeyRule, unlisted.RuleSource);
+        Assert.Equal(ClassicMessages.Unmapped, unlisted.PlayerMessage);
+        Assert.Contains("hub key 'KT_Other'", unlisted.Reason);
+
+        var closedZone = rules.IsWorldTeleportAllowed("Grizzleheim", "Grizzleheim/GH_MainHub");
+        Assert.False(closedZone.Allowed);
+        Assert.Equal("Grizzleheim isn't open yet.", closedZone.PlayerMessage);
     }
 
     [Fact]

@@ -33,7 +33,7 @@
  * 
  * Created by: Nick with Claude Code (claude-opus-5-5)
  * Version: KALI 1.0
- * Last Updated: 09/26/2026
+ * Last Updated: 09/27/2026
  */
 
 using System.IO;
@@ -69,6 +69,9 @@ public sealed class RealZoneMapTests {
     [InlineData("Grizzleheim/GH_MainHub", "grizzleheim")]
     [InlineData("Housing/WizardCity/WC_Tier1_Interior_Preview", null)]
     [InlineData("ThePhantomZoneWorld/Minigame", null)]
+    [InlineData("WizardCity/Interiors/WC_Library", "wizard_city")]
+    [InlineData("WizardCity/Tutorial_Duel_Arena", "wizard_city")]
+    [InlineData("MooShu/Interiors/MS_ShopJewelry", "mooshu")]
     public void OpenOnLate2009(string zone, string? world) {
         var decision = ClassicDataFixture.RealRules("late-2009").IsZoneAllowed(zone);
 
@@ -86,6 +89,21 @@ public sealed class RealZoneMapTests {
     [InlineData("Nonsense/Anything", null)]
     [InlineData("WizardCity/Interiors/WC_Park_PetShop", "wizard_city")]
     [InlineData("Krokotopia/Interiors/KT_SkeletonKeyWood01", "krokotopia")]
+    [InlineData("Krokotopia/KT_Selenopolis/KT_Z04_Selenopolis", "selenopolis")]
+    [InlineData("Krokotopia/KT_Selenopolis/Interiors/KT_Z04_Selenopolis_T1", "selenopolis")]
+    [InlineData("WizardCity/Interiors/WC_Shop_Jeweler", "wizard_city")]
+    [InlineData("WizardCity/Interiors/WC_Shop_Makeup", "wizard_city")]
+    [InlineData("WizardCity/Interiors/WC_LibraryBookStacks", "wizard_city")]
+    [InlineData("WizardCity/TreasureTower/WC_TT01_Death_L01", "wizard_city")]
+    [InlineData("WizardCity/Tutorial_Archmastery_Arena_1", "wizard_city")]
+    [InlineData("WizardCity/Tutorial_Fusion_Arena_1", "wizard_city")]
+    [InlineData("WizardCity/KR_IsleOfArachnis", "wizard_city")]
+    [InlineData("WizardCity/WC_Streets/WC_Drains/Z00_Drains_HUB", "wizard_city")]
+    [InlineData("WizardCity/WC_Streets/WC_Catacombs_B", "wizard_city")]
+    [InlineData("WizardCity/WC_Streets/Interiors/WC_Catacombs_Avalon", "wizard_city")]
+    [InlineData("MooShu/MS_Catmandu", "mooshu")]
+    [InlineData("MooShu/Interiors/MS_CAT_SoyHut", "mooshu")]
+    [InlineData("Marleybone/G14_Gauntlet/MB_Z01_BarkinghamCourtyard", "marleybone")]
     public void ClosedOnLate2009(string zone, string? world) {
         var decision = ClassicDataFixture.RealRules("late-2009").IsZoneAllowed(zone);
 
@@ -101,6 +119,25 @@ public sealed class RealZoneMapTests {
         Assert.Contains("feature pets.hatching is off", decision.Reason);
         Assert.Equal("overrides-spiraldb.yaml overrides[1]", decision.RuleSource);
         Assert.Equal("medium", decision.Confidence);
+    }
+
+    [Fact]
+    public void JewelerIsClosedByTheJewelsSwitch() {
+        var decision = ClassicDataFixture.RealRules("late-2009").IsZoneAllowed("WizardCity/Interiors/WC_Shop_Jeweler");
+
+        Assert.Contains("feature jewels is off", decision.Reason);
+        Assert.Equal("high", decision.Confidence);
+    }
+
+    [Fact]
+    public void SelenopolisIsItsOwnClosedWorldOnTheSpiralDoor() {
+        var rules = ClassicDataFixture.RealRules("late-2009");
+        var decision = rules.IsWorldTeleportAllowed("KT_Selenopolis", "Krokotopia/KT_Selenopolis/KT_Z04_Selenopolis");
+
+        Assert.False(rules.IsHubKeyAllowed("KT_Selenopolis"));
+        Assert.False(decision.Allowed);
+        Assert.Equal("Selenopolis isn't open yet.", decision.PlayerMessage);
+        Assert.True(rules.IsWorldTeleportAllowed("Krokotopia", "Krokotopia/KT_WorldTeleporter").Allowed);
     }
 
     [Fact]
@@ -142,6 +179,7 @@ public sealed class RealZoneMapTests {
     [InlineData("Grizzleheim/GH_HFjord/GH_Nordrilund", "Grizzleheim")]
     [InlineData("DragonSpire/DS_Hub_Cathedral", "DragonSpire")]
     [InlineData("MooShu/MS_Hub", "MooShu")]
+    [InlineData("Krokotopia/KT_Selenopolis/KT_Z04_Selenopolis", "WizardCity")]
     public void HubKeyForLate2009(string zone, string hubKey) {
         Assert.Equal(hubKey, ClassicDataFixture.RealRules("late-2009").HubKeyFor(zone));
     }

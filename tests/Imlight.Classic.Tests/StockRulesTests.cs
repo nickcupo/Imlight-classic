@@ -32,7 +32,7 @@
  * 
  * Created by: Nick with Claude Code (claude-opus-5-5)
  * Version: KALI 1.0
- * Last Updated: 09/26/2026
+ * Last Updated: 09/27/2026
  */
 
 using Xunit;
@@ -54,6 +54,7 @@ public sealed class StockRulesTests {
         Assert.True(rules.CriticalAndBlockEnabled);
         Assert.Null(rules.HubKeyFor("Celestia/X"));
         Assert.True(rules.IsHubKeyAllowed("Anything"));
+        Assert.True(rules.IsWorldTeleportAllowed("Anything", "Celestia/X").Allowed);
     }
 
     [Theory]

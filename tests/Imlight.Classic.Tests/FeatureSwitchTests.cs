@@ -32,7 +32,7 @@
  * 
  * Created by: Nick with Claude Code (claude-opus-5-5)
  * Version: KALI 1.0
- * Last Updated: 09/26/2026
+ * Last Updated: 09/27/2026
  */
 
 using System;
@@ -96,7 +96,7 @@ public sealed class FeatureSwitchTests {
         Assert.Equal("Your dorm room isn't available yet.", ClassicMessages.FeatureUnavailable(ClassicFeatures.Housing));
         Assert.Equal("The Bazaar isn't open yet.", ClassicMessages.FeatureUnavailable(ClassicFeatures.Bazaar));
         Assert.Equal("The Seamstress isn't open yet.", ClassicMessages.FeatureUnavailable(ClassicFeatures.Seamstress));
-        Assert.Equal("Jewels can't be socketed yet.", ClassicMessages.FeatureUnavailable(ClassicFeatures.Jewels));
+        Assert.Equal("Jewels aren't available yet.", ClassicMessages.FeatureUnavailable(ClassicFeatures.Jewels));
         Assert.Equal("That isn't available yet.", ClassicMessages.FeatureUnavailable(ClassicFeatures.Mounts));
         Assert.Equal("Celestia isn't open yet.", ClassicMessages.WorldClosed("Celestia"));
     }

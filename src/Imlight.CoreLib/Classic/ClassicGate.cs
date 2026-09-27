@@ -36,7 +36,7 @@
  * 
  * Created by: Nick with Claude Code (claude-opus-5-5)
  * Version: KALI 1.0
- * Last Updated: 09/26/2026
+ * Last Updated: 09/27/2026
  */
 
 #nullable enable
@@ -66,10 +66,7 @@ internal static class ClassicGate {
     /// <returns>The decision.</returns>
     internal static ZoneDecision Decide(string zone) {
         var decision = ClassicRuntime.Rules.IsZoneAllowed(zone);
-        if (decision.Allowed && ClassicRuntime.AuditVerbose) {
-            ClassicRuntime.Audit(new ClassicAuditEntry(ClassicAuditKind.ZoneAllowed, null, decision.Zone, decision.Reason,
-                Verbose: true));
-        }
+        AuditIfAllowedAndVerbose(decision);
 
         return decision;
     }
@@ -83,6 +80,27 @@ internal static class ClassicGate {
     /// <returns>True when the zone is open.</returns>
     internal static bool AllowsZone(string zone, ulong? charId, Action<string, bool>? inform) {
         var decision = Decide(zone);
+        if (decision.Allowed) {
+            return true;
+        }
+
+        ReportDenial(decision, charId, inform);
+
+        return false;
+    }
+
+    /// <summary>
+    /// Spiral Door pre-check: the requested hub key must be one the door lists, and its teleport zone must be
+    /// open. On a denial it audits and tells the player.
+    /// </summary>
+    /// <param name="hubKey">The requested WorldHubZones.xml key.</param>
+    /// <param name="zone">That key's universe teleport zone.</param>
+    /// <param name="charId">The moving character, if known.</param>
+    /// <param name="inform">Shows the player a message; null for no message.</param>
+    /// <returns>True when the door may send the player.</returns>
+    internal static bool AllowsWorldTeleport(string hubKey, string zone, ulong? charId, Action<string, bool>? inform) {
+        var decision = ClassicRuntime.Rules.IsWorldTeleportAllowed(hubKey, zone);
+        AuditIfAllowedAndVerbose(decision);
         if (decision.Allowed) {
             return true;
         }
@@ -192,6 +210,13 @@ internal static class ClassicGate {
     internal static void LevelCapReached(ulong charId, int level)
         => ClassicRuntime.Audit(new ClassicAuditEntry(ClassicAuditKind.LevelCapReached, charId, $"level {level}",
             $"the level cap of profile {ClassicRuntime.Rules.Profile.Id}; further XP stops at the ceiling"));
+
+    private static void AuditIfAllowedAndVerbose(ZoneDecision decision) {
+        if (decision.Allowed && ClassicRuntime.AuditVerbose) {
+            ClassicRuntime.Audit(new ClassicAuditEntry(ClassicAuditKind.ZoneAllowed, null, decision.Zone, decision.Reason,
+                Verbose: true));
+        }
+    }
 
     private static void ReportDenial(ZoneDecision decision, ulong? charId, Action<string, bool>? inform) {
         if (!s_throttle.ShouldReport(charId ?? 0, decision.Zone)) {

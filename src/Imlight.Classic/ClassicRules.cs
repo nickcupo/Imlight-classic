@@ -37,7 +37,7 @@
  * 
  * Created by: Nick with Claude Code (claude-opus-5-5)
  * Version: KALI 1.0
- * Last Updated: 09/26/2026
+ * Last Updated: 09/27/2026
  */
 
 using System;
@@ -59,6 +59,11 @@ public sealed class ClassicRules {
     /// The <see cref="ZoneDecision.RuleSource"/> of a zone no world or area prefix covers.
     /// </summary>
     public const string UnmappedRule = "unmapped";
+
+    /// <summary>
+    /// The <see cref="ZoneDecision.RuleSource"/> of a Spiral Door request for a hub key no open world has.
+    /// </summary>
+    public const string HubKeyRule = "hub_key";
 
     private readonly XpCapPolicy _xpPolicy;
 
@@ -197,6 +202,28 @@ public sealed class ClassicRules {
         }
 
         return Zones.FindWorldByHubKey(hubKey) is { } world && Profile.AllowsWorld(world.Id);
+    }
+
+    /// <summary>
+    /// Decides a Spiral Door request. The teleport zone must be open, and the hub key must be one the
+    /// door lists (<see cref="IsHubKeyAllowed"/>), because the client can send any key.
+    /// </summary>
+    /// <param name="hubKey">The requested WorldHubZones.xml key.</param>
+    /// <param name="zone">That key's universe teleport zone.</param>
+    /// <returns>The zone's decision, or a denial when only the hub key is closed.</returns>
+    public ZoneDecision IsWorldTeleportAllowed(string hubKey, string zone) {
+        var decision = IsZoneAllowed(zone);
+        if (!decision.Allowed || IsHubKeyAllowed(hubKey)) {
+            return decision;
+        }
+
+        return decision with {
+            Allowed = false,
+            Reason = $"hub key '{hubKey}' belongs to no open world of profile {Profile.Id}, so the Spiral Door does not list it",
+            PlayerMessage = ClassicMessages.Unmapped,
+            RuleSource = HubKeyRule,
+            Confidence = null,
+        };
     }
 
     /// <summary>

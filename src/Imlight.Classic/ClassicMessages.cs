@@ -32,7 +32,7 @@
  * 
  * Created by: Nick with Claude Code (claude-opus-5-5)
  * Version: KALI 1.0
- * Last Updated: 09/26/2026
+ * Last Updated: 09/27/2026
  */
 
 namespace Imlight.Classic;
@@ -47,7 +47,7 @@ public static class ClassicMessages {
     public const string DormUnavailable = "Your dorm room isn't available yet.";
     public const string BazaarClosed = "The Bazaar isn't open yet.";
     public const string SeamstressClosed = "The Seamstress isn't open yet.";
-    public const string JewelsUnavailable = "Jewels can't be socketed yet.";
+    public const string JewelsUnavailable = "Jewels aren't available yet.";
     public const string Unavailable = "That isn't available yet.";
 
     /// <summary>

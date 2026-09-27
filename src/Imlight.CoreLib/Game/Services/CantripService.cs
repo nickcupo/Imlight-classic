@@ -48,6 +48,8 @@ using Imcodec.Cryptography;
 using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty;
 using Imcodec.ObjectProperty.TypeCache;
+using Imlight.Classic;
+using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.Game.Cantrips;
 using Imlight.CoreLib.Shared.Character;
 using Imlight.CoreLib.Shared.Networking;
@@ -70,6 +72,13 @@ internal class CantripService(SessionActor sessionActor) : MessageService(sessio
 
     [MessageHandler(typeof(CANTRIPSMESSAGES_57_PROTOCOL.MSG_CANTRIPSSPELLCAST))]
     private void ReceiveCantripSpellCast(CANTRIPSMESSAGES_57_PROTOCOL.MSG_CANTRIPSSPELLCAST message) {
+        // CLASSIC: casting follows the profile's cantrips switch; the client names any spell template.
+        if (!ClassicRuntime.Rules.IsFeatureEnabled(ClassicFeatures.Cantrips)) {
+            ClassicGate.RefuseFeature(ClassicFeatures.Cantrips, GetActiveWizard()?.CharId, InformGameClient);
+
+            return;
+        }
+
         var wizard = GetActiveWizard();
         CantripsSpellTemplate cantrip = CantripFactory.CreateCantripTemplateFromId(message.SpellTemplateID);
 
@@ -110,6 +119,13 @@ internal class CantripService(SessionActor sessionActor) : MessageService(sessio
 
     [MessageHandler(typeof(CANTRIPSMESSAGES_57_PROTOCOL.MSG_CASTRITUAL))]
     private void ReceiveCastRitual(CANTRIPSMESSAGES_57_PROTOCOL.MSG_CASTRITUAL message) {
+        // CLASSIC: rituals are cantrips too.
+        if (!ClassicRuntime.Rules.IsFeatureEnabled(ClassicFeatures.Cantrips)) {
+            ClassicGate.RefuseFeature(ClassicFeatures.Cantrips, GetActiveWizard()?.CharId, InformGameClient);
+
+            return;
+        }
+
         bool hasEnergy = CastCantrip((uint) message.SpellTemplateID);
 
         if (!hasEnergy) {
