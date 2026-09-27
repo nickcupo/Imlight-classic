@@ -36,14 +36,21 @@
  * complete. Those links are dropped, and the entries that followed them
  * wait for all of the start goals. Start goals with requirements (per-school
  * goals) are left out, since not every player gets them.
+ * A quest keeps its chain when one of its start goals has nothing on the
+ * server to complete it (a waypoint with no zone, proximity volume or quest
+ * event, as in DS-ACAD-C01-001), since waiting for that goal would block it.
+ * Wizard City's quests keep upstream's logic; joined, WC-TRITON-MAIN-005
+ * would need Triton's cogs, which are consumed on use and do not respawn.
  *
  * TODO:
+ * - Should Triton's cogs respawn, so WC-TRITON-MAIN-005 could wait for them?
  *
  * Created by: Nick with Claude Code (claude-opus-5-5)
  * Version: KALI 1.0
  * Last Updated: 09/26/2026
  */
 
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using Imcodec.ObjectProperty.TypeCache;
@@ -56,6 +63,8 @@ namespace Imlight.CoreLib.WizardData.Collections;
 /// </summary>
 internal static class ParallelStartGoals {
 
+    private const string WizardCityQuestPrefix = "WC-";
+
     /// <summary>
     /// Rewrites a quest's goal logic so the goals it starts together must all be complete before
     /// the goals that follow them start. Quests without chained start goals are left alone.
@@ -63,7 +72,8 @@ internal static class ParallelStartGoals {
     /// <param name="quest">The quest template, just deserialized.</param>
     /// <returns>Whether the goal logic changed.</returns>
     internal static bool Join(QuestTemplate quest) {
-        if (quest?.m_goalLogic is null || quest.m_startGoals is null || quest.m_goals is null) {
+        if (quest?.m_goalLogic is null || quest.m_startGoals is null || quest.m_goals is null
+            || quest.m_questName?.StartsWith(WizardCityQuestPrefix, StringComparison.Ordinal) == true) {
             return false;
         }
 
@@ -71,7 +81,8 @@ internal static class ParallelStartGoals {
             .Where(name => quest.m_goals.Any(goal => goal.m_goalName == name && !HasRequirements(goal)))
             .Distinct()
             .ToList();
-        if (startGoals.Count < 2) {
+        if (startGoals.Count < 2
+            || quest.m_goals.Any(goal => startGoals.Contains(goal.m_goalName) && !HasCompletionPath(goal))) {
             return false;
         }
 
@@ -96,5 +107,11 @@ internal static class ParallelStartGoals {
 
     private static bool HasRequirements(GoalTemplate goal)
         => goal.m_goalRequirements?.m_requirements is { Count: > 0 };
+
+    private static bool HasCompletionPath(GoalTemplate goal)
+        => goal is not WaypointGoalTemplate waypoint
+            || !string.IsNullOrEmpty(waypoint.m_proximityTag)
+            || (!string.IsNullOrEmpty(waypoint.m_zoneTag) && (waypoint.m_zoneEntry || waypoint.m_zoneExit))
+            || InteractableQuestEvents.IsCompletedByEvent(goal);
 
 }

@@ -24,7 +24,8 @@
  * captured "Use" waypoint goal tagged with one of them can complete.
  *
  * USAGE EXAMPLE:
- * InteractableQuestEvents.CompletesGoal(objectTemplate, goal); // InteractQuestSelectComponent
+ * InteractableQuestEvents.AddGoalsCompletedBy(objectTemplate, goalsByQuest); // InteractQuestSelectComponent
+ * InteractableQuestEvents.IsCompletedByEvent(goal); // ParallelStartGoals
  *
  * NOTE:
  * Some captured "Use" goals are GOAL_TYPE_WAYPOINT with no zone or
@@ -70,5 +71,39 @@ internal static class InteractableQuestEvents {
             && objectTemplate?.m_objectName is not null
             && s_questEventsByObject.TryGetValue(objectTemplate.m_objectName, out var questEvents)
             && goal.m_clientTags?.Any(questEvents.Contains) == true;
+
+    /// <summary>
+    /// Whether some object's quest event completes the goal.
+    /// </summary>
+    /// <param name="goal">The goal template.</param>
+    internal static bool IsCompletedByEvent(GoalTemplate goal)
+        => goal is WaypointGoalTemplate
+            && goal.m_clientTags?.Any(tag => s_questEventsByObject.Values.Any(questEvents => questEvents.Contains(tag))) == true;
+
+    /// <summary>
+    /// Adds every quest goal that using the object completes to the goals it is interactable for.
+    /// </summary>
+    /// <param name="objectTemplate">The object's template.</param>
+    /// <param name="goalsByQuest">The object's goals, by quest name.</param>
+    internal static void AddGoalsCompletedBy(GameObjectTemplate objectTemplate,
+                                             Dictionary<string, List<GoalTemplate>> goalsByQuest) {
+        if (objectTemplate?.m_objectName is null || !s_questEventsByObject.ContainsKey(objectTemplate.m_objectName)) {
+            return;
+        }
+
+        foreach (var quest in QuestTemplateCollection.GetAllQuests()) {
+            if (quest?.m_goals is null) {
+                continue;
+            }
+
+            foreach (var goal in quest.m_goals.Where(goal => CompletesGoal(objectTemplate, goal))) {
+                if (!goalsByQuest.TryGetValue(quest.m_questName, out var goals)) {
+                    goals = [];
+                    goalsByQuest[quest.m_questName] = goals;
+                }
+                goals.Add(goal);
+            }
+        }
+    }
 
 }

@@ -107,8 +107,7 @@ internal sealed class InteractQuestSelectComponent(ZoneEntity entity)
             }
 
             foreach (var goal in qTemplate.m_goals) {
-                if ((goal.m_goalType != GOAL_TYPE.GOAL_TYPE_USAGE || !DoesGoalMatchObject(gameObjectTemplate, goal))
-                    && !InteractableQuestEvents.CompletesGoal(gameObjectTemplate, goal)) { // CLASSIC: waypoint goals this object's quest event completes.
+                if (goal.m_goalType != GOAL_TYPE.GOAL_TYPE_USAGE || !DoesGoalMatchObject(gameObjectTemplate, goal)) {
                     continue;
                 }
 
@@ -119,6 +118,8 @@ internal sealed class InteractQuestSelectComponent(ZoneEntity entity)
                 goalList.Add(goal);
             }
         }
+
+        InteractableQuestEvents.AddGoalsCompletedBy(gameObjectTemplate, _usageGoalsByQuest); // CLASSIC: waypoint goals this object's quest event completes.
     }
 
     public void OnServiceInteraction(IActorRef playerActor, Wizard playerCharacter, CoreObject playerObject, uint serviceOptionIndex) {
