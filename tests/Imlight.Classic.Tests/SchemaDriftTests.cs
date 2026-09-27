@@ -215,10 +215,14 @@ public sealed class SchemaDriftTests {
         Assert.Equal(PropertyNames(properties.GetProperty("gold")), Sorted(MobRewardRulesLoader.s_goldKeys));
         Assert.Equal(PropertyNames(properties.GetProperty("gold").GetProperty("properties").GetProperty("by_rank").GetProperty("items")),
             Sorted(MobRewardRulesLoader.s_rankKeys));
-        Assert.Equal(PropertyNames(properties.GetProperty("drops")), Sorted(MobRewardRulesLoader.s_dropKeys));
+        // drops, treasure_cards and reagents share one shape; the loader accepts tallies only under drops and
+        // quantity/client_tables only under the other two.
+        var dropRule = PropertyNames(defs.GetProperty("dropRule"));
+        Assert.Equal(dropRule, Sorted(MobRewardRulesLoader.s_dropKeys.Union(MobRewardRulesLoader.s_extraDropKeys)));
+        Assert.Equal(PropertyNames(defs.GetProperty("tally")), Sorted(MobRewardRulesLoader.s_tallyKeys));
+        Assert.Equal(PropertyNames(defs.GetProperty("clientTable")), Sorted(MobRewardRulesLoader.s_clientTableKeys));
         Assert.Equal(PropertyNames(defs.GetProperty("mob")), Sorted(MobRewardRulesLoader.s_mobKeys));
-        Assert.Equal(PropertyNames(defs.GetProperty("mob").GetProperty("properties").GetProperty("drops").GetProperty("items")),
-            Sorted(MobRewardRulesLoader.s_itemKeys));
+        Assert.Equal(PropertyNames(defs.GetProperty("dropEntry")), Sorted(MobRewardRulesLoader.s_itemKeys));
     }
 
 }

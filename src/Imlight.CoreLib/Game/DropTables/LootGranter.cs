@@ -44,11 +44,14 @@ using System;
 using System.Collections.Generic;
 using Akka.Actor;
 using Imcodec.CoreObject;
+using Imcodec.Cryptography;
 using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
 using Imlight.CoreLib.Shared.Packets;
+using Imlight.CoreLib.Shared.Resources;
+using Imlight.CoreLib.WizardData.Collections;
 using Imlight.CoreLib.WizardData.Models.Player;
 using Imlight.CoreLib.WizardData.Models.World;
 
@@ -62,6 +65,7 @@ public static class LootGranter {
     private const uint LOOT_LIST_SERIALIZATION_FLAGS = 4;
     private const uint INVENTORY_ADD_SERIALIZATION_FLAGS =
         (uint) (PropertyFlags.Prop_Transmit | PropertyFlags.Prop_AuthorityTransmit);
+    private const uint REAGENT_ADD_SERIALIZATION_FLAGS = 27;   // CLASSIC: as CommandModifyProtocol's addreagent
     private static readonly CoreObjectSerializer s_itemSerializer = new(behaviors: SerializerFlags.None);
 
     /// <summary>
@@ -75,6 +79,8 @@ public static class LootGranter {
         UpdateWizardXP(playerActor, results.ExperienceAmount);
         UpdateWizardTP(playerActor, wizard, results.TrainingPoints);
         UpdateCharacterItems(playerActor, wizard, results.Items);
+        UpdateTreasureCards(playerActor, wizard, results);   // CLASSIC
+        UpdateReagents(playerActor, wizard, results.Reagents);   // CLASSIC
         SendLootInfoToClient(playerActor, results, wizard);
 
         if (results.GrantsPotionSlot) {
@@ -156,6 +162,65 @@ public static class LootGranter {
             // The attach payload (which carries the inventory) was already sent, so push each
             // item to the client explicitly or the reward stays invisible this session.
             SendInventoryAdd(playerActor, wizard, addedItem);
+        }
+    }
+
+    // CLASSIC: adds dropped Treasure Cards to the treasure book the way a Bazaar/vendor purchase does
+    // (TreasureShopService): the client learns the card by its name hash, the save keeps the spell template.
+    private static void UpdateTreasureCards(IActorRef playerActor, Wizard wizard, DropTableResult results) {
+        results.TreasureCardSpellIds.Clear();
+        foreach (var templateId in results.TreasureCards) {
+            if (CoreObjectFactory.GetCoreTemplate(templateId) is not SpellTemplate spell) {
+                Logger.Warning("Treasure Card drop {0} is not a spell template.", Logger.Args(templateId));
+
+                continue;
+            }
+
+            var spellHash = StringHash.Compute(spell.m_name);
+            playerActor.Tell(new WIZARD_12_PROTOCOL.MSG_ADDTREASURESPELLTOBOOK {
+                SpellID = (int) spellHash,
+                EnchantmentID = 0,
+            });
+
+            wizard.SpellbookBehavior.AddTreasureCard(templateId);
+            WizardCollection.AddTreasureCard(wizard, templateId);
+            results.TreasureCardSpellIds.Add(spellHash);
+        }
+    }
+
+    // CLASSIC: adds dropped reagents to the reagent bag the way the addreagent command does.
+    private static void UpdateReagents(IActorRef playerActor, Wizard wizard, List<DropItemResult> reagents) {
+        foreach (var reagent in reagents) {
+            if (!ulong.TryParse(reagent.ItemId, out var templateId)
+                || CoreObjectFactory.GetCoreTemplate(templateId) is not ReagentItemTemplate) {
+                continue;
+            }
+
+            ClientReagentItem added = null;
+            for (var i = 0; i < Math.Max(1, reagent.Quantity); i++) {
+                if (!wizard.AddReagent(templateId, out var reagentObj)) {
+                    Logger.Error("Failed to add reagent {0} to wizard {1}'s reagent bag.",
+                        Logger.Args(templateId, wizard.CharId));
+
+                    break;
+                }
+
+                added = reagentObj;
+            }
+
+            if (added is null || !s_itemSerializer.Serialize(added, REAGENT_ADD_SERIALIZATION_FLAGS, out var serializedReagent)) {
+                continue;
+            }
+
+            playerActor.Tell(new WIZARD_12_PROTOCOL.MSG_REAGENTADD {
+                GlobalID = wizard.GameObjectID,
+                Data = serializedReagent,
+            });
+            playerActor.Tell(new WIZARD2_53_PROTOCOL.MSG_ITEMACQUISITION {
+                ItemGlobalID = added.m_globalID,
+                ItemTemplateID = (uint) added.m_templateID,
+                ItemLocation = 1,
+            });
         }
     }
 

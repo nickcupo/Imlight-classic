@@ -163,7 +163,8 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
         GrantMobLoot(message.MobTemplateIds);
     }
 
-    // CLASSIC: XP for the pips this player used, then gold and at most one item per defeated mob.
+    // CLASSIC: XP for the pips this player used, then per defeated mob gold, items, Treasure Cards and reagents
+    // (each list entry rolls on its own, capped per mob; see MobRewardRules.Roll).
     private void GrantClassicCombatRewards(MobRewardRules rules, int usedPips, ulong[] defeatedMobTemplateIds) {
         var result = new DropTableResult {
             DropTableId = "classic_mob_rewards",
@@ -178,8 +179,24 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
 
             var loot = rules.Roll(mob, random);
             result.GoldAmount += loot.Gold;
-            if (loot.Item is { } item && CoreObjectFactory.GetCoreTemplate(item) is not null) {
-                result.Items.Add(new DropItemResult { ItemId = item.ToString(), ItemName = string.Empty, Quantity = 1 });
+            foreach (var item in loot.Items) {
+                if (CoreObjectFactory.GetCoreTemplate(item) is not null) {
+                    result.Items.Add(new DropItemResult { ItemId = item.ToString(), ItemName = string.Empty, Quantity = 1 });
+                }
+            }
+
+            foreach (var card in loot.TreasureCards) {
+                if (card <= uint.MaxValue && CoreObjectFactory.GetCoreTemplate(card) is SpellTemplate) {
+                    result.TreasureCards.Add((uint) card);
+                }
+            }
+
+            foreach (var reagent in loot.Reagents) {
+                if (CoreObjectFactory.GetCoreTemplate(reagent.Template) is ReagentItemTemplate) {
+                    result.Reagents.Add(new DropItemResult {
+                        ItemId = reagent.Template.ToString(), ItemName = string.Empty, Quantity = reagent.Quantity,
+                    });
+                }
             }
         }
 

@@ -36,6 +36,7 @@
  */
 
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -62,7 +63,7 @@ public sealed class MobRewardRulesTests : IDisposable {
     private const string Source = "{source: https://example.invalid, source_date: '2010-05-15', retrieved: '2026-09-27', covers: [combat_xp], confidence: verified}";
 
     private static string RulesYaml(string xPip = "1", string fizzle = "card", string mobs = "", string extraRank = "",
-                                    string normalChance = "0.0") {
+                                    string normalChance = "0.0", string extra = "", int maxPerMob = 3) {
         var text = new StringBuilder();
         text.Append("id: mob-rewards-test\nprofiles: [late-2009]\nlicense_tag: own\n");
         text.Append("combat_xp:\n  xp_per_pip: 3\n  zero_pip_counts_as: 1\n  x_pip_counts_as: ").Append(xPip)
@@ -71,7 +72,9 @@ public sealed class MobRewardRulesTests : IDisposable {
         text.Append("  - {rank: 1, normal: [1, 3], elite: [4, 6], boss: [10, 20], confidence: verified}\n");
         text.Append("  - {rank: 5, normal: [30, 40], elite: [50, 60], boss: [100, 200], confidence: inferred}\n");
         text.Append(extraRank);
-        text.Append("drops:\n  confidence: inferred\n  chance: {normal: ").Append(normalChance).Append(", elite: 0.5, boss: 1.0}\n");
+        text.Append("drops:\n  confidence: inferred\n  expected: {normal: ").Append(normalChance)
+            .Append(", elite: 0.5, boss: 1.0}\n  max_per_mob: ").Append(maxPerMob).Append("\n  unseen_chance: 0\n");
+        text.Append(extra.Length == 0 || extra.EndsWith('\n') ? extra : extra + "\n");
         text.Append(mobs.Length == 0 ? "mobs: []\n" : "mobs:\n" + mobs);
 
         return text.ToString();
@@ -136,22 +139,149 @@ public sealed class MobRewardRulesTests : IDisposable {
 
     [Fact]
     public void DropsOnlyDocumentedItemsWithTemplates() {
-        var rules = MobRewardRulesLoader.Load(Write(RulesYaml(mobs: TwoMobs, normalChance: "1.0")));
+        // normal expected 2.0 over the pirate's two listed items: each drops every time, but only one has a template.
+        var rules = MobRewardRulesLoader.Load(Write(RulesYaml(mobs: TwoMobs, normalChance: "2.0")));
         var random = new Random(7);
 
         for (var i = 0; i < 50; i++) {
             var pirate = rules.Roll(new MobInfo(35785, 1, MobKind.Normal), random);
             Assert.InRange(pirate.Gold, 1, 2);
-            Assert.Equal(77552UL, pirate.Item);                 // the only item with a template
+            Assert.Equal([77552UL], pirate.Items);              // the only item with a template
 
             var kraken = rules.Roll(new MobInfo(35309, 3, MobKind.Boss), random);
-            Assert.Contains(kraken.Item!.Value, new ulong[] { 1111, 2222 });
+            Assert.All(kraken.Items, item => Assert.Contains(item, new ulong[] { 1111, 2222 }));
 
-            Assert.Null(rules.Roll(new MobInfo(424242, 3, MobKind.Boss), random).Item);   // undocumented: gold only
+            var stranger = rules.Roll(new MobInfo(424242, 3, MobKind.Boss), random);   // undocumented: gold only
+            Assert.Empty(stranger.Items);
+            Assert.Empty(stranger.TreasureCards);
+            Assert.Empty(stranger.Reagents);
         }
 
         var never = MobRewardRulesLoader.Load(Write(RulesYaml(mobs: TwoMobs, normalChance: "0.0")));
         Assert.All(Enumerable.Range(0, 50), _ => Assert.Null(never.Roll(new MobInfo(35785, 1, MobKind.Normal), random).Item));
+    }
+
+    [Fact]
+    public void UntalliedEntriesShareTheKindsExpectedDrops() {
+        // Boss expected 1.0 over Kraken's two items: each at 0.5, so about one item per fight, sometimes two, sometimes none.
+        var rules = MobRewardRulesLoader.Load(Write(RulesYaml(mobs: TwoMobs)));
+        var random = new Random(11);
+        var counts = new int[3];
+        for (var i = 0; i < 4000; i++) {
+            counts[rules.Roll(new MobInfo(35309, 3, MobKind.Boss), random).Items.Length]++;
+        }
+
+        Assert.InRange(counts[0] / 4000.0, 0.21, 0.29);
+        Assert.InRange(counts[1] / 4000.0, 0.45, 0.55);
+        Assert.InRange(counts[2] / 4000.0, 0.21, 0.29);
+        Assert.Equal(0.5, rules.ItemDrops.ChanceOf(new DropEntry(1111, null), MobKind.Boss, listed: 2, tallied: false));
+    }
+
+    private const string TalliedBoss = """
+        - name: Lord Nightshade
+          templates: [35099]
+          rank: 3
+          kind: boss
+          tally: 50
+          drops: [{name: Always, template: 11, chance: 1}, {name: Seen once, template: 12, chance: 0.02}, {name: Never seen, template: 13, chance: 0}, {name: Unlisted, template: 14}]
+          treasure_cards: [{name: Ghost Touch, template: 501, chance: 1}]
+          reagents: [{name: Ectoplasm, template: 601}]
+          source: {page: Lord Nightshade, oldid: 68538, date: '2010-05-09'}
+        """;
+
+    private const string CardAndReagentRules = """
+        treasure_cards:
+          confidence: inferred
+          expected: {normal: 0, elite: 0, boss: 20}
+          max_per_mob: 1
+          provenance:
+          - {source: https://example.invalid, source_date: '2010-05-15', retrieved: '2026-09-27', covers: [treasure_cards], confidence: inferred}
+          client_tables:
+          - {name: Fire Elf, template: 502, mobs: [424242, 35099]}
+        reagents:
+          confidence: inferred
+          expected: {normal: 0, elite: 0, boss: 20}
+          max_per_mob: 1
+          quantity: [2, 3]
+          provenance:
+          - {source: https://example.invalid, source_date: '2010-05-15', retrieved: '2026-09-27', covers: [reagents], confidence: inferred}
+          client_tables:
+          - {name: Bone, template: 602, mobs: [424242]}
+        """;
+
+    [Fact]
+    public void TalliedChancesWinAndUnseenEntriesRarelyDrop() {
+        var rules = MobRewardRulesLoader.Load(Write(RulesYaml(mobs: TalliedBoss, extra: CardAndReagentRules)));
+        var random = new Random(3);
+        var seen = new Dictionary<ulong, int>();
+        for (var i = 0; i < 2000; i++) {
+            foreach (var item in rules.Roll(new MobInfo(35099, 3, MobKind.Boss), random).Items) {
+                seen[item] = seen.GetValueOrDefault(item) + 1;
+            }
+        }
+
+        Assert.Equal(2000, seen[11]);                            // 100% on the tally
+        Assert.InRange(seen.GetValueOrDefault(12UL), 15, 70);      // 2%
+        Assert.False(seen.ContainsKey(13));                      // never seen, unseen_chance 0
+        Assert.False(seen.ContainsKey(14));                      // not on the tally: unseen too
+        Assert.Equal(0.02, rules.ItemDrops.ChanceOf(new DropEntry(12, 0.02), MobKind.Boss, 4, tallied: true));
+    }
+
+    [Fact]
+    public void TreasureCardsAndReagentsComeFromTheListThenTheClientTables() {
+        var rules = MobRewardRulesLoader.Load(Write(RulesYaml(mobs: TalliedBoss, extra: CardAndReagentRules)));
+        var random = new Random(5);
+        for (var i = 0; i < 100; i++) {
+            var nightshade = rules.Roll(new MobInfo(35099, 3, MobKind.Boss), random);
+            Assert.Equal([501UL], nightshade.TreasureCards);                 // its own list, not the Fire Elf fallback
+            var reagent = Assert.Single(nightshade.Reagents);                  // boss expected 20 over one entry: always
+            Assert.Equal(601UL, reagent.Template);
+            Assert.InRange(reagent.Quantity, 2, 3);
+
+            var stranger = rules.Roll(new MobInfo(424242, 3, MobKind.Boss), random);
+            Assert.Equal([502UL], stranger.TreasureCards);                   // client loot-table fallback
+            Assert.Equal(602UL, Assert.Single(stranger.Reagents).Template);
+            Assert.Empty(stranger.Items);
+
+            Assert.Empty(rules.Roll(new MobInfo(424242, 3, MobKind.Normal), random).TreasureCards);   // normal expected 0
+        }
+    }
+
+    [Fact]
+    public void CapsDropsPerMob() {
+        const string greedy = """
+            - name: Greedy
+              templates: [77]
+              rank: 1
+              kind: boss
+              tally: 50
+              drops: [{name: A, template: 1, chance: 1}, {name: B, template: 2, chance: 1}, {name: C, template: 3, chance: 1}, {name: D, template: 4, chance: 1}]
+              source: {page: Greedy, oldid: 1, date: '2010-01-01'}
+            """;
+        var rules = MobRewardRulesLoader.Load(Write(RulesYaml(mobs: greedy, maxPerMob: 2)));
+        var random = new Random(9);
+        var picked = new HashSet<ulong>();
+        for (var i = 0; i < 200; i++) {
+            var items = rules.Roll(new MobInfo(77, 1, MobKind.Boss), random).Items;
+            Assert.Equal(2, items.Length);
+            picked.UnionWith(items);
+        }
+
+        Assert.Equal(4, picked.Count);    // the cap keeps a random two, not always the first two
+    }
+
+    [Fact]
+    public void RejectsChancesWithoutATallyAndBadQuantities() {
+        var untallied = RulesYaml(mobs: TalliedBoss.Replace("  tally: 50\n", ""));
+        var ex = Assert.Throws<ClassicDataException>(() => MobRewardRulesLoader.Load(Write(untallied)));
+        Assert.Contains(ex.Errors, error => error.Message.Contains("needs the mob's tally"));
+
+        var zero = RulesYaml(extra: CardAndReagentRules.Replace("quantity: [2, 3]", "quantity: [0, 3]"));
+        ex = Assert.Throws<ClassicDataException>(() => MobRewardRulesLoader.Load(Write(zero)));
+        Assert.Contains(ex.Errors, error => error.Message.Contains("at least one"));
+
+        var tooLikely = RulesYaml(mobs: TalliedBoss.Replace("chance: 0.02", "chance: 1.5"));
+        Assert.Throws<ClassicDataException>(() => MobRewardRulesLoader.Load(Write(tooLikely)));
     }
 
     [Fact]
@@ -182,6 +312,25 @@ public sealed class MobRewardRulesTests : IDisposable {
         Assert.Equal(1, rules.GoldByRank.Keys.First());
         Assert.NotEmpty(rules.Mobs);
         Assert.All(rules.GoldByRank.Values, row => Assert.True(row.Normal.Max <= row.Boss.Max));
+
+        // Drops: a boss gives about one item a fight, an elite fewer, a street mob well under one; cards and
+        // reagents are rarer; the cap lets a boss drop two.
+        Assert.InRange(rules.ItemDrops.Expected[MobKind.Boss], 0.8, 1.3);
+        Assert.True(rules.ItemDrops.Expected[MobKind.Elite] < rules.ItemDrops.Expected[MobKind.Boss]);
+        Assert.Equal(2, rules.ItemDrops.MaxPerMob);
+        Assert.True(rules.ItemDrops.Expected[MobKind.Normal] < rules.ItemDrops.Expected[MobKind.Elite]);
+        Assert.True(rules.TreasureCardDrops.Expected[MobKind.Boss] < rules.ItemDrops.Expected[MobKind.Boss]);
+        Assert.Equal(1, rules.TreasureCardDrops.MaxPerMob);
+        Assert.NotEmpty(rules.TreasureCardFallback);
+        Assert.NotEmpty(rules.ReagentFallback);
+
+        // Rattlebones (Unicorn Way, rank 1 elite): the cutoff page's 50-fight tally.
+        var rattlebones = rules.Find(35311)!;
+        Assert.Equal("Rattlebones", rattlebones.Name);
+        Assert.Equal(50, rattlebones.Tally);
+        Assert.Contains(rattlebones.Items, entry => entry.Chance is > 0);
+        Assert.Contains(rules.Mobs, mob => !mob.TreasureCards.IsEmpty);
+        Assert.Contains(rules.Mobs, mob => !mob.Reagents.IsEmpty);
     }
 
 }
