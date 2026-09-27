@@ -51,6 +51,7 @@ using Imcodec.IO;
 using Imcodec.ObjectProperty;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
+using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.Shared.Utilities;
 
 namespace Imlight.CoreLib.Shared.Resources;
@@ -183,6 +184,8 @@ public class CoreObjectFactory : RootSingleResourceSingleton<CoreObjectFactory>,
                 Logger.Error("Could not load CoreTemplate from {Loc}. Could not get file from root archive.",
                     Logger.Args(templateLocation.m_filename));
             }
+
+            ClassicSpellTemplates.Apply(templateObj, templateLocation.m_filename); // CLASSIC: combat reads this copy of a spell template.
 
             return templateObj;
         });

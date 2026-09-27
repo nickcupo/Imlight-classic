@@ -33,7 +33,7 @@
  * 
  * Created by: Jooty
  * Version: KALI 1.0
- * Last Updated: 3/18/2025
+ * Last Updated: 09/27/2026
  */
 
 using System;
@@ -42,6 +42,7 @@ using Imcodec.Cryptography;
 using Imcodec.ObjectProperty;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
+using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.Shared.Resources;
 
 namespace Imlight.CoreLib.Game.Spells;
@@ -80,6 +81,9 @@ internal class SpellFactory : RootDirectoryResourceSingleton<SpellFactory>, IMem
             }
 
             var stringHash = StringHash.Compute(spellTemplate.m_name);
+
+            // CLASSIC: the profile's 2009 pip cost, accuracy and effect values replace the client's.
+            ClassicSpellTemplates.Apply(spellTemplate, fileRecord.FileName, census: true);
 
             s_spellTemplates.Add(stringHash, spellTemplate);
             counter++;

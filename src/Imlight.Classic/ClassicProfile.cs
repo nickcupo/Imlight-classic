@@ -35,7 +35,7 @@
  * 
  * Created by: Nick with Claude Code (claude-opus-5-5)
  * Version: KALI 1.0
- * Last Updated: 09/26/2026
+ * Last Updated: 09/27/2026
  */
 
 using System;
@@ -43,6 +43,7 @@ using System.Collections.Frozen;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Globalization;
+using System.IO;
 using System.Linq;
 
 namespace Imlight.Classic;
@@ -187,6 +188,12 @@ public sealed class ClassicProfile {
     /// The files the profile was merged from, child first.
     /// </summary>
     public required ImmutableArray<string> SourceFiles { get; init; }
+
+    /// <summary>
+    /// The profile ids of the extends chain, child first, such as <c>[arc1-2009h1, late-2009]</c>.
+    /// </summary>
+    public ImmutableArray<string> Lineage
+        => SourceFiles.IsEmpty ? [Id] : [.. SourceFiles.Select(file => Path.GetFileNameWithoutExtension(file))];
 
     /// <summary>
     /// True when the profile restricts nothing, so it must behave exactly like stock Imlight.

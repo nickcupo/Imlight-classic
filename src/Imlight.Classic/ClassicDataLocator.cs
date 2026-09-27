@@ -26,6 +26,7 @@
  * USAGE EXAMPLE:
  * var profiles = ClassicDataLocator.ResolveProfilesPath(configured, AppContext.BaseDirectory);
  * var zones = ClassicDataLocator.ResolveZoneWorldsPath(configuredZones, profiles, AppContext.BaseDirectory);
+ * var spells = ClassicDataLocator.ResolveSpellsPath(configuredSpells, profiles, AppContext.BaseDirectory);
  * 
  * NOTE:
  * Relative settings resolve against the binary's directory, never the
@@ -35,7 +36,7 @@
  * 
  * Created by: Nick with Claude Code (claude-opus-5-5)
  * Version: KALI 1.0
- * Last Updated: 09/26/2026
+ * Last Updated: 09/27/2026
  */
 
 using System;
@@ -92,6 +93,21 @@ public static class ClassicDataLocator {
         }
 
         return Path.GetFullPath(Path.Combine(profilesPath, "..", "zones", "worlds.yaml"));
+    }
+
+    /// <summary>
+    /// Resolves the spell records directory.
+    /// </summary>
+    /// <param name="configured">The <c>Classic.SpellsPath</c> setting; empty uses spells/ next to the profiles.</param>
+    /// <param name="profilesPath">The resolved profiles directory.</param>
+    /// <param name="baseDirectory">The server binary's directory.</param>
+    /// <returns>The absolute spells directory.</returns>
+    public static string ResolveSpellsPath(string? configured, string profilesPath, string baseDirectory) {
+        if (!string.IsNullOrWhiteSpace(configured)) {
+            return ResolveConfigured(configured, baseDirectory);
+        }
+
+        return Path.GetFullPath(Path.Combine(profilesPath, "..", "spells"));
     }
 
     /// <summary>

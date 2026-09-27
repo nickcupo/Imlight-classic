@@ -33,10 +33,11 @@
  * 
  * Created by: Jooty
  * Version: KALI 1.0
- * Last Updated: 09/26/2026
+ * Last Updated: 09/27/2026
  */
 
 using Imcodec.ObjectProperty.TypeCache;
+using Imlight.Classic;
 using Imlight.Common;
 using Imlight.CoreLib.Game.Spells;
 using Imlight.CoreLib.Shared.Packets;
@@ -94,6 +95,11 @@ internal static class CombatActionResolver {
 
         var critEligibleTargetSlots = new List<int>();
 
+        // CLASSIC: what DoSpellCastConsequences will charge, so a pip gain on the caster lands after the cost.
+        var casterPipCost = ClassicRuntime.IsActive
+            ? IsXPipSpell(action.Spell) ? combatAction.m_xPipCost : action.Spell.m_pipCost?.m_spellRank ?? 0
+            : 0;
+
         foreach (var spellEffect in action.SpellTemplate.m_effects) {
             var chosenEffect = spellEffect;
 
@@ -112,6 +118,15 @@ internal static class CombatActionResolver {
             charmsAffectingThisSpell = CombatCharms.FindAppliedCharms(action.SpellCaster, [.. allEffects]);
 
             var targets = GetEffectTargets(chosenEffect, action.SpellCaster, action.SelectedTarget);
+
+            // CLASSIC: a global has no targets; it goes on the battlefield.
+            if (targets.Length == 0 && chosenEffect.m_effectTarget == kEffectTarget.kGlobal && ClassicRuntime.IsActive) {
+                spellWorthCasting = true;
+                cinematicTime += CombatEffectApplicator.ApplyEffect(chosenEffect, [], action.SpellCaster, [], critMultiplier);
+
+                continue;
+            }
+
             if (targets.Length == 0) {
                 continue;
             }
@@ -143,7 +158,8 @@ internal static class CombatActionResolver {
                                                                 [.. charmsAffectingThisSpell],
                                                                 action.SpellCaster,
                                                                 targets,
-                                                                critMultiplier);
+                                                                critMultiplier,
+                                                                casterPipCost);
         }
 
         if (critEligibleTargetSlots.Count > 0) {

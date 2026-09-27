@@ -21,8 +21,8 @@
  * 
  * PURPOSE:
  * Collects validation errors while a classic-data file is checked, and
- * provides the typed reads (string, integer, date, boolean, enum) the
- * profile and zone loaders share.
+ * provides the typed reads (string, integer, fraction, date, boolean, enum)
+ * the classic-data loaders share.
  * 
  * USAGE EXAMPLE:
  * var cap = diagnostics.ReadPositiveInt(entry.Value, "level_cap");
@@ -36,7 +36,7 @@
  * 
  * Created by: Nick with Claude Code (claude-opus-5-5)
  * Version: KALI 1.0
- * Last Updated: 09/26/2026
+ * Last Updated: 09/27/2026
  */
 
 using System;
@@ -153,6 +153,35 @@ internal sealed class YamlDiagnostics {
 
         var expected = allowNull ? "an integer >= 1 or null" : "an integer >= 1";
         At(node, keyPath, $"expected {expected}, got {node.Describe()}");
+
+        return null;
+    }
+
+    public int? ReadInt(YNode node, string keyPath, int min, int max = int.MaxValue) {
+        if (node is YScalar { IsPlain: true } scalar
+            && int.TryParse(scalar.Value, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out var value)
+            && value >= min && value <= max) {
+            return value;
+        }
+
+        var expected = (min, max) switch {
+            (int.MinValue, int.MaxValue) => "an integer",
+            (_, int.MaxValue) => $"an integer >= {min.ToString(CultureInfo.InvariantCulture)}",
+            _ => $"an integer from {min.ToString(CultureInfo.InvariantCulture)} to {max.ToString(CultureInfo.InvariantCulture)}",
+        };
+        At(node, keyPath, $"expected {expected}, got {node.Describe()}");
+
+        return null;
+    }
+
+    public double? ReadFraction(YNode node, string keyPath) {
+        if (node is YScalar { IsPlain: true } scalar
+            && double.TryParse(scalar.Value, NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out var value)
+            && value is >= 0 and <= 1) {
+            return value;
+        }
+
+        At(node, keyPath, $"expected a fraction from 0 to 1, got {node.Describe()}");
 
         return null;
     }

@@ -34,7 +34,7 @@
  * 
  * Created by: Jooty
  * Version: KALI 1.0
- * Last Updated: 08/14/2026
+ * Last Updated: 09/27/2026
  */
 
 using Imcodec.ObjectProperty.TypeCache;
@@ -64,12 +64,15 @@ internal static class CombatEffectApplicator {
     /// <param name="charms">The charms currently applied to the caster.</param>
     /// <param name="caster">The caster of the spell.</param>
     /// <param name="targets">The targets of the spell effect.</param>
+    /// <param name="critMultiplier">The landed critical's multiplier, 1 when none landed.</param>
+    /// <param name="casterPipCost">The pips the caster pays for the spell after its effects land.</param>
     /// <returns>The cinematic time required for the effect to be applied.</returns>
     internal static float ApplyEffect(SpellEffect effect,
                                       SpellEffect[] charms,
                                       CombatDuelSubCircle caster,
                                       CombatDuelSubCircle[] targets,
-                                      float critMultiplier = 1) {
+                                      float critMultiplier = 1,
+                                      int casterPipCost = 0) {
         var cinematicTime = 0.0f;
 
         if (effect.m_effectTarget == kEffectTarget.kGlobal) {
@@ -128,7 +131,7 @@ internal static class CombatEffectApplicator {
                 cinematicTime += ApplyKillCreatureEffect(effect, targets);
                 break;
             case kSpellEffects.kModifyPips:
-                ApplyModifyPipsEffect(effect, targets);
+                ApplyModifyPipsEffect(effect, targets, caster, casterPipCost);
                 break;
             case kSpellEffects.kMaxHealthDamage:
                 cinematicTime += ApplyMaxHealthDamageEffect(effect, targets);
@@ -355,8 +358,12 @@ internal static class CombatEffectApplicator {
 
         foreach (var target in targets) {
             var hangingEffects = target._hangingEffects.ToArray();
-            var charmsInQuesiton = CombatCharms.FindAppliedCharms(target, hangingEffects, effect.m_disposition)
-                                               .Take(charmRemoveCount);
+            // CLASSIC: the charms hanging on the target, rather than the ones a damage or heal effect would use.
+            var charmsInQuesiton = (ClassicRuntime.IsActive
+                    ? CombatCharms.FindHangingCharms(target, effect.m_disposition)
+                    : CombatCharms.FindAppliedCharms(target, hangingEffects, effect.m_disposition))
+                .Take(charmRemoveCount)
+                .ToList();
 
             cinematicTime += charmsInQuesiton.Count() * HANGING_EFFECT_CONSUME_TIME;
 
@@ -396,8 +403,12 @@ internal static class CombatEffectApplicator {
 
         foreach (var target in targets) {
             var hangingEffects = target._hangingEffects.ToArray();
-            var charmsInQuesiton = CombatCharms.FindAppliedCharms(target, hangingEffects, effect.m_disposition)
-                                               .Take(charmRemoveCount);
+            // CLASSIC: the charms hanging on the target, rather than the ones a damage or heal effect would use.
+            var charmsInQuesiton = (ClassicRuntime.IsActive
+                    ? CombatCharms.FindHangingCharms(target, effect.m_disposition)
+                    : CombatCharms.FindAppliedCharms(target, hangingEffects, effect.m_disposition))
+                .Take(charmRemoveCount)
+                .ToList();
 
             cinematicTime += charmsInQuesiton.Count() * HANGING_EFFECT_CONSUME_TIME;
 
@@ -458,7 +469,7 @@ internal static class CombatEffectApplicator {
 
     // Adds or removes generic pips (signed m_effectParam). Gains respect the 7-pip cap; steals
     // only take generic pips, so a power-pip-only target keeps them.
-    private static void ApplyModifyPipsEffect(SpellEffect effect, CombatDuelSubCircle[] targets) {
+    private static void ApplyModifyPipsEffect(SpellEffect effect, CombatDuelSubCircle[] targets, CombatDuelSubCircle caster, int casterPipCost) {
         foreach (var target in targets) {
             if (!target.IsAlive) {
                 continue;
@@ -467,8 +478,11 @@ internal static class CombatEffectApplicator {
             var pipCount = target.CombatParticipant.m_pipCount;
             var genericPips = pipCount.m_genericPips;
             if (effect.m_effectParam >= 0) {
+                // CLASSIC: the caster pays before its own pips arrive (Empower at 7 pips ends on 7), so the cap leaves
+                // room for the cost DoSpellCastConsequences takes next.
+                var owed = target == caster && ClassicRuntime.IsActive ? casterPipCost : 0;
                 pipCount.m_genericPips = (byte) Math.Min(genericPips + effect.m_effectParam,
-                                                        CombatDuelSubCircle.MAX_PIP_COUNT - pipCount.m_powerPips);
+                                                        CombatDuelSubCircle.MAX_PIP_COUNT - pipCount.m_powerPips + owed);
             }
             else {
                 pipCount.m_genericPips = (byte) Math.Max(genericPips + effect.m_effectParam, 0);
