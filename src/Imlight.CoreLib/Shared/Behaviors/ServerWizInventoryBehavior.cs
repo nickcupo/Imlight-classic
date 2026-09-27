@@ -20,6 +20,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using Newtonsoft.Json;
+using Imlight.Classic.Collections;
 using Imlight.Common;
 using Imcodec.ObjectProperty.TypeCache;
 
@@ -36,7 +37,7 @@ public class ServerWizInventoryBehavior : IClientBehaviorProvider<ClientWizInven
 
     public List<ulong> InventoryItemIds { get; set; }
 
-    [JsonIgnore] public List<WizClientObjectItem> Items { get; set; }
+    [JsonIgnore] public CopyOnWriteList<WizClientObjectItem> Items { get; set; } // CLASSIC: other services' actors read it while one of them writes.
 
     /// <summary>
     /// Adds an item to the player's inventory.
