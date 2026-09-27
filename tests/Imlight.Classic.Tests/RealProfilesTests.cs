@@ -39,6 +39,7 @@
 using System;
 using System.IO;
 using System.Linq;
+using Imlight.Classic.Zones;
 using Xunit;
 
 namespace Imlight.Classic.Tests;
@@ -100,6 +101,17 @@ public sealed class RealProfilesTests {
         Assert.Null(profile.Worlds);
         Assert.True(profile.Features.AllEnabled);
         Assert.True(profile.IsUnrestricted);
+    }
+
+    [Fact]
+    public void DevUnrestrictedNeedsNoZoneMap() {
+        // ClassicStartup gives an unrestricted profile ZoneWorldMap.Empty instead of loading zones/worlds.yaml.
+        var rules = new ClassicRules(ClassicDataFixture.LoadProfile("dev-unrestricted"), ZoneWorldMap.Empty);
+
+        Assert.False(rules.IsRestricted);
+        Assert.True(rules.IsZoneAllowed("Celestia/CL_Hub").Allowed);
+        Assert.True(rules.IsHubKeyAllowed("Celestia"));
+        Assert.Null(rules.HubKeyFor("Celestia/CL_Hub"));
     }
 
     [Fact]

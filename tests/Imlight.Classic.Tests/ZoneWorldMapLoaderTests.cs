@@ -184,6 +184,60 @@ public sealed class ZoneWorldMapLoaderTests : IDisposable {
     }
 
     [Fact]
+    public void DuplicateKeyInAnIncludeNamesTheInclude() {
+        _data.WriteZoneFile("extra.yaml", OverridesFile + "\n" + """
+              - zone: WizardCity/WC_Shop
+                feature: housing
+                feature: bazaar
+                reason: r
+                confidence: high
+            """);
+        var yaml = ZoneFixture.WorldsYaml(Worlds, includes: "  - extra.yaml");
+
+        var error = ZoneFixture.SingleError(() => Load(yaml), "overrides[1].feature");
+
+        Assert.Equal("classic-data/zones/extra.yaml", error.File);
+        Assert.Equal(9, error.Line);
+        Assert.Equal("duplicate key", error.Message);
+    }
+
+    [Fact]
+    public void UnclosedListInAnIncludeNamesTheInclude() {
+        _data.WriteZoneFile("extra.yaml", OverridesFile + "\n" + """
+              - zone: [WizardCity/WC_Shop
+                reason: r
+                confidence: high
+            """);
+        var yaml = ZoneFixture.WorldsYaml(Worlds, includes: "  - extra.yaml");
+
+        var error = ZoneFixture.SingleError(() => Load(yaml), "overrides[1].zone");
+
+        Assert.Equal("classic-data/zones/extra.yaml", error.File);
+        Assert.Equal(7, error.Line);
+        Assert.StartsWith("not valid YAML", error.Message);
+    }
+
+    [Fact]
+    public void IncludeWithoutAKindIsCheckedAsAnOverridesFile() {
+        _data.WriteZoneFile("extra.yaml", OverridesFile.Replace("kind: zone-overrides\n", ""));
+        var yaml = ZoneFixture.WorldsYaml(Worlds, includes: "  - extra.yaml");
+
+        var error = ZoneFixture.SingleError(() => Load(yaml), "kind");
+
+        Assert.Equal("classic-data/zones/extra.yaml", error.File);
+        Assert.Equal("required key 'kind' is missing", error.Message);
+    }
+
+    [Fact]
+    public void AreaCanCiteASource() {
+        var map = Load(ZoneFixture.WorldsYaml(Worlds, areas: """
+              shops: { name: Shops, prefixes: [Shops], access: allow, reason: r, confidence: high, source: "https://example.org/notes" }
+            """));
+
+        Assert.Equal("https://example.org/notes", Assert.Single(map.Areas).Source);
+    }
+
+    [Fact]
     public void OverridesFileCannotInclude() {
         _data.WriteZoneFile("extra.yaml", OverridesFile + "\nincludes: [more.yaml]\n");
         var yaml = ZoneFixture.WorldsYaml(Worlds, includes: "  - extra.yaml");

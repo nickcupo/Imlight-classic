@@ -94,6 +94,7 @@ public sealed class AreaEntry {
     public DateOnly? IntroducedAfter { get; init; }
     public required string Reason { get; init; }
     public required string Confidence { get; init; }
+    public string? Source { get; init; }
     public string? Message { get; init; }
 
 }

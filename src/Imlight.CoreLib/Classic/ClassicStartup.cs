@@ -89,14 +89,22 @@ public static class ClassicStartup {
                 Logger.Args(profilesPath, zoneWorldsPath));
 
             var profile = ClassicProfileLoader.Load(profilesPath, profileId);
-            var zones = ZoneWorldMapLoader.Load(zoneWorldsPath);
+
+            // An unrestricted profile never consults the zone map, so a missing or broken map must not
+            // stop the profile meant to tell an Imlight bug from a Classic-layer one.
+            var zones = profile.IsUnrestricted ? ZoneWorldMap.Empty : ZoneWorldMapLoader.Load(zoneWorldsPath);
             var rules = new ClassicRules(profile, zones);
             ClassicRuntime.Initialize(rules, new LoggerAuditSink(), auditVerbose);
             s_classicDataRoot = Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(profilesPath));
 
             Logger.Information("Classic profile chain: {Chain}.", Logger.Args(string.Join(" -> ", profile.SourceFiles)));
-            Logger.Information("Classic zone map: {Worlds} worlds, {Areas} areas, {Overrides} overrides from {Files}.",
-                Logger.Args(zones.Worlds.Length, zones.Areas.Length, zones.Overrides.Length, string.Join(", ", zones.SourceFiles)));
+            if (profile.IsUnrestricted) {
+                Logger.Information("Classic zone map not loaded: profile {Profile} is unrestricted.", Logger.Args(profile.Id));
+            }
+            else {
+                Logger.Information("Classic zone map: {Worlds} worlds, {Areas} areas, {Overrides} overrides from {Files}.",
+                    Logger.Args(zones.Worlds.Length, zones.Areas.Length, zones.Overrides.Length, string.Join(", ", zones.SourceFiles)));
+            }
             ClassicRuntime.Audit(new ClassicAuditEntry(ClassicAuditKind.Startup, null, profile.Id, profile.Describe()));
             if (!rules.IsRestricted) {
                 Logger.Warning("Classic profile {Profile} restricts nothing; the server runs stock Imlight rules.",

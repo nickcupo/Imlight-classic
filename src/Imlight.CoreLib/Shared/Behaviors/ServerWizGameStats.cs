@@ -189,9 +189,7 @@ public class ServerWizGameStats : IClientTypeProvider<WizGameStats> {
     /// </summary>
     /// <returns></returns>
     public WizGameStats GetCombatGameStats() {
-        // CLASSIC: without critical and block the client gets no rating or chance to re-simulate a crit from.
-        var critAndBlock = ClassicRuntime.Rules.CriticalAndBlockEnabled;
-        return new WizGameStats() {
+        var stats = new WizGameStats() { // CLASSIC: was `return new WizGameStats() {`; see the block after it.
             m_baseHitpoints = m_baseHitpoints,
             m_currentHitpoints = m_currentHitpoints,
             m_baseMana = m_baseMana,
@@ -220,15 +218,29 @@ public class ServerWizGameStats : IClientTypeProvider<WizGameStats> {
             m_powerPipBonusPercentAll = m_powerPipBonusPercentAll,
             m_xpPercentIncrease = m_xpPercentIncrease,
             // The client's cinematic re-simulates the crit from the rating and percent we send here.
-            m_criticalHitPercentBySchool = critAndBlock ? ToChanceList(m_criticalHitRatingBySchool, Level) : null,
-            m_blockPercentBySchool = critAndBlock ? ToChanceList(m_blockRatingBySchool, Level) : null,
-            m_criticalHitRatingBySchool = critAndBlock ? m_criticalHitRatingBySchool : null,
-            m_blockRatingBySchool = critAndBlock ? m_blockRatingBySchool : null,
-            m_criticalHitRatingAll = critAndBlock ? m_criticalHitRatingAll : 0f,
-            m_blockRatingAll = critAndBlock ? m_blockRatingAll : 0f,
-            m_criticalHitPercentAll = critAndBlock ? CombatCriticals.RatingToChance(m_criticalHitRatingAll, Level) : 0f,
-            m_blockPercentAll = critAndBlock ? CombatCriticals.RatingToChance(m_blockRatingAll, Level) : 0f,
+            m_criticalHitPercentBySchool = ToChanceList(m_criticalHitRatingBySchool, Level),
+            m_blockPercentBySchool = ToChanceList(m_blockRatingBySchool, Level),
+            m_criticalHitRatingBySchool = m_criticalHitRatingBySchool,
+            m_blockRatingBySchool = m_blockRatingBySchool,
+            m_criticalHitRatingAll = m_criticalHitRatingAll,
+            m_blockRatingAll = m_blockRatingAll,
+            m_criticalHitPercentAll = CombatCriticals.RatingToChance(m_criticalHitRatingAll, Level),
+            m_blockPercentAll = CombatCriticals.RatingToChance(m_blockRatingAll, Level),
         };
+
+        // CLASSIC: without critical and block the client gets no rating or chance to re-simulate a crit from.
+        if (!ClassicRuntime.Rules.CriticalAndBlockEnabled) {
+            stats.m_criticalHitPercentBySchool = null;
+            stats.m_blockPercentBySchool = null;
+            stats.m_criticalHitRatingBySchool = null;
+            stats.m_blockRatingBySchool = null;
+            stats.m_criticalHitRatingAll = 0f;
+            stats.m_blockRatingAll = 0f;
+            stats.m_criticalHitPercentAll = 0f;
+            stats.m_blockPercentAll = 0f;
+        }
+
+        return stats;
     }
 
     private static List<float> ToChanceList(List<float> ratings, int level) {

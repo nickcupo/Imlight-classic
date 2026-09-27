@@ -58,20 +58,20 @@ public static class ZoneWorldMapLoader {
     private const string WorldsKind = "zone-worlds";
     private const string OverridesKind = "zone-overrides";
 
-    private static readonly FrozenSet<string> s_worldsFileKeys = FrozenSet.Create(StringComparer.Ordinal,
+    internal static readonly FrozenSet<string> s_worldsFileKeys = FrozenSet.Create(StringComparer.Ordinal,
         "kind", "version", "license_tag", "fallback_world", "includes", "worlds", "areas", "overrides", "notes");
     private static readonly string[] s_worldsFileRequired =
         ["kind", "version", "license_tag", "fallback_world", "worlds", "areas", "overrides"];
-    private static readonly FrozenSet<string> s_overridesFileKeys = FrozenSet.Create(StringComparer.Ordinal,
+    internal static readonly FrozenSet<string> s_overridesFileKeys = FrozenSet.Create(StringComparer.Ordinal,
         "kind", "version", "license_tag", "source", "overrides", "notes");
     private static readonly string[] s_overridesFileRequired = ["kind", "version", "license_tag", "source", "overrides"];
-    private static readonly FrozenSet<string> s_worldKeys = FrozenSet.Create(StringComparer.Ordinal,
+    internal static readonly FrozenSet<string> s_worldKeys = FrozenSet.Create(StringComparer.Ordinal,
         "name", "hub_key", "prefixes", "notes");
     private static readonly string[] s_worldRequired = ["name", "prefixes"];
-    private static readonly FrozenSet<string> s_areaKeys = FrozenSet.Create(StringComparer.Ordinal,
-        "name", "prefixes", "access", "feature", "introduced", "introduced_after", "reason", "confidence", "message");
+    internal static readonly FrozenSet<string> s_areaKeys = FrozenSet.Create(StringComparer.Ordinal,
+        "name", "prefixes", "access", "feature", "introduced", "introduced_after", "reason", "confidence", "source", "message");
     private static readonly string[] s_areaRequired = ["name", "prefixes", "access", "reason", "confidence"];
-    private static readonly FrozenSet<string> s_overrideKeys = FrozenSet.Create(StringComparer.Ordinal,
+    internal static readonly FrozenSet<string> s_overrideKeys = FrozenSet.Create(StringComparer.Ordinal,
         "zone", "world", "feature", "access", "introduced", "introduced_after", "reason", "confidence", "source", "message");
     private static readonly string[] s_overrideRequired = ["zone", "reason", "confidence"];
     private static readonly string[] s_overrideEffects = ["world", "feature", "access", "introduced", "introduced_after"];
@@ -134,19 +134,25 @@ public static class ZoneWorldMapLoader {
                     continue;
                 }
 
-                var kind = PeekKind(includePath);
-                if (!string.Equals(kind, OverridesKind, StringComparison.Ordinal)) {
-                    diagnostics.At(item, keyPath, $"includes '{name}', which is a '{kind ?? "unknown"}' file, not {OverridesKind}");
+                // Parse errors are reported against the include itself, with its own line and key path.
+                var includeRoot = YamlTree.Parse(includePath, ClassicDataLocator.DisplayPath(includePath), diagnostics);
+                if (includeRoot is YMap peek && peek.Find("kind")?.Value is YScalar { Value: var kind }
+                    && !string.Equals(kind, OverridesKind, StringComparison.Ordinal)) {
+                    diagnostics.At(item, keyPath, $"includes '{name}', which is a '{kind}' file, not {OverridesKind}");
                     continue;
                 }
 
-                var include = ParseFile(includePath, diagnostics, OverridesKind, s_overridesFileKeys, s_overridesFileRequired);
+                var include = ValidateFile(includeRoot, diagnostics, OverridesKind, s_overridesFileKeys, s_overridesFileRequired);
                 if (include is null) {
                     continue;
                 }
 
                 if (include.Find("source") is { } source) {
                     _ = diagnostics.ReadString(source.Value, "source");
+                }
+
+                if (include.Find("notes") is { } includeNotes) {
+                    diagnostics.ReadStringList(includeNotes.Value, "notes");
                 }
 
                 overrides.AddRange(ReadOverrides(include, name, diagnostics, duplicates));
@@ -189,8 +195,12 @@ public static class ZoneWorldMapLoader {
     }
 
     private static YMap? ParseFile(string path, YamlDiagnostics diagnostics, string expectedKind,
-                                   IReadOnlySet<string> keys, string[] required) {
-        var root = YamlTree.Parse(path, ClassicDataLocator.DisplayPath(path), diagnostics);
+                                   IReadOnlySet<string> keys, string[] required)
+        => ValidateFile(YamlTree.Parse(path, ClassicDataLocator.DisplayPath(path), diagnostics),
+            diagnostics, expectedKind, keys, required);
+
+    private static YMap? ValidateFile(YNode? root, YamlDiagnostics diagnostics, string expectedKind,
+                                      IReadOnlySet<string> keys, string[] required) {
         if (root is null) {
             return null;
         }
@@ -217,15 +227,6 @@ public static class ZoneWorldMapLoader {
         }
 
         return map;
-    }
-
-    private static string? PeekKind(string path) {
-        var peek = new YamlDiagnostics();
-
-        return YamlTree.Parse(path, ClassicDataLocator.DisplayPath(path), peek) is YMap map
-            && map.Find("kind")?.Value is YScalar kind
-                ? kind.Value
-                : null;
     }
 
     private static List<WorldEntry> ReadWorlds(YMap root, YamlDiagnostics diagnostics, Duplicates duplicates) {
@@ -309,6 +310,7 @@ public static class ZoneWorldMapLoader {
                 IntroducedAfter = introducedAfter,
                 Reason = ReadOptionalString(area, keyPath, "reason", diagnostics) ?? "",
                 Confidence = ReadConfidence(area, keyPath, diagnostics),
+                Source = ReadOptionalString(area, keyPath, "source", diagnostics),
                 Message = ReadOptionalString(area, keyPath, "message", diagnostics),
             });
         }

@@ -404,6 +404,26 @@ public sealed class ProfileLoaderTests : IDisposable {
         Assert.Equal("duplicate key", error.Message);
     }
 
+    [Theory]
+    [InlineData("worlds: [wizard_city, krokotopia", "worlds")]
+    [InlineData("features: {bazaar: true", "features")]
+    public void UnclosedFlowCollectionBeforeAnotherKey(string line, string keyPath) {
+        _data.WriteProfile("p", $"""
+            id: p
+            title: P
+            status: optional
+            cutoff: null
+            {line}
+            level_cap: 50
+            """);
+
+        var error = ZoneFixture.SingleError(() => ClassicProfileLoader.Load(_data.ProfilesPath, "p"), keyPath);
+
+        Assert.Equal("classic-data/profiles/p.yaml", error.File);
+        Assert.Equal(5, error.Line);
+        Assert.StartsWith("not valid YAML", error.Message);
+    }
+
     [Fact]
     public void BadPowerPipRank() {
         _data.WriteProfile("p", """
@@ -474,6 +494,28 @@ public sealed class ProfileLoaderTests : IDisposable {
         var ex = Assert.Throws<ClassicDataException>(() => ClassicProfileLoader.LoadAll(_data.ProfilesPath));
 
         Assert.Contains(ex.Errors, error => error.File.EndsWith("bad-one.yaml", StringComparison.Ordinal));
+        Assert.Contains(ex.Errors, error => error.File.EndsWith("bad-two.yaml", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void LoadAllGoesPastAFileTheParserCannotRead() {
+        _data.WriteProfile("bad-one", """
+            id: bad-one
+            title: Bad
+            status: optional
+            worlds: [wizard_city
+            cutoff: null
+            """);
+        _data.WriteProfile("bad-two", """
+            id: bad-two
+            title: Bad
+            status: nope
+            cutoff: null
+            """);
+
+        var ex = Assert.Throws<ClassicDataException>(() => ClassicProfileLoader.LoadAll(_data.ProfilesPath));
+
+        Assert.Contains(ex.Errors, error => error.File.EndsWith("bad-one.yaml", StringComparison.Ordinal) && error.KeyPath == "worlds");
         Assert.Contains(ex.Errors, error => error.File.EndsWith("bad-two.yaml", StringComparison.Ordinal));
     }
 

@@ -135,6 +135,16 @@ internal static class YamlTree {
 
             return null;
         }
+        catch (InvalidOperationException) {
+            // YamlDotNet's scanner throws this, with no position, when a flow [ or { is left open and a
+            // later line holds another key. Replay the parser to report where it stopped.
+            var (keyPath, line, inFlow) = FindWhereParsingStopped(text);
+            diagnostics.Add(new ClassicDataError(displayPath, keyPath, line, inFlow
+                ? "not valid YAML: the parser failed inside this [ ] or { }; check that it is closed"
+                : "not valid YAML: the parser failed after this line"));
+
+            return null;
+        }
 
         if (stream.Documents.Count == 0) {
             diagnostics.Add(new ClassicDataError(displayPath, "", null, "the file is empty"));
@@ -235,67 +245,111 @@ internal static class YamlTree {
     private static string? FindKeyPathAt(string text, Mark at) {
         // RepresentationModel stops at a duplicate key without saying where in the tree it was.
         // Replay the parser events and report the path of the key that starts at the error mark.
-        var frames = new Stack<Frame>();
+        var tracker = new PathTracker();
         var parser = new Parser(new StringReader(text));
         try {
             while (parser.MoveNext()) {
-                switch (parser.Current) {
-                    case MappingStart:
-                        frames.Push(new Frame(ChildPath(frames), isMap: true));
-                        break;
-                    case SequenceStart:
-                        frames.Push(new Frame(ChildPath(frames), isMap: false));
-                        break;
-                    case MappingEnd or SequenceEnd:
-                        frames.Pop();
-                        CompleteValue(frames);
-                        break;
-                    case Scalar scalar when frames.TryPeek(out var top) && top.IsMap && top.ExpectingKey:
-                        if (scalar.Start.Line == at.Line && scalar.Start.Column == at.Column) {
-                            return Join(top.Path, scalar.Value);
-                        }
-
-                        top.CurrentKey = scalar.Value;
-                        top.ExpectingKey = false;
-                        break;
-                    case Scalar or AnchorAlias:
-                        CompleteValue(frames);
-                        break;
+                var parsingEvent = parser.Current!;
+                if (tracker.Follow(parsingEvent) is { } keyPath
+                    && parsingEvent.Start.Line == at.Line && parsingEvent.Start.Column == at.Column) {
+                    return keyPath;
                 }
             }
         }
-        catch (YamlException) {
-            // The replay hits the same error the loader did; any path found before it stands.
+        catch (Exception ex) when (ex is YamlException or InvalidOperationException) {
+            // The replay hits the same error the loader did, or a later one; any path found before it stands.
         }
 
         return null;
     }
 
-    private static string ChildPath(Stack<Frame> frames) {
-        if (!frames.TryPeek(out var parent)) {
-            return "";
+    private static (string KeyPath, int? Line, bool InFlow) FindWhereParsingStopped(string text) {
+        var tracker = new PathTracker();
+        var parser = new Parser(new StringReader(text));
+        int? lastLine = null;
+        try {
+            while (parser.MoveNext()) {
+                _ = tracker.Follow(parser.Current!);
+                lastLine = (int) parser.Current!.Start.Line;
+            }
+        }
+        catch (Exception ex) when (ex is YamlException or InvalidOperationException) {
+            // Expected: the replay stops where the loader did.
         }
 
-        return parent.IsMap ? Join(parent.Path, parent.CurrentKey) : Index(parent.Path, parent.Index);
+        // An open flow collection is the likely culprit, so point at the line of its [ or {.
+        return tracker.Open is { IsFlow: true } open
+            ? (open.Path, open.Line, true)
+            : (tracker.Open?.Path ?? "", lastLine, false);
     }
 
-    private static void CompleteValue(Stack<Frame> frames) {
-        if (!frames.TryPeek(out var parent)) {
-            return;
+    private sealed class PathTracker {
+
+        private readonly Stack<Frame> _frames = new();
+
+        /// <summary>
+        /// The innermost collection that has started and not ended.
+        /// </summary>
+        public Frame? Open => _frames.TryPeek(out var top) ? top : null;
+
+        /// <summary>
+        /// Follows one parser event.
+        /// </summary>
+        /// <returns>The key path when the event is a mapping key, else null.</returns>
+        public string? Follow(ParsingEvent parsingEvent) {
+            switch (parsingEvent) {
+                case MappingStart mapping:
+                    _frames.Push(new Frame(ChildPath(), isMap: true, mapping.Style == MappingStyle.Flow, (int) mapping.Start.Line));
+                    break;
+                case SequenceStart sequence:
+                    _frames.Push(new Frame(ChildPath(), isMap: false, sequence.Style == SequenceStyle.Flow, (int) sequence.Start.Line));
+                    break;
+                case MappingEnd or SequenceEnd:
+                    _frames.Pop();
+                    CompleteValue();
+                    break;
+                case Scalar scalar when _frames.TryPeek(out var top) && top.IsMap && top.ExpectingKey:
+                    top.CurrentKey = scalar.Value;
+                    top.ExpectingKey = false;
+
+                    return Join(top.Path, scalar.Value);
+                case Scalar or AnchorAlias:
+                    CompleteValue();
+                    break;
+            }
+
+            return null;
         }
 
-        if (parent.IsMap) {
-            parent.ExpectingKey = true;
+        private string ChildPath() {
+            if (!_frames.TryPeek(out var parent)) {
+                return "";
+            }
+
+            return parent.IsMap ? Join(parent.Path, parent.CurrentKey) : Index(parent.Path, parent.Index);
         }
-        else {
-            parent.Index++;
+
+        private void CompleteValue() {
+            if (!_frames.TryPeek(out var parent)) {
+                return;
+            }
+
+            if (parent.IsMap) {
+                parent.ExpectingKey = true;
+            }
+            else {
+                parent.Index++;
+            }
         }
+
     }
 
-    private sealed class Frame(string path, bool isMap) {
+    private sealed class Frame(string path, bool isMap, bool isFlow, int line) {
 
         public string Path { get; } = path;
         public bool IsMap { get; } = isMap;
+        public bool IsFlow { get; } = isFlow;
+        public int Line { get; } = line;
         public bool ExpectingKey { get; set; } = true;
         public string CurrentKey { get; set; } = "";
         public int Index { get; set; }

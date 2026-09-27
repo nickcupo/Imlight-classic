@@ -78,6 +78,11 @@ internal static class CombatEffectApplicator {
             return cinematicTime;
         }
 
+        // CLASSIC: without critical and block no roll ever consumes Vengeance or Conviction, so they never hang.
+        if (!ClassicRuntime.Rules.CriticalAndBlockEnabled && effect.m_effectType is kSpellEffects.kCritBoost or kSpellEffects.kCritBlock) {
+            return cinematicTime;
+        }
+
         switch (effect.m_effectType) {
             case kSpellEffects.kDamage:
                 cinematicTime += ApplyFlatDamageEffect(effect, charms, caster, targets, critMultiplier);
@@ -107,14 +112,9 @@ internal static class CombatEffectApplicator {
             case kSpellEffects.kModifyIncomingHealFlat:
             case kSpellEffects.kModifyIncomingDamageType:
             case kSpellEffects.kAbsorbDamage:
-                ApplyHangingEffect(effect, targets);
-                break;
             case kSpellEffects.kCritBoost:
             case kSpellEffects.kCritBlock:
-                // CLASSIC: without critical and block no roll ever consumes Vengeance or Conviction.
-                if (ClassicRuntime.Rules.CriticalAndBlockEnabled) {
-                    ApplyHangingEffect(effect, targets);
-                }
+                ApplyHangingEffect(effect, targets);
                 break;
             case kSpellEffects.kStun:
                 cinematicTime += ApplyStunEffect(effect, targets);

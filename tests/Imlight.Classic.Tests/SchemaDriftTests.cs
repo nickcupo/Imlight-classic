@@ -35,10 +35,12 @@
  * Last Updated: 09/26/2026
  */
 
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
+using Imlight.Classic.Zones;
 using Xunit;
 
 namespace Imlight.Classic.Tests;
@@ -98,6 +100,27 @@ public sealed class SchemaDriftTests {
         Assert.Equal(EnumValues(rules.GetProperty("tutorial")), ClassicSchema.Tutorials.ToArray());
         Assert.Equal(new[] { "accuracy_table", "xp_table", "power_pips_from_rank", "dragonspyre_difficulty", "tutorial" },
             rules.EnumerateObject().Select(rule => rule.Name).ToArray());
+    }
+
+    [Theory]
+    [InlineData("worldsFile")]
+    [InlineData("overridesFile")]
+    [InlineData("world")]
+    [InlineData("area")]
+    [InlineData("override")]
+    public void ZoneLoaderKeysMatchZonesSchema(string definition) {
+        var schema = ReadSchema("zones.schema.json");
+        var properties = schema.GetProperty("$defs").GetProperty(definition).GetProperty("properties")
+            .EnumerateObject().Select(property => property.Name).Order(StringComparer.Ordinal).ToArray();
+        var keys = definition switch {
+            "worldsFile" => ZoneWorldMapLoader.s_worldsFileKeys,
+            "overridesFile" => ZoneWorldMapLoader.s_overridesFileKeys,
+            "world" => ZoneWorldMapLoader.s_worldKeys,
+            "area" => ZoneWorldMapLoader.s_areaKeys,
+            _ => ZoneWorldMapLoader.s_overrideKeys,
+        };
+
+        Assert.Equal(properties, keys.Order(StringComparer.Ordinal).ToArray());
     }
 
     [Fact]
