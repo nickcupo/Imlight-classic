@@ -51,6 +51,9 @@ using System.Text.RegularExpressions;
 using Akka.Actor;
 using Imcodec.Math;
 using Imcodec.ObjectProperty.TypeCache;
+using Imlight.CoreLib.Classic;
+using Imlight.CoreLib.Game.Requirements;
+using Imlight.CoreLib.Game.Requirements.Contexts;
 using Imlight.CoreLib.Game.WizBang;
 using Imlight.CoreLib.Game.Zone.Core;
 using Imlight.CoreLib.Shared.Packets;
@@ -112,8 +115,14 @@ internal sealed partial class InteractDungeonSigilComponent(ZoneEntity entity)
             || name.Contains("TeleportFullCircle");
     }
 
-    public IEnumerable<ServiceOptionBase> GetServiceOptions(Wizard _) {
+    public IEnumerable<ServiceOptionBase> GetServiceOptions(Wizard playerCharacter) {
         if (!IsAvailable) {
+            return [];
+        }
+
+        // CLASSIC: a sigil offers itself only to a wizard who meets its requirement list (the quest that opens
+        // the dungeon), as the client data gates it.
+        if (!MeetsRequirements(null, null, playerCharacter)) {
             return [];
         }
 
@@ -123,13 +132,18 @@ internal sealed partial class InteractDungeonSigilComponent(ZoneEntity entity)
     }
 
     public override void OnPlayerJoin(CoreObject playerObj, IActorRef playerActor, Wizard playerWizard) {
-        if (IsAvailable) {
+        if (IsAvailable && MeetsRequirements(playerActor, playerObj, playerWizard)) { // CLASSIC: dark for a wizard it refuses.
             Entity.ChangeStateExclusiveSender("Glowy", playerActor);
         }
     }
 
     public void OnServiceInteraction(IActorRef playerActor, Wizard playerCharacter, CoreObject playerObject, uint serviceOptionIndex) {
         if (!TryResolveDestination(out var sigil)) {
+            return;
+        }
+
+        // CLASSIC: the requirements may have changed since the option was offered.
+        if (!MeetsRequirements(playerActor, playerObject, playerCharacter)) {
             return;
         }
 
@@ -148,6 +162,23 @@ internal sealed partial class InteractDungeonSigilComponent(ZoneEntity entity)
             DestinationZone = sigil.DestinationZone,
             DestinationLoc = sigil.DestinationLoc,
         });
+    }
+
+    // CLASSIC: the sigil's own m_requirements (a MinigameSigilInfo list: the quest that opens its dungeon), read the
+    // KingsIsle way when the classic quest rules are on. Stock Imlight never checked them.
+    private bool MeetsRequirements(IActorRef playerActor, CoreObject playerObj, Wizard wizard) {
+        var requirements = SigilInfo?.m_requirements;
+        if (!ClassicQuestEngine.IsActive || requirements?.m_requirements is not { Count: > 0 }) {
+            return true;
+        }
+
+        if (wizard is null) {
+            return false;
+        }
+
+        return RequirementDispatcher.EvaluateRequirements(
+            requirements: requirements,
+            context: new QuestRequirementContext(requirements, playerActor, playerObj, wizard));
     }
 
     private sealed record ResolvedSigil(string DestinationZone, string DestinationLoc);

@@ -43,6 +43,10 @@ public static partial class SpiralDB {
 
     private const int OverlayMaxKeysLogged = 50;
 
+    // CLASSIC: ZoneTransfer merge records applied onto a record loaded from the same folder in the last LoadZoneData
+    // call; such a file shares its key with another file on purpose (SpiralDB.LoadZoneData).
+    private static int s_zoneMergesOntoSameRootRecords;
+
     private sealed class OverlayCategoryStats(string name, Func<int> count) {
         public string Name { get; } = name;
         public Func<int> Count { get; } = count;
@@ -294,7 +298,8 @@ public static partial class SpiralDB {
                 Logger.Args(dir, failed, files.Count));
         }
 
-        var duplicates = loaded - added - overridden.Count - keyless.Count;
+        var duplicates = loaded - added - overridden.Count - keyless.Count
+            - (stats.Name == "ZoneTransfer" ? s_zoneMergesOntoSameRootRecords : 0);
         if (duplicates > 0) {
             Logger.Warning("SpiralDB overlay {0}: {1} files repeat a key used by another file in this folder; " +
                            "which one wins is not defined.",

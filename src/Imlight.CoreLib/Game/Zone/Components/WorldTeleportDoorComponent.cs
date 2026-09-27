@@ -44,6 +44,7 @@ using Imcodec.ObjectProperty;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Classic;
 using Imlight.Common;
+using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.Game.WizBang;
 using Imlight.CoreLib.Game.Zone.Core;
 using Imlight.CoreLib.Shared.Packets;
@@ -78,12 +79,12 @@ internal sealed class WorldTeleportDoorComponent(ZoneEntity entity) : ZoneEntity
         ];
 
     public void OnServiceInteraction(IActorRef playerActor, Wizard playerCharacter, CoreObject playerObject, uint serviceOptionIndex) {
-        SendWorldTeleportOptions(playerActor);
+        SendWorldTeleportOptions(playerActor, playerCharacter);
         SendPlayerIntoWizbang(playerObject.m_globalID);
         SendPlayerIntoState(playerObject.m_globalID);
     }
 
-    private void SendWorldTeleportOptions(IActorRef playerActor) {
+    private void SendWorldTeleportOptions(IActorRef playerActor, Wizard playerCharacter) {
         var teleportDoorOptions = new WorldTeleportOptions {
             m_worldList = [ // TODO: fetch available worlds for user to teleport to from db
                 "WizardCity",
@@ -95,8 +96,14 @@ internal sealed class WorldTeleportDoorComponent(ZoneEntity entity) : ZoneEntity
             ]
         };
 
-        // CLASSIC: list only the worlds the profile opens.
+        // CLASSIC: list only the worlds the profile opens, and of those only the ones this wizard has unlocked
+        // (the profile's world_unlocks: the 2009 quest that opened each world).
         teleportDoorOptions.m_worldList = [.. teleportDoorOptions.m_worldList.Where(ClassicRuntime.Rules.IsHubKeyAllowed)];
+        if (playerCharacter is not null) {
+            var progress = new WizardProgress(playerCharacter);
+            teleportDoorOptions.m_worldList = [.. teleportDoorOptions.m_worldList
+                .Where(hubKey => ClassicRuntime.Rules.IsWorldUnlocked(hubKey, progress).Unlocked)];
+        }
 
         // Serialize the teleport door options and send it to the player.
         var serializer = new ObjectSerializer(

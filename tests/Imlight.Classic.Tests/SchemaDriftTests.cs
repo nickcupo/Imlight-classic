@@ -127,6 +127,17 @@ public sealed class SchemaDriftTests {
     }
 
     [Fact]
+    public void ProfileLoaderKeysMatchProfileSchema() {
+        var schema = ReadSchema("profile.schema.json");
+        var unlock = schema.GetProperty("properties").GetProperty("world_unlocks").GetProperty("additionalProperties");
+        var check = schema.GetProperty("$defs").GetProperty("unlockCheck");
+
+        Assert.Equal(PropertyNames(schema), Sorted(ClassicProfileLoader.s_rootKeys));
+        Assert.Equal(PropertyNames(unlock), Sorted(ClassicProfileLoader.s_worldUnlockKeys));
+        Assert.Equal(PropertyNames(check), Sorted(Imlight.Classic.Travel.UnlockCheck.Keys));
+    }
+
+    [Fact]
     public void ProfileIdPatternMatchesSchema() {
         var schema = ReadSchema("profile.schema.json");
 

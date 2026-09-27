@@ -59,6 +59,14 @@ public static class ClassicMessages {
         => $"{worldName} isn't open yet.";
 
     /// <summary>
+    /// The text for a world the wizard has not unlocked yet (the profile's world_unlocks rule).
+    /// </summary>
+    /// <param name="worldName">The world's display name.</param>
+    /// <returns>For example "You can't travel to Krokotopia yet."</returns>
+    public static string WorldLocked(string worldName)
+        => $"You can't travel to {worldName} yet.";
+
+    /// <summary>
     /// The text for a feature that is switched off.
     /// </summary>
     /// <param name="featurePath">A <see cref="ClassicFeatures"/> path.</param>

@@ -45,6 +45,7 @@ using System.Collections.Immutable;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using Imlight.Classic.Travel;
 
 namespace Imlight.Classic;
 
@@ -182,6 +183,13 @@ public sealed class ClassicProfile {
 
     public required FeatureSwitches Features { get; init; }
     public required ProfileRules Rules { get; init; }
+
+    /// <summary>
+    /// The quest or level that opens each world at the Spiral Door, keyed by world id. A world without a rule
+    /// is open to every wizard; an empty map means no world is locked.
+    /// </summary>
+    public ImmutableDictionary<string, WorldUnlock> WorldUnlocks { get; init; }
+        = ImmutableDictionary<string, WorldUnlock>.Empty.WithComparers(StringComparer.Ordinal);
     public ImmutableArray<string> Notes { get; init; } = [];
 
     /// <summary>
