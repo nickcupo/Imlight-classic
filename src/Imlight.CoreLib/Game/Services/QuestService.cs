@@ -58,7 +58,7 @@ using System.Linq;
 
 namespace Imlight.CoreLib.Game.Services;
 
-internal class QuestService(SessionActor sessionActor) : MessageService(sessionActor) {
+internal partial class QuestService(SessionActor sessionActor) : MessageService(sessionActor) { // CLASSIC: partial for QuestService.Scavenge.cs.
 
     private const float DEFAULT_KILL_COLLECT_CHANCE = 0.5f;
     private const string QUEST_COMPLETED_ENTRY = "Complete";
@@ -846,65 +846,6 @@ internal class QuestService(SessionActor sessionActor) : MessageService(sessionA
 
             SendGoalMessage(goalTemplate, qInstance, 2);
         }
-    }
-
-    // CLASSIC: scavenge ("Defeat and Collect") goals. Their quest items have no client item
-    // templates, so, like BOUNTYCOLLECT, the item is only the goal tally: every defeated mob
-    // that ScavengeGoalIndex names for an active goal rolls the tally's chance and adds one.
-    // Each player in the duel gets their own MSG_COMBATWIN, so each rolls and counts for
-    // themselves. Nothing enters the backpack, so nothing is removed on completion.
-    private void ProcessScavengeGoals(Wizard wizard, ulong[] defeatedMobTemplateIds) {
-        if (defeatedMobTemplateIds is not { Length: > 0 }) {
-            return;
-        }
-
-        // Iterate a copy: completing a goal can complete or grant quests.
-        foreach (var qInstance in wizard.QuestBehavior.CurrentQuestInstances.ToArray()) {
-            var qTemplate = _cachedQuestTemplates.FirstOrDefault(q => q.m_questName == qInstance.QuestName);
-            if (qTemplate == null) {
-                continue;
-            }
-
-            foreach (var goal in qTemplate.m_goals.OfType<ScavengeGoalTemplate>()) {
-                if (qInstance.IsGoalActive(goal.m_goalName)) {
-                    ProcessScavengeGoal(wizard, qInstance, goal, defeatedMobTemplateIds);
-                }
-            }
-        }
-    }
-
-    // CLASSIC: see ProcessScavengeGoals.
-    private void ProcessScavengeGoal(Wizard wizard,
-                                     QuestInstance qInstance,
-                                     ScavengeGoalTemplate goalTemplate,
-                                     ulong[] defeatedMobTemplateIds) {
-        var gInstance = qInstance.GoalProgress.FirstOrDefault(g => g.GoalName == goalTemplate.m_goalName);
-        if (gInstance == null) {
-            return;
-        }
-
-        var goalMax = goalTemplate.m_tallyCounter?.m_count ?? 1;
-        var chance = goalTemplate.m_tallyCounter?.m_percentChance ?? DEFAULT_KILL_COLLECT_CHANCE;
-
-        var collected = ScavengeGoalIndex.RollDrops(qInstance.QuestName, goalTemplate.m_goalName,
-            defeatedMobTemplateIds, chance, goalMax - gInstance.CurrentProgress);
-
-        // A saved tally already at the total (the index's count was lowered) completes here too.
-        if (collected == 0 && gInstance.CurrentProgress < goalMax) {
-            return;
-        }
-
-        for (var i = 0; i < collected; i++) {
-            wizard.IncrementQuestGoal(qInstance.QuestName, goalTemplate.m_goalName);
-        }
-
-        if (gInstance.CurrentProgress >= goalMax) {
-            CompleteGoal(qInstance, goalTemplate);
-
-            return;
-        }
-
-        SendGoalMessage(goalTemplate, qInstance, 2);
     }
 
     private string GetPatronIconFromGoal(GoalTemplate gTemplate) {

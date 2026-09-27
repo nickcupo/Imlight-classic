@@ -45,12 +45,15 @@
  * it gives one ("text"), a single named item ("one"), the Wizard101 wiki
  * ("wiki", unverified) or, where nothing states it, a guess of 3 ("guess").
  * The drop chance is 1.0, as on the captured WC KillCollect tallies.
+ * Drops are not zone-checked, so a target must not match mobs in other
+ * worlds. Quests whose start goals run in parallel, which the captured
+ * goal logic chains, get a turn-in that waits for all of them.
  *
  * TODO:
  * Replace the "wiki"/"guess" counts if a capture or SpiralDB update ever
  * carries the real m_itemTotal.
  *
- * Created by: Wizard101 Classic
+ * Created by: Nick with Claude Code (claude-opus-5-5)
  * Version: KALI 1.0
  * Last Updated: 09/26/2026
  */
@@ -70,15 +73,8 @@ namespace Imlight.CoreLib.WizardData.Collections;
 /// </summary>
 internal static class ScavengeGoalIndex {
 
-    /// <summary>
-    /// The drop chance written into the restored tallies, matching the captured WC KillCollect goals.
-    /// </summary>
     private const float COLLECT_CHANCE = 1.0f;
 
-    /// <summary>
-    /// What one scavenge goal needs: the tally total, the item and mob locale keys for the tally
-    /// text, and the mob display-name keys or adjectives that drop the item.
-    /// </summary>
     private sealed record Fill(int Count, string Item, string Mob, string[] Targets);
 
     private static readonly Dictionary<(string Quest, string Goal), Fill> s_fills = new() {
@@ -120,17 +116,23 @@ internal static class ScavengeGoalIndex {
         [("DS-NEC1-C01-005", "1_WizardQuestGoals_KillCollect")] = new(1, "WizQst1ED2B_00000000", "WizardMobs_00000483", ["WizardMobs_00000483"]),                                 // one: Reins, The Collector
         [("DS-NEC1-C05-003", "1_WizardQuestGoals_KillCollect")] = new(1, "WizQst1ED84_00000000", "WizardMobs_00000490", ["WizardMobs_00000490"]),                                 // one: Crystal Hammer, Gallium Juggernaut
         [("DS-NEC2-C01-001", "1_WizardQuestGoals_KillCollect")] = new(3, "WizQst1ED39_00000000", "WizardMobs_00000463", ["Manascale_Sorcerer"]),                                  // wiki: Knowledge Crystals
-        [("DS-ACAD1-C04-001", "1_WizardQuestGoals_KillCollect")] = new(3, "WizQst1ED97_00000002", "WizQst1ED97_00000001", ["Spider"]),                                            // wiki: Crystal Spinnerets, any spider
+        [("DS-ACAD1-C04-001", "1_WizardQuestGoals_KillCollect")] = new(3, "WizQst1ED97_00000002", "WizQst1ED97_00000001",
+            ["WizardMobs_00000433", "WizardMobs_00000434", "WizardMobs_00000435", "WizardMobs_00000436", "WizardMobs_00000438"]),     // wiki: Crystal Spinnerets, the Crystal Grove spiders
         [("DS-ACAD2-C01-004", "1_WizardQuestGoals_KillCollect")] = new(1, "WizQst1EDA3_00000009", "WizardMobs_00000468", ["Kraysys"]),                                            // one: Knowledge Crystal
         [("DS-ACAD2-C01-006", "1_WizardQuestGoals_KillCollect")] = new(3, "WizQst1EDA5_00000000", "WizardMobs_00000440", ["WizardMobs_00000440"]),                                // wiki: Coal Hearts, Fangtooth Lavaspinner
         [("DS-ACAD2-C01-006", "2_WizardQuestGoals_KillCollect")] = new(3, "WizQst1EDA5_00000001", "WizardMobs_00000456", ["Burning_Flamewing"]),                                  // guess: Flame Sacs
         [("DS-ACAD2-C01-008", "1_WizardQuestGoals_KillCollect")] = new(8, "WizQst1EDA7_00000000", "WizardMobs_00000470", ["Terrorwing_Talonmaster"]),                             // wiki: Armor Pieces
     };
 
+    private static readonly HashSet<string> s_questsWithParallelStartGoals = [
+        "DS-ACAD2-C01-006", // Coal Hearts and Flame Sacs.
+    ];
+
     /// <summary>
     /// Fills a loaded quest's scavenge goals with their tally counter and item total. Data the
     /// template already carries is kept; a scavenge goal with no entry is logged, since nothing
-    /// can complete it.
+    /// can complete it. A quest whose start goals run in parallel gets goal logic that waits for
+    /// all of them.
     /// </summary>
     /// <param name="quest">The quest template, just deserialized.</param>
     internal static void ApplyTo(QuestTemplate quest) {
@@ -157,6 +159,26 @@ internal static class ScavengeGoalIndex {
             if (goal.m_itemTotal <= 0) {
                 goal.m_itemTotal = goal.m_tallyCounter.m_count;
             }
+        }
+
+        if (s_questsWithParallelStartGoals.Contains(quest.m_questName)) {
+            JoinParallelStartGoals(quest);
+        }
+    }
+
+    private static void JoinParallelStartGoals(QuestTemplate quest) {
+        // The captured goal logic chains goals that all start on accept, so finishing the last one first
+        // would skip the others. Drop the links that re-add a start goal; what follows waits for every one.
+        var startGoals = quest.m_startGoals ?? [];
+        if (quest.m_goalLogic is null || startGoals.Count < 2) {
+            return;
+        }
+
+        quest.m_goalLogic.RemoveAll(logic => logic.m_goalsToAdd is { Count: > 0 }
+            && logic.m_goalsToAdd.All(startGoals.Contains));
+
+        foreach (var logic in quest.m_goalLogic.Where(l => l.m_goalsAND?.Any(startGoals.Contains) == true)) {
+            logic.m_goalsAND = [.. startGoals.Union(logic.m_goalsAND)];
         }
     }
 
