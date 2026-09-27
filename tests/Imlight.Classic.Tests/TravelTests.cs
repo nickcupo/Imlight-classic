@@ -230,6 +230,45 @@ public sealed class TravelTests {
     }
 
     [Fact]
+    public void GoHomeFromALockedWorldGoesToTheFallbackHub() {
+        var rules = RulesWith("""
+            world_unlocks:
+              grizzleheim:
+                any_of:
+                  - level: 20
+                  - quest: WC-GRZ-C01-001
+            """);
+        var low = new Progress { Level = 5 };
+
+        Assert.Equal("Grizzleheim", rules.HubKeyFor("GrizzleheimLite/GH_GrizzleheimHubLite"));
+        Assert.Equal("WizardCity", rules.HomeHubKeyFor("GrizzleheimLite/GH_GrizzleheimHubLite", low));
+        Assert.Equal("WizardCity", rules.HomeHubKeyFor("Grizzleheim/GH_MainHub", low));
+        Assert.Equal("Krokotopia", rules.HomeHubKeyFor("Krokotopia/KT_Hub", low));
+
+        low.Active.Add("WC-GRZ-C01-001");
+        Assert.Equal("Grizzleheim", rules.HomeHubKeyFor("GrizzleheimLite/GH_GrizzleheimHubLite", low));
+        Assert.Equal("Grizzleheim", rules.HomeHubKeyFor("GrizzleheimLite/GH_GrizzleheimHubLite", new Progress { Level = 20 }));
+    }
+
+    [Fact]
+    public void GoHomeWithoutAWorldRuleIsTheWorldHub() {
+        Assert.Equal("Grizzleheim", RulesWith("").HomeHubKeyFor("GrizzleheimLite/GH_GrizzleheimHubLite", new Progress()));
+        Assert.Null(ClassicRules.Stock.HomeHubKeyFor("GrizzleheimLite/GH_GrizzleheimHubLite", new Progress()));
+        Assert.Null(ClassicDataFixture.RealRules("dev-unrestricted")
+            .HomeHubKeyFor("GrizzleheimLite/GH_GrizzleheimHubLite", new Progress()));
+    }
+
+    [Fact]
+    public void Late2009GoHomeFromTheGrizzleheimPreviewRespectsTheUnlock() {
+        var rules = ClassicDataFixture.RealRules("late-2009");
+        var trader = new Progress { Level = 5 };
+        trader.Active.Add("WC-GRZ-PRE-002");   // Trade Voyage sends a level-5 wizard to the preview
+
+        Assert.Equal("WizardCity", rules.HomeHubKeyFor("GrizzleheimLite/GH_GrizzleheimHubLite", trader));
+        Assert.Equal("Grizzleheim", rules.HomeHubKeyFor("GrizzleheimLite/GH_GrizzleheimHubLite", new Progress { Level = 20 }));
+    }
+
+    [Fact]
     public void DevUnrestrictedHasNoWorldUnlocks() {
         Assert.Empty(ClassicDataFixture.LoadProfile("dev-unrestricted").WorldUnlocks);
     }

@@ -318,8 +318,9 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
         // this teleports the wizard to the world hub, NOT their home/dorm. for that you want MSG_GOTODORM. goofy ahh naming scheme
         var wizard = GetActiveWizard();
         // CLASSIC: go home through the classic zone map (ClassicMode and Housing belong to Wizard City),
+        // to the fallback world's hub when the wizard has not unlocked this world (the Grizzleheim preview),
         // and refuse a closed hub before the effects play.
-        var hub = ClassicGate.HubFor(wizard.Zone);
+        var hub = ClassicGate.HubFor(wizard.Zone, new WizardProgress(wizard));
         if (hub is null || !ClassicGate.AllowsZone(hub.Value.Zone, wizard.CharId, InformGameClient)) {
             return;
         }
@@ -530,8 +531,9 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
         var wizard = GetActiveWizard();
         var zoneName = wizard.Zone;
 
-        // CLASSIC: the hub comes from the classic zone map; without a profile this is the stock lookup.
-        var worldHubMap = ClassicGate.HubFor(zoneName);
+        // CLASSIC: the hub comes from the classic zone map (the fallback world's hub for a world the wizard has
+        // not unlocked); without a profile this is the stock lookup.
+        var worldHubMap = ClassicGate.HubFor(zoneName, new WizardProgress(wizard));
         if (worldHubMap is null) {
             Logger.Error("Could not find world hub mapping for zone {0}",
                 Logger.Args(zoneName));

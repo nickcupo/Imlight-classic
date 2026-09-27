@@ -287,6 +287,25 @@ public sealed class ClassicRules {
         return FallbackHubKey();
     }
 
+    /// <summary>
+    /// The hub key Go Home sends a wizard in <paramref name="zone"/> to: <see cref="HubKeyFor"/>, unless the
+    /// profile's world_unlocks rule for that world is not met, in which case the fallback world's hub. A wizard
+    /// can stand in a world before it unlocks (the Grizzleheim preview, GrizzleheimLite, is open to a level-5
+    /// wizard on Trade Voyage), and Go Home must not carry them into the locked world's hub.
+    /// </summary>
+    /// <param name="zone">The zone the wizard is in.</param>
+    /// <param name="progress">What the wizard has done.</param>
+    /// <returns>A WorldHubZones.xml key; null only when the profile is unrestricted.</returns>
+    public string? HomeHubKeyFor(string? zone, IPlayerProgress progress) {
+        ArgumentNullException.ThrowIfNull(progress);
+        var hubKey = HubKeyFor(zone);
+        if (hubKey is null || IsWorldUnlocked(hubKey, progress).Unlocked) {
+            return hubKey;
+        }
+
+        return FallbackHubKey() ?? hubKey;
+    }
+
     public int EffectiveMaxLevel(int stockMaxLevel)
         => LevelCapRules.EffectiveMaxLevel(stockMaxLevel, Profile.LevelCap);
 

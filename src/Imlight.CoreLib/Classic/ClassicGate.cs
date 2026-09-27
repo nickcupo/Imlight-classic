@@ -157,15 +157,21 @@ internal static class ClassicGate {
     /// <see cref="WorldHubZones.GetHubForZone"/> lookup.
     /// </summary>
     /// <param name="zone">The zone the player is in.</param>
+    /// <param name="progress">
+    /// The wizard going home, when known: a world whose world_unlocks rule the wizard has not met sends them to
+    /// the fallback world's hub instead (<see cref="ClassicRules.HomeHubKeyFor"/>).
+    /// </param>
     /// <returns>The hub zone and location, or null when there is none.</returns>
-    internal static (string Zone, string Location)? HubFor(string zone) {
+    internal static (string Zone, string Location)? HubFor(string zone, IPlayerProgress? progress = null) {
         if (!ClassicRuntime.IsActive) {
             var stock = WorldHubZones.GetHubForZone(zone);
 
             return stock is null ? null : (stock.m_hubZone, stock.m_location);
         }
 
-        var hubKey = ClassicRuntime.Rules.HubKeyFor(zone);
+        var hubKey = progress is null
+            ? ClassicRuntime.Rules.HubKeyFor(zone)
+            : ClassicRuntime.Rules.HomeHubKeyFor(zone, progress);
         var hub = hubKey is null ? null : WorldHubZones.GetHubForZone(hubKey);
         if (hub is null) {
             return null;
