@@ -45,6 +45,7 @@ using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
+using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.Game.WizBang;
 using Imlight.CoreLib.Game.Zone.Core;
 using Imlight.CoreLib.Shared.Networking;
@@ -115,6 +116,8 @@ internal sealed class InteractServiceMementoComponent(ZoneEntity entity)
     }
 
     public override void OnPlayerLeave(IActorRef playerActor, ulong id) {
+        _sentTeleportOptions.Remove(playerActor); // CLASSIC
+
         if (_playersInInteractionRange.Any(x => x.Value == playerActor)) {
             var playerObj = _playersInInteractionRange.First(x => x.Value == playerActor).Key;
             _playersInInteractionRange.Remove(playerObj);
@@ -148,6 +151,7 @@ internal sealed class InteractServiceMementoComponent(ZoneEntity entity)
         else if (!IsInRadius(playerObj, interactionRadius)
                  && _playersInInteractionRange.ContainsKey(playerId)) {
             _playersInInteractionRange.Remove(playerId);
+            _sentTeleportOptions.Remove(playerActor); // CLASSIC
             SendLeaveServiceRange(playerActor);
         }
 
@@ -238,8 +242,32 @@ internal sealed class InteractServiceMementoComponent(ZoneEntity entity)
             var wizard = result.Wizards[i];
             if (wizard != null) {
                 SendWizBang(result.PlayerActors[i], wizard);
+                ResendTeleportOptionsIfChanged(result.PlayerActors[i], wizard); // CLASSIC
             }
         }
+    }
+
+    // CLASSIC: a teleport stone is discovered by walking into its volume, which is inside its interaction range, so
+    // the options the wizard got on coming into range (none) are stale; send them again once they change.
+    private readonly Dictionary<IActorRef, int> _sentTeleportOptions = [];
+
+    private void ResendTeleportOptionsIfChanged(IActorRef playerActor, Wizard wizard) {
+        if (!ClassicQuestEngine.IsActive || !_playersInInteractionRange.ContainsValue(playerActor)
+                || !_serviceComponents.OfType<InteractTeleportObjectComponent>().Any()) {
+            return;
+        }
+
+        var count = _serviceComponents.Sum(component => component.GetServiceOptions(wizard).Count());
+        if (_sentTeleportOptions.TryGetValue(playerActor, out var sent) && sent == count) {
+            return;
+        }
+
+        if (_sentTeleportOptions.ContainsKey(playerActor)) {
+            SendLeaveServiceRange(playerActor);
+            SendActorServiceOptions(playerActor);
+        }
+
+        _sentTeleportOptions[playerActor] = count;
     }
 
     private void SendActorServiceOptions(IActorRef playerActor, int reinteract = 0) {
@@ -250,6 +278,7 @@ internal sealed class InteractServiceMementoComponent(ZoneEntity entity)
             .Wizard;
 
         RefreshServiceMomento(wizard);
+        _sentTeleportOptions[playerActor] = _serviceMemento?.m_serviceOptions?.Count ?? 0; // CLASSIC
 
         // If we have no service options, do not send anything.
         if (_serviceMemento.m_serviceOptions.Count <= 0) {
