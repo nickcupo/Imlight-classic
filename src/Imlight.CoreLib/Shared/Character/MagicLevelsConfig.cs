@@ -42,6 +42,7 @@
 
 using System.Collections.Generic;
 using Imlight.Classic;
+using Imlight.CoreLib.Classic;
 using Imlight.Common;
 using Imlight.CoreLib.Shared.Resources;
 using Imlight.CoreLib.Shared.Behaviors;
@@ -229,6 +230,7 @@ internal class MagicLevelsConfig : RootSingleResourceSingleton<MagicLevelsConfig
         // how much base health the wizard has at any given level.
         s_playerLevelConfig = [];
         var allSchoolInfo = magicXPConfig.m_levelInfo;
+        ApplyClassicXpTable(allSchoolInfo); // CLASSIC: the profile's XP curve replaces the client's for its levels.
 
         var counter = 0;
         foreach (var classInfo in magicXPConfig.m_classInfo) {
@@ -263,6 +265,31 @@ internal class MagicLevelsConfig : RootSingleResourceSingleton<MagicLevelsConfig
         }
 
         Logger.Information("Loaded {0} player level configurations", Logger.Args(counter));
+    }
+
+    // CLASSIC: writes the profile's XP-to-leave totals into the shared level table. Levels past the table
+    // keep the client's steps, shifted so the totals stay increasing.
+    private static void ApplyClassicXpTable(List<MagicLevelInfo> allSchoolInfo) {
+        if (ClassicProgression.XpTable is not { } table || allSchoolInfo is null) {
+            return;
+        }
+
+        var client = allSchoolInfo.Select(info => info.m_xpToLevel).ToList();
+        var differences = table.DiffersFrom(client);
+        var shift = 0;
+        for (var level = 1; level < allSchoolInfo.Count; level++) {
+            if (table.XpToLeave(level) is { } classic) {
+                shift = classic - client[level];
+                allSchoolInfo[level].m_xpToLevel = classic;
+            }
+            else {
+                allSchoolInfo[level].m_xpToLevel = client[level] + shift;
+            }
+        }
+
+        Logger.Information("Classic XP table {Table} applied to levels 1-{MaxLevel}: {Count} level totals differ from the client{Detail}.",
+            Logger.Args(table.Id, table.MaxLevel, differences.Count,
+                differences.Count == 0 ? "" : ": " + string.Join(", ", differences.Select(d => $"L{d.Level} {d.Client}->{d.Classic}"))));
     }
 
     public void DisposeStream()

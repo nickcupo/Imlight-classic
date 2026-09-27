@@ -58,6 +58,7 @@ using Akka.Actor;
 using Imcodec.MessageLayer.Generated;
 using Imlight.CoreLib.Game.Spells;
 using Imlight.Classic;
+using Imlight.CoreLib.Classic;
 using Imlight.Common;
 using Imlight.CoreLib.Shared.Behaviors;
 using Imlight.CoreLib.Shared.Resources;
@@ -269,7 +270,10 @@ public class CombatResolver(Duel duel, CombatDuelSubCircle[] actorSubCircles) {
                 cinematicTime += HandleFizzleAction(action, combatActionList);
 
                 // Increase pips used counter by 1, even if the spell fizzled.
-                action.SpellCaster._usedPipsForExperienceGain++;
+                // CLASSIC: under the profile's mob reward rules a fizzled card counts as the rules say.
+                action.SpellCaster._usedPipsForExperienceGain += ClassicProgression.MobRewards is { } rewards
+                    ? rewards.CombatXp.PipsForFizzle(action.Spell.m_pipCost.m_spellRank, CombatActionResolver.IsXPipSpell(action.Spell))
+                    : 1;
             }
             else {
                 // Record when this caster's cinematic begins so a summoned minion appears with its cast.
@@ -530,14 +534,16 @@ public class CombatResolver(Duel duel, CombatDuelSubCircle[] actorSubCircles) {
         // X-pip spells spend what they used (same GetXPipCost that chose the tier).
         if (CombatActionResolver.IsXPipSpell(action.m_spell)) {
             var xCost = CombatActionResolver.GetXPipCost(action.m_spell, caster);
-            caster._usedPipsForExperienceGain += xCost;
+            // CLASSIC: the 2010 rule counts an X-pip card as one pip, whatever it spent.
+            caster._usedPipsForExperienceGain += ClassicProgression.MobRewards?.CombatXp.PipsForCast(0, true, xCost) ?? xCost;
 
             caster.DeductPips((MagicSchool) action.m_spell.m_magicSchoolID, xCost);
         }
         else {
             // Increase the used pips for experience gain by the rank of the spell.
             // Even 0-rank spells will give the caster 1 pip for experience gain.
-            caster._usedPipsForExperienceGain += Math.Max((byte) 1, action.m_spell.m_pipCost.m_spellRank);
+            caster._usedPipsForExperienceGain += ClassicProgression.MobRewards?.CombatXp.PipsForCast(action.m_spell.m_pipCost.m_spellRank, false, 0)
+                ?? Math.Max((byte) 1, action.m_spell.m_pipCost.m_spellRank);
 
             caster.DeductPips((MagicSchool) action.m_spell.m_magicSchoolID, action.m_spell.m_pipCost.m_spellRank);
         }

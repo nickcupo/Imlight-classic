@@ -59,7 +59,7 @@ public static class ClassicProfileLoader {
     private static readonly string[] s_requiredKeys = ["id", "title", "cutoff", "status"];
     private static readonly string[] s_inheritedKeys = ["cutoff", "level_cap", "worlds", "features", "rules"];
     private static readonly FrozenSet<string> s_ruleKeys = FrozenSet.Create(StringComparer.Ordinal,
-        "accuracy_table", "xp_table", "power_pips_from_rank", "dragonspyre_difficulty", "tutorial");
+        "accuracy_table", "xp_table", "mob_rewards", "power_pips_from_rank", "dragonspyre_difficulty", "tutorial");
 
     /// <summary>
     /// Loads the profile <paramref name="id"/> from <paramref name="profilesDir"/>, following its extends chain.
@@ -279,7 +279,7 @@ public static class ClassicProfileLoader {
         foreach (var entry in rules.Entries) {
             var path = YamlTree.Join("rules", entry.Key);
             switch (entry.Key) {
-                case "accuracy_table" or "xp_table":
+                case "accuracy_table" or "xp_table" or "mob_rewards":
                     _ = diagnostics.ReadString(entry.Value, path);
                     break;
                 case "power_pips_from_rank":
@@ -324,6 +324,7 @@ public static class ClassicProfileLoader {
             Rules = rules is null ? ProfileRules.None : new ProfileRules {
                 AccuracyTable = ScalarOf(rules, "accuracy_table"),
                 XpTable = ScalarOf(rules, "xp_table"),
+                MobRewards = ScalarOf(rules, "mob_rewards"),
                 PowerPipsFromRank = ScalarOf(rules, "power_pips_from_rank"),
                 DragonspyreDifficulty = ScalarOf(rules, "dragonspyre_difficulty"),
                 Tutorial = ScalarOf(rules, "tutorial"),

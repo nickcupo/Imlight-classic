@@ -20,7 +20,8 @@
  * ========================================================================
  * 
  * PURPOSE:
- * Loads the [Classic] profile, zone map and spell values at boot, before
+ * Loads the [Classic] profile, zone map, spell values, XP table and mob
+ * reward rules at boot, before
  * any resource or server reads them, and checks them against the client's
  * resources once those have loaded.
  * 
@@ -105,6 +106,9 @@ public static class ClassicStartup {
                     ? Path.Combine(classicDataRoot, table)
                     : null;
                 ClassicSpellTemplates.Initialize(profile, spellsPath, !string.IsNullOrWhiteSpace(configuredSpellsPath), accuracyTablePath);
+                if (classicDataRoot is not null) {
+                    ClassicProgression.Initialize(profile, classicDataRoot);
+                }
             }
 
             ClassicRuntime.Initialize(rules, new LoggerAuditSink(), auditVerbose);
@@ -227,6 +231,7 @@ public static class ClassicStartup {
         var tables = new[] {
             ("rules.xp_table", rules.Profile.Rules.XpTable),
             ("rules.accuracy_table", rules.Profile.Rules.AccuracyTable),
+            ("rules.mob_rewards", rules.Profile.Rules.MobRewards),
         };
         foreach (var (key, relativePath) in tables) {
             if (relativePath is null || File.Exists(Path.Combine(s_classicDataRoot, relativePath))) {

@@ -138,6 +138,11 @@ public sealed class ProfileRules {
     public string? XpTable { get; init; }
 
     /// <summary>
+    /// Path under classic-data of the mob reward rules (combat XP, gold, drops), if any.
+    /// </summary>
+    public string? MobRewards { get; init; }
+
+    /// <summary>
     /// The rank from which power pips appear; null when unset or set to null.
     /// </summary>
     public string? PowerPipsFromRank { get; init; }
