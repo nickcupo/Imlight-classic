@@ -177,48 +177,75 @@ With a restricted classic profile (`late-2009`, `arc1-2009h1`), the server loads
 `classic-data/spells` at boot (`[Classic] SpellsPath`, default: next to the profiles) and writes the
 profile's numbers into each client spell template as it is deserialized: `SpellFactory`'s copy and the
 `CoreObjectFactory` copy combat reads (`ClassicSpellTemplates.Apply`). Combat code does not know about it.
-`dev-unrestricted`, or no profile, loads nothing and keeps the client's values.
+`dev-unrestricted`, or no profile, loads nothing and keeps the client's values. A `SpellsPath` that is set
+but does not exist stops the boot; the default path only warns.
 
-**Matching.** A template takes the record whose `client_template` is its Root.wad path, else the record with
-its card name (ignoring case). Templates with no record keep the client's values. A record's numbers are
-`values`, then any `profile_values` entry of the active profile or a profile it extends.
+**Matching.** A template takes the record whose `client_template` is its Root.wad path; else, for a Treasure
+Card (`Spells/TreasureCards/<card> TC.xml`), the trained or crossover record whose name or client template file
+is `<card>`, since one record covers both copies of a card; else a record with no `client_template` and its card
+name. A record never takes a different template that shares its name, such as `Spells/Gobbler.xml`, a
+310-damage card that is not the Gobbler Treasure Card.
+Templates with no record keep the client's values. A record's numbers are `values`, then any `profile_values`
+entry of the active profile or a profile it extends.
 
 **Applied**
-- Pip cost (the spell rank, with school pips cleared), when record and template are both fixed-cost.
+- Pip cost (the spell rank, with school pips cleared), when record and template are both fixed-cost. A
+  profile whose cost is X on a fixed-cost template charges the fixed cost of the profile it extends instead
+  (`arc1-2009h1` Taunt: 2, as in `late-2009`, not the client's 3), and its amounts are not written.
 - Accuracy.
 - Effect amounts: `damage`, `heal`, `steal` (and its heal share from `percent`), `pip` (a drain keeps its
-  sign), `ward` (absorb amount), `dot` and `hot` (total and rounds).
-- Effect percentages: `blade`, `charm` (damage, accuracy or heal), `trap`, `shield`, `global`.
+  sign), `ward` (absorb amount), `dot` and `hot` (total and rounds). A self-hit the client charges as a share
+  of max health becomes the record's flat hit (Empower: 500). It is then an ordinary Death hit on the caster,
+  so the caster's own blades, shields and resist change it and are used up by it.
+- Effect percentages: `blade`, `charm` (damage, accuracy or heal), `trap`, `shield`, `global`. A healing
+  bubble matches whatever school the client files it under (Doom and Gloom).
 - Targets, only when the classic target is wider (single to all, or to self): the client sends no
   target for a card it thinks is area-of-effect, so a card can never become single-target.
+- Zeroed template effects the classic card did not have: an up-front hit or heal beside the record's own
+  damage or heal on the same targets, once every amount the record gives has landed (Link's 30 and 15,
+  Helping Hands' 120), and a global whose meaning the record does not share (Power Play's Balance boost: the
+  bubble still replaces the one in play, but boosts nothing).
 
 A damage range is spread over the template's rolled children, lowest first, because the client replays the
 server's roll by index; a single-value effect takes the range's mean; X cards scale the per-pip amount by
 tier. Effects are paired by kind, school and target, then by looser rules only when the pairing is the only
 one left. A percent never flips an effect's sign, and effects are never added, removed or reordered.
 
+**Combat rules a classic profile changes.** Each is tagged `// CLASSIC:` and applies only with a restricted
+profile; `dev-unrestricted` keeps stock Imlight.
+- Globals go on the battlefield (`CombatActionResolver`); stock Imlight skips an effect with no targets, so no
+  bubble is ever cast.
+- A spell hits when the 0 to 99 roll is below its accuracy, so 75% hits 75 times in 100.
+- Accuracy stats scale the accuracy (`75 * 1.10 = 82`), and accuracy charms add their percentage points to
+  the next spell of their school, or any spell for `All` (Precision, Lightning Strike, Black Mantle).
+- Cleanse Charm and Steal Charm take the target's hanging charms of the effect's disposition, newest first.
+- A card the caster cannot pay for is not cast (`HandleAttackMove` queues the pass only).
+- The caster pays before a pip gain on itself lands, so Empower at 7 pips ends on 7.
+
 **Not applied yet**
-- Stun length (the server always stuns for one round), minions (the records hold no creature ids),
-  threat, beguile, prisms, mutations, dispels, reshuffle, charm and ward removal counts, and Treasure Card
-  enchantments (the server does not implement them).
-- Classic effects with no template counterpart, such as Power Nova's weakness, Orthrus's two hits,
-  Immolate's self-hit and Empower's health cost; and globals whose meaning changed, such as Power Play
-  (a power pip bubble in 2009).
-- Template effects with no classic counterpart keep the client's values, such as the up-front heal of
-  Helping Hands and the up-front hit and heal of Link.
+- Stun length (the server always stuns for one round) and stun blocks, which the server adds after every
+  stun in every profile although they arrived on 2009-07-01 (a profile rule for them does not exist yet);
+  minions (the records hold no creature ids), threat, beguile, prisms, mutations, dispels, reshuffle, charm and
+  ward removal counts, and Treasure Card enchantments (the server does not implement them).
+- Classic effects with no template counterpart: Power Nova's weakness, Orthrus's two single-target hits (the
+  client casts it on every enemy), Immolate's self-hit (it sits in a conditional inside an effect list, which
+  the server does not resolve in any profile), and Power Play's power pip chance (the server has no such
+  bubble).
+- Template effects with no classic counterpart that are not zeroed keep the client's values.
 - `rules/accuracy-2009.yaml` is loaded and checked, but spells without a record keep their own accuracy.
 
-The startup log counts templates matched and changed, effects applied and skipped with the reason, and
+The startup log counts templates matched and changed, effects applied, zeroed and skipped with the reason, and
 records no template matched; with `LogLevel = DEBUG` each changed spell gets a line.
 
 **What players may notice.** The client draws cards and tooltips from its own templates, so they show modern
 numbers; the damage numbers in a cinematic are most likely the client's replay of its own template, while
 health follows the server. The
 `Spell` objects in a hand carry the classic pip cost and accuracy; whether the client greys cards by them is
-untested. Some cards cost more in 2009 (Donate Power 3 instead of 1, Power Play 4 instead of 2, and in
-`arc1-2009h1` Wyldfire, Balefrost, Darkwind and Time of Legend 4), a few less (Taunt 2, Distract 0, Rebirth 7).
-Accuracy charm percentages are written, but `CombatResolver` consumes an accuracy charm only when its damage
-type is the spell's school, and then adds about one point, so Precision and Black Mantle barely matter yet.
+untested. Some cards cost more in 2009 (Donate Power 3 instead of 1, Power Play 4 instead of 2, Empower 1
+instead of 0, and in `arc1-2009h1` Wyldfire, Balefrost, Darkwind and Time of Legend 4), a few less (Taunt 2,
+Distract 0, Rebirth 7). If the client lets a player pick a card the server says they cannot afford, the
+player's turn passes. A Treasure Card now casts the trained card's 2009 numbers while its tooltip shows the
+client's.
 
 ## Combat AI System
 

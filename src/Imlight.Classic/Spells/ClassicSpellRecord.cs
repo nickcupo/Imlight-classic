@@ -21,7 +21,8 @@
  *
  * PURPOSE:
  * One classic-data/spells record, and the lookup of every record by client
- * template path and by card name.
+ * template path, by the Treasure Card copy of a trained card, and by card
+ * name.
  *
  * USAGE EXAMPLE:
  * var record = book.FindByTemplate("Spells/Tiered Spells/Fire Cat.xml") ?? book.FindByName(template.m_name);
@@ -30,7 +31,9 @@
  * NOTE:
  * values holds the canonical profile's numbers. A profile_values entry of
  * the active profile or any profile it extends overrides them, the nearest
- * profile last so it wins.
+ * profile last so it wins. A trained or crossover record also covers the
+ * card's Treasure Card, which the client names "<card> TC" in
+ * Spells/TreasureCards/ (README: one record per card, the trained one).
  *
  * TODO:
  *
@@ -43,6 +46,7 @@ using System;
 using System.Collections.Frozen;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.IO;
 using System.Linq;
 
 namespace Imlight.Classic.Spells;
@@ -114,8 +118,12 @@ public sealed class ClassicSpellRecord {
 /// </summary>
 public sealed class ClassicSpellBook {
 
+    private const string TreasureCardFolder = "Spells/TreasureCards/";
+    private const string TreasureCardSuffix = " TC";
+
     private readonly FrozenDictionary<string, ClassicSpellRecord> _byTemplate;
     private readonly FrozenDictionary<string, ClassicSpellRecord> _byName;
+    private readonly FrozenDictionary<string, ClassicSpellRecord> _byTreasureCardName;
 
     /// <summary>
     /// Creates the book. Template paths must be unique, and names unique ignoring case.
@@ -129,6 +137,7 @@ public sealed class ClassicSpellBook {
         _byTemplate = Records.Where(record => record.ClientTemplate is not null)
             .ToFrozenDictionary(record => record.ClientTemplate!, StringComparer.Ordinal);
         _byName = Records.ToFrozenDictionary(record => record.Name, StringComparer.OrdinalIgnoreCase);
+        _byTreasureCardName = TreasureCardNames(Records);
     }
 
     /// <summary>
@@ -158,5 +167,36 @@ public sealed class ClassicSpellBook {
     /// <returns>The record, or null.</returns>
     public ClassicSpellRecord? FindByName(string? name)
         => name is not null && _byName.TryGetValue(name, out var record) ? record : null;
+
+    /// <summary>
+    /// The trained or crossover record whose Treasure Card is the template at <paramref name="templatePath"/>.
+    /// </summary>
+    /// <param name="templatePath">A Root.wad path such as <c>Spells/TreasureCards/Fire Cat TC.xml</c>.</param>
+    /// <param name="templateName">The template's name, such as <c>Fire Cat TC</c>.</param>
+    /// <returns>The record whose name, or whose client template's file name, is the card name without " TC"; or null.</returns>
+    public ClassicSpellRecord? FindTreasureCardOf(string? templatePath, string? templateName) {
+        if (templatePath is null || templateName is null
+            || !templatePath.StartsWith(TreasureCardFolder, StringComparison.Ordinal)
+            || !templateName.EndsWith(TreasureCardSuffix, StringComparison.Ordinal)) {
+            return null;
+        }
+
+        return _byTreasureCardName.GetValueOrDefault(templateName[..^TreasureCardSuffix.Length]);
+    }
+
+    private static FrozenDictionary<string, ClassicSpellRecord> TreasureCardNames(IEnumerable<ClassicSpellRecord> records) {
+        // A renamed card's Treasure Card may follow either its cutoff name or its client template; a name two
+        // records could claim matches neither.
+        var candidates = records
+            .Where(record => record.ClientTemplate is not null && record.Kind is "trained" or "crossover")
+            .SelectMany(record => new[] { record.Name, Path.GetFileNameWithoutExtension(record.ClientTemplate!) }
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Select(name => (Name: name, Record: record)));
+
+        return candidates
+            .GroupBy(candidate => candidate.Name, StringComparer.OrdinalIgnoreCase)
+            .Where(group => group.Select(candidate => candidate.Record.Id).Distinct(StringComparer.Ordinal).Count() == 1)
+            .ToFrozenDictionary(group => group.Key, group => group.First().Record, StringComparer.OrdinalIgnoreCase);
+    }
 
 }

@@ -222,16 +222,145 @@ public sealed class SpellOverridePlannerTests {
     }
 
     [Fact]
-    public void AGlobalOfAnotherSchoolIsNotTheSameGlobal() {
-        // Power Play: a 2009 power pip bubble for everyone; the client's is a Balance damage bubble.
+    public void AGlobalOfAnotherMeaningIsZeroed() {
+        // Power Play: a 2009 power pip bubble for everyone; the client's is a Balance damage bubble. The bubble
+        // still replaces the one on the battlefield, but boosts nothing.
         var shape = Shape(2, 100, Plain(TemplateEffectKind.ModifyOutgoingDamage, 25, TemplateTarget.Global, "Balance"));
 
         var plan = Plan(shape, SpellPips.Of(4), 1.0, Effect(SpellEffectKind.Global, "all", percent: 35, targets: null));
 
-        Assert.Empty(plan.EffectChanges);
+        Assert.Equal(new EffectChange(new EffectAddress(0), Param: 0), Assert.Single(plan.EffectChanges));
         Assert.Equal(4, plan.Rank);
         Assert.Equal(new SkippedEffect(SpellEffectKind.Global, EffectSkipReason.NoMatchingTemplateEffect), Assert.Single(plan.SkippedEffects));
-        Assert.Equal(1, plan.UnmatchedTemplateEffects);
+        Assert.Equal(1, plan.ZeroedTemplateEffects);
+        Assert.Equal(0, plan.UnmatchedTemplateEffects);
+    }
+
+    [Fact]
+    public void AHealingBubbleMatchesWhateverItsSchool() {
+        // Doom and Gloom: -50% to every heal; the client files the bubble under Life, the record under all.
+        var shape = Shape(2, 100, Plain(TemplateEffectKind.ModifyOutgoingHeal, -35, TemplateTarget.Global, "Life"));
+
+        var plan = Plan(shape, SpellPips.Of(3), 1.0, Effect(SpellEffectKind.Global, "all", percent: -50, targets: null));
+
+        Assert.Equal(new EffectChange(new EffectAddress(0), Param: -50), Assert.Single(plan.EffectChanges));
+        Assert.Equal(0, plan.ZeroedTemplateEffects);
+    }
+
+    [Fact]
+    public void AnUpFrontHitAndHealTheCardLackedAreZeroed() {
+        // Link: 180 over 3 rounds and 120 back over 3 rounds, with no up-front hit or heal in 2009.
+        var shape = Shape(2, 75,
+            Plain(TemplateEffectKind.Damage, 30),
+            Plain(TemplateEffectKind.DamageOverTime, 150, rounds: 3, pipNumber: 1),
+            Plain(TemplateEffectKind.Heal, 15, TemplateTarget.Self, "Life"),
+            Plain(TemplateEffectKind.HealOverTime, 105, TemplateTarget.Self, "Life", rounds: 3, pipNumber: 1));
+
+        var plan = Plan(shape, SpellPips.Of(2), 0.75,
+            Effect(SpellEffectKind.Dot, min: 180, rounds: 3),
+            Effect(SpellEffectKind.Hot, min: 120, rounds: 3, targets: SpellTargets.Self));
+
+        Assert.Equal(new int?[] { 0, 180, 0, 120 }, plan.EffectChanges.OrderBy(c => c.Address.Index).Select(c => c.Param).ToArray());
+        Assert.Equal(2, plan.ZeroedTemplateEffects);
+        Assert.Equal(0, plan.UnmatchedTemplateEffects);
+    }
+
+    [Fact]
+    public void AnUpFrontHealBesideAHealOverTimeIsZeroed() {
+        // Helping Hands: 540 over 3 rounds on an ally; the client adds a 120 heal up front.
+        var shape = Shape(3, 85,
+            Plain(TemplateEffectKind.Heal, 120, TemplateTarget.FriendlySingle, "Life"),
+            Plain(TemplateEffectKind.HealOverTime, 720, TemplateTarget.FriendlySingle, "Life", rounds: 4));
+
+        var plan = Plan(shape, SpellPips.Of(3), 1.0, Effect(SpellEffectKind.Hot, "balance", 540, rounds: 3));
+
+        Assert.Equal(new EffectChange(new EffectAddress(0), Param: 0), ChangesAt(plan, 0).Single());
+        Assert.Equal(new EffectChange(new EffectAddress(1), Param: 540, Rounds: 3), ChangesAt(plan, 1).Single());
+    }
+
+    [Fact]
+    public void ALeftoverEffectIsKeptUnlessTheRecordClearlyLacksIt() {
+        // A heal the record says nothing about is not zeroed beside the record's damage, and nothing is zeroed
+        // while one of the record's own amounts found no template effect.
+        var otherFamily = Shape(2, 75, Plain(TemplateEffectKind.Damage, 100), Plain(TemplateEffectKind.Heal, 50, TemplateTarget.Self, "Life"));
+        var otherTargets = Shape(2, 75, Plain(TemplateEffectKind.Damage, 100), Plain(TemplateEffectKind.Damage, 50, TemplateTarget.Self));
+        var unplaced = Shape(2, 75, Plain(TemplateEffectKind.Damage, 100), Plain(TemplateEffectKind.Damage, 50));
+
+        Assert.Equal(0, Plan(otherFamily, SpellPips.Of(2), 0.75, Effect(SpellEffectKind.Damage, min: 120)).ZeroedTemplateEffects);
+        Assert.Equal(0, Plan(otherTargets, SpellPips.Of(2), 0.75, Effect(SpellEffectKind.Damage, min: 120)).ZeroedTemplateEffects);
+        Assert.Equal(0, Plan(unplaced, SpellPips.Of(2), 0.75,
+            Effect(SpellEffectKind.Damage, min: 120), Effect(SpellEffectKind.Heal, min: 60, targets: SpellTargets.Self)).ZeroedTemplateEffects);
+    }
+
+    [Fact]
+    public void ARolledOutcomeIsNeverZeroed() {
+        // Spectral Blast rolls one of three schools; a record that places one outcome leaves the others alone.
+        var shape = Shape(3, 80, Random(
+            Plain(TemplateEffectKind.Damage, 300, damageType: "Fire"),
+            Plain(TemplateEffectKind.Damage, 300, damageType: "Ice"),
+            Plain(TemplateEffectKind.Damage, 300, damageType: "Storm")));
+
+        var plan = Plan(shape, SpellPips.Of(3), 0.8, Effect(SpellEffectKind.Damage, "fire", 290, 330));
+
+        Assert.Equal(0, plan.ZeroedTemplateEffects);
+        Assert.Equal(2, plan.UnmatchedTemplateEffects);
+    }
+
+    [Fact]
+    public void AShareOfMaxHealthBecomesTheRecordsFlatHit() {
+        // Empower: the caster paid 500 health in 2009; the client charges 5% of max health.
+        var shape = Shape(0, 100,
+            Plain(TemplateEffectKind.MaxHealthDamage, 5, TemplateTarget.Self, "Death"),
+            Plain(TemplateEffectKind.ModifyPips, 3, TemplateTarget.Self, "All"));
+
+        var plan = Plan(shape, SpellPips.Of(1), 1.0,
+            Effect(SpellEffectKind.Damage, "death", 500, targets: SpellTargets.Self),
+            Effect(SpellEffectKind.Pip, "death", 3, targets: SpellTargets.Self));
+
+        Assert.Equal(new EffectChange(new EffectAddress(0), Param: 500, Kind: TemplateEffectKind.Damage), Assert.Single(plan.EffectChanges));
+        Assert.Empty(plan.SkippedEffects);
+    }
+
+    [Fact]
+    public void AShareOfMaxHealthOnOtherTargetsStaysAsItIs() {
+        var shape = Shape(2, 100, Plain(TemplateEffectKind.MaxHealthDamage, 10, TemplateTarget.EnemySingle, "Death"));
+
+        var plan = Plan(shape, SpellPips.Of(2), 1.0, Effect(SpellEffectKind.Damage, "death", 300, targets: SpellTargets.Self));
+
+        Assert.Empty(plan.EffectChanges);
+        Assert.Equal(new SkippedEffect(SpellEffectKind.Damage, EffectSkipReason.NoMatchingTemplateEffect), Assert.Single(plan.SkippedEffects));
+    }
+
+    [Fact]
+    public void AmountsWaitForAPipCostThatFits() {
+        // An X card's amount is per pip and a fixed card's is the whole effect; neither is written across.
+        var fixedTemplate = Shape(3, 100, Plain(TemplateEffectKind.Damage, 300));
+        var xTemplate = Shape(0, 100, PerPip(Plain(TemplateEffectKind.Damage, 100, pipNumber: 1), Plain(TemplateEffectKind.Damage, 200, pipNumber: 2)))
+            with { IsXPip = true };
+
+        var xOnFixed = Plan(fixedTemplate, SpellPips.X, 1.0, Effect(SpellEffectKind.Damage, min: 90));
+        var fixedOnX = Plan(xTemplate, SpellPips.Of(2), 1.0, Effect(SpellEffectKind.Damage, min: 90));
+
+        Assert.Empty(xOnFixed.EffectChanges);
+        Assert.Equal(new SkippedEffect(SpellEffectKind.Damage, EffectSkipReason.PipsNotApplied), Assert.Single(xOnFixed.SkippedEffects));
+        Assert.Empty(fixedOnX.EffectChanges);
+        Assert.Equal(new SkippedEffect(SpellEffectKind.Damage, EffectSkipReason.PipsNotApplied), Assert.Single(fixedOnX.SkippedEffects));
+    }
+
+    [Fact]
+    public void AnXCostOnAFixedTemplateChargesTheInheritedFixedCost() {
+        // Taunt in arc1-2009h1: X, 2 in late-2009, 3 in the client.
+        var shape = Shape(3, 100, Plain(TemplateEffectKind.Other, 1, TemplateTarget.Self, "Ice"));
+        var record = Record(SpellPips.X, 1.0);
+
+        var inherited = SpellOverridePlanner.Plan(record, SpellMatch.ClientTemplate, record.Values, shape, inheritedFixedPips: 2);
+        var none = SpellOverridePlanner.Plan(record, SpellMatch.ClientTemplate, record.Values, shape);
+
+        Assert.Equal(2, inherited.Rank);
+        Assert.Equal(PipsSkip.XOnFixedCostTemplate, inherited.PipsSkip);
+        Assert.True(inherited.PipsInherited);
+        Assert.Null(none.Rank);
+        Assert.False(none.PipsInherited);
     }
 
     [Fact]

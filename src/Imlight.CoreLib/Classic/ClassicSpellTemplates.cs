@@ -25,15 +25,18 @@
  * they load, so combat reads 2009 numbers without knowing about classic.
  *
  * USAGE EXAMPLE:
- * ClassicSpellTemplates.Initialize(profile, spellsPath, accuracyTablePath);   // ClassicStartup, before resources
- * ClassicSpellTemplates.Apply(spellTemplate, path, census: true);             // wherever a SpellTemplate is deserialized
+ * ClassicSpellTemplates.Initialize(profile, spellsPath, configured, accuracyTablePath); // ClassicStartup, before resources
+ * ClassicSpellTemplates.Apply(spellTemplate, path, census: true);                       // wherever a SpellTemplate is deserialized
  *
  * NOTE:
  * SpellFactory and CoreObjectFactory each deserialize their own copy of a
  * template, so both call Apply. Nothing happens until Initialize runs, and
  * ClassicStartup only runs it for a restricted profile: dev-unrestricted
  * and no profile keep the client's values. Spells with no record keep them
- * too. The census counts SpellFactory's pass, which sees every template.
+ * too. The census counts SpellFactory's pass, which sees every template,
+ * and is dropped once logged. SpellTemplateMapping (Imlight.Classic) holds
+ * the mapping by client type and enum names; this file only reads and
+ * writes the generated fields.
  *
  * TODO:
  *
@@ -44,9 +47,11 @@
 
 #nullable enable
 
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Classic;
 using Imlight.Classic.Rules;
@@ -61,22 +66,31 @@ namespace Imlight.CoreLib.Classic;
 public static class ClassicSpellTemplates {
 
     private static volatile ClassicSpellOverrides? s_overrides;
-    private static readonly SpellOverrideCensus s_census = new();
+    private static SpellOverrideCensus? s_census = new();
 
     /// <summary>
     /// Loads the spell records and the profile's accuracy table.
     /// </summary>
     /// <param name="profile">The active, restricted profile.</param>
     /// <param name="spellsPath">The classic-data/spells directory.</param>
+    /// <param name="spellsPathConfigured">True when <c>[Classic] SpellsPath</c> names the directory, rather than the default next to the profiles.</param>
     /// <param name="accuracyTablePath">The profile's accuracy table file, or null when it names none.</param>
-    /// <exception cref="ClassicDataException">A record or the accuracy table is invalid.</exception>
-    public static void Initialize(ClassicProfile profile, string spellsPath, string? accuracyTablePath) {
+    /// <exception cref="ClassicDataException">A record or the accuracy table is invalid, or a configured SpellsPath does not exist.</exception>
+    /// <exception cref="InvalidOperationException">The client's generated enums lack a name the mapping uses.</exception>
+    public static void Initialize(ClassicProfile profile, string spellsPath, bool spellsPathConfigured, string? accuracyTablePath) {
         if (!Directory.Exists(spellsPath)) {
+            if (spellsPathConfigured) {
+                throw new ClassicDataException(new ClassicDataError(spellsPath, "Classic.SpellsPath", null,
+                    "the configured spells directory does not exist"));
+            }
+
             Logger.Warning("Classic spell values not loaded: {SpellsPath} does not exist, so every spell keeps the client's values.",
                 Logger.Args(spellsPath));
 
             return;
         }
+
+        CheckClientNames();
 
         var book = ClassicSpellLoader.Load(spellsPath);
         AccuracyTable? accuracyTable = null;
@@ -107,7 +121,7 @@ public static class ClassicSpellTemplates {
         var shape = ShapeOf(spell, path);
         var plan = overrides.PlanFor(shape);
         if (census) {
-            s_census.Add(shape, spell.m_sMagicSchoolName, plan);
+            s_census?.Add(shape, spell.m_sMagicSchoolName, plan);
         }
 
         if (plan is not { ChangesTemplate: true }) {
@@ -126,25 +140,26 @@ public static class ClassicSpellTemplates {
     /// Logs what the spell values changed. Call after the resources have loaded.
     /// </summary>
     public static void LogCensus() {
-        if (s_overrides is not { } overrides) {
+        if (s_overrides is not { } overrides || Interlocked.Exchange(ref s_census, null) is not { } census) {
             return;
         }
 
-        var summary = s_census.Summarize(overrides);
-        Logger.Information("Classic spell census over {Templates} client spell templates: {ByPath} matched by client_template, {ByName} by name, {Unmatched} without a record keep the client's values.",
-            Logger.Args(summary.Templates, summary.MatchedByClientTemplate, summary.MatchedByName, summary.Unmatched));
-        Logger.Information("Classic spell values changed {Changed} templates: pip cost {Pips} (school pips cleared on {SchoolPips}), accuracy {Accuracy}, effect amounts and percentages {Params}, rounds {Rounds}, drain heal shares {Heal}, targets {Targets}.",
+        var summary = census.Summarize(overrides);
+        Logger.Information("Classic spell census over {Templates} client spell templates: {ByPath} matched by client_template, {ByTreasureCard} as the Treasure Card of a trained card, {ByName} by name, {Unmatched} without a record keep the client's values.",
+            Logger.Args(summary.Templates, summary.MatchedByClientTemplate, summary.MatchedByTreasureCard, summary.MatchedByName, summary.Unmatched));
+        Logger.Information("Classic spell values changed {Changed} templates: pip cost {Pips} (school pips cleared on {SchoolPips}), accuracy {Accuracy}, effect amounts and percentages {Params}, rounds {Rounds}, drain heal shares {Heal}, targets {Targets}, effect types {Kinds}.",
             Logger.Args(summary.ChangedTemplates, summary.PipsChanged, summary.SchoolPipsCleared, summary.AccuracyChanged,
-                summary.EffectValuesChanged, summary.RoundsChanged, summary.HealModifiersChanged, summary.TargetsChanged));
-        Logger.Information("Classic spell effects applied: {Applied}. Not applied, the server reads no such value from a template: {NotApplied}. Not applied, no number to apply: {NoValues}. Not applied, no matching template effect: {NoMatch}.",
+                summary.EffectValuesChanged, summary.RoundsChanged, summary.HealModifiersChanged, summary.TargetsChanged, summary.KindsChanged));
+        Logger.Information("Classic spell effects applied: {Applied}. Not applied, the server reads no such value from a template: {NotApplied}. Not applied, no number to apply: {NoValues}. Not applied, no matching template effect: {NoMatch}. Not applied, the pip cost did not fit the template: {PipsNotApplied}.",
             Logger.Args(summary.DescribeApplied(), summary.DescribeSkipped(EffectSkipReason.KindNotApplied),
-                summary.DescribeSkipped(EffectSkipReason.NoValues), summary.DescribeSkipped(EffectSkipReason.NoMatchingTemplateEffect)));
-        Logger.Information("Classic spell templates keep {Unmatched} effects that have no classic counterpart at their client values.",
-            Logger.Args(summary.UnmatchedTemplateEffects));
+                summary.DescribeSkipped(EffectSkipReason.NoValues), summary.DescribeSkipped(EffectSkipReason.NoMatchingTemplateEffect),
+                summary.DescribeSkipped(EffectSkipReason.PipsNotApplied)));
+        Logger.Information("Classic spell templates zero {Zeroed} effects the classic card did not have and keep {Unmatched} effects that have no classic counterpart at their client values.",
+            Logger.Args(summary.ZeroedTemplateEffects, summary.UnmatchedTemplateEffects));
 
         if (!summary.PipsSkipped.IsEmpty) {
-            Logger.Warning("Classic spell pip costs not applied: {XOnFixed} X costs on fixed-cost templates, {FixedOnX} fixed costs on X templates.",
-                Logger.Args(summary.PipsSkipped.GetValueOrDefault(PipsSkip.XOnFixedCostTemplate),
+            Logger.Warning("Classic spell pip costs not applied: {XOnFixed} X costs on fixed-cost templates ({Inherited} charge the fixed cost of a profile this one extends), {FixedOnX} fixed costs on X templates.",
+                Logger.Args(summary.PipsSkipped.GetValueOrDefault(PipsSkip.XOnFixedCostTemplate), summary.PipsInherited,
                     summary.PipsSkipped.GetValueOrDefault(PipsSkip.FixedOnXTemplate)));
         }
 
@@ -169,6 +184,16 @@ public static class ClassicSpellTemplates {
         }
     }
 
+    private static void CheckClientNames() {
+        var missing = SpellTemplateMapping.EffectTypeNames.Where(name => !Enum.TryParse<kSpellEffects>(name, out _))
+            .Concat(SpellTemplateMapping.TargetNames.Where(name => !Enum.TryParse<kEffectTarget>(name, out _)))
+            .ToList();
+        if (missing.Count > 0) {
+            throw new InvalidOperationException(
+                $"The client's spell effect enums lack names the classic spell values use: {string.Join(", ", missing)}.");
+        }
+    }
+
     private static SpellTemplateShape ShapeOf(SpellTemplate template, string path) {
         var rank = template.m_spellRank;
         var effects = template.m_effects ?? [];
@@ -181,78 +206,28 @@ public static class ClassicSpellTemplates {
             SchoolPips = rank is null ? 0 : rank.m_balancePips + rank.m_deathPips + rank.m_firePips + rank.m_icePips
                 + rank.m_lifePips + rank.m_mythPips + rank.m_stormPips + rank.m_shadowPips,
             Accuracy = template.m_accuracy,
-            Effects = [.. effects.Select(NodeOf)],
+            Effects = [.. effects.Select(effect => SpellTemplateMapping.NodeOf(effect, FieldsOf, ChildrenOf))],
         };
     }
 
-    private static TemplateEffectNode NodeOf(SpellEffect? effect) {
-        if (effect is null) {
-            return new TemplateEffectNode { Composition = TemplateComposition.Other };
+    private static ClientEffectFields FieldsOf(SpellEffect effect)
+        => new(TypeChainOf(effect.GetType()), effect.m_effectType.ToString(), effect.m_effectTarget.ToString(), effect.m_sDamageType,
+            effect.m_effectParam, effect.m_numRounds, effect.m_pipNum, effect.m_healModifier);
+
+    private static List<string> TypeChainOf(System.Type? type) {
+        var chain = new List<string>();
+        for (; type is not null && type != typeof(object); type = type.BaseType) {
+            chain.Add(type.Name);
         }
 
-        var node = new TemplateEffectNode {
-            Kind = KindOf(effect.m_effectType),
-            Target = TargetOf(effect.m_effectTarget),
-            DamageType = effect.m_sDamageType ?? "",
-            Param = effect.m_effectParam,
-            Rounds = effect.m_numRounds,
-            PipNumber = effect.m_pipNum,
-            HealModifier = effect.m_healModifier,
-        };
-
-        return effect switch {
-            RandomSpellEffect random => node with {
-                Composition = TemplateComposition.Random,
-                Children = [.. (random.m_effectList ?? []).Select(NodeOf)],
-            },
-            VariableSpellEffect variable => node with {
-                Composition = TemplateComposition.PerPip,
-                Children = [.. (variable.m_effectList ?? []).Select(NodeOf)],
-            },
-            _ when effect.GetType() == typeof(SpellEffect) => node,
-            _ => node with { Composition = TemplateComposition.Other },
-        };
+        return chain;
     }
 
-    private static TemplateEffectKind KindOf(kSpellEffects type)
-        => type switch {
-            kSpellEffects.kDamage => TemplateEffectKind.Damage,
-            kSpellEffects.kDamageOverTime => TemplateEffectKind.DamageOverTime,
-            kSpellEffects.kHeal => TemplateEffectKind.Heal,
-            kSpellEffects.kHealOverTime => TemplateEffectKind.HealOverTime,
-            kSpellEffects.kStealHealth => TemplateEffectKind.StealHealth,
-            kSpellEffects.kModifyOutgoingDamage => TemplateEffectKind.ModifyOutgoingDamage,
-            kSpellEffects.kModifyIncomingDamage => TemplateEffectKind.ModifyIncomingDamage,
-            kSpellEffects.kModifyAccuracy => TemplateEffectKind.ModifyAccuracy,
-            kSpellEffects.kModifyOutgoingHeal => TemplateEffectKind.ModifyOutgoingHeal,
-            kSpellEffects.kModifyIncomingHeal => TemplateEffectKind.ModifyIncomingHeal,
-            kSpellEffects.kAbsorbDamage => TemplateEffectKind.AbsorbDamage,
-            kSpellEffects.kModifyPips => TemplateEffectKind.ModifyPips,
-            _ => TemplateEffectKind.Other,
-        };
-
-    private static TemplateTarget TargetOf(kEffectTarget target)
-        => target switch {
-            kEffectTarget.kEnemySingle => TemplateTarget.EnemySingle,
-            kEffectTarget.kFriendlySingle => TemplateTarget.FriendlySingle,
-            kEffectTarget.kMinion or kEffectTarget.kFriendlyMinion or kEffectTarget.kEnemyMinion
-                or kEffectTarget.kCasterMinion or kEffectTarget.kTargetMinion => TemplateTarget.MinionSingle,
-            kEffectTarget.kSelf => TemplateTarget.Self,
-            kEffectTarget.kEnemyTeam or kEffectTarget.kEnemyTeamAllAtOnce => TemplateTarget.EnemyTeam,
-            kEffectTarget.kFriendlyTeam or kEffectTarget.kFriendlyTeamAllAtOnce => TemplateTarget.FriendlyTeam,
-            kEffectTarget.kGlobal => TemplateTarget.Global,
-            _ => TemplateTarget.Other,
-        };
-
-    private static kEffectTarget EffectTargetOf(TemplateTarget target)
-        => target switch {
-            TemplateTarget.EnemySingle => kEffectTarget.kEnemySingle,
-            TemplateTarget.FriendlySingle => kEffectTarget.kFriendlySingle,
-            TemplateTarget.Self => kEffectTarget.kSelf,
-            TemplateTarget.EnemyTeam => kEffectTarget.kEnemyTeam,
-            TemplateTarget.FriendlyTeam => kEffectTarget.kFriendlyTeam,
-            TemplateTarget.Global => kEffectTarget.kGlobal,
-            _ => kEffectTarget.kInvalidTarget,
+    private static IReadOnlyList<SpellEffect?>? ChildrenOf(SpellEffect effect)
+        => effect switch {
+            RandomSpellEffect random => random.m_effectList,
+            VariableSpellEffect variable => variable.m_effectList,
+            _ => null,
         };
 
     private static void ApplyPlan(SpellTemplate template, SpellOverridePlan plan) {
@@ -277,8 +252,12 @@ public static class ClassicSpellTemplates {
         }
 
         foreach (var change in plan.EffectChanges) {
-            if (EffectAt(template.m_effects, change.Address) is not { } effect) {
+            if (SpellTemplateMapping.EffectAt(template.m_effects, change.Address, ChildrenOf) is not { } effect) {
                 continue;
+            }
+
+            if (change.Kind is { } kind) {
+                effect.m_effectType = Enum.Parse<kSpellEffects>(SpellTemplateMapping.EffectTypeName(kind));
             }
 
             if (change.Param is { } param) {
@@ -293,29 +272,10 @@ public static class ClassicSpellTemplates {
                 effect.m_healModifier = heal;
             }
 
-            if (change.Target is { } target) {
-                effect.m_effectTarget = EffectTargetOf(target);
+            if (change.Target is { } target && SpellTemplateMapping.EffectTargetName(target) is { } targetName) {
+                effect.m_effectTarget = Enum.Parse<kEffectTarget>(targetName);
             }
         }
-    }
-
-    private static SpellEffect? EffectAt(List<SpellEffect>? effects, EffectAddress address) {
-        if (effects is null || address.Index >= effects.Count) {
-            return null;
-        }
-
-        var effect = effects[address.Index];
-        if (address.Child < 0) {
-            return effect;
-        }
-
-        var children = effect switch {
-            RandomSpellEffect random => random.m_effectList,
-            VariableSpellEffect variable => variable.m_effectList,
-            _ => null,
-        };
-
-        return children is not null && address.Child < children.Count ? children[address.Child] : null;
     }
 
 }

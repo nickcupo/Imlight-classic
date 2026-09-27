@@ -48,11 +48,15 @@ public sealed class SpellCensusTests {
 
     private static ClassicSpellRecord Named(string id, string name, string? template, SpellPips pips, double accuracy,
                                             string[]? profiles = null, params SpellEffectValues[] effects)
+        => Named(id, name, "trained", template, pips, accuracy, profiles, effects);
+
+    private static ClassicSpellRecord Named(string id, string name, string kind, string? template, SpellPips pips, double accuracy,
+                                            string[]? profiles = null, params SpellEffectValues[] effects)
         => new() {
             Id = id,
             Name = name,
             School = "fire",
-            Kind = "trained",
+            Kind = kind,
             ClientTemplate = template,
             Profiles = [.. profiles ?? ["late-2009"]],
             Values = new SpellValues(pips, accuracy, null, null, null, [.. effects]),
@@ -62,7 +66,7 @@ public sealed class SpellCensusTests {
     private static readonly ClassicSpellBook s_book = new("spells", [
         Named("spell.fire.fire_cat", "Fire Cat", "Spells/Tiered Spells/Fire Cat.xml", SpellPips.Of(1), 0.75, null,
             Effect(SpellEffectKind.Damage, min: 80, max: 120)),
-        Named("spell.fire.krokomummy", "Krokomummy", "Spells/TreasureCards/Krokomummy TC.xml", SpellPips.Of(3), 0.75, null,
+        Named("spell.fire.krokomummy", "Krokomummy", "treasure_card", "Spells/TreasureCards/Krokomummy TC.xml", SpellPips.Of(3), 0.75, null,
             Effect(SpellEffectKind.Damage, min: 375), Effect(SpellEffectKind.Stun, rounds: 1)),
         Named("spell.fire.link", "Link", "Spells/Link.xml", SpellPips.Of(2), 0.75, ["late-2009"],
             Effect(SpellEffectKind.Dot, min: 180, rounds: 3)),
@@ -83,13 +87,53 @@ public sealed class SpellCensusTests {
         => new(s_book, ProfileWithId("test"), table);
 
     [Fact]
-    public void FindsByTemplatePathFirstThenByName() {
+    public void FindsByTemplatePathThenTreasureCardThenName() {
         var overrides = Overrides();
+        var fireCat = s_book.Records[0];
+        var lost = s_book.Records[3];
 
         Assert.Equal(SpellMatch.ClientTemplate, overrides.Find("Spells/TreasureCards/Krokomummy TC.xml", "Krokomummy TC")!.Value.Match);
-        Assert.Equal((s_book.Records[1], SpellMatch.Name), overrides.Find("Spells/Krokomummy.xml", "Krokomummy")!.Value);
-        Assert.Null(overrides.Find("Spells/Fire Cat TC.xml", "Fire Cat TC"));
+        Assert.Equal((fireCat, SpellMatch.TreasureCard), overrides.Find("Spells/TreasureCards/Fire Cat TC.xml", "Fire Cat TC")!.Value);
+        Assert.Equal((lost, SpellMatch.Name), overrides.Find("Spells/Lost Card.xml", "Lost Card")!.Value);
         Assert.Null(overrides.PlanFor(Shape(1, 75) with { Path = "Spells/Other.xml", Name = "Other" }));
+    }
+
+    [Fact]
+    public void ANameMatchesOnlyARecordWithoutAClientTemplate() {
+        // Spells/Gobbler.xml is a 310-damage card that is not the Gobbler Treasure Card the record describes.
+        var overrides = Overrides();
+
+        Assert.Null(overrides.Find("Spells/Krokomummy.xml", "Krokomummy"));
+        Assert.Null(overrides.Find("Spells/Tiered Spells/Fire Cat 2.xml", "Fire Cat"));
+    }
+
+    [Fact]
+    public void ATreasureCardNeedsTheFolderAndTheSuffix() {
+        var overrides = Overrides();
+
+        Assert.Null(overrides.Find("Spells/Fire Cat TC.xml", "Fire Cat TC"));
+        Assert.Null(overrides.Find("Spells/TreasureCards/Fire Cat.xml", "Fire Cat"));
+        Assert.Null(overrides.Find("Spells/TreasureCards/Fire Cat TC PH.xml", "Fire Cat TC PrH"));
+    }
+
+    [Fact]
+    public void ATreasureCardFollowsTheCutoffNameOrTheClientTemplate() {
+        var book = new ClassicSpellBook("spells", [
+            Named("spell.death.doom_and_gloom", "Doom and Gloom", "Spells/DoomGloom.xml", SpellPips.Of(3), 1.0),
+            Named("spell.myth.time_of_legend", "Time of Legend", "Spells/Blood Moon.xml", SpellPips.Of(2), 1.0),
+            Named("spell.storm.storm_hound", "Storm Hound", "pet", "Spells/Storm Hound - Pet.xml", SpellPips.X, 0.7),
+            Named("spell.fire.a", "Twin", "Spells/Twin A.xml", SpellPips.Of(1), 1.0),
+            Named("spell.fire.b", "Other Twin", "Spells/Twin.xml", SpellPips.Of(1), 1.0),
+        ]);
+
+        Assert.Equal("spell.death.doom_and_gloom", book.FindTreasureCardOf("Spells/TreasureCards/Doom and Gloom TC.xml", "Doom and Gloom TC")?.Id);
+        Assert.Equal("spell.myth.time_of_legend", book.FindTreasureCardOf("Spells/TreasureCards/Blood Moon TC.xml", "Blood Moon TC")?.Id);
+        Assert.Equal("spell.myth.time_of_legend", book.FindTreasureCardOf("Spells/TreasureCards/Time of Legend TC.xml", "time of legend TC")?.Id);
+        // Only trained and crossover records cover a Treasure Card.
+        Assert.Null(book.FindTreasureCardOf("Spells/TreasureCards/Storm Hound TC.xml", "Storm Hound TC"));
+        // "Twin" is one record's name and another's template file; it matches neither.
+        Assert.Null(book.FindTreasureCardOf("Spells/TreasureCards/Twin TC.xml", "Twin TC"));
+        Assert.Equal("spell.fire.a", book.FindTreasureCardOf("Spells/TreasureCards/Twin A TC.xml", "Twin A TC")?.Id);
     }
 
     [Fact]
@@ -113,28 +157,33 @@ public sealed class SpellCensusTests {
         Add(Shape(1, 70, Plain(TemplateEffectKind.Damage, 50)) with { Path = "Spells/Mob Fire.xml", Name = "Mob Fire" });
         Add(Shape(1, 75, Plain(TemplateEffectKind.Damage, 50)) with { Path = "Spells/Mob Fire 2.xml", Name = "Mob Fire 2" });
         Add(Shape(0, 100, Plain(TemplateEffectKind.ModifyIncomingDamage, -50)) with { Path = "Spells/Mob Shield.xml", Name = "Mob Shield" });
+        Add(Shape(1, 80, Random(Plain(TemplateEffectKind.Damage, 90), Plain(TemplateEffectKind.Damage, 130)))
+            with { Path = "Spells/TreasureCards/Fire Cat TC.xml", Name = "Fire Cat TC" });
+        Add(Shape(1, 100) with { Path = "Spells/Lost Card.xml", Name = "Lost Card" });
         // Counted once however often it loads.
         Add(Shape(1, 70, Plain(TemplateEffectKind.Damage, 50)) with { Path = "Spells/Mob Fire.xml", Name = "Mob Fire" });
 
         var summary = census.Summarize(overrides);
 
-        Assert.Equal(6, summary.Templates);
+        Assert.Equal(8, summary.Templates);
         Assert.Equal(2, summary.MatchedByClientTemplate);
+        Assert.Equal(1, summary.MatchedByTreasureCard);
         Assert.Equal(1, summary.MatchedByName);
-        Assert.Equal(3, summary.Unmatched);
+        Assert.Equal(4, summary.Unmatched);
         Assert.Equal(2, summary.ChangedTemplates);
         Assert.Equal(0, summary.PipsChanged);
         Assert.Equal(1, summary.AccuracyChanged);
-        Assert.Equal(2, summary.EffectValuesChanged);
+        Assert.Equal(4, summary.EffectValuesChanged);
         Assert.Equal(1, summary.RoundsChanged);
-        Assert.Equal(2, summary.UnmatchedTemplateEffects);
-        Assert.Equal(new[] { "spell.fire.lost" }, summary.RecordsWithoutTemplate);
+        Assert.Equal(1, summary.ZeroedTemplateEffects);
+        Assert.Equal(0, summary.UnmatchedTemplateEffects);
+        Assert.Equal(new[] { "spell.fire.krokomummy" }, summary.RecordsWithoutTemplate);
         Assert.Equal(new[] { "spell.fire.fire_cat", "spell.fire.krokomummy", "spell.fire.link", "spell.fire.lost" }, summary.RecordsNotInProfile);
         Assert.Equal("damage 2, dot 1", summary.DescribeApplied());
-        Assert.Equal("stun 1", summary.DescribeSkipped(EffectSkipReason.KindNotApplied));
+        Assert.Equal("none", summary.DescribeSkipped(EffectSkipReason.KindNotApplied));
         Assert.Equal("none", summary.DescribeSkipped(EffectSkipReason.NoValues));
-        Assert.Equal(2, summary.UnmatchedDamageTemplates);
-        Assert.Equal(1, summary.UnmatchedDamageOffSchoolBase);
+        Assert.Equal(3, summary.UnmatchedDamageTemplates);
+        Assert.Equal(2, summary.UnmatchedDamageOffSchoolBase);
     }
 
     [Fact]

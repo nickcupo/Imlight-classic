@@ -56,6 +56,7 @@ public sealed record SpellCensusSummary {
 
     public int Templates { get; init; }
     public int MatchedByClientTemplate { get; init; }
+    public int MatchedByTreasureCard { get; init; }
     public int MatchedByName { get; init; }
     public int Unmatched { get; init; }
     public int ChangedTemplates { get; init; }
@@ -68,6 +69,21 @@ public sealed record SpellCensusSummary {
     public int TargetsChanged { get; init; }
     public int TargetsNotRepresentable { get; init; }
     public int UnmatchedTemplateEffects { get; init; }
+
+    /// <summary>
+    /// Template effects zeroed because the record has no such effect.
+    /// </summary>
+    public int ZeroedTemplateEffects { get; init; }
+
+    /// <summary>
+    /// Template effects whose type the plan rewrote (a share of max health to a flat hit).
+    /// </summary>
+    public int KindsChanged { get; init; }
+
+    /// <summary>
+    /// Templates charged a fixed cost inherited from a profile the active one extends, instead of the active profile's X.
+    /// </summary>
+    public int PipsInherited { get; init; }
 
     /// <summary>
     /// Records no template path or name matched, by id.
@@ -162,6 +178,7 @@ public sealed class SpellOverrideCensus {
         return new SpellCensusSummary {
             Templates = entries.Count,
             MatchedByClientTemplate = plans.Count(plan => plan.Match == SpellMatch.ClientTemplate),
+            MatchedByTreasureCard = plans.Count(plan => plan.Match == SpellMatch.TreasureCard),
             MatchedByName = plans.Count(plan => plan.Match == SpellMatch.Name),
             Unmatched = entries.Count - plans.Count,
             ChangedTemplates = plans.Count(plan => plan.ChangesTemplate),
@@ -174,6 +191,9 @@ public sealed class SpellOverrideCensus {
             TargetsChanged = changes.Count(change => change.Target is not null),
             TargetsNotRepresentable = plans.Sum(plan => plan.TargetsNotRepresentable),
             UnmatchedTemplateEffects = plans.Sum(plan => plan.UnmatchedTemplateEffects),
+            ZeroedTemplateEffects = plans.Sum(plan => plan.ZeroedTemplateEffects),
+            KindsChanged = changes.Count(change => change.Kind is not null),
+            PipsInherited = plans.Count(plan => plan.PipsInherited),
             RecordsWithoutTemplate = [.. overrides.Book.Records.Where(record => !matchedIds.Contains(record.Id)).Select(record => record.Id)],
             RecordsNotInProfile = [.. overrides.RecordsNotInProfile.Select(record => record.Id)],
             PipsSkipped = plans.Where(plan => plan.PipsSkip != PipsSkip.None)

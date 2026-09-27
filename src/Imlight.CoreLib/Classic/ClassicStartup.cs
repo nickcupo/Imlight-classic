@@ -31,10 +31,11 @@
  * NOTE:
  * No [Classic] section, or an empty Profile, runs stock Imlight without
  * reading classic-data. A configured profile that fails to load stops the
- * boot. The zone census logs counts and unmapped first segments only;
- * zone names come from the client's WAD, so never commit the log. Spell
- * values load only for a restricted profile; the spell census names
- * classic record ids, never client template paths.
+ * boot, as does a configured SpellsPath that does not exist (the default
+ * path only warns). The zone census logs counts and unmapped first
+ * segments only; zone names come from the client's WAD, so never commit
+ * the log. Spell values load only for a restricted profile; the spell
+ * census names classic record ids, never client template paths.
  * 
  * TODO:
  * 
@@ -86,8 +87,8 @@ public static class ClassicStartup {
                 ConfigurationManager.Settings["Classic.ProfilesPath"].AsString(), baseDirectory);
             var zoneWorldsPath = ClassicDataLocator.ResolveZoneWorldsPath(
                 ConfigurationManager.Settings["Classic.ZoneWorldsPath"].AsString(), profilesPath, baseDirectory);
-            var spellsPath = ClassicDataLocator.ResolveSpellsPath(
-                ConfigurationManager.Settings["Classic.SpellsPath"].AsString(), profilesPath, baseDirectory);
+            var configuredSpellsPath = ConfigurationManager.Settings["Classic.SpellsPath"].AsString();
+            var spellsPath = ClassicDataLocator.ResolveSpellsPath(configuredSpellsPath, profilesPath, baseDirectory);
             var auditVerbose = ConfigurationManager.Settings["Classic.AuditVerbose"].AsBool();
             Logger.Information("Classic rules: profiles {ProfilesPath}, zone map {ZoneWorldsPath}.",
                 Logger.Args(profilesPath, zoneWorldsPath));
@@ -103,7 +104,7 @@ public static class ClassicStartup {
                 var accuracyTablePath = profile.Rules.AccuracyTable is { } table && classicDataRoot is not null
                     ? Path.Combine(classicDataRoot, table)
                     : null;
-                ClassicSpellTemplates.Initialize(profile, spellsPath, accuracyTablePath);
+                ClassicSpellTemplates.Initialize(profile, spellsPath, !string.IsNullOrWhiteSpace(configuredSpellsPath), accuracyTablePath);
             }
 
             ClassicRuntime.Initialize(rules, new LoggerAuditSink(), auditVerbose);

@@ -93,6 +93,28 @@ public sealed class RealSpellsTests {
     }
 
     [Fact]
+    public void TauntChargesItsLate2009CostInArc1() {
+        // The client's Taunt costs 3 and cannot be an X card, so arc1-2009h1 falls back to the 2 late-2009 charges.
+        var overrides = new ClassicSpellOverrides(LoadBook(), ClassicDataFixture.LoadProfile("arc1-2009h1"));
+        var shape = new SpellTemplateShape { Path = "Spells/Taunt.xml", Name = "Taunt", Rank = 3, Accuracy = 100 };
+
+        var plan = overrides.PlanFor(shape)!;
+
+        Assert.Equal(2, plan.Rank);
+        Assert.True(plan.PipsInherited);
+        Assert.Equal(PipsSkip.XOnFixedCostTemplate, plan.PipsSkip);
+        Assert.Null(new ClassicSpellOverrides(LoadBook(), ClassicDataFixture.LoadProfile("late-2009")).InheritedFixedPips(plan.Record));
+    }
+
+    [Fact]
+    public void TreasureCardsOfRecordedCardsFindTheirRecord() {
+        var book = LoadBook();
+
+        Assert.Equal("spell.ice.colossus", book.FindTreasureCardOf("Spells/TreasureCards/Colossus TC.xml", "Colossus TC")?.Id);
+        Assert.Equal("spell.storm.wild_bolt", book.FindTreasureCardOf("Spells/TreasureCards/Wild Bolt TC.xml", "Wild Bolt TC")?.Id);
+    }
+
+    [Fact]
     public void EveryNamedProfileExistsAndTheCanonicalOneIsTheSchemas() {
         var profiles = ClassicProfileLoader.LoadAll(ClassicDataFixture.ProfilesPath);
         var ids = profiles.Select(profile => profile.Id).ToHashSet();

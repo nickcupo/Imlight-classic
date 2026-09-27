@@ -21,8 +21,9 @@
  *
  * PURPOSE:
  * The spell values of one profile: finds the record for a client template
- * (by client_template path, else by card name) and plans the template's
- * overrides with that profile's numbers.
+ * (by client_template path, then as a trained card's Treasure Card, then
+ * by card name for records with no client_template) and plans the
+ * template's overrides with that profile's numbers.
  *
  * USAGE EXAMPLE:
  * var overrides = new ClassicSpellOverrides(ClassicSpellLoader.Load(spellsDir), profile, accuracyTable);
@@ -78,7 +79,8 @@ public sealed class ClassicSpellOverrides {
     public AccuracyTable? AccuracyTable { get; }
 
     /// <summary>
-    /// The record for a template: the one naming its path, else the one with its card name.
+    /// The record for a template: the one naming its path, else the trained card whose Treasure Card it is,
+    /// else a record with its card name and no client template.
     /// </summary>
     /// <param name="templatePath">The template's Root.wad path.</param>
     /// <param name="templateName">The template's name.</param>
@@ -88,7 +90,13 @@ public sealed class ClassicSpellOverrides {
             return (byPath, SpellMatch.ClientTemplate);
         }
 
-        if (Book.FindByName(templateName) is { } byName) {
+        if (Book.FindTreasureCardOf(templatePath, templateName) is { } trained) {
+            return (trained, SpellMatch.TreasureCard);
+        }
+
+        // A record with a client template describes that template only; another template sharing the card
+        // name is a different card, such as a creature's own copy.
+        if (Book.FindByName(templateName) is { ClientTemplate: null } byName) {
             return (byName, SpellMatch.Name);
         }
 
@@ -113,7 +121,26 @@ public sealed class ClassicSpellOverrides {
             return null;
         }
 
-        return SpellOverridePlanner.Plan(record, match, ValuesOf(record), shape);
+        return SpellOverridePlanner.Plan(record, match, ValuesOf(record), shape, InheritedFixedPips(record));
+    }
+
+    /// <summary>
+    /// The nearest fixed pip cost a profile this one extends gives the record, for a profile whose own cost is X.
+    /// </summary>
+    /// <param name="record">A record of <see cref="Book"/>.</param>
+    /// <returns>The cost, or null when the active profile's cost is fixed or no ancestor fixes one.</returns>
+    public int? InheritedFixedPips(ClassicSpellRecord record) {
+        if (!ValuesOf(record).Pips.IsX) {
+            return null;
+        }
+
+        for (var i = 1; i < Lineage.Length; i++) {
+            if (record.ValuesFor(Lineage[i..]).Pips.Fixed is { } cost) {
+                return cost;
+            }
+        }
+
+        return null;
     }
 
     /// <summary>

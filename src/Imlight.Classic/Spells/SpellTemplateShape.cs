@@ -61,6 +61,7 @@ public enum TemplateEffectKind {
     ModifyIncomingHeal,
     AbsorbDamage,
     ModifyPips,
+    MaxHealthDamage,
 }
 
 /// <summary>
@@ -174,5 +175,11 @@ public readonly record struct EffectAddress(int Index, int Child = -1);
 /// <summary>
 /// New values for one template effect; a null field stays as it is.
 /// </summary>
+/// <param name="Address">The effect.</param>
+/// <param name="Param">The new amount or percentage.</param>
+/// <param name="Rounds">The new duration.</param>
+/// <param name="HealModifier">The new heal share of a drain.</param>
+/// <param name="Target">The new target.</param>
+/// <param name="Kind">The new effect type, when the classic effect means something else than the client's.</param>
 public sealed record EffectChange(EffectAddress Address, int? Param = null, int? Rounds = null, float? HealModifier = null,
-                                  TemplateTarget? Target = null);
+                                  TemplateTarget? Target = null, TemplateEffectKind? Kind = null);

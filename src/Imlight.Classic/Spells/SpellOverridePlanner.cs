@@ -35,6 +35,10 @@
  * target alone, then kind alone. The looser passes need the pairing to be
  * the only one left for that kind, and the last two only apply to amounts
  * (damage, heals, drains, pips, wards) whose template school says little.
+ * A template effect the record leaves out is zeroed only where the record
+ * clearly has no such effect: an up-front hit or heal beside the record's
+ * damage or heal on the same targets (Link, Helping Hands), or a global
+ * whose meaning the record does not share (Power Play).
  *
  * TODO:
  *
@@ -56,6 +60,15 @@ namespace Imlight.Classic.Spells;
 /// </summary>
 public enum SpellMatch {
     ClientTemplate,
+
+    /// <summary>
+    /// The template is the Treasure Card of a trained or crossover record.
+    /// </summary>
+    TreasureCard,
+
+    /// <summary>
+    /// The card name of a record with no client template.
+    /// </summary>
     Name,
 }
 
@@ -67,6 +80,7 @@ public enum PipsSkip {
 
     /// <summary>
     /// The record is X but the template has a fixed cost; the server decides X by the template's structure.
+    /// The nearest fixed cost of a profile the active one extends is charged instead, when there is one.
     /// </summary>
     XOnFixedCostTemplate,
 
@@ -96,6 +110,12 @@ public enum EffectSkipReason {
     /// </summary>
     NoMatchingTemplateEffect,
 
+    /// <summary>
+    /// An amount whose pip cost did not reach the template: an X card's amount is per pip and a fixed card's
+    /// is the whole effect, so neither fits the other's template.
+    /// </summary>
+    PipsNotApplied,
+
 }
 
 /// <summary>
@@ -124,6 +144,12 @@ public sealed class SpellOverridePlan {
     public PipsSkip PipsSkip { get; init; }
 
     /// <summary>
+    /// True when <see cref="Rank"/> or the kept template cost is a fixed cost inherited from a profile the active one
+    /// extends, because the active profile's X cost did not fit the template.
+    /// </summary>
+    public bool PipsInherited { get; init; }
+
+    /// <summary>
     /// The new accuracy as a whole percentage, or null when it is unchanged.
     /// </summary>
     public int? Accuracy { get; init; }
@@ -138,7 +164,8 @@ public sealed class SpellOverridePlan {
     public ImmutableArray<SkippedEffect> SkippedEffects { get; init; } = [];
 
     /// <summary>
-    /// Template effects no classic effect was paired with (each outcome of a mixed roll counts); they keep their client values.
+    /// Template effects no classic effect was paired with and that were not zeroed (each outcome of a mixed roll
+    /// counts); they keep their client values.
     /// </summary>
     public int UnmatchedTemplateEffects { get; init; }
 
@@ -146,6 +173,11 @@ public sealed class SpellOverridePlan {
     /// Paired effects whose classic target could not be written, because the client would not send a target for it.
     /// </summary>
     public int TargetsNotRepresentable { get; init; }
+
+    /// <summary>
+    /// Template effects the record has no counterpart for that are zeroed (an up-front hit or heal, a global with another meaning).
+    /// </summary>
+    public int ZeroedTemplateEffects { get; init; }
 
     /// <summary>
     /// True when applying the plan changes anything.
@@ -184,7 +216,7 @@ public static class SpellOverridePlanner {
 
     private static readonly FrozenDictionary<SpellEffectKind, TemplateEffectKind[]> s_templateKinds =
         new Dictionary<SpellEffectKind, TemplateEffectKind[]> {
-            [SpellEffectKind.Damage] = [TemplateEffectKind.Damage],
+            [SpellEffectKind.Damage] = [TemplateEffectKind.Damage, TemplateEffectKind.MaxHealthDamage],
             [SpellEffectKind.Dot] = [TemplateEffectKind.DamageOverTime],
             [SpellEffectKind.Heal] = [TemplateEffectKind.Heal],
             [SpellEffectKind.Hot] = [TemplateEffectKind.HealOverTime],
@@ -217,12 +249,14 @@ public static class SpellOverridePlanner {
     /// <param name="match">How the template found the record.</param>
     /// <param name="values">The record's values in the active profile.</param>
     /// <param name="shape">The template.</param>
+    /// <param name="inheritedFixedPips">The fixed cost to charge when <paramref name="values"/> is X and the template is not.</param>
     /// <returns>The plan; empty changes when the template already carries the classic numbers.</returns>
-    public static SpellOverridePlan Plan(ClassicSpellRecord record, SpellMatch match, SpellValues values, SpellTemplateShape shape) {
-        var (rank, clearSchoolPips, pipsSkip) = PlanPips(values.Pips, shape);
+    public static SpellOverridePlan Plan(ClassicSpellRecord record, SpellMatch match, SpellValues values, SpellTemplateShape shape,
+                                         int? inheritedFixedPips = null) {
+        var (rank, clearSchoolPips, pipsSkip) = PlanPips(values.Pips, shape, inheritedFixedPips);
         var accuracy = values.AccuracyPercent;
         var slots = BuildSlots(shape.Effects);
-        var pairs = Pair(values.Effects, slots, out var skipped);
+        var pairs = Pair(values.Effects, slots, amountsFit: pipsSkip == PipsSkip.None, out var skipped);
 
         var changes = new List<EffectChange>();
         var targetsNotRepresentable = 0;
@@ -237,24 +271,38 @@ public static class SpellOverridePlanner {
             changes.AddRange(ChangesFor(effect, slot, target));
         }
 
+        var zeroed = SlotsToZero(values.Effects, slots, pairs);
+        foreach (var slotIndex in zeroed) {
+            var slot = slots[slotIndex];
+            changes.AddRange(slot.Addresses.Where((_, i) => slot.Effects[i].Param != 0).Select(address => new EffectChange(address, Param: 0)));
+        }
+
         return new SpellOverridePlan {
             Record = record,
             Match = match,
             Rank = rank,
             ClearSchoolPips = clearSchoolPips,
             PipsSkip = pipsSkip,
+            PipsInherited = pipsSkip == PipsSkip.XOnFixedCostTemplate && inheritedFixedPips is not null,
             Accuracy = accuracy == shape.Accuracy ? null : accuracy,
             EffectChanges = [.. changes],
             AppliedEffects = [.. pairs.OrderBy(pair => pair.Effect).Select(pair => values.Effects[pair.Effect].Kind)],
             SkippedEffects = skipped,
-            UnmatchedTemplateEffects = slots.Count - pairs.Count,
+            UnmatchedTemplateEffects = slots.Count - pairs.Count - zeroed.Count,
             TargetsNotRepresentable = targetsNotRepresentable,
+            ZeroedTemplateEffects = zeroed.Count,
         };
     }
 
-    private static (int? Rank, bool ClearSchoolPips, PipsSkip Skip) PlanPips(SpellPips pips, SpellTemplateShape shape) {
+    private static (int? Rank, bool ClearSchoolPips, PipsSkip Skip) PlanPips(SpellPips pips, SpellTemplateShape shape, int? inheritedFixedPips) {
         if (pips.Fixed is not { } cost) {
-            return (null, false, shape.IsXPip ? PipsSkip.None : PipsSkip.XOnFixedCostTemplate);
+            if (shape.IsXPip) {
+                return (null, false, PipsSkip.None);
+            }
+
+            return inheritedFixedPips is { } inherited
+                ? (inherited == shape.Rank ? null : inherited, shape.SchoolPips > 0, PipsSkip.XOnFixedCostTemplate)
+                : (null, false, PipsSkip.XOnFixedCostTemplate);
         }
 
         if (shape.IsXPip) {
@@ -304,7 +352,7 @@ public static class SpellOverridePlanner {
                 && CategoryOf(child.Target) == CategoryOf(children[0].Target)
                 && string.Equals(child.DamageType, children[0].DamageType, StringComparison.OrdinalIgnoreCase));
 
-    private static List<(int Effect, int Slot)> Pair(ImmutableArray<SpellEffectValues> effects, List<Slot> slots,
+    private static List<(int Effect, int Slot)> Pair(ImmutableArray<SpellEffectValues> effects, List<Slot> slots, bool amountsFit,
                                                      out ImmutableArray<SkippedEffect> skipped) {
         var pairs = new List<(int Effect, int Slot)>();
         var usedSlots = new HashSet<int>();
@@ -317,6 +365,9 @@ public static class SpellOverridePlanner {
             }
             else if (s_amountKinds.Contains(effect.Kind) ? !effect.HasAmount : effect.Percent is null) {
                 skips.Add((i, new SkippedEffect(effect.Kind, EffectSkipReason.NoValues)));
+            }
+            else if (s_amountKinds.Contains(effect.Kind) && !amountsFit) {
+                skips.Add((i, new SkippedEffect(effect.Kind, EffectSkipReason.PipsNotApplied)));
             }
             else {
                 open.Add(i);
@@ -357,12 +408,66 @@ public static class SpellOverridePlanner {
         return pairs;
     }
 
+    private static List<int> SlotsToZero(ImmutableArray<SpellEffectValues> effects, List<Slot> slots, List<(int Effect, int Slot)> pairs) {
+        var pairedEffects = pairs.Select(pair => pair.Effect).ToHashSet();
+        var pairedSlots = pairs.Select(pair => pair.Slot).ToHashSet();
+        var zero = new List<int>();
+
+        // Every amount the record gives has landed, so a remaining up-front hit or heal on targets the record's
+        // own damage or heal already covers is one the card did not have.
+        var amountsLanded = Enumerable.Range(0, effects.Length)
+            .Where(i => s_amountKinds.Contains(effects[i].Kind) && effects[i].HasAmount)
+            .All(pairedEffects.Contains);
+        var covered = pairs
+            .Select(pair => (Family: FamilyOf(slots[pair.Slot].Kind), Targets: CategoryOf(slots[pair.Slot].Target)))
+            .Where(cover => cover.Family is not null)
+            .ToHashSet();
+
+        // A global the record gives but no template global means is a different bubble; the template's own
+        // meaning (Power Play's Balance boost) was not in the card.
+        var globalsDiffer = effects.Any(effect => effect.Kind == SpellEffectKind.Global && effect.Percent is not null)
+            && !Enumerable.Range(0, effects.Length).Any(i => effects[i].Kind == SpellEffectKind.Global && pairedEffects.Contains(i));
+
+        for (var i = 0; i < slots.Count; i++) {
+            var slot = slots[i];
+            if (pairedSlots.Contains(i) || slot.Effects.All(node => node.Param == 0)) {
+                continue;
+            }
+
+            var upFront = amountsLanded
+                && slot is { Shape: SlotShape.Single, Kind: TemplateEffectKind.Damage or TemplateEffectKind.Heal }
+                && slot.Addresses[0].Child < 0
+                && covered.Contains((FamilyOf(slot.Kind), CategoryOf(slot.Target)));
+            var otherGlobal = globalsDiffer
+                && CategoryOf(slot.Target) == TargetCategory.Global
+                && s_templateKinds[SpellEffectKind.Global].Contains(slot.Kind);
+            if (upFront || otherGlobal) {
+                zero.Add(i);
+            }
+        }
+
+        return zero;
+    }
+
+    private static SpellEffectKind? FamilyOf(TemplateEffectKind kind)
+        => kind switch {
+            TemplateEffectKind.Damage or TemplateEffectKind.DamageOverTime or TemplateEffectKind.StealHealth
+                or TemplateEffectKind.MaxHealthDamage => SpellEffectKind.Damage,
+            TemplateEffectKind.Heal or TemplateEffectKind.HealOverTime => SpellEffectKind.Heal,
+            _ => null,
+        };
+
     private static bool IsCandidate(SpellEffectValues effect, Slot slot) {
         if (!s_templateKinds[effect.Kind].Contains(slot.Kind)) {
             return false;
         }
 
         if ((effect.Kind == SpellEffectKind.Global) != (CategoryOf(slot.Target) == TargetCategory.Global)) {
+            return false;
+        }
+
+        // A share of max health only turns into a flat hit on the same targets (Empower's cost to the caster).
+        if (slot.Kind == TemplateEffectKind.MaxHealthDamage && CategoryOf(effect) != CategoryOf(slot.Target)) {
             return false;
         }
 
@@ -376,7 +481,9 @@ public static class SpellOverridePlanner {
 
     private static bool SchoolFits(SpellEffectValues effect, Slot slot)
         => string.Equals(slot.DamageType, effect.School, StringComparison.OrdinalIgnoreCase)
-            || (effect.Kind != SpellEffectKind.Global && string.Equals(slot.DamageType, "All", StringComparison.OrdinalIgnoreCase));
+            || (effect.Kind != SpellEffectKind.Global && string.Equals(slot.DamageType, "All", StringComparison.OrdinalIgnoreCase))
+            // A healing bubble changes every heal whatever its school; the client files them under Life (Doom and Gloom).
+            || (effect.Kind == SpellEffectKind.Global && slot.Kind is TemplateEffectKind.ModifyOutgoingHeal or TemplateEffectKind.ModifyIncomingHeal);
 
     private static TargetCategory CategoryOf(TemplateTarget target)
         => target switch {
@@ -422,6 +529,7 @@ public static class SpellOverridePlanner {
 
     private static IEnumerable<EffectChange> ChangesFor(SpellEffectValues effect, Slot slot, TemplateTarget? target) {
         var values = NewParams(effect, slot);
+        TemplateEffectKind? kind = slot.Kind == TemplateEffectKind.MaxHealthDamage ? TemplateEffectKind.Damage : null;
         for (var i = 0; i < slot.Effects.Length; i++) {
             var node = slot.Effects[i];
             int? param = values[i] == node.Param ? null : values[i];
@@ -430,8 +538,8 @@ public static class SpellOverridePlanner {
                 ? p / 100f
                 : null;
             var newTarget = target is { } t && t != node.Target ? target : null;
-            if (param is not null || rounds is not null || heal is not null || newTarget is not null) {
-                yield return new EffectChange(slot.Addresses[i], param, rounds, heal, newTarget);
+            if (param is not null || rounds is not null || heal is not null || newTarget is not null || kind is not null) {
+                yield return new EffectChange(slot.Addresses[i], kind is null ? param : values[i], rounds, heal, newTarget, kind);
             }
         }
     }
