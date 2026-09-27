@@ -123,6 +123,12 @@ public static class ClassicStartup {
                     Logger.Args(zones.Worlds.Length, zones.Areas.Length, zones.Overrides.Length, string.Join(", ", zones.SourceFiles)));
             }
             ClassicRuntime.Audit(new ClassicAuditEntry(ClassicAuditKind.Startup, null, profile.Id, profile.Describe()));
+            if (rules.IsRestricted && !profile.WorldUnlocks.IsEmpty) {
+                Logger.Information("Classic world unlocks at the Spiral Door: {Unlocks}.", Logger.Args(string.Join("; ",
+                    profile.WorldUnlocks.Values.OrderBy(unlock => unlock.WorldId, StringComparer.Ordinal)
+                        .Select(unlock => $"{unlock.WorldId}: {unlock.Describe()}"))));
+            }
+
             if (!rules.IsRestricted) {
                 Logger.Warning("Classic profile {Profile} restricts nothing; the server runs stock Imlight rules.",
                     Logger.Args(profile.Id));

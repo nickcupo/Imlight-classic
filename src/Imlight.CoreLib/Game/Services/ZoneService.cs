@@ -387,8 +387,10 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
             return;
         }
 
-        // CLASSIC: the client may ask for any key; refuse one the door would not list or a closed zone, and clear the wizbang.
-        if (!ClassicGate.AllowsWorldTeleport(zoneMap.m_world, zoneMap.m_universeTPZone, GetActiveWizard().CharId, InformGameClient)) {
+        // CLASSIC: the client may ask for any key; refuse one the door would not list, a closed zone or a world the
+        // wizard has not unlocked yet, and clear the wizbang.
+        if (!ClassicGate.AllowsWorldTeleport(zoneMap.m_world, zoneMap.m_universeTPZone, GetActiveWizard().CharId, InformGameClient)
+            || !ClassicGate.AllowsWorldUnlock(zoneMap.m_world, new WizardProgress(GetActiveWizard()), GetActiveWizard().CharId, InformGameClient)) {
             ZoneBroadcast(new GAME_5_PROTOCOL.MSG_WIZBANG {
                 GameObjectID = GetActiveWizard().GameObjectID,
                 WizBangID = (uint) WizBangs.None

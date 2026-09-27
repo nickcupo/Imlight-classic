@@ -21,6 +21,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using Imlight.Common;
 using Imlight.CoreLib.WizardData.Models.World;
 using Imcodec.ObjectProperty.TypeCache;
@@ -512,12 +513,20 @@ public static partial class SpiralDB {
         }
 
         var count = 0;
+        var merges = new List<(string File, WizardZoneData Zone)>(); // CLASSIC: merge records apply after the full ones.
+        var fullKeys = new List<string>(); // CLASSIC
         foreach (var file in Directory.EnumerateFiles(dir, "*.json")) {
             try {
                 var json = File.ReadAllText(file);
                 var zone = JsonConvert.DeserializeObject<WizardZoneData>(json, s_jsonSettings);
                 if (zone != null) {
+                    if (zone.Merge) { // CLASSIC
+                        merges.Add((file, zone));
+                        continue;
+                    }
+
                     target[zone.ZoneName] = zone;
+                    fullKeys.Add(zone.ZoneName); // CLASSIC
                     count++;
                 }
             }
@@ -525,6 +534,29 @@ public static partial class SpiralDB {
                 Logger.Warning("Failed to load zone data {0}: {1}",
                     Logger.Args(Path.GetFileName(file), ex.Message));
             }
+        }
+
+        // CLASSIC: merge records, in file-name order, add or replace entries of the record loaded so far by trigger
+        // name (a null Teleport removes one). The merged record is a new object, so the overlay stats count it.
+        var keysLoadedHere = new HashSet<string>(fullKeys, StringComparer.Ordinal);
+        s_zoneMergesOntoSameRootRecords = 0;
+        foreach (var (file, zone) in merges.OrderBy(merge => merge.File, StringComparer.Ordinal)) {
+            if (string.IsNullOrEmpty(zone.ZoneName)) {
+                Logger.Warning("Zone data merge record {0} has no ZoneName; skipped.", Logger.Args(Path.GetFileName(file)));
+                continue;
+            }
+
+            target.TryGetValue(zone.ZoneName, out var loaded);
+            if (!keysLoadedHere.Add(zone.ZoneName)) {
+                s_zoneMergesOntoSameRootRecords++; // not a repeated key: the overlay stats should not warn about it
+            }
+
+            target[zone.ZoneName] = new WizardZoneData {
+                ZoneName = zone.ZoneName,
+                Teleports = Imlight.Classic.Travel.ZoneTransferMerge.Apply(loaded?.Teleports, zone.Teleports,
+                    teleport => teleport?.TriggerName, teleport => teleport.Teleport is null),
+            };
+            count++;
         }
 
         return count;

@@ -49,6 +49,7 @@ public enum ClassicAuditKind {
     LevelCapReached,
     ZoneAllowed,
     Startup,
+    WorldLocked, // CLASSIC travel: a Spiral Door request for a world the wizard has not unlocked
 }
 
 /// <summary>

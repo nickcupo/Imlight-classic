@@ -45,6 +45,7 @@ using System;
 using Imcodec.Cryptography;
 using Imlight.Classic;
 using Imlight.Classic.Audit;
+using Imlight.Classic.Travel;
 using Imlight.Classic.Zones;
 using Imlight.Common;
 using Imlight.CoreLib.Game.World;
@@ -106,6 +107,30 @@ internal static class ClassicGate {
         }
 
         ReportDenial(decision, charId, inform);
+
+        return false;
+    }
+
+    /// <summary>
+    /// Spiral Door unlock check: the world of <paramref name="hubKey"/> must be unlocked for the wizard (the
+    /// profile's world_unlocks rule). On a denial it audits and tells the player.
+    /// </summary>
+    /// <param name="hubKey">The requested WorldHubZones.xml key.</param>
+    /// <param name="progress">What the wizard has done.</param>
+    /// <param name="charId">The moving character, if known.</param>
+    /// <param name="inform">Shows the player a message; null for no message.</param>
+    /// <returns>True when the wizard has unlocked the world.</returns>
+    internal static bool AllowsWorldUnlock(string hubKey, IPlayerProgress progress, ulong? charId, Action<string, bool>? inform) {
+        var decision = ClassicRuntime.Rules.IsWorldUnlocked(hubKey, progress);
+        if (decision.Unlocked) {
+            return true;
+        }
+
+        if (s_throttle.ShouldReport(charId ?? 0, "world:" + hubKey)) {
+            ClassicRuntime.Audit(new ClassicAuditEntry(ClassicAuditKind.WorldLocked, charId, hubKey, decision.Reason));
+            var name = ClassicRuntime.Rules.Zones.FindWorldByHubKey(hubKey)?.Name ?? hubKey;
+            inform?.Invoke(ClassicMessages.WorldLocked(name), true);
+        }
 
         return false;
     }

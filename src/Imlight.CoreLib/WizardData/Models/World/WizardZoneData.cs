@@ -26,6 +26,10 @@ public class WizardZoneData {
     public string ZoneName { get; set; }
     public List<WizardTeleportData> Teleports { get; set; } = [];
 
+    // CLASSIC: an overlay record with "Merge": true adds its entries to the zone's loaded record by trigger name
+    // (a null Teleport removes one) instead of replacing the record (SpiralDB.LoadZoneData, ZoneTransferMerge).
+    public bool Merge { get; set; }
+
 }
 
 public class WizardTeleportData {

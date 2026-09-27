@@ -46,6 +46,7 @@ using System.Collections.Immutable;
 using System.Globalization;
 using System.Linq;
 using Imlight.Classic.Rules;
+using Imlight.Classic.Travel;
 using Imlight.Classic.Zones;
 
 namespace Imlight.Classic;
@@ -238,6 +239,27 @@ public sealed class ClassicRules {
             RuleSource = HubKeyRule,
             Confidence = null,
         };
+    }
+
+    /// <summary>
+    /// Decides whether the world of <paramref name="hubKey"/> is unlocked for a wizard: the profile's
+    /// world_unlocks rule for that world, if it has one. A world without a rule, a hub key no world has, and
+    /// every world of an unrestricted profile are unlocked (the zone gate decides those).
+    /// </summary>
+    /// <param name="hubKey">A WorldHubZones.xml key such as <c>Krokotopia</c>.</param>
+    /// <param name="progress">What the wizard has done.</param>
+    /// <returns>The decision and the rule behind it.</returns>
+    public WorldUnlockDecision IsWorldUnlocked(string hubKey, IPlayerProgress progress) {
+        ArgumentNullException.ThrowIfNull(progress);
+        if (!IsRestricted || Zones.FindWorldByHubKey(hubKey) is not { } world) {
+            return new WorldUnlockDecision(true, null, null);
+        }
+
+        if (!Profile.WorldUnlocks.TryGetValue(world.Id, out var rule)) {
+            return new WorldUnlockDecision(true, world.Id, null);
+        }
+
+        return new WorldUnlockDecision(rule.IsMet(progress), world.Id, rule);
     }
 
     /// <summary>

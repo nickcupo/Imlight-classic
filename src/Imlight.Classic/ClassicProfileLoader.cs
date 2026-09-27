@@ -45,6 +45,7 @@ using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.IO;
 using System.Linq;
+using Imlight.Classic.Travel;
 using Imlight.Classic.Yaml;
 
 namespace Imlight.Classic;
@@ -54,10 +55,12 @@ namespace Imlight.Classic;
 /// </summary>
 public static class ClassicProfileLoader {
 
-    private static readonly FrozenSet<string> s_rootKeys = FrozenSet.Create(StringComparer.Ordinal,
-        "id", "title", "description", "status", "extends", "cutoff", "level_cap", "worlds", "features", "rules", "notes");
+    internal static readonly FrozenSet<string> s_rootKeys = FrozenSet.Create(StringComparer.Ordinal,
+        "id", "title", "description", "status", "extends", "cutoff", "level_cap", "worlds", "features", "rules", "notes",
+        "world_unlocks");
     private static readonly string[] s_requiredKeys = ["id", "title", "cutoff", "status"];
-    private static readonly string[] s_inheritedKeys = ["cutoff", "level_cap", "worlds", "features", "rules"];
+    private static readonly string[] s_inheritedKeys = ["cutoff", "level_cap", "worlds", "features", "rules", "world_unlocks"];
+    internal static readonly FrozenSet<string> s_worldUnlockKeys = FrozenSet.Create(StringComparer.Ordinal, "any_of", "source", "notes");
     private static readonly FrozenSet<string> s_ruleKeys = FrozenSet.Create(StringComparer.Ordinal,
         "accuracy_table", "xp_table", "mob_rewards", "power_pips_from_rank", "dragonspyre_difficulty", "tutorial");
 
@@ -204,6 +207,9 @@ public static class ClassicProfileLoader {
                 case "notes":
                     diagnostics.ReadStringList(value, "notes");
                     break;
+                case "world_unlocks":
+                    ValidateWorldUnlocks(value, diagnostics);
+                    break;
             }
         }
 
@@ -233,6 +239,96 @@ public static class ClassicProfileLoader {
                 diagnostics.At(list.Items[i], path, $"world '{world}' is listed twice");
             }
         }
+    }
+
+    private static void ValidateWorldUnlocks(YNode value, YamlDiagnostics diagnostics) {
+        if (diagnostics.ReadMap(value, "world_unlocks") is not { } unlocks) {
+            return;
+        }
+
+        foreach (var entry in unlocks.Entries) {
+            var path = YamlTree.Join("world_unlocks", entry.Key);
+            if (!ClassicSchema.IsWorldId(entry.Key)) {
+                diagnostics.AtKey(unlocks, entry, path, $"unknown world id '{entry.Key}'");
+                continue;
+            }
+
+            if (diagnostics.ReadMap(entry.Value, path) is not { } rule) {
+                continue;
+            }
+
+            diagnostics.CheckKeys(rule, path, s_worldUnlockKeys, ["any_of"]);
+            foreach (var field in rule.Entries) {
+                var fieldPath = YamlTree.Join(path, field.Key);
+                switch (field.Key) {
+                    case "source":
+                        _ = diagnostics.ReadString(field.Value, fieldPath);
+                        break;
+                    case "notes":
+                        diagnostics.ReadStringList(field.Value, fieldPath);
+                        break;
+                    case "any_of":
+                        if (diagnostics.ReadList(field.Value, fieldPath) is not { } checks) {
+                            break;
+                        }
+
+                        if (checks.Items.Length == 0) {
+                            diagnostics.At(field.Value, fieldPath, "any_of needs at least one check");
+                        }
+
+                        for (var i = 0; i < checks.Items.Length; i++) {
+                            _ = ReadUnlockCheck(checks.Items[i], YamlTree.Index(fieldPath, i), diagnostics);
+                        }
+                        break;
+                }
+            }
+        }
+    }
+
+    private static UnlockCheck? ReadUnlockCheck(YNode node, string path, YamlDiagnostics diagnostics) {
+        if (diagnostics.ReadMap(node, path) is not { } check) {
+            return null;
+        }
+
+        if (check.Entries.Length != 1 || !UnlockCheck.Keys.Contains(check.Entries[0].Key)) {
+            diagnostics.At(node, path, $"a check has exactly one of {string.Join(", ", UnlockCheck.Keys)}");
+
+            return null;
+        }
+
+        var (key, value) = (check.Entries[0].Key, check.Entries[0].Value);
+        var kind = (UnlockCheckKind) UnlockCheck.Keys.IndexOf(key);
+        var valuePath = YamlTree.Join(path, key);
+        if (kind == UnlockCheckKind.Level) {
+            return diagnostics.ReadPositiveInt(value, valuePath, allowNull: false) is { } level
+                ? new UnlockCheck(kind, null, level)
+                : null;
+        }
+
+        if (diagnostics.ReadString(value, valuePath) is not { Length: > 0 } name) {
+            return null;
+        }
+
+        return new UnlockCheck(kind, name, 0);
+    }
+
+    private static ImmutableDictionary<string, WorldUnlock> BuildWorldUnlocks(YMap? unlocks) {
+        var builder = ImmutableDictionary.CreateBuilder<string, WorldUnlock>(StringComparer.Ordinal);
+        if (unlocks is null) {
+            return builder.ToImmutable();
+        }
+
+        var diagnostics = new YamlDiagnostics();
+        foreach (var entry in unlocks.Entries) {
+            if (entry.Value is not YMap rule || rule.Find("any_of")?.Value is not YSeq checks) {
+                continue;
+            }
+
+            var read = checks.Items.Select(item => ReadUnlockCheck(item, "", diagnostics)).OfType<UnlockCheck>().ToImmutableArray();
+            builder[entry.Key] = new WorldUnlock(entry.Key, read, ScalarOf(rule, "source"));
+        }
+
+        return builder.ToImmutable();
     }
 
     private static void ValidateFeatures(YNode value, YamlDiagnostics diagnostics) {
@@ -329,6 +425,7 @@ public static class ClassicProfileLoader {
                 DragonspyreDifficulty = ScalarOf(rules, "dragonspyre_difficulty"),
                 Tutorial = ScalarOf(rules, "tutorial"),
             },
+            WorldUnlocks = BuildWorldUnlocks(merged.Find("world_unlocks")?.Value as YMap),
             Notes = child.Find("notes")?.Value is YSeq notes
                 ? [.. notes.Items.Cast<YScalar>().Select(note => note.Value)]
                 : [],
