@@ -106,10 +106,12 @@ internal sealed class InteractTeleportObjectComponent(ZoneEntity entity)
             return false; // InteractDungeonSigilComponent's
         }
 
-        // The Grizzleheim rune stones (GH_RunestoneMainBearClaw, GH_Runestone_BearClaw, ...) are teleport stones too.
+        // The Grizzleheim rune stones (GH_RunestoneMainBearClaw, GH_Runestone_BearClaw, ...) are teleport stones too,
+        // and the travel overlay names the others (the Dragonspyre battledrake, the Grand Chasm time crystal).
         return name.Contains("Teleport", StringComparison.OrdinalIgnoreCase)
             || name.Contains("Portal", StringComparison.OrdinalIgnoreCase)
-            || (name.StartsWith("GH_Runestone", StringComparison.Ordinal) && !name.Contains("Minor"));
+            || (name.StartsWith("GH_Runestone", StringComparison.Ordinal) && !name.Contains("Minor"))
+            || (ClassicQuestEngine.IsActive && ZoneDataCollection.IsTeleportObjectTemplate(name));
     }
 
     public IEnumerable<ServiceOptionBase> GetServiceOptions(Wizard playerCharacter) {

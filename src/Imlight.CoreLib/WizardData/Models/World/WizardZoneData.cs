@@ -52,6 +52,10 @@ public class ClassicTeleportObject {
     // The placement's location (X, Y, Z), telling apart the entries of placements that share a tag.
     public List<float> At { get; set; }
 
+    // The object's template name, for objects whose name does not say they teleport (the Dragonspyre battledrake,
+    // the Grand Chasm time crystal): the component attaches to every template an entry names.
+    public string Template { get; set; }
+
     // The profile feature the object needs, such as hub_teleporters (the Oct 2009 Marleybone and MooShu stones).
     public string Feature { get; set; }
 

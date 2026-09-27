@@ -32,6 +32,22 @@ public static class ZoneDataCollection {
     public static WizardZoneData GetZoneData(string zoneName) 
         => SpiralDB.GetZoneData(zoneName);
 
+    // CLASSIC: the template names the classic travel overlay's teleport object entries name (Classic.Template).
+    private static System.Collections.Generic.HashSet<string> s_teleportObjectTemplates;
+
+    public static bool IsTeleportObjectTemplate(string objectName) {
+        if (string.IsNullOrEmpty(objectName)) {
+            return false;
+        }
+
+        s_teleportObjectTemplates ??= [.. SpiralDB.GetAllZoneData()
+            .SelectMany(zone => zone?.Teleports ?? [])
+            .Select(entry => entry?.Classic?.Template)
+            .Where(name => !string.IsNullOrEmpty(name))];
+
+        return s_teleportObjectTemplates.Contains(objectName);
+    }
+
     /// <summary>
     /// Retrieves a random zone data entry.
     /// </summary>
