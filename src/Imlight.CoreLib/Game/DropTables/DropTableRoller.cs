@@ -30,7 +30,7 @@ using Imlight.CoreLib.WizardData.Models.World;
 
 namespace Imlight.CoreLib.Game.DropTables;
 
-public static class DropTableRoller {
+public static partial class DropTableRoller { // CLASSIC: partial for DropTableRoller.QuestRewards.cs.
 
     /// <summary>
     /// Rolls multiple drop tables with requirement validation against the provided player context

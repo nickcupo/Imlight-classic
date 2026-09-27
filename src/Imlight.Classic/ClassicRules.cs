@@ -112,6 +112,20 @@ public sealed class ClassicRules {
     public bool CriticalAndBlockEnabled { get; }
 
     /// <summary>
+    /// True when quest data is read the KingsIsle way: requirement lists left to right, every item of a quest
+    /// reward table granted, zone triggers disarmed by their deactivate events, and held quests or teleports
+    /// with missing data skipped. Stock Imlight's reading otherwise.
+    /// </summary>
+    public bool UsesKingsIsleQuestRules => IsRestricted;
+
+    /// <summary>
+    /// True when new characters get the classic start (<c>rules.tutorial: unicorn-way-classic</c>): they land in
+    /// Ambrose's office with the classic starter kit.
+    /// </summary>
+    public bool UsesClassicStart
+        => IsRestricted && string.Equals(Profile.Rules.Tutorial, ClassicSchema.ClassicTutorial, StringComparison.Ordinal);
+
+    /// <summary>
     /// Decides whether a player may enter <paramref name="zone"/>. The first failing check decides.
     /// </summary>
     /// <param name="zone">The zone name.</param>

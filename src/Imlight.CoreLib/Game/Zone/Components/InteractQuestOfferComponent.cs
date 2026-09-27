@@ -354,7 +354,7 @@ internal sealed class InteractQuestOfferComponent(ZoneEntity entity)
             .Distinct()
             .ToArray();
 
-        var rollResult = DropTableRoller.Roll(dropTableNames, playerActor, playerObj, playerWizard);
+        var rollResult = DropTableRoller.RollQuestReward(dropTableNames, playerActor, playerObj, playerWizard); // CLASSIC: was Roll.
         var convertedResults = DropTableConverter.ToLootInfoList(rollResult);
 
         // Spell rewards live in the results, not the drop tables; surface the wizard's own school spell.

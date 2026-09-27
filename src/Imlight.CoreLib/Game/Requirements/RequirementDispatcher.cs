@@ -38,7 +38,7 @@
  * 
  * Created by: Jooty
  * Version: KALI 1.0
- * Last Updated: 09/16/2025
+ * Last Updated: 09/27/2026
  */
 
 using System;
@@ -47,6 +47,7 @@ using System.Linq;
 using System.Reflection;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
+using Imlight.CoreLib.Classic;
 using Type = System.Type;
 
 namespace Imlight.CoreLib.Game.Requirements;
@@ -54,7 +55,7 @@ namespace Imlight.CoreLib.Game.Requirements;
 /// <summary>
 /// Dispatches requirement evaluation across different contexts (zone triggers, quest checks, interactions)
 /// </summary>
-public static class RequirementDispatcher {
+public static partial class RequirementDispatcher { // CLASSIC: partial for RequirementDispatcher.KingsIsle.cs.
 
     private static readonly Dictionary<Type, MethodInfo> s_requirementHandlers = [];
 
@@ -71,6 +72,11 @@ public static class RequirementDispatcher {
     public static bool EvaluateRequirements(RequirementList requirements, IRequirementContext context) {
         if (requirements?.m_requirements == null || requirements.m_requirements.Count == 0) {
             return true;
+        }
+
+        // CLASSIC: KingsIsle's lists read left to right, each item's operator joining it to the next.
+        if (ClassicQuestEngine.IsActive) {
+            return EvaluateLeftToRight(requirements, context);
         }
 
         var andResults = new List<bool>();
