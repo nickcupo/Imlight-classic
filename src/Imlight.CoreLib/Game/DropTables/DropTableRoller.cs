@@ -89,7 +89,9 @@ public static partial class DropTableRoller { // CLASSIC: partial for DropTableR
             combinedResult.ExperienceAmount += tableResult.ExperienceAmount;
             combinedResult.TrainingPoints += tableResult.TrainingPoints;
             combinedResult.Items.AddRange(tableResult.Items);
-            combinedResult.GrantsPotionSlot = tableResult.GrantsPotionSlot;
+            combinedResult.GrantsPotionSlot = ClassicQuestEngine.IsActive // CLASSIC: any rolled table's potion slot counts.
+                ? combinedResult.GrantsPotionSlot || tableResult.GrantsPotionSlot
+                : tableResult.GrantsPotionSlot;
             
         }
 
@@ -120,6 +122,7 @@ public static partial class DropTableRoller { // CLASSIC: partial for DropTableR
         result.ExperienceAmount = dropTable.ExperienceAmount;
         result.MagicSchool = "All"; 
         result.TrainingPoints = dropTable.TrainingPoints;
+        result.GrantsPotionSlot = ClassicQuestEngine.IsActive && dropTable.GrantsPotionSlot; // CLASSIC: stock never reads the table's flag.
         
         // Roll items with requirements validation.
         result.Items = questReward && ClassicQuestEngine.IsActive // CLASSIC: a quest reward table is a list, not a pool.
