@@ -27,6 +27,7 @@
  *
  * USAGE EXAMPLE:
  * serializer.TypeRegistry = ClassicZoneTypeRegistry.Instance;   // ZoneLoader, classic quest engine only
+ * (the registry lives in Classic/ClassicZoneTypes.cs with the Monster_Killed requirement)
  *
  * NOTE:
  * Property hashes were matched against r806919's 2,248 triggers.xml files
@@ -241,26 +242,5 @@ public sealed record ClassicResZoneTimer : Result {
             else if (hash == ConditionHash) Condition = reader.ReadString();
         });
     }
-
-}
-
-/// <summary>
-/// The client registry plus the classic cinematic results, for zone data.
-/// </summary>
-public sealed class ClassicZoneTypeRegistry : TypeRegistry {
-
-    public static ClassicZoneTypeRegistry Instance { get; } = new();
-
-    private static readonly ClientGeneratedTypeRegistry s_client = new();
-
-    public override void RegisterType(uint hash, System.Type t) => throw new NotSupportedException();
-
-    public override System.Type LookupType(uint hash) => hash switch {
-        16312488 => typeof(ClassicResPlayCinematic),
-        82637767 => typeof(ClassicResCinematic),
-        145615551 => typeof(ClassicResStartStagedCinematic),
-        ClassicResZoneTimer.TypeHash => typeof(ClassicResZoneTimer),
-        _ => s_client.LookupType(hash),
-    };
 
 }

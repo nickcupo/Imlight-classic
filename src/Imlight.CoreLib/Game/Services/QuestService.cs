@@ -59,7 +59,7 @@ using System.Linq;
 
 namespace Imlight.CoreLib.Game.Services;
 
-internal partial class QuestService(SessionActor sessionActor) : MessageService(sessionActor) { // CLASSIC: partial for QuestService.IndexedCombatGoals.cs, QuestService.GoalEvents.cs and QuestService.ClassicRewards.cs.
+internal partial class QuestService(SessionActor sessionActor) : MessageService(sessionActor) { // CLASSIC: partial for QuestService.IndexedCombatGoals.cs, QuestService.GoalEvents.cs, QuestService.ClassicRewards.cs and QuestService.ZoneEvents.cs.
 
     private const float DEFAULT_KILL_COLLECT_CHANCE = 0.5f;
     private const string QUEST_COMPLETED_ENTRY = "Complete";
@@ -338,7 +338,15 @@ internal partial class QuestService(SessionActor sessionActor) : MessageService(
     private void ReceiveCombatVictory(COMBAT_106_PROTOCOL.MSG_COMBATWIN message) {
         var wizard = GetActiveWizard();
 
-        foreach (var qInstance in wizard.QuestBehavior.CurrentQuestInstances) {
+        // CLASSIC: iterate a copy; a kill that completes a quest removes it from (and can add to) the list.
+        var heldQuests = ClassicQuestEngine.IsActive
+            ? wizard.QuestBehavior.CurrentQuestInstances.ToList()
+            : wizard.QuestBehavior.CurrentQuestInstances;
+        foreach (var qInstance in heldQuests) {
+            if (ClassicQuestEngine.IsActive && !wizard.QuestBehavior.CurrentQuestInstances.Contains(qInstance)) {
+                continue;
+            }
+
             var qTemplate = _cachedQuestTemplates.FirstOrDefault(q => q.m_questName == qInstance.QuestName);
             if (qTemplate == null) {
                 Logger.Error("Failed to find quest template for quest '{0}' when processing combat victory.",
@@ -356,6 +364,10 @@ internal partial class QuestService(SessionActor sessionActor) : MessageService(
             }
 
             foreach (var goal in combatGoals) {
+                if (ClassicQuestEngine.IsActive && !wizard.QuestBehavior.CurrentQuestInstances.Contains(qInstance)) {
+                    break; // CLASSIC: an earlier goal of this quest completed it.
+                }
+
                 if (!qInstance.IsGoalActive(goal.m_goalName)) {
                     continue;
                 }
@@ -372,6 +384,7 @@ internal partial class QuestService(SessionActor sessionActor) : MessageService(
         }
 
         ProcessIndexedCombatGoals(wizard, message.MobTemplateIds); // CLASSIC: credit captured goals that have no adjectives to match.
+        PostMonsterKilled(message.MobTemplateIds); // CLASSIC: QuestService.ZoneEvents.cs.
     }
 
     private void SendQuestStartingMessage(QuestTemplate qTemplate, QuestInstance questInstance) {
@@ -439,6 +452,7 @@ internal partial class QuestService(SessionActor sessionActor) : MessageService(
             results: startResults,
             playerRef: SessionActor.ActorRef,
             playerObj: GetActiveGameObject(),
+            zoneActor: ResultZoneActor(), // CLASSIC: ResSpawn and ResPostEvent need the wizard's zone.
             questName: questInstance.QuestName
         );
     }
@@ -504,7 +518,7 @@ internal partial class QuestService(SessionActor sessionActor) : MessageService(
     private void CheckForWaypointGoalZoneEntry(Wizard wizard) {
         var currentZone = wizard.Zone;
 
-        foreach (var quest in _cachedQuestTemplates) {
+        foreach (var quest in _cachedQuestTemplates.ToArray()) { // CLASSIC: completing a quest can grant (cache) another.
             // Check to see if the quest has any waypoint goals that trigger on zone entry.
             var waypointGoals = quest.m_goals
                 .Where(gTemplate => gTemplate.m_goalType == GOAL_TYPE.GOAL_TYPE_WAYPOINT)
@@ -545,7 +559,7 @@ internal partial class QuestService(SessionActor sessionActor) : MessageService(
     private void CheckForWaypointGoalZoneExit(Wizard wizard) {
         var previousZone = wizard.PreviousZone;
 
-        foreach (var quest in _cachedQuestTemplates) {
+        foreach (var quest in _cachedQuestTemplates.ToArray()) { // CLASSIC: completing a quest can grant (cache) another.
             // Check to see if the quest has any waypoint goals that trigger on zone exit.
             var waypointGoals = quest.m_goals
                 .Where(gTemplate => gTemplate.m_goalType == GOAL_TYPE.GOAL_TYPE_WAYPOINT)
@@ -622,6 +636,7 @@ internal partial class QuestService(SessionActor sessionActor) : MessageService(
             results: activationResults,
             playerRef: SessionActor.ActorRef,
             playerObj: GetActiveGameObject(),
+            zoneActor: ResultZoneActor(), // CLASSIC: ResSpawn and ResPostEvent need the wizard's zone.
             questName: questInstance.QuestName,
             goalName: goalTemplate.m_goalName
         );
@@ -629,6 +644,8 @@ internal partial class QuestService(SessionActor sessionActor) : MessageService(
         // Play goal start dialogue if it exists.
         var goalId = questInstance.GoalProgress.First(g => g.GoalName == goalTemplate.m_goalName).ID;
         ShowGoalStartDialogue(goalTemplate, questInstance.ID, goalId);
+
+        QueueZoneEntryCheck(goalTemplate); // CLASSIC: QuestService.ZoneEvents.cs.
     }
 
     private void CompleteGoal(QuestInstance questInstance, GoalTemplate goalTemplate) {
@@ -655,6 +672,7 @@ internal partial class QuestService(SessionActor sessionActor) : MessageService(
             results: goalTemplate.m_completeResults,
             playerRef: SessionActor.ActorRef,
             playerObj: GetActiveGameObject(),
+            zoneActor: ResultZoneActor(), // CLASSIC: ResSpawn and ResPostEvent need the wizard's zone.
             questName: questInstance.QuestName,
             goalName: goalTemplate.m_goalName
         );
@@ -703,6 +721,7 @@ internal partial class QuestService(SessionActor sessionActor) : MessageService(
             results: qTemplate.m_endResults,
             playerRef: SessionActor.ActorRef,
             playerObj: GetActiveGameObject(),
+            zoneActor: ResultZoneActor(), // CLASSIC: ResSpawn and ResPostEvent need the wizard's zone.
             questName: questInstance.QuestName
         );
 

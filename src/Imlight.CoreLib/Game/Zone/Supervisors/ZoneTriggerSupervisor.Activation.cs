@@ -66,8 +66,16 @@ internal sealed partial class ZoneTriggerSupervisor {
     }
 
     private void ReceiveClassicPostEvent(ZONE_102_PROTOCOL.MSG_POSTEVENT message) {
+        // A waypoint goal may name the event itself (KT-CRY5-C01-002's "PuzzleComplete").
+        message.PlayerActor?.Tell(new ZONE_102_PROTOCOL.MSG_CLASSICZONEEVENT { EventName = message.EventName });
+
+        // Monster_Killed triggers check the defeated monster (ClassicReqMonsterKilled); one whose check did not
+        // decode would read as met for every kill, so it stays quiet.
+        var isKill = message.EventName == KilledMonster.EventName;
+        using var killed = KilledMonsterScope.Enter(message.KilledTemplateIds);
         var fires = _activation.Dispatch(_orderedTriggers, entry => entry.Actor, message.EventName, message.PlayerActor,
-            listens: entry => entry.Trigger?.m_fireEvents?.Any(x => x == message.EventName) == true,
+            listens: entry => entry.Trigger?.m_fireEvents?.Any(x => x == message.EventName) == true
+                && !(isKill && HasUndecodedRequirement(entry.Trigger.m_requirements)),
             meetsRequirements: entry => EvaluateRequirements(entry.Trigger, message),
             teleportsSomewhere: entry => HasTeleportDestination(entry.Trigger),
             stateChanged: (name, armed) => Logger.Debug("Zone {Zone} trigger {Trigger} is {State} for {Player} by {Event}.",
@@ -79,9 +87,14 @@ internal sealed partial class ZoneTriggerSupervisor {
                 PlayerActor = message.PlayerActor,
                 PlayerGameObject = message.PlayerGameObject,
                 SuppressTeleportResults = fire.SuppressTeleport,
+                KilledTemplateIds = message.KilledTemplateIds,
             });
         }
     }
+
+    private static bool HasUndecodedRequirement(RequirementList requirements)
+        => requirements?.m_requirements?.Any(requirement => requirement is null
+            || (requirement is RequirementList nested && HasUndecodedRequirement(nested))) == true;
 
     private static bool HasTeleportDestination(Trigger trigger)
         => trigger.m_results?.m_results?.Any(result => result is ResTeleport teleport

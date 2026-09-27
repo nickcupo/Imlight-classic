@@ -180,9 +180,10 @@ internal sealed class ZoneLoader : ReceiveProtocolDispatcher {
 
         var serializer = new BindSerializer();
         if (ClassicQuestEngine.IsActive) {
-            // CLASSIC: read the trigger results that play cinematics, which the server registry decodes empty.
+            // CLASSIC: read the trigger results that play cinematics and the Monster_Killed trigger requirement, which the server registry decodes empty.
             serializer.TypeRegistry = ClassicZoneTypeRegistry.Instance;
         }
+
         if (!serializer.Deserialize<T>(data, 1, out var result)) {
             Logger.Error("Failed to deserialize {DataName} from {FileName}", Logger.Args(dataName, fileName));
 

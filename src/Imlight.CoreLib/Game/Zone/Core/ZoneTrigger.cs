@@ -46,6 +46,7 @@ using System.Collections.Generic;
 using System.Linq;
 using Akka.Actor;
 using Imcodec.ObjectProperty.TypeCache;
+using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.Game.Requirements;
 using Imlight.CoreLib.Game.Requirements.Contexts;
 using Imlight.CoreLib.Game.Results;
@@ -83,6 +84,8 @@ public sealed class ZoneTrigger(IActorRef zoneRef, Zone zone, Trigger trigger)
         if (TriggerData.m_cooldown > 0 && !CooldownCheck(message.PlayerActor)) {
             return;
         }
+
+        using var killed = KilledMonsterScope.Enter(message.KilledTemplateIds); // CLASSIC: Monster_Killed checks.
 
         // Evaluate requirements when present.
         if (   TriggerData.m_requirements is not null

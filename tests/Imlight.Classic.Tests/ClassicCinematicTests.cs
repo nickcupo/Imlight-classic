@@ -49,6 +49,7 @@ using System.Threading.Tasks;
 using Imcodec.ObjectProperty;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Classic.Cinematics;
+using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.Classic.Cinematics;
 using Xunit;
 using Action = System.Action;

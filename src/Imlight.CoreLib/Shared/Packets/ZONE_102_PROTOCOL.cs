@@ -531,6 +531,12 @@ public class ZONE_102_PROTOCOL : IServerProtocol {
         public CoreObject? PlayerGameObject;
         public bool SuppressTeleportResults;
 
+        /// <summary>
+        /// CLASSIC: the defeated monsters' template IDs of a "Monster_Killed" event (QuestService posts it on a
+        /// combat win); the Monster_Killed trigger requirement checks them.
+        /// </summary>
+        public ulong[] KilledTemplateIds;
+
     }
 
     /// <summary>
@@ -1015,6 +1021,43 @@ public class ZONE_102_PROTOCOL : IServerProtocol {
         public byte ServiceID { get; } = 102;
 
         public ulong PetGlobalId;
+
+    }
+
+
+    /// <summary>
+    /// CLASSIC: sent by a zone's trigger supervisor to the session of the player an event was posted for, so a
+    /// waypoint goal whose client tags name the event (KT-CRY5-C01-002's "PuzzleComplete") can complete.
+    /// </summary>
+    public sealed class MSG_CLASSICZONEEVENT : IServerMessage {
+
+        public byte MessageOrder { get; } = 68;
+        public byte ServiceID { get; } = 102;
+
+        public string EventName;
+
+    }
+
+    /// <summary>
+    /// CLASSIC: sent by the QuestService to itself after a zone-entry waypoint goal starts, so a goal that
+    /// starts in its own zone completes once the goal or quest change that started it has finished.
+    /// </summary>
+    public sealed class MSG_CLASSICZONEENTRYCHECK : IServerMessage {
+
+        public byte MessageOrder { get; } = 69;
+        public byte ServiceID { get; } = 102;
+
+    }
+
+    /// <summary>
+    /// CLASSIC: a collection object's respawn timer for one player (InteractQuestSelectComponent).
+    /// </summary>
+    public sealed class MSG_CLASSICCOLLECTRESPAWN : IServerMessage {
+
+        public byte MessageOrder { get; } = 71;
+        public byte ServiceID { get; } = 102;
+
+        public ulong CharacterId;
 
     }
 

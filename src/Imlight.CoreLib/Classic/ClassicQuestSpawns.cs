@@ -34,7 +34,9 @@
  * BOUNTYCOLLECT: one of its adjectives is one of the goal's
  * m_npcAdjectives) or is one of the targets CombatGoalTargetIndex fills in
  * for a captured combat goal. Started spawners are those a trigger's
- * ResSpawn names and those InteractableQuestEvents starts on an object use.
+ * ResSpawn activates (m_activate) and those InteractableQuestEvents starts
+ * on an object use; a death trigger's deactivating ResSpawn starts nothing,
+ * so KT_ThroneRoom's Krokenkahmen and KT_Retreat's Overseer stay dormant.
  *
  * TODO:
  *
@@ -82,6 +84,7 @@ internal static class ClassicQuestSpawns {
             .Where(trigger => trigger?.m_results?.m_results is not null)
             .SelectMany(trigger => trigger.m_results.m_results)
             .OfType<ResSpawn>()
+            .Where(spawn => spawn.m_activate) // m_activate false stops a spawner (a boss's death trigger); it starts nothing.
             .Select(spawn => (uint) spawn.m_spawnID)
             .Concat(InteractableQuestEvents.SpawnersStartedByObjects());
 

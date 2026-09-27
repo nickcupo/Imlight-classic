@@ -71,6 +71,7 @@ internal sealed class RenderComponent(ZoneEntity entity) : ZoneEntityComponent(e
     private readonly Dictionary<CoreObject, IActorRef> _playersInRange = new(ReferenceEqualityComparer.Instance);
     private readonly Dictionary<Wizard, IActorRef> _playersWithRequirementsMet = [];
     private readonly Dictionary<IActorRef, Wizard> _playerIgnoreBecauseDynamod = [];
+    private readonly HashSet<IActorRef> _collectedHidden = []; // CLASSIC: hidden by HideCollectedForPlayer, not a dynamod.
     private float _renderDistance;
     private bool _doesDistanceCheck = false;
 
@@ -175,6 +176,8 @@ internal sealed class RenderComponent(ZoneEntity entity) : ZoneEntityComponent(e
     }
 
     public override void OnPlayerLeave(IActorRef suspect, ulong id) {
+        _collectedHidden.Remove(suspect); // CLASSIC
+
         var wizard = _playersWithRequirementsMet.FirstOrDefault(x => x.Value == suspect).Key;
         if (wizard != null) {
             _playersWithRequirementsMet.Remove(wizard);
@@ -277,6 +280,32 @@ internal sealed class RenderComponent(ZoneEntity entity) : ZoneEntityComponent(e
                 CreateObjectForPlayer(player);
             }
         }
+    }
+
+    // CLASSIC: a collection object one player took leaves only that player's view until it respawns for them
+    // (InteractQuestSelectComponent). A dynamod that already hides the object keeps it hidden.
+    internal void HideCollectedForPlayer(IActorRef player) {
+        if (player is null || _playerIgnoreBecauseDynamod.ContainsKey(player)) {
+            return;
+        }
+
+        _playerIgnoreBecauseDynamod[player] = _playersWithRequirementsMet.FirstOrDefault(x => x.Value == player).Key;
+        _collectedHidden.Add(player);
+        DespawnObjectForPlayer(player);
+    }
+
+    internal void ShowCollectedForPlayer(IActorRef player) {
+        if (player is null || !_collectedHidden.Remove(player)) {
+            return;
+        }
+
+        _playerIgnoreBecauseDynamod.Remove(player, out var wizard);
+        if (wizard is null) {
+            return;
+        }
+
+        _playersWithRequirementsMet[wizard] = player;
+        CreateObjectForPlayer(player);
     }
 
     private void CreateObjectForPlayer(IActorRef player) {

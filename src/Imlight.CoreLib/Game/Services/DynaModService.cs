@@ -41,6 +41,7 @@ using Akka.Actor;
 using Imcodec.Cryptography;
 using Imcodec.MessageLayer.Generated;
 using Imlight.Common;
+using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;
 
@@ -104,6 +105,16 @@ internal class DynaModService(SessionActor sessionActor) : MessageService(sessio
             Sender = SessionActor.ActorRef
         };
         ZoneBroadcastNoPlayers(stateChangeMsg);
+
+        // CLASSIC: the object entering the state posts "<tag>.<state>.EnterState", which zone triggers listen for
+        // (MS_Plague_Zone3_CliffsidePalace's OpenGate1Trigger on "MS_Lever_Plague3 instance.On.EnterState").
+        if (ClassicQuestEngine.IsActive && !string.IsNullOrEmpty(dynaModClientTag) && !string.IsNullOrEmpty(dynaModState)) {
+            SessionActor.GetZoneActor()?.Tell(new ZONE_102_PROTOCOL.MSG_POSTEVENT {
+                EventName = $"{dynaModClientTag}.{dynaModState}.EnterState",
+                PlayerActor = SessionActor.ActorRef,
+                PlayerGameObject = GetActiveGameObject(),
+            });
+        }
     }
 
     [MessageHandler(typeof(CHARACTER_103_PROTOCOL.MSG_REMOVEDYNAMOD))]
