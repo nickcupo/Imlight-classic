@@ -38,7 +38,7 @@
  * 
  * Created by: Jooty, Joji
  * Version: KALI 1.0
- * Last Updated: 3/18/2025
+ * Last Updated: 09/27/2026
  */
 
 using Akka.Actor;
@@ -226,6 +226,14 @@ internal class WizardService(SessionActor sessionActor) : MessageService(session
 
     [MessageHandler(typeof(GAME_5_PROTOCOL.MSG_CLIENTMOVE))]
     private void ReceiveClientMove(GAME_5_PROTOCOL.MSG_CLIENTMOVE message) {
+        // CLASSIC: a client may move before its MSG_ATTACH has set the wizard.
+        if (_activeWizard is null) {
+            Logger.Debug("SessionActor {SessionId} ignored a move sent before the attach.",
+                Logger.Args(SessionActor.SessionID));
+
+            return;
+        }
+
         // Save the player's location and direction on interval.
         // Restore actual location information, as it is compressed by a factor of 4 and unsigned.
         // Yaw is represented in radians in the client, but transmitted to the server as degrees.
