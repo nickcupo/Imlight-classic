@@ -118,6 +118,8 @@ internal sealed class InteractQuestSelectComponent(ZoneEntity entity)
                 goalList.Add(goal);
             }
         }
+
+        InteractableQuestEvents.AddGoalsCompletedBy(gameObjectTemplate, _usageGoalsByQuest); // CLASSIC: waypoint goals this object's quest event completes.
     }
 
     public void OnServiceInteraction(IActorRef playerActor, Wizard playerCharacter, CoreObject playerObject, uint serviceOptionIndex) {
@@ -129,6 +131,13 @@ internal sealed class InteractQuestSelectComponent(ZoneEntity entity)
         }
 
         var (quest, goal, goalProgress) = activeGoalData.Value;
+
+        // CLASSIC: the object's quest event completes a waypoint goal, as a proximity volume would.
+        if (goal.m_goalType == GOAL_TYPE.GOAL_TYPE_WAYPOINT) {
+            playerActor.Tell(new ZONE_102_PROTOCOL.MSG_COMPLETEPROXIMITYGOAL { QuestID = quest.ID, GoalID = goalProgress.ID });
+
+            return;
+        }
 
         // Route the use through the quest service: it increments the tally, reports the
         // new count to the client (progress SENDGOAL), and completes the goal at the cap.
@@ -190,7 +199,7 @@ internal sealed class InteractQuestSelectComponent(ZoneEntity entity)
             .ToList();
 
     private static bool IsActiveUsageGoal(GoalInstance goalProgress, string goalName)
-        => goalProgress.GoalType == GOAL_TYPE.GOAL_TYPE_USAGE
+        => goalProgress.GoalType is GOAL_TYPE.GOAL_TYPE_USAGE or GOAL_TYPE.GOAL_TYPE_WAYPOINT // CLASSIC: event-completed waypoint goals.
                && goalProgress.CurrentProgress > -1
                && goalProgress.CurrentProgress != int.MaxValue
                && (goalName == null || goalProgress.GoalName == goalName);

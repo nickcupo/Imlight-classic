@@ -477,6 +477,8 @@ public static class SpiralDB {
                 var json = File.ReadAllText(file);
                 var quest = JsonConvert.DeserializeObject<QuestTemplate>(json, s_jsonSettings);
                 if (quest != null) {
+                    Collections.CombatGoalTargetIndex.ApplyTo(quest); // CLASSIC: captured combat goals lack their tally data.
+                    Collections.ParallelStartGoals.Join(quest); // CLASSIC: captured goal logic chains goals that start together.
                     targetList.Add(quest);
                     targetDict[quest.m_questName] = quest;
                     count++;

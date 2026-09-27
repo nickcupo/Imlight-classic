@@ -58,7 +58,7 @@ using System.Linq;
 
 namespace Imlight.CoreLib.Game.Services;
 
-internal class QuestService(SessionActor sessionActor) : MessageService(sessionActor) {
+internal partial class QuestService(SessionActor sessionActor) : MessageService(sessionActor) { // CLASSIC: partial for QuestService.IndexedCombatGoals.cs.
 
     private const float DEFAULT_KILL_COLLECT_CHANCE = 0.5f;
     private const string QUEST_COMPLETED_ENTRY = "Complete";
@@ -361,6 +361,8 @@ internal class QuestService(SessionActor sessionActor) : MessageService(sessionA
                 ProcessCombatGoal(wizard, qInstance, bountyGoal, message.MobAdjectives);
             }
         }
+
+        ProcessIndexedCombatGoals(wizard, message.MobTemplateIds); // CLASSIC: credit captured goals that have no adjectives to match.
     }
 
     private void SendQuestStartingMessage(QuestTemplate qTemplate, QuestInstance questInstance) {
