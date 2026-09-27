@@ -815,6 +815,8 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
         });
     }
 
+    private void DoTeleport(string location) => DoTeleport(Util.GetVectorFromCompactString(location)); // CLASSIC
+
     private void DoTeleport(Imcodec.Math.Vector4 coords) { // CLASSIC: was a location string.
         var compressedCoords = coords / 4;
 
