@@ -181,26 +181,15 @@ internal sealed class SocketListener : ReceiveActor, IDisposable {
     }
 
     private bool ProcessFrame(KinpRead read) {
-        switch (read.Status) {
-            case KinpReadStatus.Skipped:
-                Logger.Debug("SessionActor {SessionId} received non-KINP packet ({ByteCount} bytes skipped)",
-                    Logger.Args(_sessionid, read.ByteCount));
+        if (read.Status == KinpReadStatus.Oversized) {
+            Logger.Warning("SessionActor {SessionId} announced a {ByteCount} byte frame; closing the session.",
+                Logger.Args(_sessionid, read.ByteCount));
+            this.Dispose();
 
-                return true;
-            case KinpReadStatus.Oversized:
-                Logger.Warning("SessionActor {SessionId} announced a {ByteCount} byte frame; closing the session.",
-                    Logger.Args(_sessionid, read.ByteCount));
-                this.Dispose();
-
-                return false;
-            case KinpReadStatus.LargeFrame:
-                // todo: MessageEncoder.Decode reads only the 16-bit length. Does any client send large frames?
-                Logger.Warning("SessionActor {SessionId} dropped a {ByteCount} byte large frame.",
-                    Logger.Args(_sessionid, read.ByteCount));
-
-                return true;
+            return false;
         }
 
+        // CLASSIC: skipped bytes and dropped large frames cost a token too, so they cannot flood the log.
         if (!_tokenBucket.TryAcquire()) {
             Logger.Warning("SessionActor {SessionId} failed to acquire token.", Logger.Args(_sessionid));
 
@@ -218,6 +207,20 @@ internal sealed class SocketListener : ReceiveActor, IDisposable {
             }
 
             return true;
+        }
+
+        switch (read.Status) {
+            case KinpReadStatus.Skipped:
+                Logger.Debug("SessionActor {SessionId} received non-KINP packet ({ByteCount} bytes skipped)",
+                    Logger.Args(_sessionid, read.ByteCount));
+
+                return true;
+            case KinpReadStatus.LargeFrame:
+                // todo: MessageEncoder.Decode reads only the 16-bit length. Does any client send large frames?
+                Logger.Warning("SessionActor {SessionId} dropped a {ByteCount} byte large frame.",
+                    Logger.Args(_sessionid, read.ByteCount));
+
+                return true;
         }
 
         var packets = GetPacketsFromBuffer(read.Frame, read.Frame.Length);

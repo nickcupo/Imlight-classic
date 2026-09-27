@@ -31,7 +31,8 @@
  * A frame is u16 0xF00D, u16 length (bytes after the length field), then
  * the body. A length of 0x8000 or more marks a large frame: a u32 follows
  * and counts every byte after itself. Bytes that do not start with the
- * magic are skipped up to the next magic.
+ * magic are skipped up to the next magic. After an oversized frame the
+ * assembler holds and returns nothing more.
  *
  * TODO:
  *
@@ -71,7 +72,8 @@ public enum KinpReadStatus {
     Skipped,
 
     /// <summary>
-    /// A frame announced more than the maximum size. Nothing after it can be trusted.
+    /// A frame announced more than the maximum size. Nothing after it can be trusted, so every later
+    /// call returns <see cref="Incomplete"/>.
     /// </summary>
     Oversized,
 
@@ -105,6 +107,7 @@ public sealed class KinpFrameAssembler {
     private byte[] _buffer = new byte[8192];
     private int _start;
     private int _count;
+    private bool _refused;
 
     /// <summary>
     /// Creates an empty assembler.
@@ -125,7 +128,7 @@ public sealed class KinpFrameAssembler {
     /// </summary>
     /// <param name="data">The bytes read.</param>
     public void Append(ReadOnlySpan<byte> data) {
-        if (data.IsEmpty) {
+        if (data.IsEmpty || _refused) {
             return;
         }
 
@@ -143,11 +146,11 @@ public sealed class KinpFrameAssembler {
 
     /// <summary>
     /// Takes the next whole frame, or reports why there is none. Call until it returns
-    /// <see cref="KinpReadStatus.Incomplete"/>.
+    /// <see cref="KinpReadStatus.Incomplete"/>, which it always does after <see cref="KinpReadStatus.Oversized"/>.
     /// </summary>
     /// <returns>The frame, skipped bytes, an oversized announcement, or <see cref="KinpReadStatus.Incomplete"/>.</returns>
     public KinpRead Next() {
-        if (_count < 2) {
+        if (_refused || _count < 2) {
             return Incomplete();
         }
 
@@ -175,6 +178,9 @@ public sealed class KinpFrameAssembler {
         }
 
         if (frameSize > _maxFrameSize) {
+            _refused = true;
+            Consume(_count);
+
             return new KinpRead(KinpReadStatus.Oversized, [], frameSize);
         }
         if (_count < frameSize) {

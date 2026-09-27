@@ -192,6 +192,19 @@ public sealed class KinpFrameAssemblerTests {
         Assert.Equal(KinpReadStatus.Oversized, assembler.Next().Status);
     }
 
+    [Fact]
+    public void NothingComesOutAfterAnOversizedFrame() {
+        var assembler = new KinpFrameAssembler(maxFrameSize: 64);
+
+        assembler.Append([.. ClientMove(1), 0x0D, 0xF0, 0x00, 0x01, .. ClientMove(2)]);
+        var reads = Drain(assembler);
+        assembler.Append(ClientMove(3));
+
+        Assert.Equal([KinpReadStatus.Frame, KinpReadStatus.Oversized], reads.Select(read => read.Status));
+        Assert.Equal(KinpReadStatus.Incomplete, assembler.Next().Status);
+        Assert.Equal(0, assembler.BufferedBytes);
+    }
+
     private static List<KinpRead> Drain(KinpFrameAssembler assembler) {
         var reads = new List<KinpRead>();
         for (var read = assembler.Next(); read.Status != KinpReadStatus.Incomplete; read = assembler.Next()) {
