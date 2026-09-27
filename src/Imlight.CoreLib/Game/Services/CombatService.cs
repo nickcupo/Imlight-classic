@@ -142,6 +142,8 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
             noAggroGraceOverMsg,
             TimeSpan.FromSeconds(NO_AGGRO_EFFECT_DURATION_IN_SECONDS));
 
+        ClassicBadges.MobsDefeated(GetActiveWizard(), message.MobTemplateIds, SendToSocket); // CLASSIC: kill badges.
+
         // CLASSIC: under the profile's mob reward rules, XP per pip, gold and drops come from classic-data
         // and show in one loot popup; SpiralDB mob loot (none for Arc 1) still rolls after it.
         if (ClassicProgression.MobRewards is { } classicRewards) {

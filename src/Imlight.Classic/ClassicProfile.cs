@@ -144,6 +144,16 @@ public sealed class ProfileRules {
     public string? MobRewards { get; init; }
 
     /// <summary>
+    /// Path under classic-data of the badges and how each is awarded, if any.
+    /// </summary>
+    public string? Badges { get; init; }
+
+    /// <summary>
+    /// Path under classic-data of the treasure cards quests give on completion, if any.
+    /// </summary>
+    public string? QuestCards { get; init; }
+
+    /// <summary>
     /// The rank from which power pips appear; null when unset or set to null.
     /// </summary>
     public string? PowerPipsFromRank { get; init; }

@@ -20,8 +20,9 @@
  * ========================================================================
  *
  * PURPOSE:
- * Holds the profile's XP table and mob reward rules, loaded at boot, for
- * MagicLevelsConfig, the combat resolver and CombatService.
+ * Holds the profile's XP table, mob reward rules, badges and treasure-card
+ * quest rewards, loaded at boot, for MagicLevelsConfig, the combat
+ * resolver, CombatService, ClassicBadges and QuestService.
  *
  * USAGE EXAMPLE:
  * ClassicProgression.Initialize(profile, classicDataRoot);   // ClassicStartup, restricted profiles only
@@ -43,6 +44,7 @@
 #nullable enable
 
 using System.IO;
+using System.Linq;
 using Imlight.Classic;
 using Imlight.Classic.Rules;
 using Imlight.Common;
@@ -56,6 +58,8 @@ public static class ClassicProgression {
 
     private static volatile XpTable? s_xpTable;
     private static volatile MobRewardRules? s_mobRewards;
+    private static volatile BadgeRules? s_badges;
+    private static volatile QuestCardRewards? s_questCards;
 
     /// <summary>
     /// The profile's XP table, or null for the client's curve.
@@ -66,6 +70,16 @@ public static class ClassicProgression {
     /// The profile's combat XP, gold and drop rules, or null for stock Imlight.
     /// </summary>
     public static MobRewardRules? MobRewards => s_mobRewards;
+
+    /// <summary>
+    /// The profile's badges, or null for stock Imlight (no badges awarded).
+    /// </summary>
+    public static BadgeRules? Badges => s_badges;
+
+    /// <summary>
+    /// The profile's treasure-card quest rewards, or null for none.
+    /// </summary>
+    public static QuestCardRewards? QuestCards => s_questCards;
 
     /// <summary>
     /// Loads the tables a restricted profile names.
@@ -85,6 +99,18 @@ public static class ClassicProgression {
             Logger.Information("Classic mob rewards {Table}: {XpPerPip} XP per pip, gold for {Ranks} ranks, {Mobs} documented mobs ({Templates} templates).",
                 Logger.Args(s_mobRewards.Id, s_mobRewards.CombatXp.XpPerPip, s_mobRewards.GoldByRank.Count,
                     s_mobRewards.Mobs.Length, s_mobRewards.MobCount));
+        }
+
+        if (profile.Rules.Badges is { } badges && File.Exists(Path.Combine(classicDataRoot, badges))) {
+            s_badges = BadgeRulesLoader.Load(Path.Combine(classicDataRoot, badges));
+            Logger.Information("Classic badges {Table}: {Count} badges, {Granted} awarded by the server.",
+                Logger.Args(s_badges.Id, s_badges.Badges.Length, s_badges.Granted.Count()));
+        }
+
+        if (profile.Rules.QuestCards is { } cards && File.Exists(Path.Combine(classicDataRoot, cards))) {
+            s_questCards = QuestCardRewardsLoader.Load(Path.Combine(classicDataRoot, cards));
+            Logger.Information("Classic quest cards {Table}: treasure cards for {Count} quests.",
+                Logger.Args(s_questCards.Id, s_questCards.ByQuest.Count));
         }
     }
 

@@ -59,7 +59,7 @@ using System.Linq;
 
 namespace Imlight.CoreLib.Game.Services;
 
-internal partial class QuestService(SessionActor sessionActor) : MessageService(sessionActor) { // CLASSIC: partial for QuestService.IndexedCombatGoals.cs and QuestService.GoalEvents.cs.
+internal partial class QuestService(SessionActor sessionActor) : MessageService(sessionActor) { // CLASSIC: partial for QuestService.IndexedCombatGoals.cs, QuestService.GoalEvents.cs and QuestService.ClassicRewards.cs.
 
     private const float DEFAULT_KILL_COLLECT_CHANCE = 0.5f;
     private const string QUEST_COMPLETED_ENTRY = "Complete";
@@ -712,6 +712,7 @@ internal partial class QuestService(SessionActor sessionActor) : MessageService(
             m_loot = []
         };
         AppendSpellRewards(spellRewards.m_loot, qTemplate, wizard);
+        GrantClassicQuestCards(wizard, questInstance.QuestName, spellRewards.m_loot); // CLASSIC: QuestService.ClassicRewards.cs.
         if (spellRewards.m_loot.Count > 0
             && _goalSerializer.Serialize(spellRewards, 1, out var spellRewardData)) {
             SendToSocket(new WIZARD_12_PROTOCOL.MSG_QUESTREWARDS {
@@ -719,6 +720,8 @@ internal partial class QuestService(SessionActor sessionActor) : MessageService(
                 LootList = spellRewardData
             });
         }
+
+        ClassicBadges.QuestCompleted(wizard, questInstance.QuestName, SendToSocket); // CLASSIC: badges a quest finishes.
 
         // Chain advance: completion stamps the "Complete" registry entry, which is the ReqHasEntry
         // prerequisite of the next quest in the dungeon's chain.

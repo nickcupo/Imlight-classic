@@ -238,6 +238,8 @@ public static class ClassicStartup {
             ("rules.xp_table", rules.Profile.Rules.XpTable),
             ("rules.accuracy_table", rules.Profile.Rules.AccuracyTable),
             ("rules.mob_rewards", rules.Profile.Rules.MobRewards),
+            ("rules.badges", rules.Profile.Rules.Badges), // CLASSIC
+            ("rules.quest_cards", rules.Profile.Rules.QuestCards), // CLASSIC
         };
         foreach (var (key, relativePath) in tables) {
             if (relativePath is null || File.Exists(Path.Combine(s_classicDataRoot, relativePath))) {
