@@ -41,6 +41,10 @@ using System.Linq;
 using Akka.Actor;
 using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty.TypeCache;
+using Imlight.Classic.Quests;
+using Imlight.CoreLib.Classic;
+using Imlight.CoreLib.Game.Requirements;
+using Imlight.CoreLib.Game.Requirements.Contexts;
 using Imlight.CoreLib.Game.WizBang;
 using Imlight.CoreLib.Game.Zone.Core;
 using Imlight.CoreLib.Shared.Packets;
@@ -71,6 +75,12 @@ internal sealed class InteractQuestSelectComponent(ZoneEntity entity)
 
     public IEnumerable<ServiceOptionBase> GetServiceOptions(Wizard playerCharacter) {
         if (playerCharacter?.QuestBehavior?.CurrentQuestInstances == null) {
+            yield break;
+        }
+
+        // CLASSIC: an object whose use summons someone the player needs is usable without an open goal.
+        if (HasUseSpawns(playerCharacter)) {
+            yield return new InteractableOption { m_serviceName = ServiceName };
             yield break;
         }
 
@@ -127,6 +137,7 @@ internal sealed class InteractQuestSelectComponent(ZoneEntity entity)
         // Find the first active goal that matches this object's client tags.
         // This ensures we only complete one goal per interaction, even if multiple goals match.
         var activeGoalData = FindActiveMatchingGoal(playerCharacter);
+        StartUseSpawns(playerActor, playerCharacter, playerObject); // CLASSIC: the behavior's ResSpawn.
         if (activeGoalData == null) {
             return;
         }
@@ -205,8 +216,35 @@ internal sealed class InteractQuestSelectComponent(ZoneEntity entity)
                && goalProgress.CurrentProgress != int.MaxValue
                && (goalName == null || goalProgress.GoalName == goalName);
 
+    // CLASSIC: the spawners this object's behavior starts for the player (InteractableQuestEvents).
+    private IReadOnlyList<uint> UseSpawnsFor(IActorRef playerActor, Wizard playerCharacter, CoreObject playerObject)
+        => Entity.Template is GameObjectTemplate objectTemplate
+            ? InteractableQuestEvents.SpawnsOnUse(objectTemplate, requirements => RequirementDispatcher.EvaluateRequirements(
+                requirements, new GenericRequirementContext(requirements, playerActor, playerObject, playerCharacter, Entity.ZoneRef)))
+            : [];
+
+    private bool HasUseSpawns(Wizard playerCharacter)
+        => UseSpawnsFor(null, playerCharacter, null).Count > 0;
+
+    private void StartUseSpawns(IActorRef playerActor, Wizard playerCharacter, CoreObject playerObject) {
+        var spawnerIds = UseSpawnsFor(playerActor, playerCharacter, playerObject);
+        if (spawnerIds.Count == 0) {
+            return;
+        }
+
+        Entity.ZoneRef.Tell(new ZONE_102_PROTOCOL.MSG_ZONEBROADCAST {
+            Messages = [.. spawnerIds.Select(id => new ZONE_102_PROTOCOL.MSG_ZONEPATHSPAWN { SpawnObjectID = id })],
+            Targets = ZoneBroadcastTarget.Paths,
+        });
+    }
+
     private static bool DoesGoalMatchObject(GameObjectTemplate gameObjectTemplate, GoalTemplate goal) {
         if (goal.m_clientTags?.Contains(gameObjectTemplate.m_objectName) == true) {
+            return true;
+        }
+
+        // CLASSIC: captured usage goals name the object behind a "Ddl_" prefix (Ddl_WC_DarkCave_Bubble1).
+        if (ClassicQuestEngine.IsActive && ClientTagVariants.NamesObject(goal.m_clientTags, gameObjectTemplate.m_objectName)) {
             return true;
         }
 

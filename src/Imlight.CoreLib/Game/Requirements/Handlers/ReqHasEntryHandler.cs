@@ -16,7 +16,11 @@
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+using System.Linq;
 using Imcodec.ObjectProperty.TypeCache;
+using Imlight.Classic.Quests;
+using Imlight.CoreLib.Classic;
+using Imlight.CoreLib.WizardData.Collections;
 using Imlight.CoreLib.WizardData.Models.Player;
 
 namespace Imlight.CoreLib.Game.Requirements.Handlers;
@@ -47,8 +51,23 @@ internal sealed class ReqHasEntryHandler : BaseRequirementHandler<ReqHasEntry> {
             return wizard.HasQuestRegistryValue(questName, entryName);
         }
         else {
-            return wizard.HasRegistryValue(entryName);
+            return wizard.HasRegistryValue(entryName)
+                || HasTakenQuest(wizard, entryName); // CLASSIC: KingsIsle's "QT-<quest>" entries.
         }
     }
+
+    // CLASSIC: KingsIsle's server set "QT-<quest>" when a quest was taken; nothing in SpiralDB writes it,
+    // so the entry reads as "has the quest, active or done" (Imlight.Classic.Quests.QuestTakenEntry).
+    private static bool HasTakenQuest(Wizard wizard, string entryName) {
+        if (!ClassicQuestEngine.IsActive || QuestTakenEntry.QuestNameOf(entryName) is not { } questName
+            || !QuestTemplateCollection.DoesQuestExist(questName)) {
+            return false;
+        }
+
+        return wizard.QuestBehavior?.CurrentQuestInstances?.Any(q => q.QuestName == questName) == true
+            || wizard.HasQuestRegistryValue(questName, QUEST_COMPLETED_ENTRY);
+    }
+
+    private const string QUEST_COMPLETED_ENTRY = "Complete"; // CLASSIC: as ReqHasQuestHandler reads completion.
 
 }

@@ -32,8 +32,8 @@
  * only sees WizardSelectBehavior. Grizzleheim's berries, peat and fires,
  * DS_Desk and KT_MapRoomStaff have no WizardSelectBehavior. An object counts
  * when a usage goal names it (client tag or scavenge item adjective, as
- * InteractQuestSelectComponent matches it) or it fires a quest event;
- * every other object keeps upstream's check.
+ * InteractQuestSelectComponent matches it, a "Ddl_" prefix included) or it
+ * fires a quest event; every other object keeps upstream's check.
  *
  * TODO:
  * - Does the client show the use prompt for an object without
@@ -47,6 +47,8 @@
 using System.Collections.Generic;
 using System.Linq;
 using Imcodec.ObjectProperty.TypeCache;
+using Imlight.Classic.Quests;
+using Imlight.CoreLib.Classic;
 
 namespace Imlight.CoreLib.WizardData.Collections;
 
@@ -94,6 +96,9 @@ internal static class QuestUsedObjects {
             .SelectMany(goal => goal.m_clientTags ?? [])
             .Where(tag => tag is not null)
             .ToHashSet();
+        if (ClassicQuestEngine.IsActive) { // CLASSIC: also the object a "Ddl_" tag names (Ddl_WC_DarkCave_Bubble1).
+            names.UnionWith(names.Select(ClientTagVariants.ObjectNameOf).Where(name => name is not null).ToList());
+        }
         var itemAdjectives = usageGoals
             .OfType<ScavengeGoalTemplate>()
             .SelectMany(goal => goal.m_itemAdjectives ?? [])
