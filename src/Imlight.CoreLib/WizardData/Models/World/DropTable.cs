@@ -66,7 +66,16 @@ public class DropTableResult {
     public int TrainingPoints { get; set; } = 0;
     public bool GrantsPotionSlot { get; set; } = false;
     public List<DropItemResult> Items { get; set; } = [];
-    public bool HasRewards => GoldAmount > 0 || ExperienceAmount > 0 || TrainingPoints > 0 || Items.Count > 0;
+
+    // CLASSIC: Treasure Card spell templates and reagents a won duel gives under the profile's mob reward rules.
+    public List<uint> TreasureCards { get; set; } = [];
+    public List<DropItemResult> Reagents { get; set; } = [];
+
+    // CLASSIC: the granted Treasure Cards' spell ids (name hashes) for the loot popup; LootGranter fills it.
+    public List<uint> TreasureCardSpellIds { get; set; } = [];
+
+    public bool HasRewards => GoldAmount > 0 || ExperienceAmount > 0 || TrainingPoints > 0 || Items.Count > 0
+        || TreasureCards.Count > 0 || Reagents.Count > 0;
 
 }
 

@@ -80,6 +80,25 @@ public static class DropTableConverter {
             }
         }
 
+        // CLASSIC: reagents show like a harvest (item loot by template); Treasure Cards by spell id, the
+        // name hash MSG_ADDTREASURESPELLTOBOOK uses.
+        foreach (var reagent in dropResult.Reagents) {
+            if (TryParseItemId(reagent.ItemId, out var reagentGid)) {
+                lootItems.Add(new ItemLootInfo {
+                    m_lootType = LOOT_TYPE.LOOT_TYPE_ITEM,
+                    m_itemID = reagentGid,
+                    m_numItems = reagent.Quantity
+                });
+            }
+        }
+
+        foreach (var spellId in dropResult.TreasureCardSpellIds) {
+            lootItems.Add(new TreasureCardLootInfo {
+                m_lootType = LOOT_TYPE.LOOT_TYPE_TREASURE_CARD,
+                m_spellID = spellId
+            });
+        }
+
         lootList.m_loot = lootItems;
         
         return lootList;

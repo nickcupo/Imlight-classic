@@ -22,19 +22,23 @@
  * PURPOSE:
  * A profile's combat reward rules (progression/mob-rewards-2009.yaml):
  * XP per pip used in a won duel, gold per defeated mob by rank and kind
- * (or the mob's own documented range), and item drops from the mob's
- * documented loot list.
+ * (or the mob's own documented range), and equipment, Treasure Card and
+ * reagent drops from the mob's documented loot lists.
  *
  * USAGE EXAMPLE:
  * var rules = MobRewardRulesLoader.Load(path);
  * var pips = rules.CombatXp.PipsForCast(rank: 0, isXPip: false, xPipsSpent: 0);   // 1
- * var loot = rules.Roll(new MobInfo(35785, Rank: 1, MobKind.Normal), random);      // gold 1-2, maybe an item
+ * var loot = rules.Roll(new MobInfo(35785, Rank: 1, MobKind.Normal), random);      // gold 1-2, maybe items, cards, reagents
  *
  * NOTE:
  * A mob's rank is its template's NPC level (the 2009 wiki's "Rank"). A
  * documented mob's gold range and loot list win over the rank table; an
- * undocumented mob gets the rank table's gold and no items. Pure logic, no
- * server types, so the tests can drive it.
+ * undocumented mob gets the rank table's gold and no items. Every list entry
+ * rolls on its own: a tallied entry at its tallied chance, an untallied one at
+ * the kind's expected drops per fight divided by the list length, capped per
+ * mob. Treasure Cards and reagents fall back to the client's loot-table names
+ * when the mob's page lists none. Pure logic, no server types, so the tests
+ * can drive it.
  *
  * TODO:
  *
@@ -103,9 +107,21 @@ public sealed record RankGold(int Rank, GoldRange Normal, GoldRange Elite, GoldR
 /// <param name="Rank">The 2009 rank.</param>
 /// <param name="Kind">Normal, elite or boss.</param>
 /// <param name="Gold">The documented gold range, if the page gave one.</param>
-/// <param name="Drops">Client item template ids of the documented loot that exist in the client.</param>
+/// <param name="ListedItems">How many equipment, pet and housing items the page lists, with a client template or not.</param>
+/// <param name="Items">The listed items that exist in the client.</param>
+/// <param name="TreasureCards">The listed Treasure Cards (spell templates).</param>
+/// <param name="Reagents">The listed reagents.</param>
+/// <param name="Tally">Fights behind the page's drop percentages, or null when it has none.</param>
 public sealed record DocumentedMob(string Name, ImmutableArray<ulong> Templates, int Rank, MobKind Kind, GoldRange? Gold,
-                                   ImmutableArray<ulong> Drops);
+                                   int ListedItems, ImmutableArray<DropEntry> Items, ImmutableArray<DropEntry> TreasureCards,
+                                   ImmutableArray<DropEntry> Reagents, int? Tally = null) {
+
+    /// <summary>
+    /// The item templates of the documented loot.
+    /// </summary>
+    public ImmutableArray<ulong> Drops => [.. Items.Select(entry => entry.Template)];
+
+}
 
 /// <summary>
 /// XP from a won duel: <see cref="XpPerPip"/> for every pip of every card played.
@@ -156,11 +172,94 @@ public sealed record CombatXpRule(int XpPerPip, int ZeroPipCountsAs, int? XPipCo
 }
 
 /// <summary>
+/// One entry of a mob's documented loot list.
+/// </summary>
+/// <param name="Template">The client template (an item, a Treasure Card spell or a reagent).</param>
+/// <param name="Chance">The entry's own chance per fight from a drop tally (0: listed but not seen in the tally), or null to
+/// derive it from the kind's rate.</param>
+public sealed record DropEntry(ulong Template, double? Chance);
+
+/// <summary>
+/// One kind of loot (equipment, Treasure Cards or reagents) and how often a mob drops it.
+/// </summary>
+/// <param name="Expected">Expected drops of this kind per defeated mob and player, by mob kind.</param>
+/// <param name="MaxPerMob">The most drops of this kind one mob gives one player in one fight.</param>
+/// <param name="UnseenChance">The chance of a listed entry that a mob's drop tally never saw.</param>
+/// <param name="Quantity">How many of the template one drop gives.</param>
+public sealed record DropRule(ImmutableDictionary<MobKind, double> Expected, int MaxPerMob, double UnseenChance, GoldRange Quantity) {
+
+    /// <summary>
+    /// No drops of this kind.
+    /// </summary>
+    public static DropRule None { get; } = new(ImmutableDictionary<MobKind, double>.Empty, 0, 0, new GoldRange(1, 1));
+
+    /// <summary>
+    /// The chance per fight of one list entry.
+    /// </summary>
+    /// <param name="entry">The entry.</param>
+    /// <param name="kind">The mob's kind.</param>
+    /// <param name="listed">How many entries the mob's list has, templates or not.</param>
+    /// <param name="tallied">True when the page gave entries of this list their own percentage.</param>
+    public double ChanceOf(DropEntry entry, MobKind kind, int listed, bool tallied) {
+        if (entry.Chance is { } own) {
+            return own > 0 ? own : UnseenChance;   // 0: on the tally's list but never seen in its fights
+        }
+
+        if (tallied) {
+            return UnseenChance;
+        }
+
+        return listed <= 0 ? 0 : Math.Min(1.0, Expected.GetValueOrDefault(kind) / listed);
+    }
+
+    /// <summary>
+    /// Rolls every entry of a list on its own, in random order, and keeps at most <see cref="MaxPerMob"/> hits.
+    /// </summary>
+    public ImmutableArray<ulong> Roll(ImmutableArray<DropEntry> entries, MobKind kind, int listed, bool tallied, Random random) {
+        if (entries.IsDefaultOrEmpty || MaxPerMob <= 0) {
+            return [];
+        }
+
+        var order = entries.ToArray();
+        random.Shuffle(order);
+        var hits = ImmutableArray.CreateBuilder<ulong>();
+        foreach (var entry in order) {
+            if (hits.Count >= MaxPerMob) {
+                break;
+            }
+
+            if (random.NextDouble() < ChanceOf(entry, kind, listed, tallied)) {
+                hits.Add(entry.Template);
+            }
+        }
+
+        return hits.ToImmutable();
+    }
+
+}
+
+/// <summary>
+/// A reagent drop.
+/// </summary>
+/// <param name="Template">The reagent's client template.</param>
+/// <param name="Quantity">How many.</param>
+public readonly record struct ReagentDrop(ulong Template, int Quantity);
+
+/// <summary>
 /// The loot one defeated mob gives one player.
 /// </summary>
 /// <param name="Gold">Gold.</param>
-/// <param name="Item">An item template id, or null for no item.</param>
-public sealed record MobLoot(int Gold, ulong? Item);
+/// <param name="Items">Item templates (equipment, pets, housing).</param>
+/// <param name="TreasureCards">Treasure Card spell templates.</param>
+/// <param name="Reagents">Reagents.</param>
+public sealed record MobLoot(int Gold, ImmutableArray<ulong> Items, ImmutableArray<ulong> TreasureCards, ImmutableArray<ReagentDrop> Reagents) {
+
+    /// <summary>
+    /// The first item, if any.
+    /// </summary>
+    public ulong? Item => Items.IsDefaultOrEmpty ? null : Items[0];
+
+}
 
 /// <summary>
 /// A profile's combat XP, mob gold and drop rules.
@@ -178,9 +277,31 @@ public sealed class MobRewardRules {
     public required ImmutableSortedDictionary<int, RankGold> GoldByRank { get; init; }
 
     /// <summary>
-    /// Chance a documented mob drops one item from its loot list, per kind.
+    /// Equipment, pet and housing drops.
     /// </summary>
-    public required ImmutableDictionary<MobKind, double> DropChance { get; init; }
+    public required DropRule ItemDrops { get; init; }
+
+    /// <summary>
+    /// Treasure Card drops.
+    /// </summary>
+    public DropRule TreasureCardDrops { get; init; } = DropRule.None;
+
+    /// <summary>
+    /// Reagent drops.
+    /// </summary>
+    public DropRule ReagentDrops { get; init; } = DropRule.None;
+
+    /// <summary>
+    /// Treasure Cards for mob templates whose page lists none, from the client's loot-table names.
+    /// </summary>
+    public ImmutableDictionary<ulong, ImmutableArray<DropEntry>> TreasureCardFallback { get; init; } =
+        ImmutableDictionary<ulong, ImmutableArray<DropEntry>>.Empty;
+
+    /// <summary>
+    /// Reagents for mob templates whose page lists none, from the client's loot-table names.
+    /// </summary>
+    public ImmutableDictionary<ulong, ImmutableArray<DropEntry>> ReagentFallback { get; init; } =
+        ImmutableDictionary<ulong, ImmutableArray<DropEntry>>.Empty;
 
     public required ImmutableArray<DocumentedMob> Mobs { get; init; }
     public required string SourceFile { get; init; }
@@ -227,19 +348,37 @@ public sealed class MobRewardRules {
     }
 
     /// <summary>
-    /// Rolls one player's loot from one defeated mob.
+    /// Rolls one player's loot from one defeated mob: gold always; items, Treasure Cards and reagents each rolled
+    /// entry by entry from the mob's lists (or, for cards and reagents, the client loot-table fallback).
     /// </summary>
     /// <param name="mob">The defeated mob.</param>
     /// <param name="random">The random source.</param>
     public MobLoot Roll(MobInfo mob, Random random) {
         var gold = GoldFor(mob).Roll(random);
-        ulong? item = null;
-        if (Find(mob.TemplateId) is { Drops.IsEmpty: false } documented
-            && random.NextDouble() < DropChance.GetValueOrDefault(mob.Kind)) {
-            item = documented.Drops[random.Next(documented.Drops.Length)];
-        }
+        var documented = Find(mob.TemplateId);
 
-        return new MobLoot(gold, item);
+        // A list counts as tallied when the page gave any of its entries a percentage.
+        static bool Tallied(ImmutableArray<DropEntry> entries) => entries.Any(entry => entry.Chance is not null);
+
+        var items = documented is null
+            ? []
+            : ItemDrops.Roll(documented.Items, mob.Kind, documented.ListedItems, Tallied(documented.Items), random);
+
+        var cards = documented is { TreasureCards.IsEmpty: false }
+            ? TreasureCardDrops.Roll(documented.TreasureCards, mob.Kind, documented.TreasureCards.Length, Tallied(documented.TreasureCards), random)
+            : TreasureCardFallback.TryGetValue(mob.TemplateId, out var cardFallback)
+                ? TreasureCardDrops.Roll(cardFallback, mob.Kind, cardFallback.Length, tallied: false, random)
+                : [];
+
+        var reagentTemplates = documented is { Reagents.IsEmpty: false }
+            ? ReagentDrops.Roll(documented.Reagents, mob.Kind, documented.Reagents.Length, Tallied(documented.Reagents), random)
+            : ReagentFallback.TryGetValue(mob.TemplateId, out var reagentFallback)
+                ? ReagentDrops.Roll(reagentFallback, mob.Kind, reagentFallback.Length, tallied: false, random)
+                : [];
+        var reagents = reagentTemplates.Select(template => new ReagentDrop(template, ReagentDrops.Quantity.Roll(random)))
+            .ToImmutableArray();
+
+        return new MobLoot(gold, items, cards, reagents);
     }
 
 }
@@ -250,7 +389,7 @@ public sealed class MobRewardRules {
 public static class MobRewardRulesLoader {
 
     internal static readonly FrozenSet<string> s_rootKeys = FrozenSet.Create(StringComparer.Ordinal,
-        "id", "title", "profiles", "combat_xp", "gold", "drops", "mobs", "later_changes", "license_tag", "notes");
+        "id", "title", "profiles", "combat_xp", "gold", "drops", "treasure_cards", "reagents", "mobs", "later_changes", "license_tag", "notes");
     private static readonly string[] s_rootRequired = ["id", "profiles", "combat_xp", "gold", "drops", "mobs", "license_tag"];
     internal static readonly FrozenSet<string> s_combatKeys = FrozenSet.Create(StringComparer.Ordinal,
         "xp_per_pip", "zero_pip_counts_as", "x_pip_counts_as", "fizzle_counts", "provenance", "notes");
@@ -259,10 +398,16 @@ public static class MobRewardRulesLoader {
     internal static readonly FrozenSet<string> s_rankKeys = FrozenSet.Create(StringComparer.Ordinal,
         "rank", "normal", "elite", "boss", "sample", "confidence", "notes");
     internal static readonly FrozenSet<string> s_dropKeys = FrozenSet.Create(StringComparer.Ordinal,
-        "chance", "provenance", "confidence", "notes");
+        "expected", "max_per_mob", "unseen_chance", "tallies", "provenance", "confidence", "notes");
+    internal static readonly FrozenSet<string> s_extraDropKeys = FrozenSet.Create(StringComparer.Ordinal,
+        "expected", "max_per_mob", "unseen_chance", "quantity", "client_tables", "provenance", "confidence", "notes");
+    internal static readonly FrozenSet<string> s_clientTableKeys = FrozenSet.Create(StringComparer.Ordinal, "name", "template", "mobs");
+    internal static readonly FrozenSet<string> s_tallyKeys = FrozenSet.Create(StringComparer.Ordinal,
+        "page", "oldid", "date", "first_oldid", "first_date", "kind", "rank", "battles", "items", "treasure_cards", "reagents", "minions", "items_alone",
+        "treasure_cards_alone", "notes");
     internal static readonly FrozenSet<string> s_mobKeys = FrozenSet.Create(StringComparer.Ordinal,
-        "name", "templates", "rank", "kind", "gold", "drops", "source", "notes");
-    internal static readonly FrozenSet<string> s_itemKeys = FrozenSet.Create(StringComparer.Ordinal, "name", "template");
+        "name", "templates", "rank", "kind", "gold", "drops", "treasure_cards", "reagents", "tally", "source", "notes");
+    internal static readonly FrozenSet<string> s_itemKeys = FrozenSet.Create(StringComparer.Ordinal, "name", "template", "chance");
     private static readonly string[] s_fizzle = ["card", "one"];
     private static readonly string[] s_kinds = ["normal", "elite", "boss"];
     private static readonly string[] s_confidences = ["verified", "corroborated", "inferred", "placeholder"];
@@ -304,7 +449,9 @@ public static class MobRewardRulesLoader {
         var profiles = ReadProfiles(map, diagnostics);
         var combat = ReadCombatXp(map, diagnostics);
         var gold = ReadGold(map, diagnostics);
-        var drops = ReadDrops(map, diagnostics);
+        var drops = ReadDropRule(map, "drops", s_dropKeys, diagnostics, out _);
+        var cards = ReadDropRule(map, "treasure_cards", s_extraDropKeys, diagnostics, out var cardFallback);
+        var reagents = ReadDropRule(map, "reagents", s_extraDropKeys, diagnostics, out var reagentFallback);
         var mobs = ReadMobs(map, diagnostics);
         if (map.Find("license_tag") is { } license) {
             _ = diagnostics.ReadEnum(license.Value, "license_tag", ClassicSpellSchema.LicenseTags);
@@ -328,7 +475,11 @@ public static class MobRewardRulesLoader {
             Profiles = profiles,
             CombatXp = combat!,
             GoldByRank = gold,
-            DropChance = drops,
+            ItemDrops = drops,
+            TreasureCardDrops = cards,
+            ReagentDrops = reagents,
+            TreasureCardFallback = cardFallback ?? ImmutableDictionary<ulong, ImmutableArray<DropEntry>>.Empty,
+            ReagentFallback = reagentFallback ?? ImmutableDictionary<ulong, ImmutableArray<DropEntry>>.Empty,
             Mobs = mobs,
             SourceFile = display,
         };
@@ -468,25 +619,168 @@ public static class MobRewardRulesLoader {
         return result.ToImmutable();
     }
 
-    private static ImmutableDictionary<MobKind, double> ReadDrops(YMap map, YamlDiagnostics diagnostics) {
-        var result = ImmutableDictionary.CreateBuilder<MobKind, double>();
-        if (map.Find("drops") is not { } entry || diagnostics.ReadMap(entry.Value, "drops") is not { } drops) {
+    private static double? ReadNumber(YNode node, string keyPath, double max, YamlDiagnostics diagnostics) {
+        if (node is YScalar { IsPlain: true } scalar
+            && double.TryParse(scalar.Value, NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out var value)
+            && value >= 0 && value <= max) {
+            return value;
+        }
+
+        diagnostics.At(node, keyPath, $"expected a number from 0 to {max.ToString(CultureInfo.InvariantCulture)}, got {node.Describe()}");
+
+        return null;
+    }
+
+    private static DropRule ReadDropRule(YMap map, string key, FrozenSet<string> keys, YamlDiagnostics diagnostics,
+                                         out ImmutableDictionary<ulong, ImmutableArray<DropEntry>>? fallback) {
+        fallback = null;
+        if (map.Find(key) is not { } entry || diagnostics.ReadMap(entry.Value, key) is not { } rule) {
+            return DropRule.None;
+        }
+
+        diagnostics.CheckKeys(rule, key, keys, ["expected", "max_per_mob", "confidence"]);
+        RequireProvenance(rule, key, diagnostics);
+        if (rule.Find("confidence") is { } c) {
+            _ = diagnostics.ReadEnum(c.Value, YamlTree.Join(key, "confidence"), s_confidences);
+        }
+
+        if (rule.Find("notes") is { } notes) {
+            _ = diagnostics.ReadString(notes.Value, YamlTree.Join(key, "notes"));
+        }
+
+        var expected = ImmutableDictionary.CreateBuilder<MobKind, double>();
+        if (rule.Find("expected") is { } expectedEntry
+            && diagnostics.ReadMap(expectedEntry.Value, YamlTree.Join(key, "expected")) is { } perKind) {
+            var path = YamlTree.Join(key, "expected");
+            diagnostics.CheckKeys(perKind, path, s_kinds.ToFrozenSet(StringComparer.Ordinal), s_kinds);
+            foreach (var kind in s_kinds) {
+                if (perKind.Find(kind) is { } value && ReadNumber(value.Value, YamlTree.Join(path, kind), 20, diagnostics) is { } number) {
+                    expected[ParseKind(kind)] = number;
+                }
+            }
+        }
+
+        var max = rule.Find("max_per_mob") is { } m ? diagnostics.ReadInt(m.Value, YamlTree.Join(key, "max_per_mob"), 0, 50) : null;
+        double unseen = 0;
+        if (rule.Find("unseen_chance") is { } u && diagnostics.ReadFraction(u.Value, YamlTree.Join(key, "unseen_chance")) is { } fraction) {
+            unseen = fraction;
+        }
+
+        var quantity = new GoldRange(1, 1);
+        if (rule.Find("quantity") is { } q && ReadRange(q.Value, YamlTree.Join(key, "quantity"), diagnostics) is { } range) {
+            if (range.Min < 1) {
+                diagnostics.At(q.Value, YamlTree.Join(key, "quantity"), "a drop gives at least one");
+            }
+
+            quantity = range;
+        }
+
+        if (rule.Find("tallies") is { } tallies) {
+            ReadTallies(tallies.Value, YamlTree.Join(key, "tallies"), diagnostics);
+        }
+
+        if (rule.Find("client_tables") is { } tables) {
+            fallback = ReadClientTables(tables.Value, YamlTree.Join(key, "client_tables"), diagnostics);
+        }
+
+        return new DropRule(expected.ToImmutable(), max ?? 0, unseen, quantity);
+    }
+
+    private static void ReadTallies(YNode node, string keyPath, YamlDiagnostics diagnostics) {
+        if (diagnostics.ReadList(node, keyPath) is not { } list) {
+            return;
+        }
+
+        for (var i = 0; i < list.Items.Length; i++) {
+            var path = YamlTree.Index(keyPath, i);
+            if (diagnostics.ReadMap(list.Items[i], path) is not { } tally) {
+                continue;
+            }
+
+            diagnostics.CheckKeys(tally, path, s_tallyKeys, ["page", "oldid", "date", "kind", "battles", "items"]);
+            if (tally.Find("kind") is { } kind) {
+                _ = diagnostics.ReadEnum(kind.Value, YamlTree.Join(path, "kind"), s_kinds);
+            }
+
+            if (tally.Find("battles") is { } battles) {
+                _ = diagnostics.ReadInt(battles.Value, YamlTree.Join(path, "battles"), 1);
+            }
+
+            if (tally.Find("minions") is { } minions) {
+                diagnostics.ReadStringList(minions.Value, YamlTree.Join(path, "minions"));
+            }
+
+            foreach (var number in (string[]) ["items", "treasure_cards", "reagents", "items_alone", "treasure_cards_alone"]) {
+                if (tally.Find(number) is { } value) {
+                    _ = ReadNumber(value.Value, YamlTree.Join(path, number), 20, diagnostics);
+                }
+            }
+        }
+    }
+
+    private static ImmutableDictionary<ulong, ImmutableArray<DropEntry>> ReadClientTables(YNode node, string keyPath,
+                                                                                           YamlDiagnostics diagnostics) {
+        var byMob = new Dictionary<ulong, List<DropEntry>>();
+        if (diagnostics.ReadList(node, keyPath) is not { } list) {
+            return ImmutableDictionary<ulong, ImmutableArray<DropEntry>>.Empty;
+        }
+
+        for (var i = 0; i < list.Items.Length; i++) {
+            var path = YamlTree.Index(keyPath, i);
+            if (diagnostics.ReadMap(list.Items[i], path) is not { } table) {
+                continue;
+            }
+
+            diagnostics.CheckKeys(table, path, s_clientTableKeys, ["name", "template", "mobs"]);
+            if (table.Find("name") is { } name) {
+                _ = diagnostics.ReadString(name.Value, YamlTree.Join(path, "name"));
+            }
+
+            if (table.Find("template") is not { } templateEntry || ReadId(templateEntry.Value, YamlTree.Join(path, "template"), diagnostics) is not { } template) {
+                continue;
+            }
+
+            foreach (var mob in ReadIds(table, "mobs", path, diagnostics, minOne: true)) {
+                if (!byMob.TryGetValue(mob, out var entries)) {
+                    byMob[mob] = entries = [];
+                }
+
+                if (entries.All(entry => entry.Template != template)) {
+                    entries.Add(new DropEntry(template, null));
+                }
+            }
+        }
+
+        return byMob.ToImmutableDictionary(pair => pair.Key, pair => pair.Value.ToImmutableArray());
+    }
+
+    private static ImmutableArray<DropEntry> ReadEntries(YMap mob, string key, string keyPath, YamlDiagnostics diagnostics,
+                                                         out int listed) {
+        listed = 0;
+        var result = ImmutableArray.CreateBuilder<DropEntry>();
+        if (mob.Find(key) is not { } d || diagnostics.ReadList(d.Value, YamlTree.Join(keyPath, key)) is not { } items) {
             return result.ToImmutable();
         }
 
-        diagnostics.CheckKeys(drops, "drops", s_dropKeys, ["chance", "confidence"]);
-        RequireProvenance(drops, "drops", diagnostics);
-        if (drops.Find("confidence") is { } c) {
-            _ = diagnostics.ReadEnum(c.Value, "drops.confidence", s_confidences);
-        }
+        for (var j = 0; j < items.Items.Length; j++) {
+            var itemPath = YamlTree.Index(YamlTree.Join(keyPath, key), j);
+            if (diagnostics.ReadMap(items.Items[j], itemPath) is not { } item) {
+                continue;
+            }
 
-        if (drops.Find("chance") is { } chanceEntry && diagnostics.ReadMap(chanceEntry.Value, "drops.chance") is { } chance) {
-            diagnostics.CheckKeys(chance, "drops.chance", s_kinds.ToFrozenSet(StringComparer.Ordinal), s_kinds);
-            foreach (var kind in s_kinds) {
-                if (chance.Find(kind) is { } value
-                    && diagnostics.ReadFraction(value.Value, YamlTree.Join("drops.chance", kind)) is { } fraction) {
-                    result[ParseKind(kind)] = fraction;
-                }
+            listed++;
+            diagnostics.CheckKeys(item, itemPath, s_itemKeys, key == "drops" ? ["name"] : ["name", "template"]);
+            if (item.Find("name") is { } itemName) {
+                _ = diagnostics.ReadString(itemName.Value, YamlTree.Join(itemPath, "name"));
+            }
+
+            double? chance = null;
+            if (item.Find("chance") is { } c) {
+                chance = diagnostics.ReadFraction(c.Value, YamlTree.Join(itemPath, "chance"));
+            }
+
+            if (item.Find("template") is { } template && ReadId(template.Value, YamlTree.Join(itemPath, "template"), diagnostics) is { } id) {
+                result.Add(new DropEntry(id, chance));
             }
         }
 
@@ -518,23 +812,12 @@ public static class MobRewardRulesLoader {
                 }
             }
 
-            var drops = ImmutableArray.CreateBuilder<ulong>();
-            if (mob.Find("drops") is { } d && diagnostics.ReadList(d.Value, YamlTree.Join(keyPath, "drops")) is { } items) {
-                for (var j = 0; j < items.Items.Length; j++) {
-                    var itemPath = YamlTree.Index(YamlTree.Join(keyPath, "drops"), j);
-                    if (diagnostics.ReadMap(items.Items[j], itemPath) is not { } item) {
-                        continue;
-                    }
-
-                    diagnostics.CheckKeys(item, itemPath, s_itemKeys, ["name"]);
-                    if (item.Find("name") is { } itemName) {
-                        _ = diagnostics.ReadString(itemName.Value, YamlTree.Join(itemPath, "name"));
-                    }
-
-                    if (item.Find("template") is { } template && ReadId(template.Value, YamlTree.Join(itemPath, "template"), diagnostics) is { } id) {
-                        drops.Add(id);
-                    }
-                }
+            var items = ReadEntries(mob, "drops", keyPath, diagnostics, out var listedItems);
+            var cards = ReadEntries(mob, "treasure_cards", keyPath, diagnostics, out _);
+            var reagents = ReadEntries(mob, "reagents", keyPath, diagnostics, out _);
+            var tally = mob.Find("tally") is { } t ? diagnostics.ReadInt(t.Value, YamlTree.Join(keyPath, "tally"), 1) : null;
+            if (tally is null && items.Concat(cards).Concat(reagents).Any(entry => entry.Chance is not null)) {
+                diagnostics.At(mob, keyPath, "a drop chance needs the mob's tally (the fights behind it)");
             }
 
             if (mob.Find("source") is { } source) {
@@ -545,7 +828,7 @@ public static class MobRewardRulesLoader {
                 continue;
             }
 
-            result.Add(new DocumentedMob(name, templates, rank.Value, ParseKind(kind), gold, drops.ToImmutable()));
+            result.Add(new DocumentedMob(name, templates, rank.Value, ParseKind(kind), gold, listedItems, items, cards, reagents, tally));
         }
 
         return result.ToImmutable();
