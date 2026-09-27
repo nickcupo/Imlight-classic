@@ -17,6 +17,11 @@
     </ItemGroup>
 
     <ItemGroup>
+        <!-- CLASSIC: tests for the classic fixes that live in CoreLib. -->
+        <InternalsVisibleTo Include="Imlight.Classic.Tests" />
+    </ItemGroup>
+
+    <ItemGroup>
         <ProjectReference Include="..\Imlight.Common\Imlight.Common.csproj" />
         <!-- CLASSIC: the pure rules library; the reverse reference must never exist. -->
         <ProjectReference Include="..\Imlight.Classic\Imlight.Classic.csproj" />

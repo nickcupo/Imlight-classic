@@ -101,8 +101,23 @@ public sealed class SchemaDriftTests {
         Assert.Equal(EnumValues(rules.GetProperty("power_pips_from_rank")), ClassicSchema.PowerPipRanks.Cast<string?>().Append(null).ToArray());
         Assert.Equal(EnumValues(rules.GetProperty("dragonspyre_difficulty")), ClassicSchema.DragonspyreDifficulties.ToArray());
         Assert.Equal(EnumValues(rules.GetProperty("tutorial")), ClassicSchema.Tutorials.ToArray());
-        Assert.Equal(new[] { "accuracy_table", "xp_table", "mob_rewards", "power_pips_from_rank", "dragonspyre_difficulty", "tutorial" },
+        Assert.Equal(new[] { "accuracy_table", "xp_table", "mob_rewards", "badges", "quest_cards", "power_pips_from_rank", "dragonspyre_difficulty", "tutorial" },
             rules.EnumerateObject().Select(rule => rule.Name).ToArray());
+    }
+
+    [Fact]
+    public void BadgeAndQuestCardLoaderKeysMatchTheirSchemas() {
+        string[] Keys(System.Text.Json.JsonElement node) => [.. node.GetProperty("properties").EnumerateObject().Select(p => p.Name).Order(StringComparer.Ordinal)];
+        string[] Sorted(IEnumerable<string> keys) => [.. keys.Order(StringComparer.Ordinal)];
+        var badges = ReadSchema("badges.schema.json");
+        var cards = ReadSchema("quest-cards.schema.json");
+
+        Assert.Equal(Keys(badges), Sorted(BadgeRulesLoader.s_rootKeys));
+        Assert.Equal(Keys(badges.GetProperty("$defs").GetProperty("badge")), Sorted(BadgeRulesLoader.s_badgeKeys));
+        Assert.Equal(Keys(badges.GetProperty("$defs").GetProperty("badge").GetProperty("properties").GetProperty("award")),
+            Sorted(BadgeRulesLoader.s_awardKeys));
+        Assert.Equal(Keys(cards), Sorted(QuestCardRewardsLoader.s_rootKeys));
+        Assert.Equal(Keys(cards.GetProperty("$defs").GetProperty("quest")), Sorted(QuestCardRewardsLoader.s_questKeys));
     }
 
     [Theory]

@@ -18,6 +18,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Imlight.Classic\Imlight.Classic.csproj" />
+    <!-- CLASSIC: the server-side race, cinematic and badge tests use CoreLib's own types. -->
+    <ProjectReference Include="..\..\src\Imlight.CoreLib\Imlight.CoreLib.csproj" />
   </ItemGroup>
 
 </Project>

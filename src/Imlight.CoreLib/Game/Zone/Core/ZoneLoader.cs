@@ -46,6 +46,8 @@ using Imcodec.ObjectProperty;
 using Imcodec.ObjectProperty.TypeCache;
 using Imcodec.Wad;
 using Imlight.Common;
+using Imlight.CoreLib.Classic;
+using Imlight.CoreLib.Classic.Cinematics;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;
 using Imlight.CoreLib.Shared.Resources;
@@ -177,6 +179,10 @@ internal sealed class ZoneLoader : ReceiveProtocolDispatcher {
         }
 
         var serializer = new BindSerializer();
+        if (ClassicQuestEngine.IsActive) {
+            // CLASSIC: read the trigger results that play cinematics, which the server registry decodes empty.
+            serializer.TypeRegistry = ClassicZoneTypeRegistry.Instance;
+        }
         if (!serializer.Deserialize<T>(data, 1, out var result)) {
             Logger.Error("Failed to deserialize {DataName} from {FileName}", Logger.Args(dataName, fileName));
 

@@ -24,6 +24,7 @@ using Raven.Client.Documents.Operations;
 using Raven.Client.Documents.Queries;
 using Imlight.CoreLib.WizardData.Databases;
 using Imcodec.IO;
+using Imlight.Classic.Net;
 
 namespace Imlight.CoreLib.WizardData.Collections;
 
@@ -38,7 +39,7 @@ public class ClientKeyPair(ulong accountId, ulong machineId, string clientKey2) 
 
 public static class ClientKeyCollection {
 
-    private const string CollectionName = "SessionKeys";
+    private const string CollectionName = SessionKeyDocument.CollectionName; // CLASSIC
 
     private static readonly IDocumentStore Store;
     private const uint KeyExpireTimeInHours = 30;
@@ -56,19 +57,15 @@ public static class ClientKeyCollection {
     public static void AddSessionKey(ulong accountId, ulong machineId, string key) {
         using var session = Store.OpenSession();
 
-        // Remove any existing document that matches the account id.
-        Store
-            .Operations
-            .Send(new DeleteByQueryOperation(new IndexQuery {
-                Query = $"from {CollectionName} where AccountId = '{accountId}'"
-            }));
-
-        // Store a new ClientKeyPair in the database with an expiry date.
+        // CLASSIC: one document per account, stored under a fixed id, replaces upstream's asynchronous
+        // delete-by-query plus a new random-id document. The delete could still be running when the new
+        // key was stored, and GetSessionKey's index query could miss the new key or return an older one,
+        // so the validate right after a login failed now and then (ValidateFailed).
         var pair = new ClientKeyPair(accountId, machineId, key);
         var expiry = DateTime.UtcNow.AddHours(KeyExpireTimeInHours);
 
         // Store and set the metadata of the new document.
-        session.Store(pair);
+        session.Store(pair, SessionKeyDocument.IdFor(accountId)); // CLASSIC: overwrites the previous key.
         var metadata = session.Advanced.GetMetadataFor(pair);
         metadata[Constants.Documents.Metadata.Collection] = CollectionName;
         metadata[Constants.Documents.Metadata.Expires] = expiry;
@@ -85,11 +82,14 @@ public static class ClientKeyCollection {
     public static ByteString GetSessionKey(ulong accountId, ulong machineId) {
         using var session = Store.OpenSession();
 
-        // Get the ClientKeyPair from the database where the account id and machine id match.
-        var pair = session.Query<ClientKeyPair>(collectionName: CollectionName)
-            .FirstOrDefault(x => x.AccountId == accountId && x.MachineId == machineId);
+        // CLASSIC: a load by id is ACID in RavenDB, unlike the index query it replaces.
+        var pair = session.Load<ClientKeyPair>(SessionKeyDocument.IdFor(accountId));
+        string key = pair is not null
+            && SessionKeyDocument.Answers(pair.AccountId, pair.MachineId, pair.ClientKey2, accountId, machineId)
+            ? pair.ClientKey2
+            : null;
 
-        return pair?.ClientKey2;
+        return key;
     }
     
 }

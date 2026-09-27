@@ -39,9 +39,22 @@
  * own keep it, even when a client tag names an event (DS-LIB1-C01-008's
  * explore goal names the blue crystal's).
  *
+ * Arc 1 added the events the audit's tagless goals name (Mantra2/3,
+ * TakeBook, UseForge, TouchTomb, UseCrystalStand6, the obsidian chests and
+ * the Necropolis pedestals). The pedestals' behaviors fire
+ * "UsedEmptyCrystalPedestalC01-00N" while the captured goals are tagged
+ * "UseEmptyCrystalPedestalC01-00N"; the table keys on the goal's spelling.
+ * An object whose behavior also starts a zone spawner (a ResSpawn result)
+ * lists it with the requirements KingsIsle's behavior checks, read from
+ * the same bytes: the Windhammer tower's crystal stand summons the drake
+ * DS-NEC1-C01-004/006 talk to and DS-NEC1-C02-001/002 are given by, so the
+ * stand stays usable for that branch without an open goal.
+ *
  * TODO:
  * - DS-ACAD1-C01-002's goals 1 to 5 complete on entering the Crystal Grove;
  *   should the other five samples' events complete them instead?
+ * - The stand's first branch also checks that the stand is not already in
+ *   its DrakeSummoned state; the spawner's limit of one stands in for it.
  *
  * Created by: Nick with Claude Code (claude-opus-5-5)
  * Version: KALI 1.0
@@ -52,6 +65,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using Imcodec.ObjectProperty.TypeCache;
+using Imlight.CoreLib.Classic;
 
 namespace Imlight.CoreLib.WizardData.Collections;
 
@@ -78,6 +92,39 @@ internal static class InteractableQuestEvents {
         ["DS_ActivationCrystal_Blue"] = [new("ActivateCrystalBlue")], // DS-LIB1-C01-008 goal 2
         ["DS_CrystalStandDSNECHatch"] = [new("UseCrystalStand3")], // DS-NEC1-C01-004 goal 2, in Windhammer's tower
         ["DS_DragonEgg"] = [new("EggHatch")], // DS-NEC1-C05-004 goal 2, in the Drake Hatchery
+        // Arc 1 (r806919 Root.wad InteractableBehavior strings; each object's only placement is the goal's zone).
+        ["Generic_Forge"] = [new("UseForge")], // KT-SPH2-C02-001 goal 2, in KT_ChampHall_T3
+        ["MS_Mantra1Tablet"] = [new("Mantra1")], // MS-DTH1-C01-001, in the Burial Ground (its goal has a zone of its own)
+        ["MS_Mantra2Tablet"] = [new("Mantra2")], // MS-DTH1-C01-002 goal 2, in MS_Death1_T1
+        ["MS_Mantra3Tablet"] = [new("Mantra3")], // MS-DTH1-C01-003 goal 2, in MS_Death1_T2
+        ["MS_BookPed"] = [new("TakeBook")], // MS-MAIN-C03-001 goal 3, in the Rock Dojo (MS_RockDojoT2)
+        ["DS_Coffin"] = [new("TouchTomb")], // DS-NEC2-C01-009 goal 2, in the Necropolis crypt (5Room3_5)
+        ["DS_CrystalStand_NEC1_C02_002"] = [new("UseCrystalStand6")], // DS-NEC1-C02-002 goal 3, in DS_Hatchery_T4
+        ["DS_CrystalStand_C01-002"] = [new("UseEmptyCrystalPedestal")], // DS-NEC2-C01-002, in DS_A2Z2_Arena (its goal has a zone of its own)
+        ["DS_CrystalStand_C01-003"] = [new("UseEmptyCrystalPedestalC01-003")], // DS-NEC2-C01-003 goal 2, in DS_A2Z2_Arena
+        ["DS_CrystalStand_C01-005"] = [new("UseEmptyCrystalPedestalC01-005")], // DS-NEC2-C01-005 (zone of its own)
+        ["DS_CrystalStand_C01-006"] = [new("UseEmptyCrystalPedestalC01-006")], // DS-NEC2-C01-006 goal 2, in DS_A2Z2_Arena
+        ["DS_CrystalStand_C01-007"] = [new("UseEmptyCrystalPedestalC01-007")], // DS-NEC2-C01-007 (zone of its own)
+        ["DS-ObsidianChest"] = [ // DS-ACAD-C01-001 goals 1, 3, 6, 7: one chest template, one event per zone
+            new("GotObsidianChest1", "WizardCity/WC_Streets/Interiors/WC_HauntedCave_T1"),
+            new("GotObsidianChest2", "WizardCity/WC_Streets/Interiors/WC_Colossus_ThroneRoom"),
+            new("GotObsidianChest3", "Krokotopia/KT_Pyramid/Interiors/KT_Hall_T1"),
+            new("GotObsidianChest4", "Krokotopia/KT_Krokosphinx/Interiors/KT_Arena_T1"),
+            new("GotObsidianChest5", "Marleybone/MB_ScotlandYard/Interiors/MB_Prison_T5"),
+            new("GotObsidianChest6", "Marleybone/MB_Station/Interiors/MB_ChelseaCourt_T6"),
+            new("GotObsidianChest7", "MooShu/MS_Death/Interiors/MS_Death1_T4"),
+            new("GotObsidianChest8", "MooShu/MS_Plague/Interiors/MS_Plague1_T3"),
+            new("GotObsidianChest9", "DragonSpire/DS_A2_Battle/Interiors/DS_Detention_T4"),
+        ],
+    };
+
+    // CLASSIC: zone spawners an object's use starts (its InteractableBehavior's ResSpawn), with the
+    // requirements that branch of the behavior checks.
+    private static readonly Dictionary<string, UseSpawn[]> s_spawnsByObject = new() {
+        ["DS_CrystalStandDSNECHatch"] = [ // Windhammer's tower (DS_Hatchery_T1): the drake DS-NEC1-NPC02
+            new([812068], () => [HasEntry("QT-DS-NEC1-C01-004"), Not(HasQuest("DS-NEC1-C02-002"))]),
+            new([812068], () => [HasQuest("DS-NEC1-C02-002"), GoalIncomplete("DS-NEC1-C02-002", "Goal")]),
+        ],
     };
 
     /// <summary>
@@ -85,7 +132,34 @@ internal static class InteractableQuestEvents {
     /// </summary>
     /// <param name="objectTemplate">The object's template.</param>
     internal static bool FiresQuestEvents(GameObjectTemplate objectTemplate)
-        => objectTemplate?.m_objectName is not null && s_questEventsByObject.ContainsKey(objectTemplate.m_objectName);
+        => objectTemplate?.m_objectName is not null
+            && (s_questEventsByObject.ContainsKey(objectTemplate.m_objectName)
+                || (ClassicQuestEngine.IsActive && s_spawnsByObject.ContainsKey(objectTemplate.m_objectName))); // CLASSIC: use-spawns.
+
+    /// <summary>
+    /// CLASSIC: the spawners using the object starts for a player, one list per behavior branch whose
+    /// requirements the player meets.
+    /// </summary>
+    /// <param name="objectTemplate">The used object's template.</param>
+    /// <param name="meets">Evaluates a branch's requirements for the player.</param>
+    internal static IReadOnlyList<uint> SpawnsOnUse(GameObjectTemplate objectTemplate, Func<RequirementList, bool> meets) {
+        if (!ClassicQuestEngine.IsActive || objectTemplate?.m_objectName is null
+            || !s_spawnsByObject.TryGetValue(objectTemplate.m_objectName, out var branches)) {
+            return [];
+        }
+
+        return branches
+            .Where(branch => meets(branch.Requirements()))
+            .SelectMany(branch => branch.SpawnerIds)
+            .Distinct()
+            .ToList();
+    }
+
+    /// <summary>
+    /// CLASSIC: every spawner some object's use starts (so the dormant-spawner rule leaves them alone).
+    /// </summary>
+    internal static IEnumerable<uint> SpawnersStartedByObjects()
+        => s_spawnsByObject.Values.SelectMany(branches => branches).SelectMany(branch => branch.SpawnerIds).Distinct();
 
     /// <summary>
     /// Whether using the object in the zone completes the goal: a waypoint goal without a zone or
@@ -142,6 +216,31 @@ internal static class InteractableQuestEvents {
     private static bool HasOwnTrigger(WaypointGoalTemplate waypoint)
         => !string.IsNullOrEmpty(waypoint.m_proximityTag)
             || (!string.IsNullOrEmpty(waypoint.m_zoneTag) && (waypoint.m_zoneEntry || waypoint.m_zoneExit));
+
+    private static RequirementList All(params Requirement[] requirements)
+        => new() { m_requirements = [.. requirements] };
+
+    private static ReqHasEntry HasEntry(string entryName)
+        => new() { m_entryName = entryName, m_operator = Operator.ROP_AND };
+
+    private static ReqHasQuest HasQuest(string questName)
+        => new() { m_questName = questName, m_operator = Operator.ROP_AND };
+
+    private static ReqHasGoal GoalIncomplete(string questName, string goalName)
+        => new() { m_questName = questName, m_goalName = goalName, m_requiredStatus = GoalStatusRequirement.Incomplete, m_operator = Operator.ROP_AND };
+
+    private static T Not<T>(T requirement) where T : Requirement {
+        requirement.m_applyNOT = true;
+
+        return requirement;
+    }
+
+    private sealed record UseSpawn(uint[] SpawnerIds, Func<Requirement[]> Items) {
+
+        // A fresh list per use: requirement records are mutable.
+        public RequirementList Requirements() => All(Items());
+
+    }
 
     private sealed record QuestEvent(string Name, string OnlyInZone = null) {
 
