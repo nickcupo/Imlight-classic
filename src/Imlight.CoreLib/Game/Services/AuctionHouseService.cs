@@ -43,6 +43,8 @@ using System;
 using System.Linq;
 using System.Collections.Generic;
 using Akka.Actor;
+using Imlight.Classic;
+using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.Shared.Resources;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.WizardData.Collections;
@@ -98,6 +100,13 @@ internal class AuctionHouseService(SessionActor sessionActor) : MessageService(s
 
     [MessageHandler(typeof(WIZARD_12_PROTOCOL.MSG_AUCTIONHOUSEREQUEST))]
     private void ReceiveAuctionHouseRequest(WIZARD_12_PROTOCOL.MSG_AUCTIONHOUSEREQUEST message) {
+        // CLASSIC: the Bazaar follows the profile's bazaar switch; this handler is its only gate.
+        if (!ClassicRuntime.Rules.IsFeatureEnabled(ClassicFeatures.Bazaar)) {
+            ClassicGate.RefuseFeature(ClassicFeatures.Bazaar, GetActiveWizard()?.CharId, InformGameClient);
+
+            return;
+        }
+
         switch (message.Command) {
             case 0:
                 SendAuctionHouseContents(message.npcGlobalID, message.category, message.key);

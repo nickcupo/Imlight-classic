@@ -45,7 +45,9 @@ using Imcodec.Cryptography;
 using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty;
 using Imcodec.ObjectProperty.TypeCache;
+using Imlight.Classic;
 using Imlight.Common;
+using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.Game.Sigils;
 using Imlight.CoreLib.Game.WizBang;
 using Imlight.CoreLib.Game.World;
@@ -140,6 +142,15 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
             return;
         }
 
+        // CLASSIC: world gate. Every transfer path reaches this point before the zone is allocated.
+        var classicDecision = ClassicGate.Decide(message.DestinationZone);
+        if (!classicDecision.Allowed) {
+            Sender.Tell(ClassicGate.RefuseTransfer(classicDecision, GetActiveWizard()?.CharId,
+                message.SendToClient ? InformGameClient : null));
+
+            return;
+        }
+
         // Sending the server transfer request to the server will allocate and load the zone.
         var zoneDetails = AskServer<ZONE_102_PROTOCOL.MSG_ZONETRANSFERRSP>(message);
         if (message.SendToClient && zoneDetails.ErrorCode == 0) {
@@ -186,6 +197,11 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
         }
 
         if (string.IsNullOrEmpty(message.DestinationZone)) {
+            return;
+        }
+
+        // CLASSIC: refuse a closed instance before the dismount, snap and countdown.
+        if (!ClassicGate.AllowsZone(message.DestinationZone, GetActiveWizard()?.CharId, InformGameClient)) {
             return;
         }
 
@@ -300,13 +316,18 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
     private void ReceiveGoHome(WIZARD_12_PROTOCOL.MSG_GOHOME message) {
         // this teleports the wizard to the world hub, NOT their home/dorm. for that you want MSG_GOTODORM. goofy ahh naming scheme
         var wizard = GetActiveWizard();
+        // CLASSIC: go home through the classic zone map (ClassicMode and Housing belong to Wizard City),
+        // and refuse a closed hub before the effects play.
+        var hub = ClassicGate.HubFor(wizard.Zone);
+        if (hub is null || !ClassicGate.AllowsZone(hub.Value.Zone, wizard.CharId, InformGameClient)) {
+            return;
+        }
+
         SendTeleportEffects();
 
-        var currentZone = wizard.Zone;
-        var zoneMap = WorldHubZones.GetHubForZone(currentZone);
         var tpmsg = new ZONE_102_PROTOCOL.MSG_ZONETRANSFER {
-            DestinationZone = zoneMap.m_hubZone,
-            DestinationLocation = zoneMap.m_location,
+            DestinationZone = hub.Value.Zone,
+            DestinationLocation = hub.Value.Location,
             SendToClient = true,
             OwnerCharId = wizard.CharId,
         };
@@ -321,6 +342,13 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
     // jooty, again? cmon man
     [MessageHandler(typeof(WIZARD_12_PROTOCOL.MSG_GOTODORM))]
     private void ReceiveGotoDorm(WIZARD_12_PROTOCOL.MSG_GOTODORM message) {
+        // CLASSIC: housing is not implemented; a classic profile refuses instead of sending players to the QA island.
+        if (ClassicRuntime.IsActive) {
+            ClassicGate.RefuseFeature(ClassicFeatures.Housing, GetActiveWizard().CharId, InformGameClient);
+
+            return;
+        }
+
         var wizard = GetActiveWizard();
         SendTeleportEffects();
 
@@ -354,6 +382,16 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
         if (zoneMap is null) {
             Logger.Error("{0} tried to teleport to an invalid world: {1}",
                 Logger.Args(GetActiveWizard().CharId, message.World));
+
+            return;
+        }
+
+        // CLASSIC: the client may ask for any world; refuse a closed one and clear the door's wizbang.
+        if (!ClassicGate.AllowsZone(zoneMap.m_universeTPZone, GetActiveWizard().CharId, InformGameClient)) {
+            ZoneBroadcast(new GAME_5_PROTOCOL.MSG_WIZBANG {
+                GameObjectID = GetActiveWizard().GameObjectID,
+                WizBangID = (uint) WizBangs.None
+            }, false);
 
             return;
         }
@@ -489,7 +527,8 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
         var wizard = GetActiveWizard();
         var zoneName = wizard.Zone;
 
-        var worldHubMap = WorldHubZones.GetHubForZone(zoneName);
+        // CLASSIC: the hub comes from the classic zone map; without a profile this is the stock lookup.
+        var worldHubMap = ClassicGate.HubFor(zoneName);
         if (worldHubMap is null) {
             Logger.Error("Could not find world hub mapping for zone {0}",
                 Logger.Args(zoneName));
@@ -497,8 +536,8 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
             return;
         }
 
-        var destinationZoneName = worldHubMap.m_hubZone;
-        var destinationZoneLocation = worldHubMap.m_location;
+        var destinationZoneName = worldHubMap.Value.Zone;
+        var destinationZoneLocation = worldHubMap.Value.Location;
 
         var msg = new ZONE_102_PROTOCOL.MSG_ZONETRANSFER() {
             DestinationZone = destinationZoneName,

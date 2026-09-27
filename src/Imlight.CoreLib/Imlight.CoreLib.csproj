@@ -18,6 +18,8 @@
 
     <ItemGroup>
         <ProjectReference Include="..\Imlight.Common\Imlight.Common.csproj" />
+        <!-- CLASSIC: the pure rules library; the reverse reference must never exist. -->
+        <ProjectReference Include="..\Imlight.Classic\Imlight.Classic.csproj" />
         <ProjectReference Include="..\..\submodule\Imcodec\src\Imcodec.IO\Imcodec.IO.csproj" />
         <ProjectReference Include="..\..\submodule\Imcodec\src\Imcodec.Cryptography\Imcodec.Cryptography.csproj" />
         <ProjectReference Include="..\..\submodule\Imcodec\src\Imcodec.Types\Imcodec.Types.csproj" />

@@ -36,11 +36,13 @@
  */
 
 using System.Collections.Generic;
+using System.Linq;
 using Akka.Actor;
 using Imcodec.Cryptography;
 using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty;
 using Imcodec.ObjectProperty.TypeCache;
+using Imlight.Classic;
 using Imlight.Common;
 using Imlight.CoreLib.Game.WizBang;
 using Imlight.CoreLib.Game.Zone.Core;
@@ -92,6 +94,9 @@ internal sealed class WorldTeleportDoorComponent(ZoneEntity entity) : ZoneEntity
                 "DragonSpire"
             ]
         };
+
+        // CLASSIC: list only the worlds the profile opens.
+        teleportDoorOptions.m_worldList = [.. teleportDoorOptions.m_worldList.Where(ClassicRuntime.Rules.IsHubKeyAllowed)];
 
         // Serialize the teleport door options and send it to the player.
         var serializer = new ObjectSerializer(

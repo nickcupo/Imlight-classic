@@ -42,7 +42,9 @@ using Imcodec.Cryptography;
 using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty;
 using Imcodec.ObjectProperty.TypeCache;
+using Imlight.Classic;
 using Imlight.Common;
+using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Resources;
 using Imlight.CoreLib.Shared.Utilities;
@@ -145,6 +147,13 @@ internal class InventoryService(SessionActor sessionActor) : MessageService(sess
     // JEWELS
     [MessageHandler(typeof(WIZARD2_53_PROTOCOL.MSG_EQUIPJEWELREQUEST))]
     private void ReceiveEquipJewelRequest(WIZARD2_53_PROTOCOL.MSG_EQUIPJEWELREQUEST message) {
+        // CLASSIC: jewel sockets follow the profile's jewels switch.
+        if (!ClassicRuntime.Rules.IsFeatureEnabled(ClassicFeatures.Jewels)) {
+            ClassicGate.RefuseFeature(ClassicFeatures.Jewels, GetActiveWizard()?.CharId, InformGameClient);
+
+            return;
+        }
+
         SendToSocket(new WIZARD2_53_PROTOCOL.MSG_EQUIPJEWELREQUEST() {
             ItemGID = message.ItemGID,
             JewelGID = message.JewelGID,

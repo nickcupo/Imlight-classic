@@ -43,7 +43,9 @@ using Imcodec.ObjectProperty;
 using Imcodec.ObjectProperty.TypeCache;
 using Imcodec.CoreObject;
 using Imcodec.Types;
+using Imlight.Classic;
 using Imlight.Common;
+using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.Shared.Items;
 using Imlight.CoreLib.Shared.Resources;
 using Imlight.CoreLib.Shared.Networking;
@@ -142,6 +144,14 @@ internal class ShopService(SessionActor sessionActor) : MessageService(sessionAc
 
     [MessageHandler(typeof(WIZARD_12_PROTOCOL.MSG_DYEREQUEST))]
     private void ReceiveDyeRequest(WIZARD_12_PROTOCOL.MSG_DYEREQUEST message) {
+        // CLASSIC: dyeing follows the profile's seamstress switch; refuse with the handler's own failure reply.
+        if (!ClassicRuntime.Rules.IsFeatureEnabled(ClassicFeatures.Seamstress)) {
+            ClassicGate.RefuseFeature(ClassicFeatures.Seamstress, GetActiveWizard()?.CharId, InformGameClient);
+            SendToSocket(new WIZARD_12_PROTOCOL.MSG_DYECONFIRM { Failure = 1 });
+
+            return;
+        }
+
         var wizard = GetActiveWizard();
         var item = wizard.InventoryBehavior.GetItem(message.itemGlobalID);
         var isEquipped = false;

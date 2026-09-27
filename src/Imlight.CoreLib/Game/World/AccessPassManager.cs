@@ -81,6 +81,11 @@ internal class AccessPassManager : RootSingleResourceSingleton<AccessPassManager
         => s_zones.Any(zone => zone.Equals(zoneName, System.StringComparison.OrdinalIgnoreCase));
 
     /// <summary>
+    /// CLASSIC: every zone name the client's AccessPass.xml lists, for the classic zone census at startup.
+    /// </summary>
+    internal static IReadOnlyList<string> AllZones => s_zones;
+
+    /// <summary>
     /// Checks if a zone name contains a partial zone name.
     /// </summary>
     /// <param name="partialZoneName">The partial zone name to check.</param>

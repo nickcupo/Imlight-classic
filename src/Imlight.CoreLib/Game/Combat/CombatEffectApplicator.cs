@@ -38,6 +38,7 @@
  */
 
 using Imcodec.ObjectProperty.TypeCache;
+using Imlight.Classic;
 using System;
 using System.Linq;
 
@@ -106,9 +107,14 @@ internal static class CombatEffectApplicator {
             case kSpellEffects.kModifyIncomingHealFlat:
             case kSpellEffects.kModifyIncomingDamageType:
             case kSpellEffects.kAbsorbDamage:
+                ApplyHangingEffect(effect, targets);
+                break;
             case kSpellEffects.kCritBoost:
             case kSpellEffects.kCritBlock:
-                ApplyHangingEffect(effect, targets);
+                // CLASSIC: without critical and block no roll ever consumes Vengeance or Conviction.
+                if (ClassicRuntime.Rules.CriticalAndBlockEnabled) {
+                    ApplyHangingEffect(effect, targets);
+                }
                 break;
             case kSpellEffects.kStun:
                 cinematicTime += ApplyStunEffect(effect, targets);

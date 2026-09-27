@@ -20,6 +20,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using Newtonsoft.Json;
+using Imlight.Classic;
 using Imlight.CoreLib.WizardData.Implementations;
 using Imlight.CoreLib.Shared.Character;
 using Imlight.CoreLib.Game.Combat;
@@ -188,6 +189,8 @@ public class ServerWizGameStats : IClientTypeProvider<WizGameStats> {
     /// </summary>
     /// <returns></returns>
     public WizGameStats GetCombatGameStats() {
+        // CLASSIC: without critical and block the client gets no rating or chance to re-simulate a crit from.
+        var critAndBlock = ClassicRuntime.Rules.CriticalAndBlockEnabled;
         return new WizGameStats() {
             m_baseHitpoints = m_baseHitpoints,
             m_currentHitpoints = m_currentHitpoints,
@@ -217,14 +220,14 @@ public class ServerWizGameStats : IClientTypeProvider<WizGameStats> {
             m_powerPipBonusPercentAll = m_powerPipBonusPercentAll,
             m_xpPercentIncrease = m_xpPercentIncrease,
             // The client's cinematic re-simulates the crit from the rating and percent we send here.
-            m_criticalHitPercentBySchool = ToChanceList(m_criticalHitRatingBySchool, Level),
-            m_blockPercentBySchool = ToChanceList(m_blockRatingBySchool, Level),
-            m_criticalHitRatingBySchool = m_criticalHitRatingBySchool,
-            m_blockRatingBySchool = m_blockRatingBySchool,
-            m_criticalHitRatingAll = m_criticalHitRatingAll,
-            m_blockRatingAll = m_blockRatingAll,
-            m_criticalHitPercentAll = CombatCriticals.RatingToChance(m_criticalHitRatingAll, Level),
-            m_blockPercentAll = CombatCriticals.RatingToChance(m_blockRatingAll, Level),
+            m_criticalHitPercentBySchool = critAndBlock ? ToChanceList(m_criticalHitRatingBySchool, Level) : null,
+            m_blockPercentBySchool = critAndBlock ? ToChanceList(m_blockRatingBySchool, Level) : null,
+            m_criticalHitRatingBySchool = critAndBlock ? m_criticalHitRatingBySchool : null,
+            m_blockRatingBySchool = critAndBlock ? m_blockRatingBySchool : null,
+            m_criticalHitRatingAll = critAndBlock ? m_criticalHitRatingAll : 0f,
+            m_blockRatingAll = critAndBlock ? m_blockRatingAll : 0f,
+            m_criticalHitPercentAll = critAndBlock ? CombatCriticals.RatingToChance(m_criticalHitRatingAll, Level) : 0f,
+            m_blockPercentAll = critAndBlock ? CombatCriticals.RatingToChance(m_blockRatingAll, Level) : 0f,
         };
     }
 

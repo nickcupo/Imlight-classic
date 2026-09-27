@@ -42,6 +42,7 @@
  */
 
 using Akka.Actor;
+using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;
 using Imlight.CoreLib.WizardData.Models.Player;
@@ -115,7 +116,8 @@ internal class WizardService(SessionActor sessionActor) : MessageService(session
         // Leveling up the player will set their new stats and heal them.
         // We need to do the code below to echo those changes to the client.
         var magicSchool = _activeWizard.MagicSchoolBehavior.MagicSchool;
-        var baseStats = MagicLevelsConfig.GetPlayerLevelInfo(magicSchool, message.NewLevel);
+        // CLASSIC: SetLevel may clamp to the level cap, so echo the stats of the level actually set.
+        var baseStats = MagicLevelsConfig.GetPlayerLevelInfo(magicSchool, _activeWizard.MagicSchoolBehavior.Level);
 
         // Update health — heal to full and sync server state with what the client was told.
         _activeWizard.UpdateHealth(_activeWizard.GameStats.m_baseHitpoints);
@@ -152,9 +154,12 @@ internal class WizardService(SessionActor sessionActor) : MessageService(session
     private void ReceiveGainXP(CHARACTER_103_PROTOCOL.MSG_GAINXP message) {
         var beforeLevel = _activeWizard.MagicSchoolBehavior.Level;
         var beforeXP = _activeWizard.MagicSchoolBehavior.ExperiencePoints;
-        var xpGained = message.XP;
+        // CLASSIC: the client is told the XP actually applied, and nothing when the level cap stops it all.
+        var xpGained = _activeWizard.AddExperiencePoints(message.XP);
+        if (xpGained == 0 && message.XP != 0) {
+            return;
+        }
 
-        _activeWizard.AddExperiencePoints(xpGained);
         var afterLevel = _activeWizard.MagicSchoolBehavior.Level;
 
         if (beforeLevel != afterLevel) {
@@ -199,6 +204,11 @@ internal class WizardService(SessionActor sessionActor) : MessageService(session
                 MaxEnergy = baseStats.m_petEnergy
             };
             SendToSocket(petEnergyMessage);
+        }
+
+        // CLASSIC: audit the gain that lands a wizard on the capped max level.
+        if (beforeLevel != afterLevel && afterLevel == MagicLevelsConfig.MaxLevel && MagicLevelsConfig.MaxLevelXp is not null) {
+            ClassicGate.LevelCapReached(_activeWizard.CharId, afterLevel);
         }
 
         // Inform the client of the XP change.

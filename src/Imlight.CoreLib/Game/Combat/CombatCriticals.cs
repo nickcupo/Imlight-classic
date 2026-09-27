@@ -48,6 +48,7 @@
 using System;
 using System.Linq;
 using Imcodec.ObjectProperty.TypeCache;
+using Imlight.Classic;
 using Imlight.CoreLib.Game.Effects;
 
 namespace Imlight.CoreLib.Game.Combat;
@@ -69,6 +70,11 @@ internal static class CombatCriticals {
     }
 
     internal static bool RollsCritical(CombatDuelSubCircle caster, CombatDuelSubCircle target, string school, bool isHeal) {
+        // CLASSIC: critical and block arrived in Oct 2010; a profile without them never crits or blocks.
+        if (!ClassicRuntime.Rules.CriticalAndBlockEnabled) {
+            return false;
+        }
+
         // One combined roll: the target's block is part of the crit chance, so a
         // separate block roll does not exist. Heals have no block side; they roll
         // the rating against K alone and can never be blocked.

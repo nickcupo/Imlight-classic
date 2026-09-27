@@ -47,6 +47,7 @@ using System.Globalization;
 using System.IO;
 using Akka.Actor;
 using Imlight.Common;
+using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.Login;
 using Imlight.CoreLib.Patch;
 using Imlight.CoreLib.Shared.Packets;
@@ -111,6 +112,13 @@ internal static class Program {
         );
         Logger.Information("Imlight configuration loaded.");
 
+        // CLASSIC: the rules profile loads before any resource or server reads it; a broken profile stops the boot.
+        if (!ClassicStartup.Initialize()) {
+            Environment.ExitCode = 1;
+
+            return;
+        }
+
         // =============================================================
         // AKKA.NET CONFIGURATION
         // =============================================================
@@ -140,6 +148,9 @@ internal static class Program {
         stopwatch.Stop();
         Logger.Information($"Resource loading completed in {0} ms.",
             Logger.Args(stopwatch.ElapsedMilliseconds));
+
+        // CLASSIC: check the profile's hubs and starting zones against the client resources just loaded.
+        ClassicStartup.ValidateAfterResources();
 
         // =============================================================
         // SERVERS

@@ -48,6 +48,7 @@ using Imcodec.MessageLayer;
 using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
+using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.Game.Services;
 using Imlight.CoreLib.Game.Zone.Core;
 using Imlight.CoreLib.Shared.Packets;
@@ -272,6 +273,11 @@ internal abstract class MessageService(SessionActor sessionActor) : ReceiveProto
                             bool makePrivate = false,
                             ulong ownerCharId = 0,
                             string destinationLocation = "") {
+        // CLASSIC: refuse a closed destination before any teleport effects play.
+        if (!ClassicGate.AllowsZone(destinationZone, GetActiveWizard()?.CharId, InformGameClient)) {
+            return;
+        }
+
         // If the destination location is nothing, default it to "Start."
         var location = destinationLocation == "" ? "Start" : destinationLocation;
         var ownerId = ownerCharId == 0 ? GetActiveWizard().CharId : ownerCharId;

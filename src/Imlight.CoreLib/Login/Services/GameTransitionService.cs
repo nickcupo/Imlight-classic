@@ -42,6 +42,7 @@ using Imcodec.Math;
 using Imcodec.MessageLayer.Generated;
 using Imcodec.Types;
 using Imlight.Common;
+using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;
 using Imlight.CoreLib.Shared.Resources;
@@ -96,6 +97,8 @@ internal class GameTransitionService(SessionActor sessionActor) : MessageService
 
         var zoneName = DetermineZone(character);
         var location = DetermineLocation(character);
+        // CLASSIC: a character saved in a zone the profile closes logs in at an open hub.
+        (zoneName, location) = ClassicGate.FallbackIfClosed(character.CharId, zoneName, location);
 
         var charSelectedMsg = new LOGIN_7_PROTOCOL.MSG_CHARACTERSELECTED() {
             // Set details about the game server.

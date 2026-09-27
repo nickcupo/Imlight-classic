@@ -43,6 +43,7 @@ using Imcodec.MessageLayer.Generated;
 using Imcodec.IO;
 using Imcodec.ObjectProperty;
 using Imcodec.ObjectProperty.TypeCache;
+using Imlight.Classic;
 using Imlight.Common;
 using Imlight.CoreLib.Shared.Behaviors;
 using Imlight.CoreLib.Shared.Character;
@@ -66,6 +67,13 @@ internal class PetService(SessionActor sessionActor) : MessageService(sessionAct
     [MessageHandler(typeof(SERVICE_101_PROTOCOL.MSG_ATTACHCOMPLETE))]
     private void ReceivePostAttach(SERVICE_101_PROTOCOL.MSG_ATTACHCOMPLETE message) {
         var wizard = GetActiveWizard();
+        // CLASSIC: a profile without pet Energy gets no Energy tick and no tick timer.
+        if (!ClassicRuntime.Rules.IsFeatureEnabled(ClassicFeatures.PetsEnergy)) {
+            InitializeEggs(wizard);
+
+            return;
+        }
+
         var petOwnerBehavior = wizard.PetOwnerBehavior;
 
         var magicSchool = wizard.MagicSchoolBehavior.MagicSchool;

@@ -9,6 +9,10 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Imlight.Common", "Imlight.C
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Imlight.CoreLib", "Imlight.CoreLib\Imlight.CoreLib.csproj", "{454FBBD0-49B2-4A16-8DA7-EB6166A4D3E6}"
 EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Imlight.Classic", "Imlight.Classic\Imlight.Classic.csproj", "{FAD95A45-07FA-42E0-9FCB-A362B0329B74}"
+EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Imlight.Classic.Tests", "..\tests\Imlight.Classic.Tests\Imlight.Classic.Tests.csproj", "{9700F5E0-4EA6-4AD5-B559-1885847B338B}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -39,6 +43,14 @@ Global
 		{B5280924-D313-4C93-83FF-0BA5D7BBE597}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{B5280924-D313-4C93-83FF-0BA5D7BBE597}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{B5280924-D313-4C93-83FF-0BA5D7BBE597}.Release|Any CPU.Build.0 = Release|Any CPU
+		{FAD95A45-07FA-42E0-9FCB-A362B0329B74}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{FAD95A45-07FA-42E0-9FCB-A362B0329B74}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{FAD95A45-07FA-42E0-9FCB-A362B0329B74}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{FAD95A45-07FA-42E0-9FCB-A362B0329B74}.Release|Any CPU.Build.0 = Release|Any CPU
+		{9700F5E0-4EA6-4AD5-B559-1885847B338B}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{9700F5E0-4EA6-4AD5-B559-1885847B338B}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{9700F5E0-4EA6-4AD5-B559-1885847B338B}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{9700F5E0-4EA6-4AD5-B559-1885847B338B}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

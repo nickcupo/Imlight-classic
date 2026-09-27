@@ -30,6 +30,7 @@ using Imlight.CoreLib.WizardData.Implementations;
 using Imlight.CoreLib.Shared.Utilities;
 using Imcodec.Math;
 using Imcodec.ObjectProperty.TypeCache;
+using Imlight.Classic;
 using Imlight.Common;
 using Imcodec.Types;
 using Imlight.CoreLib.Game.Pet;
@@ -209,6 +210,8 @@ public class Wizard {
     }
 
     public bool SetLevel(byte level) {
+        // CLASSIC: the one level choke point; never above the profile's cap or below 1.
+        level = (byte) ClassicRuntime.Rules.ClampLevel(level, MagicLevelsConfig.MaxLevel);
         var school = MagicSchoolBehavior.MagicSchool;
         var currentLevel = MagicSchoolBehavior.Level;
         var oldBaseStats = MagicLevelsConfig.GetPlayerLevelInfo(school, currentLevel);
@@ -234,7 +237,14 @@ public class Wizard {
         return true;
     }
 
-    public void AddExperiencePoints(int xp) {
+    public int AddExperiencePoints(int xp) {
+        // CLASSIC: the one XP choke point; XP stops at the level cap's ceiling. Returns the XP applied.
+        var applied = ClassicRuntime.Rules.XpToApply(MagicSchoolBehavior.ExperiencePoints, xp, MagicLevelsConfig.MaxLevelXp);
+        if (applied == 0 && xp != 0) {
+            return 0;
+        }
+
+        xp = applied;
         MagicSchoolBehavior.ExperiencePoints += xp;
 
         // If the level at XP is greater than the current level, we need to level up.
@@ -245,15 +255,17 @@ public class Wizard {
                 Logger.Warning("Could not level up player {0} to level {1}.",
                     Logger.Args(PlayerNameBehavior.GetWizardName(), levelAtXp));
 
-                return;
+                return xp;
             }
 
             // SetLevel already saved to database, so we're done.
-            return;
+            return xp;
         }
 
         // Only save to database if we didn't level up (SetLevel already saved).
         WizardCollection.UpdateCharacterLevel(this);
+
+        return xp;
     }
 
     public void RemoveExperiencePoints(int xp) {
@@ -1535,8 +1547,14 @@ public class Wizard {
     }
 
     private void AfterDatabaseLoadWizardGameStats() {
+        // CLASSIC: a wizard saved above the profile's cap plays at the cap. In memory only; the next level or XP save persists it.
+        MagicSchoolBehavior.Level = ClassicRuntime.Rules.ClampLevel(MagicSchoolBehavior.Level, MagicLevelsConfig.MaxLevel);
+        MagicSchoolBehavior.ExperiencePoints = ClassicRuntime.Rules.ClampXp(MagicSchoolBehavior.ExperiencePoints, MagicLevelsConfig.MaxLevelXp);
+
         var highestLevelWizard = Account.GetHighestLevelWizard();
         var highestLevelOnAcc = highestLevelWizard.MagicSchoolBehavior.Level;
+        // CLASSIC: the account's highest level is capped the same way.
+        highestLevelOnAcc = ClassicRuntime.Rules.ClampLevel(highestLevelOnAcc, MagicLevelsConfig.MaxLevel);
 
         GameStats.Level = MagicSchoolBehavior.Level;
         GameStats.MagicSchool = MagicSchoolBehavior.MagicSchool;

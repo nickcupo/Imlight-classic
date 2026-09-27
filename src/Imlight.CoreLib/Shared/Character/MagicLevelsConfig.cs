@@ -41,6 +41,7 @@
  */
 
 using System.Collections.Generic;
+using Imlight.Classic;
 using Imlight.Common;
 using Imlight.CoreLib.Shared.Resources;
 using Imlight.CoreLib.Shared.Behaviors;
@@ -55,6 +56,12 @@ internal class MagicLevelsConfig : RootSingleResourceSingleton<MagicLevelsConfig
     protected override string ResourceName => "MagicXPConfig.xml";
 
     public static int MaxLevel { get; private set; }
+
+    /// <summary>
+    /// CLASSIC: the highest XP total a wizard may hold under the profile's level cap. Null when the
+    /// profile has no cap or the XP table gives nothing to cap against.
+    /// </summary>
+    public static int? MaxLevelXp { get; private set; }
 
     private static readonly int s_imlightMaxLevel = ConfigurationManager.Settings["Character.MaxLevel"].AsInt();
     private static Dictionary<int, int> s_mobLevelConfig;
@@ -71,6 +78,15 @@ internal class MagicLevelsConfig : RootSingleResourceSingleton<MagicLevelsConfig
         LoadMaxLevel(magicXPConfig);
         LoadMobLevelConfig(magicXPConfig);
         LoadPlayerLevelConfig(magicXPConfig);
+
+        // CLASSIC: XP stops at this ceiling at the level cap; both table inputs are logged to confirm the indexing.
+        var xpToLeaveMaxLevel = GetExperiencePointsAtLevel(MaxLevel + 1);
+        var xpToReachMaxLevel = GetExperiencePointsAtLevel(MaxLevel);
+        MaxLevelXp = ClassicRuntime.Rules.XpCeiling(xpToLeaveMaxLevel, xpToReachMaxLevel);
+        if (MaxLevelXp is not null) {
+            Logger.Information("Classic XP ceiling at level {MaxLevel}: {XpCeiling} (XP to reach the level {XpToReach}, to leave it {XpToLeave})",
+                Logger.Args(MaxLevel, MaxLevelXp.Value, xpToReachMaxLevel, xpToLeaveMaxLevel));
+        }
 
         DisposeStream();
     }
@@ -187,6 +203,9 @@ internal class MagicLevelsConfig : RootSingleResourceSingleton<MagicLevelsConfig
         if (s_imlightMaxLevel < MaxLevel) {
             MaxLevel = s_imlightMaxLevel;
         }
+
+        // CLASSIC: the profile's level cap lowers the max level further.
+        MaxLevel = ClassicRuntime.Rules.EffectiveMaxLevel(MaxLevel);
 
         Logger.Information("Imlight max level set to {0}", Logger.Args(MaxLevel));
     }
