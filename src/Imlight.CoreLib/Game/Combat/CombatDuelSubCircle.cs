@@ -47,6 +47,7 @@ using Imcodec.Math;
 using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
+using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.Game.Spells;
 using Imlight.CoreLib.Game.Zone.Components;
 using Imlight.CoreLib.Shared.Behaviors;
@@ -470,7 +471,7 @@ public class CombatDuelSubCircle {
         // todo: this method is a mess.
         var queryCharacterMsg = new CHARACTER_103_PROTOCOL.MSG_QUERYACTIVEWIZARD();
         _wizard = ParticipantActor
-            .Ask<CHARACTER_103_PROTOCOL.MSG_CHARACTER>(queryCharacterMsg)
+            .Ask<CHARACTER_103_PROTOCOL.MSG_CHARACTER>(queryCharacterMsg, PlayerQuery.Timeout) // CLASSIC: timeout
             .Result
             .Wizard;
 
@@ -577,7 +578,7 @@ public class CombatDuelSubCircle {
     private void InitializeCreatureSubCircle(bool asMinion = false, int minionOwnerSubCircle = 0) {
         var queryGameStatsMsg = new COMBAT_106_PROTOCOL.MSG_QUERYCREATURESTATS();
         var creatureStats = ParticipantActor
-            .Ask<COMBAT_106_PROTOCOL.MSG_CREATURESTATS>(queryGameStatsMsg)
+            .Ask<COMBAT_106_PROTOCOL.MSG_CREATURESTATS>(queryGameStatsMsg, PlayerQuery.Timeout) // CLASSIC: timeout
             .Result;
 
         // Dynamic symbols start 1-4 for creatures.

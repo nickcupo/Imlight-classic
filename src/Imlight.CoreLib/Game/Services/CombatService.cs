@@ -121,6 +121,7 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
 
     [MessageHandler(typeof(COMBAT_106_PROTOCOL.MSG_COMBATDEFEAT))]
     private void ReceiveCombatDefeat(COMBAT_106_PROTOCOL.MSG_COMBATDEFEAT message) {
+        _currentDuelActor = null; // CLASSIC: the duel is over for us; a later logout must not flee it again.
         GetActiveWizard().IsInDuel = false;
         EquipMountSubtle();
 
@@ -131,6 +132,9 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
 
     [MessageHandler(typeof(COMBAT_106_PROTOCOL.MSG_COMBATWIN))]
     private void ReceiveCombatVictory(COMBAT_106_PROTOCOL.MSG_COMBATWIN message) {
+        // CLASSIC: the duel is over; a logout after it used to reach the ended duel, which ran flee and defeat on it
+        // (a second "Duel ended" and a MSG_SENDTOHUB).
+        _currentDuelActor = null;
         GetActiveWizard().IsInDuel = false;
         EquipMount();
         SetNoAggroGrace();

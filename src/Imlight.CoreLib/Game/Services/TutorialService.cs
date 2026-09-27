@@ -268,6 +268,10 @@ internal sealed partial class TutorialService(SessionActor sessionActor) : Messa
     private void RemoveQuestAndClearFromJournal(Wizard wizard, string questName) {
         var instance = wizard.QuestBehavior.CurrentQuestInstances.FirstOrDefault(q => q.QuestName == questName);
         var questId = instance?.ID ?? 0;
+        if (instance is null) {
+            return; // CLASSIC: the tutorial skip removes every tutorial quest; one the wizard never had is not an error.
+        }
+
         wizard.RemoveQuest(questName);
 
         if (questId != 0) {

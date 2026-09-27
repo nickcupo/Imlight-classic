@@ -91,8 +91,11 @@ public sealed class ZoneTrigger(IActorRef zoneRef, Zone zone, Trigger trigger)
         if (   TriggerData.m_requirements is not null
             && TriggerData.m_requirements.m_requirements is not null
             && TriggerData.m_requirements.m_requirements.Count > 0) {
-            var queryWizardMsg = new CHARACTER_103_PROTOCOL.MSG_QUERYACTIVEWIZARD();
-            var wizardResponse = message.PlayerActor.Ask<CHARACTER_103_PROTOCOL.MSG_CHARACTER>(queryWizardMsg).Result;
+            // CLASSIC: with a timeout; a session that is gone used to stop this trigger for good.
+            var wizard = PlayerQuery.ActiveWizard(message.PlayerActor, $"Zone trigger {TriggerData.m_triggerName}");
+            if (wizard is null) {
+                return;
+            }
 
             var requirementsMet = RequirementDispatcher.EvaluateRequirements(
                 requirements: TriggerData.m_requirements,
@@ -100,7 +103,7 @@ public sealed class ZoneTrigger(IActorRef zoneRef, Zone zone, Trigger trigger)
                     TriggerData.m_requirements,
                     message.PlayerActor,
                     message.PlayerGameObject,
-                    wizardResponse.Wizard,
+                    wizard,
                     ZoneRef,
                     TriggerData.m_triggerName
                 )

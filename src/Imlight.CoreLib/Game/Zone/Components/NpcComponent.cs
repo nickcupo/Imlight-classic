@@ -65,7 +65,9 @@ internal sealed class NpcComponent : ZoneEntityComponent, IComponentFactory, ICl
     public float Proximity { get; private set; }
     public string NameOverride { get; private set; }
 
-    private readonly Dictionary<CoreObject, IActorRef> _playersInRange = [];
+    // CLASSIC: keyed by the object instance. CoreObject is a record whose hash follows its location, so the default
+    // comparer missed the entry after any move: enter events re-fired on every move and exit never fired.
+    private readonly Dictionary<CoreObject, IActorRef> _playersInRange = new(ReferenceEqualityComparer.Instance);
     private readonly NPCBehaviorTemplate _npcBehaviorTemplate;
     private readonly DuelistBehaviorTemplate _duelistBehaviorTemplate;
 
@@ -135,6 +137,13 @@ internal sealed class NpcComponent : ZoneEntityComponent, IComponentFactory, ICl
 
                 return;
             }
+        }
+    }
+
+    // CLASSIC: forget a player who leaves the zone, so the same object coming back in range counts as an enter again.
+    public override void OnPlayerLeave(IActorRef playerActor, ulong id) {
+        foreach (var key in _playersInRange.Where(x => x.Value.Equals(playerActor)).Select(x => x.Key).ToList()) {
+            _playersInRange.Remove(key);
         }
     }
 

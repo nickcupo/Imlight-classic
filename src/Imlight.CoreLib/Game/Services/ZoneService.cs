@@ -74,6 +74,7 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
     private readonly bool _randomBackflips
         = ConfigurationManager.Settings["April Fools.RandomBackFlips"].AsBool();
     private bool _isTransferQueued;
+    private bool _removedForTransfer; // CLASSIC: DoZoneTransfer removed the player from ZoneActor
     private uint _currentDynamicZoneId;
 
     private const string SIGIL_ENTER_TIMER_KEY = "sigilenter";
@@ -100,6 +101,15 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
         }
 
         var globalId = gameObj.m_globalID;
+
+        // CLASSIC: DoZoneTransfer already took the player out of this zone before the server transfer; a second
+        // REMOVEPLAYER from the disposed session is not sent (Zone also ignores one for a player it no longer has).
+        if (_removedForTransfer) {
+            ZoneActor = null;
+            base.OnPreDispose();
+
+            return;
+        }
 
         // If the zone reference is not null, we'll tell the zone to remove the player.
         ZoneActor?.Tell(new ZONE_102_PROTOCOL.MSG_REMOVEPLAYER() {
@@ -158,6 +168,10 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
             if (message.DestinationZone == GetActiveWizard().Zone) {
                 // CLASSIC: the zone resolves named locations such as a hub's "Start"; was message.DestinationLocation.
                 DoTeleport(new Imcodec.Math.Vector4(zoneDetails.Location, zoneDetails.Orientation));
+
+                // CLASSIC: save where the server put the wizard (a teleport stone's far end); a relog before the next
+                // move used to return the wizard to the spot before the jump.
+                GetActiveWizard().SetPersistentLocation(zoneDetails.Location);
 
                 return;
             }
@@ -732,6 +746,7 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
 
     private void SetZone(IActorRef actorRef) {
         ZoneActor = actorRef;
+        _removedForTransfer = false; // CLASSIC
     }
 
     private void ReadyClientForZoneTransfer(ZONE_102_PROTOCOL.MSG_ZONETRANSFER message) {
@@ -760,6 +775,7 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
                 MobileId = GetActiveGameObject().m_nMobileID
             };
             _ = ZoneActor.Ask<ZONE_102_PROTOCOL.MSG_REMOVEPLAYERRSP>(removePlayerMsg, _zoneRemovalWaitTime).Result;
+            _removedForTransfer = true; // CLASSIC
 
             // Remove the player from the online player collection.
             OnlinePlayerCollection.RemoveOnlinePlayer(SessionActor.SessionID);

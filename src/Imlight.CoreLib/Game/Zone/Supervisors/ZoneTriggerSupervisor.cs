@@ -110,8 +110,12 @@ internal sealed partial class ZoneTriggerSupervisor(Core.Zone zone) : ZoneEntity
             return true;
         }
 
-        var queryWizardMsg = new CHARACTER_103_PROTOCOL.MSG_QUERYACTIVEWIZARD();
-        var wizardResponse = message.PlayerActor.Ask<CHARACTER_103_PROTOCOL.MSG_CHARACTER>(queryWizardMsg).Result;
+        // CLASSIC: with a timeout. This supervisor decides every event of the zone; an Ask with no timeout to a session
+        // that had just gone stopped every trigger of the zone (the Commons gates and POIs going dead).
+        var wizard = PlayerQuery.ActiveWizard(message.PlayerActor, $"Zone {Zone.ZonePath} trigger {trigger.m_triggerName}");
+        if (wizard is null) {
+            return false;
+        }
 
         return RequirementDispatcher.EvaluateRequirements(
             requirements: trigger.m_requirements,
@@ -119,7 +123,7 @@ internal sealed partial class ZoneTriggerSupervisor(Core.Zone zone) : ZoneEntity
                 trigger.m_requirements,
                 message.PlayerActor,
                 message.PlayerGameObject,
-                wizardResponse.Wizard,
+                wizard,
                 ZoneRef,
                 trigger.m_triggerName));
     }
@@ -152,6 +156,7 @@ internal sealed partial class ZoneTriggerSupervisor(Core.Zone zone) : ZoneEntity
     }
 
     private List<Trigger> ReplaceTriggerDataWithDatabase(WizZoneTriggers clientTriggers) {
+        _teleportRequirements.Clear(); // CLASSIC
         var triggers = new List<Trigger>(clientTriggers.m_triggers);
         var zoneName = Zone.ZonePath;
 
@@ -184,6 +189,7 @@ internal sealed partial class ZoneTriggerSupervisor(Core.Zone zone) : ZoneEntity
                     m_results = [persistentTriggerData.Teleport]
                 };
                 trigger.m_results = resultList;
+                RememberTeleportRequirements(trigger, persistentTriggerData.Teleport); // CLASSIC
             }
         }
 

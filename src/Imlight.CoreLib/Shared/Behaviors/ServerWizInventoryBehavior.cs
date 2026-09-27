@@ -39,6 +39,9 @@ public class ServerWizInventoryBehavior : IClientBehaviorProvider<ClientWizInven
 
     public List<ulong> InventoryItemIds { get; set; }
 
+    // CLASSIC: true when the backpack holds as many items as the ini allows (Character.MaxInventoryItems).
+    [JsonIgnore] public bool IsFull => s_maxItemsAllowed > 0 && Items is not null && Items.Count >= s_maxItemsAllowed;
+
     [JsonIgnore] public CopyOnWriteList<WizClientObjectItem> Items { get; set; } // CLASSIC: other services' actors read it while one of them writes.
 
     /// <summary>

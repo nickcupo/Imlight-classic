@@ -106,7 +106,12 @@ public class Zone : ReceiveProtocolDispatcher, IWithTimers {
     private readonly Dictionary<IActorRef, bool> _supervisorLoadResults = [];
     private readonly HashSet<GID> _criticalObjectIds = [];
     private bool _isLoading;
-    private int _playerCount;
+    // CLASSIC: the players in the zone, not a counter. A session's REMOVEPLAYER came twice after a zone transfer
+    // (DoZoneTransfer, then the old session's OnPreDispose), which drove the count down twice and released the mobile
+    // id a second time; and the REMOVEPLAYER of the player who emptied the zone never reached the player supervisor,
+    // because the count was lowered before the broadcast that checks it.
+    private readonly HashSet<IActorRef> _players = [];
+    private int _playerCount => _players.Count;
     private readonly List<ZONE_102_PROTOCOL.MSG_PLAYERMOVE> _pendingPlayerMoves = [];
     private readonly List<ZONE_102_PROTOCOL.MSG_CREATUREMOVE> _pendingCreatureMoves = [];
 
@@ -204,7 +209,7 @@ public class Zone : ReceiveProtocolDispatcher, IWithTimers {
             return;
         }
 
-        _playerCount++;
+        _players.Add(message.PlayerActor); // CLASSIC: was _playerCount++.
         InformZoneSupervisors(message.PlayerActor, message);
         
         // Send response to confirm player was added
@@ -223,11 +228,19 @@ public class Zone : ReceiveProtocolDispatcher, IWithTimers {
             return;
         }
 
-        if (_playerCount > 0) {
-            _playerCount--;
+        // CLASSIC: a second REMOVEPLAYER for a player already gone is answered and otherwise ignored: its mobile id may
+        // belong to someone else by now. The supervisors hear the removal while the player still counts, so the player
+        // supervisor forgets the last player too.
+        if (message.PlayerActor is null || !_players.Contains(message.PlayerActor)) {
+            Logger.Debug("Zone {Zone} ignored a REMOVEPLAYER for {Player}, who is not in it.",
+                Logger.Args(ZonePath, message.PlayerActor?.Path.Name));
+            Sender.Tell(new ZONE_102_PROTOCOL.MSG_REMOVEPLAYERRSP());
+
+            return;
         }
 
         InformZoneSupervisors(message.PlayerActor, message);
+        _players.Remove(message.PlayerActor);
         ReleaseObjectIdentifier(message.MobileId);
         Sender.Tell(new ZONE_102_PROTOCOL.MSG_REMOVEPLAYERRSP());
     }
@@ -472,7 +485,7 @@ public class Zone : ReceiveProtocolDispatcher, IWithTimers {
                 ProcessZoneTransfer(transfer, playerActor);
             }
             else if (pendingEvent is ZONE_102_PROTOCOL.MSG_ADDPLAYER addPlayer) {
-                _playerCount++;
+                _players.Add(playerActor); // CLASSIC: was _playerCount++.
                 InformZoneSupervisors(playerActor, addPlayer);
                 
                 // Send response to confirm player was added

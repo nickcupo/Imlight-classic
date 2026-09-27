@@ -34,7 +34,7 @@ namespace Imlight.CoreLib.Game.Zone.Supervisors;
 /// </summary>
 internal sealed class ZoneSigilSupervisor(Core.Zone zone) : ZoneEntitySupervisor(zone) {
 
-    private readonly Dictionary<CoreObject, IActorRef> _sigils = [];
+    private readonly Dictionary<CoreObject, IActorRef> _sigils = new(ReferenceEqualityComparer.Instance); // CLASSIC: CoreObject hashes by value
     
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_ZONELOADRESULTS))]
     public override void ReceiveZoneLoadResults(ZONE_102_PROTOCOL.MSG_ZONELOADRESULTS message) {

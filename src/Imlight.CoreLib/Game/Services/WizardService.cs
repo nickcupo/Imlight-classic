@@ -45,6 +45,7 @@ using Akka.Actor;
 using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;
+using Imlight.CoreLib.WizardData.Collections;
 using Imlight.CoreLib.WizardData.Models.Player;
 using Imlight.CoreLib.Shared.Character;
 using Imcodec.MessageLayer.Generated;
@@ -104,6 +105,15 @@ internal class WizardService(SessionActor sessionActor) : MessageService(session
         var levelUpSuccess = _activeWizard.SetLevel(message.NewLevel);
         if (!levelUpSuccess) {
             return;
+        }
+
+        // CLASSIC: the GM level commands (.mod level, .mod lvlup) also set the XP to the start of the new level when
+        // the wizard's XP lies outside it, so the level holds: the next login warned of an XP/level mismatch and the
+        // next XP gain put the level back.
+        var school = _activeWizard.MagicSchoolBehavior;
+        if (MagicLevelsConfig.GetPlayerLevelAtExperience(school.ExperiencePoints) != school.Level) {
+            school.ExperiencePoints = MagicLevelsConfig.GetExperiencePointsAtLevel(school.Level);
+            WizardCollection.UpdateCharacterLevel(_activeWizard);
         }
 
         var levelUpMessage = new WIZARD_12_PROTOCOL.MSG_LEVELUP {

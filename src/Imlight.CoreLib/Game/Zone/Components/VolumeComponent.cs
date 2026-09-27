@@ -38,6 +38,7 @@
 
 using Akka.Actor;
 using Imcodec.ObjectProperty.TypeCache;
+using Imlight.Common;
 using Imlight.CoreLib.Game.Zone.Core;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;
@@ -50,7 +51,9 @@ namespace Imlight.CoreLib.Game.Zone.Components;
 
 internal sealed class VolumeComponent(ZoneEntity entity) : ZoneEntityComponent(entity), IComponentFactory {
 
-    private readonly Dictionary<CoreObject, IActorRef> _playersInRange = [];
+    // CLASSIC: keyed by the object instance. CoreObject is a record whose hash follows its location, so the default
+    // comparer missed the entry after any move: enter events re-fired on every move and exit never fired.
+    private readonly Dictionary<CoreObject, IActorRef> _playersInRange = new(ReferenceEqualityComparer.Instance);
     private readonly List<(string QuestName, string GoalName)> _volumeGoals = [];
     private Volume _volume;
 
@@ -65,6 +68,13 @@ internal sealed class VolumeComponent(ZoneEntity entity) : ZoneEntityComponent(e
 
             // A player can log in standing inside a quest-proximity volume.
             NotifyProximityGoals(playerObj, playerActor, playerWizard);
+        }
+    }
+
+    // CLASSIC: forget a player who leaves the zone, so the same object coming back in range counts as an enter again.
+    public override void OnPlayerLeave(IActorRef playerActor, ulong id) {
+        foreach (var key in _playersInRange.Where(x => x.Value.Equals(playerActor)).Select(x => x.Key).ToList()) {
+            _playersInRange.Remove(key);
         }
     }
 
@@ -117,6 +127,12 @@ internal sealed class VolumeComponent(ZoneEntity entity) : ZoneEntityComponent(e
     }
 
     private void OnProximityEnter(CoreObject playerObj, IActorRef playerActor, Wizard playerWizard) {
+        // CLASSIC: a trace of every volume enter, to tell a volume that stopped posting from a trigger that stopped
+        // deciding (the Commons gates going dead in live play).
+        Logger.Debug("Volume {Volume} in {Zone} posts {Events} for {Player}.",
+            Logger.Args(_volume.m_volumeName, Entity.Zone?.ZonePath, string.Join(", ", _volume.m_enterEvents ?? []),
+                playerActor?.Path.Name));
+
         foreach (var enterEvent in _volume.m_enterEvents) {
             var postEventMsg = new ZONE_102_PROTOCOL.MSG_POSTEVENT {
                 EventName = enterEvent,

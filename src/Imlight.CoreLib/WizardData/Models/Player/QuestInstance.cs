@@ -127,6 +127,12 @@ public class QuestInstance {
         var lastIsPersona = GoalProgress.Length > 0 &&
             GoalProgress[^1].GoalType == GOAL_TYPE.GOAL_TYPE_PERSONA;
 
+        // CLASSIC: ready only when every goal but that final hand-in is done; the quest icon over the giver showed
+        // "turn in" from the start (Unicorn's Folly on zone entry, before its first goal).
+        if (Imlight.CoreLib.Classic.ClassicQuestEngine.IsActive) {
+            return allCompleted || (lastIsPersona && GoalProgress[..^1].All(goal => goal.CurrentProgress == int.MaxValue));
+        }
+
         return allCompleted || lastIsPersona;
     }
 

@@ -156,6 +156,14 @@ public static class LootGranter {
                 Logger.Error("Failed to add item {0} to wizard {1}'s inventory.",
                     Logger.Args(item.ItemId, wizard.CharId));
 
+                // CLASSIC: tell the player why a reward is missing; with a full backpack it used to vanish silently.
+                if (wizard.InventoryBehavior?.IsFull == true) {
+                    playerActor.Tell(new EXTENDEDBASE_2_PROTOCOL.MSG_SERVERMESSAGE {
+                        Message = "Your backpack is full, so a reward item could not be added. Make room and try again later.",
+                        Modal = 0,
+                    });
+                }
+
                 continue;
             }
 

@@ -24,6 +24,8 @@ namespace Imlight.CoreLib.WizardData.Collections;
 
 public static class GlobalRegistryCollection {
 
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, bool> s_reportedMissing = new(); // CLASSIC
+
     /// <summary>
     /// Gets the global registry from SpiralDB.
     /// </summary>
@@ -41,8 +43,11 @@ public static class GlobalRegistryCollection {
         }
 
         if (!model.GlobalRegistryValues.ContainsKey(entry)) {
-            Logger.Warning("Global registry entry {0} does not exist.",
-                Logger.Args(entry));
+            // CLASSIC: once per entry; a zone's objects ask on every player move (430 lines in 12 s for Mysterious_Composer).
+            if (s_reportedMissing.TryAdd(entry ?? "", true)) {
+                Logger.Warning("Global registry entry {0} does not exist (reported once; reads as 0).",
+                    Logger.Args(entry));
+            }
 
             return 0;
         }

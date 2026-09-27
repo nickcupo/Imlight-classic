@@ -32,7 +32,9 @@
  * it is tested. Only triggers with a deactivate event are tracked; the rest
  * are always armed, as in stock Imlight. Every posted event carries its
  * player (volumes, trigger results, the tutorial, zone entry), so state is
- * kept per player actor.
+ * kept per player actor. A trigger whose ZoneTransfer entry carries
+ * requirements (a classic travel hand decision) fires only for a wizard who
+ * meets them, so the event's teleport passes to the next trigger.
  * 
  * TODO:
  * 
@@ -49,6 +51,8 @@ using Imlight.Classic;
 using Imlight.Classic.Quests;
 using Imlight.Common;
 using Imlight.CoreLib.Classic;
+using Imlight.CoreLib.Game.Requirements;
+using Imlight.CoreLib.Game.Requirements.Contexts;
 using Imlight.CoreLib.Shared.Packets;
 using Imlight.CoreLib.WizardData.Collections;
 
@@ -79,7 +83,8 @@ internal sealed partial class ZoneTriggerSupervisor {
         var fires = _activation.Dispatch(_orderedTriggers, entry => entry.Actor, message.EventName, message.PlayerActor,
             listens: entry => entry.Trigger?.m_fireEvents?.Any(x => x == message.EventName) == true
                 && !(isKill && HasUndecodedRequirement(entry.Trigger.m_requirements)),
-            meetsRequirements: entry => EvaluateRequirements(entry.Trigger, message),
+            meetsRequirements: entry => EvaluateRequirements(entry.Trigger, message)
+                && EvaluateTeleportRequirements(entry.Trigger, message),
             teleportsSomewhere: entry => HasTeleportDestination(entry.Trigger),
             stateChanged: (name, armed) => Logger.Debug("Zone {Zone} trigger {Trigger} is {State} for {Player} by {Event}.",
                 Logger.Args(Zone.ZonePath, name, armed ? "armed" : "disarmed", message.PlayerActor?.Path.Name, message.EventName)));
@@ -93,6 +98,42 @@ internal sealed partial class ZoneTriggerSupervisor {
                 KilledTemplateIds = message.KilledTemplateIds,
             });
         }
+    }
+
+    // A trigger whose results the ZoneTransfer overlay replaced may carry requirements on that teleport (the classic
+    // travel overlay's hand decisions: MS_Plague_Zone2_RiverVillage's 'Teleport MS_Plague2_T2' closes to holders of
+    // MS-PLAG2-C01-003 so the part-2 door on the same volume takes the event). Its only result is that teleport, so a
+    // wizard who fails them does not fire it, and the event's one teleport passes to the next trigger. No SpiralDB
+    // trigger entry carries requirements, so this changes nothing else.
+    private readonly Dictionary<Trigger, RequirementList> _teleportRequirements = new(ReferenceEqualityComparer.Instance);
+
+    private void RememberTeleportRequirements(Trigger trigger, ResTeleport teleport) {
+        if (!ClassicQuestEngine.IsActive || trigger is null || teleport?.m_requirements?.m_requirements is not { Count: > 0 }) {
+            return;
+        }
+
+        _teleportRequirements[trigger] = teleport.m_requirements;
+    }
+
+    private bool EvaluateTeleportRequirements(Trigger trigger, ZONE_102_PROTOCOL.MSG_POSTEVENT message) {
+        if (trigger is null || !_teleportRequirements.TryGetValue(trigger, out var requirements)) {
+            return true;
+        }
+
+        var wizard = PlayerQuery.ActiveWizard(message.PlayerActor, $"Zone {Zone.ZonePath} trigger {trigger.m_triggerName}");
+        if (wizard is null) {
+            return false;
+        }
+
+        return RequirementDispatcher.EvaluateRequirements(
+            requirements: requirements,
+            context: new ZoneRequirementContext(
+                requirements,
+                message.PlayerActor,
+                message.PlayerGameObject,
+                wizard,
+                ZoneRef,
+                trigger.m_triggerName));
     }
 
     private static bool HasUndecodedRequirement(RequirementList requirements)

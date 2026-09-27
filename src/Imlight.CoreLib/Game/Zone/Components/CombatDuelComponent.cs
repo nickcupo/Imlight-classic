@@ -121,7 +121,9 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
         => (byte) SubCircles.Count(x => x.Occupied && x.OccupiedTeam == CombatTeam.Monster && x.IsAlive && x.AddedToDuel);
     public ulong SigilId => Entity.ActiveGameObject.m_globalID;
 
-    private readonly Dictionary<CoreObject, IActorRef> _entitiesInRange = [];
+    // CLASSIC: keyed by the object instance. CoreObject is a record whose hash follows its location, so the default
+    // comparer missed the entry after any move: enter events re-fired on every move and exit never fired.
+    private readonly Dictionary<CoreObject, IActorRef> _entitiesInRange = new(ReferenceEqualityComparer.Instance);
     private readonly ObjectSerializer _serializer = new(
         Versionable: false,
         Behaviors: SerializerFlags.None
@@ -174,6 +176,13 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
 
         // Handle this as if it were the flee action.
         HandleFleeAction(subCircle);
+    }
+
+    // CLASSIC: forget a player who leaves the zone, so the same object coming back in range counts as an enter again.
+    public override void OnPlayerLeave(IActorRef playerActor, ulong id) {
+        foreach (var key in _entitiesInRange.Where(x => x.Value.Equals(playerActor)).Select(x => x.Key).ToList()) {
+            _entitiesInRange.Remove(key);
+        }
     }
 
     public override void OnPlayerMove(CoreObject playerObj, IActorRef playerActor, Wizard playerWizard) {

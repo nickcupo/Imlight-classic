@@ -77,8 +77,10 @@ internal sealed class InteractVendorComponent(ZoneEntity entity) : ZoneEntityCom
 
     public override void OnStart() {
         if (!NpcInventoryCollection.TryGetNpcInventory(Entity.ActiveGameObject.m_templateID, out var inventory)) {
-            Logger.Error("Failed to get vendor inventory for NPC {0}",
-                Logger.Args(Entity.ActiveGameObject.m_templateID));
+            // CLASSIC: a warning with the template id (the GID printed as its type name); a vendor the client lists
+            // without an inventory in the data sells nothing.
+            Logger.Warning("No vendor inventory for NPC {0} ({1}); it sells nothing.",
+                Logger.Args(Entity.ActiveGameObject.m_templateID.Full, Entity.ActiveGameObject.m_debugName));
 
             return;
         }

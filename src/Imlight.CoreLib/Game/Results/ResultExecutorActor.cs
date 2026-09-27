@@ -33,6 +33,8 @@ namespace Imlight.CoreLib.Game.Results;
 /// </summary>
 public class ResultExecutorActor(IResultContext context) : ReceiveProtocolDispatcher, IWithTimers {
 
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<System.Type, bool> s_reportedUnhandled = new(); // CLASSIC
+
     private const uint RESULT_HANDLER_TIMEOUT_MS = 30000;
 
     private readonly IResultContext _context = context;
@@ -111,8 +113,15 @@ public class ResultExecutorActor(IResultContext context) : ReceiveProtocolDispat
         var handlerType = ResultDispatcher.FindHandlerForResult(resultType, _context);
 
         if (handlerType is null) {
-            Logger.Warning("No handler registered for result type: {0}",
-                Logger.Args(resultType.Name));
+            // CLASSIC: once per type (ResModifyTriggerObject, the trigger object animations the client plays itself,
+            // came 6 times per tutorial entry), then at debug.
+            if (s_reportedUnhandled.TryAdd(resultType, true)) {
+                Logger.Warning("No handler registered for result type: {0} (reported once; skipped).",
+                    Logger.Args(resultType.Name));
+            }
+            else {
+                Logger.Debug("No handler registered for result type: {0}", Logger.Args(resultType.Name));
+            }
 
             ProcessNextResult();
             

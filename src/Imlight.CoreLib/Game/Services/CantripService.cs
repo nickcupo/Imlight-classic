@@ -135,8 +135,18 @@ internal class CantripService(SessionActor sessionActor) : MessageService(sessio
         SendToSocket(message);
     }
 
+    // CLASSIC: only the cantrip's own timed transfer is passed on. Every MSG_ZONETRANSFER told to the session reaches
+    // this handler and ZoneService alike, so passing those on handed ZoneService each transfer twice: a same-zone
+    // teleport (a teleport stone) ran twice and a refused transfer was reported twice.
+    private ZONE_102_PROTOCOL.MSG_ZONETRANSFER _pendingCantripTransfer;
+
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_ZONETRANSFER))]
     private void ReceiveZoneTransferRequest(ZONE_102_PROTOCOL.MSG_ZONETRANSFER message) {
+        if (!ReferenceEquals(message, _pendingCantripTransfer)) {
+            return;
+        }
+
+        _pendingCantripTransfer = null;
         TellOtherServices(message);
     }
 
@@ -264,6 +274,7 @@ internal class CantripService(SessionActor sessionActor) : MessageService(sessio
             SendToClient = true,
             OwnerCharId = GetActiveWizard().CharId
         };
+        _pendingCantripTransfer = tpmsg; // CLASSIC
         Timers.StartSingleTimer("zonetransfer", tpmsg, _cantripCastTimeSpan);
     }
 

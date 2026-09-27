@@ -217,7 +217,7 @@ internal sealed class InteractServiceMementoComponent(ZoneEntity entity)
         var queryTasks = playerActors.Select(async playerActor => {
             try {
                 var msg = new CHARACTER_103_PROTOCOL.MSG_QUERYACTIVEWIZARD();
-                var rsp = await playerActor.Ask<CHARACTER_103_PROTOCOL.MSG_CHARACTER>(msg);
+                var rsp = await playerActor.Ask<CHARACTER_103_PROTOCOL.MSG_CHARACTER>(msg, PlayerQuery.Timeout); // CLASSIC: timeout
                 return rsp.Wizard;
             }
             catch {
@@ -271,11 +271,12 @@ internal sealed class InteractServiceMementoComponent(ZoneEntity entity)
     }
 
     private void SendActorServiceOptions(IActorRef playerActor, int reinteract = 0) {
-        var queryCharacterMsg = new CHARACTER_103_PROTOCOL.MSG_QUERYACTIVEWIZARD();
-        var wizard = playerActor
-            .Ask<CHARACTER_103_PROTOCOL.MSG_CHARACTER>(queryCharacterMsg)
-            .Result
-            .Wizard;
+        // CLASSIC: with a timeout; a player who left between coming into range and this question used to stop the
+        // object's actor for good (no NEWOBJECT to later arrivals, no interactions, no MSG_QUERYZONEENTITY answer).
+        var wizard = PlayerQuery.ActiveWizard(playerActor, $"Service options of {Entity.ActiveGameObject?.m_debugName}");
+        if (wizard is null) {
+            return;
+        }
 
         RefreshServiceMomento(wizard);
         _sentTeleportOptions[playerActor] = _serviceMemento?.m_serviceOptions?.Count ?? 0; // CLASSIC
