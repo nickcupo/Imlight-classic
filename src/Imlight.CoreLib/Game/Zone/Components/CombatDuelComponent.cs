@@ -42,7 +42,7 @@
  * 
  * Created by: Jooty
  * Version: KALI 1.0
- * Last Updated: 09/26/2026
+ * Last Updated: 09/27/2026
  */
 
 using System;
@@ -55,6 +55,7 @@ using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty;
 using Imcodec.ObjectProperty.TypeCache;
 using Imcodec.Types;
+using Imlight.Classic;
 using Imlight.Common;
 using Imlight.CoreLib.Game.Combat;
 using Imlight.CoreLib.Game.Sigils;
@@ -1067,6 +1068,11 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
                 Logger.Args(Duel.m_duelID.Full, caster.SlotIndex, spell.m_templateID));
 
             CombatResolver.AddCombatMove(CombatMoveType.Pass, caster, null, null);
+
+            // CLASSIC: a card the caster cannot pay for is not cast.
+            if (ClassicRuntime.IsActive) {
+                return;
+            }
         }
 
         // Find the target sub circle. Valid targets are 1-8.

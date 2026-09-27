@@ -48,7 +48,7 @@
  * 
  * Created by: Jooty
  * Version: KALI 1.0
- * Last Updated: 09/26/2026
+ * Last Updated: 09/27/2026
  */
 
 using System;
@@ -57,6 +57,7 @@ using System.Linq;
 using Akka.Actor;
 using Imcodec.MessageLayer.Generated;
 using Imlight.CoreLib.Game.Spells;
+using Imlight.Classic;
 using Imlight.Common;
 using Imlight.CoreLib.Shared.Behaviors;
 using Imlight.CoreLib.Shared.Resources;
@@ -463,14 +464,23 @@ public class CombatResolver(Duel duel, CombatDuelSubCircle[] actorSubCircles) {
         var totalDecrease = (percentDecrease + percentDecreaseAll) * 100;
 
         // Apply percentages to the spell accuracy
-        spellAccuracy *= (int) Math.Floor((1 + totalIncrease / 100.0) * (1 - totalDecrease / 100.0));
+        if (ClassicRuntime.IsActive) {
+            // CLASSIC: accuracy stats scale the spell's accuracy.
+            spellAccuracy = (int) Math.Floor(spellAccuracy * (1 + totalIncrease / 100.0) * (1 - totalDecrease / 100.0));
+        }
+        else {
+            spellAccuracy *= (int) Math.Floor((1 + totalIncrease / 100.0) * (1 - totalDecrease / 100.0));
+        }
 
         // Apply any hanging accuracy effects
-        spellAccuracy = ConsumeHangingAccuracyEffects(spellAccuracy, caster, spell.m_magicSchoolID);
+        spellAccuracy = ClassicRuntime.IsActive
+            ? ConsumeAccuracyCharms(spellAccuracy, caster, spell.m_magicSchoolID)
+            : ConsumeHangingAccuracyEffects(spellAccuracy, caster, spell.m_magicSchoolID);
 
         var hitChance = Random.Shared.Next(0, 100);
-        
-        return hitChance <= spellAccuracy;
+
+        // CLASSIC: the roll is 0 to 99, so a spell of accuracy A hits on A of the 100 rolls.
+        return ClassicRuntime.IsActive ? hitChance < spellAccuracy : hitChance <= spellAccuracy;
     }
 
     private static void DoSpellCastConsequences(CombatDuelSubCircle caster, CombatAction action) {
@@ -545,6 +555,21 @@ public class CombatResolver(Duel duel, CombatDuelSubCircle[] actorSubCircles) {
         else {
             return false;
         }
+    }
+
+    private static int ConsumeAccuracyCharms(int accuracy, CombatDuelSubCircle caster, uint magicSchoolId) {
+        // CLASSIC: an accuracy charm names its school in m_sDamageType (All for any spell) and adds its percentage points.
+        var charms = caster._hangingEffects
+            .Where(x => x.m_effectType == kSpellEffects.kModifyAccuracy && x.m_sDamageType is { } school
+                     && (string.Equals(school, "All", StringComparison.OrdinalIgnoreCase) || StringHash.Compute(school) == magicSchoolId))
+            .ToList();
+
+        foreach (var charm in charms) {
+            accuracy += charm.m_effectParam;
+            caster._hangingEffects.Remove(charm);
+        }
+
+        return accuracy;
     }
 
     private static int ConsumeHangingAccuracyEffects(int startingAccuracy, CombatDuelSubCircle caster, uint magicSchoolId) {

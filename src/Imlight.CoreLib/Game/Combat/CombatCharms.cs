@@ -33,7 +33,7 @@
  * 
  * Created by: Jooty
  * Version: KALI 1.0
- * Last Updated: 3/18/2025
+ * Last Updated: 09/27/2026
  */
 
 using Imcodec.ObjectProperty.TypeCache;
@@ -97,6 +97,25 @@ internal static class CombatCharms {
 
         return [.. appliedCharms.DistinctBy(x => x.m_spellTemplateID)];
     }
+
+    /// <summary>
+    /// CLASSIC: the charms hanging on a participant, newest first, for the effects that remove or steal them.
+    /// </summary>
+    /// <param name="target">The participant.</param>
+    /// <param name="disposition">Beneficial for a positive charm, harmful for a negative one, both for either.</param>
+    /// <returns>The damage, accuracy and heal charms of that disposition.</returns>
+    internal static List<SpellEffect> FindHangingCharms(CombatDuelSubCircle target, kHangingDisposition disposition)
+        => [.. target._hangingEffects
+            .Where(x => x.m_effectType is kSpellEffects.kModifyOutgoingDamage
+                                       or kSpellEffects.kModifyAccuracy
+                                       or kSpellEffects.kModifyOutgoingHeal
+                                       or kSpellEffects.kModifyOutgoingHealFlat)
+            .Where(x => disposition switch {
+                kHangingDisposition.kBeneficial => x.m_effectParam > 0,
+                kHangingDisposition.kHarmful => x.m_effectParam < 0,
+                _ => true,
+            })
+            .Reverse()];
 
     /// <summary>
     /// Calculates the outgoing damage from the given array of charms and initial damage.
