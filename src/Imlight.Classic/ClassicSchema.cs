@@ -34,7 +34,7 @@
  * 
  * Created by: Nick with Claude Code (claude-opus-5-5)
  * Version: KALI 1.0
- * Last Updated: 09/26/2026
+ * Last Updated: 09/27/2026
  */
 
 using System;
@@ -86,9 +86,14 @@ public static class ClassicSchema {
     public static ImmutableArray<string> DragonspyreDifficulties { get; } = ["pre-2010-07", "post-2010-07"];
 
     /// <summary>
+    /// The <c>rules.tutorial</c> value for the classic start: the tutorial, then Ambrose's office and the 2009 Unicorn Way chain.
+    /// </summary>
+    public const string ClassicTutorial = "unicorn-way-classic";
+
+    /// <summary>
     /// The values of <c>rules.tutorial</c>.
     /// </summary>
-    public static ImmutableArray<string> Tutorials { get; } = ["unicorn-way-classic", "modern-2019"];
+    public static ImmutableArray<string> Tutorials { get; } = [ClassicTutorial, "modern-2019"];
 
     private static readonly FrozenSet<string> s_worldIds = WorldIds.ToFrozenSet(StringComparer.Ordinal);
 

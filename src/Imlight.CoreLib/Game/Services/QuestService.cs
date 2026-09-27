@@ -33,7 +33,7 @@
  * 
  * Created by: Jooty
  * Version: KALI 1.0
- * Last Updated: 08/22/2026
+ * Last Updated: 09/27/2026
  */
 
 using Akka.Actor;
@@ -42,6 +42,7 @@ using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
+using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.Game.DropTables;
 using Imlight.CoreLib.Game.Madlibs;
 using Imlight.CoreLib.Game.Requirements;
@@ -75,6 +76,14 @@ internal partial class QuestService(SessionActor sessionActor) : MessageService(
         var wizard = GetActiveWizard();
         foreach (var qInstance in wizard.QuestBehavior.CurrentQuestInstances) {
             var qTemplate = QuestTemplateCollection.GetQuestByName(qInstance.QuestName);
+
+            // CLASSIC: a held quest can outlive its template, e.g. one an overlay disables.
+            if (qTemplate is null && ClassicQuestEngine.IsActive) {
+                Logger.Warning("Login of {Wizard} skips held quest {Quest}: no quest template by that name is loaded.",
+                    Logger.Args(wizard.CharId, qInstance.QuestName));
+
+                continue;
+            }
 
             SendQuestResumeMessage(qTemplate, qInstance);
 
@@ -1017,7 +1026,7 @@ internal partial class QuestService(SessionActor sessionActor) : MessageService(
             .ToArray();
 
         // "Roll" the drop tables to get the actual items.
-        var rollResult = DropTableRoller.Roll(dropTableNames, playerActor, playerObj, playerWizard);
+        var rollResult = DropTableRoller.Roll(dropTableNames, playerActor, playerObj, playerWizard, questReward: true); // CLASSIC
 
         // Convert the result into something we can send over the network.
         var convertedResults = DropTableConverter.ToLootInfoList(rollResult);

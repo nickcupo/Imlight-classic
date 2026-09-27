@@ -22,6 +22,7 @@ using System.Linq;
 using Akka.Actor;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
+using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.Game.Requirements;
 using Imlight.CoreLib.Game.Requirements.Contexts;
 using Imlight.CoreLib.WizardData.Collections;
@@ -30,7 +31,7 @@ using Imlight.CoreLib.WizardData.Models.World;
 
 namespace Imlight.CoreLib.Game.DropTables;
 
-public static class DropTableRoller {
+public static partial class DropTableRoller { // CLASSIC: partial for DropTableRoller.QuestRewards.cs.
 
     /// <summary>
     /// Rolls multiple drop tables with requirement validation against the provided player context
@@ -39,12 +40,14 @@ public static class DropTableRoller {
     /// <param name="playerRef">Player actor reference for requirements context</param>
     /// <param name="playerObj">Player core object for requirements context</param>
     /// <param name="wizard">Player wizard data for requirements context</param>
+    /// <param name="questReward">CLASSIC: the tables are a quest's reward, so on a classic profile every item that passes its requirements is granted.</param>
     /// <returns>Combined DropTableResult containing all rolled loot that passed requirements</returns>
     public static DropTableResult Roll(
         string[] dropTableNames,
         IActorRef playerRef,
         CoreObject playerObj,
-        Wizard wizard) {
+        Wizard wizard,
+        bool questReward = false) {
 
         if (dropTableNames == null || dropTableNames.Length == 0) {
             return CreateEmptyResult("no_tables_specified");
@@ -79,7 +82,7 @@ public static class DropTableRoller {
             }
 
             // Roll the table with context for item requirements.
-            var tableResult = RollSingleTable(dropTable, playerRef, playerObj, wizard, random);
+            var tableResult = RollSingleTable(dropTable, playerRef, playerObj, wizard, random, questReward);
 
             // Accumulate rewards.
             combinedResult.GoldAmount += tableResult.GoldAmount;
@@ -97,7 +100,8 @@ public static class DropTableRoller {
                                                              IActorRef playerRef,
                                                              CoreObject playerObj,
                                                              Wizard wizard,
-                                                             Random random) {
+                                                             Random random,
+                                                             bool questReward) {
 
         var result = new DropTableResult {
             DropTableId = dropTable.Id
@@ -118,7 +122,9 @@ public static class DropTableRoller {
         result.TrainingPoints = dropTable.TrainingPoints;
         
         // Roll items with requirements validation.
-        result.Items = RollTableItems(dropTable, playerRef, playerObj, wizard, random);
+        result.Items = questReward && ClassicQuestEngine.IsActive // CLASSIC: a quest reward table is a list, not a pool.
+            ? EveryRewardItem(dropTable, playerRef, playerObj, wizard)
+            : RollTableItems(dropTable, playerRef, playerObj, wizard, random);
             
         return result;
     }

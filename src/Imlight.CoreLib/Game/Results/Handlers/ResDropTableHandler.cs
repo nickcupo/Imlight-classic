@@ -55,7 +55,8 @@ internal sealed class ResDropTableHandler : BaseResultHandler<ResDropTable> {
         var rollResults = DropTableRoller.Roll([Result.m_tableName],
                                                context.GetPlayerRef(),
                                                context.GetPlayerObj(),
-                                               wizard);
+                                               wizard,
+                                               questReward: true); // CLASSIC
 
         // Process the results.
         LootGranter.GrantAndDisplay(context.GetPlayerRef(), wizard, rollResults);

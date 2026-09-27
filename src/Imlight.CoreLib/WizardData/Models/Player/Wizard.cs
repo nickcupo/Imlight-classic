@@ -32,6 +32,7 @@ using Imcodec.Math;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Classic;
 using Imlight.Common;
+using Imlight.CoreLib.Classic;
 using Imcodec.Types;
 using Imlight.CoreLib.Game.Pet;
 
@@ -154,7 +155,7 @@ public class Wizard {
     public Wizard(MagicSchool wizardSchoolType, WizardCharacterBehavior avatar, uint nameIndices, byte level = 1) {
         CharId = RandomGen.GenerateGUID();
         Zone = ConfigurationManager.Settings["Character.TutorialDisabled"].AsBool()
-            ? ConfigurationManager.Settings["Character.StartingZone"]
+            ? ClassicStart.IsActive ? ClassicStart.StartingZone : ConfigurationManager.Settings["Character.StartingZone"] // CLASSIC
             : TutorialStartingZone;
         World = ConfigurationManager.Settings["Character.StartingWorld"].AsByte();
         LastLoginTime = (uint) DateTimeOffset.UtcNow.ToUnixTimeSeconds();
@@ -1341,12 +1342,12 @@ public class Wizard {
         }
 
         // The default pet must be created through the pet factory. 
-        var defaultPet = PetFactory.CreateHatchedPet(CharId, _defaultPetTemplateId);
-        if (defaultPet is null) {
+        var defaultPet = ClassicStart.IsActive ? null : PetFactory.CreateHatchedPet(CharId, _defaultPetTemplateId); // CLASSIC: a 2009 wizard started without a pet.
+        if (defaultPet is null && !ClassicStart.IsActive) { // CLASSIC
             Logger.Error("Could not create default pet (template {0}) for Wizard {1}.",
                 Logger.Args(_defaultPetTemplateId, CharId));
         }
-        else {
+        else if (defaultPet is not null) { // CLASSIC
             // Add pet to inventory.
             itemsToAdd.Add(defaultPet);
             InventoryBehavior.InventoryItemIds.Add(defaultPet.m_globalID);

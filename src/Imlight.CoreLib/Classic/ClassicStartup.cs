@@ -38,7 +38,7 @@
  * 
  * Created by: Nick with Claude Code (claude-opus-5-5)
  * Version: KALI 1.0
- * Last Updated: 09/26/2026
+ * Last Updated: 09/27/2026
  */
 
 #nullable enable
@@ -133,6 +133,7 @@ public static class ClassicStartup {
             var rules = ClassicRuntime.Rules;
             CheckHubs(rules);
             CheckStartingZones(rules);
+            LogClassicStart(rules);
             CheckRuleTables(rules);
             LogZoneCensus(rules);
         }
@@ -170,7 +171,9 @@ public static class ClassicStartup {
 
     private static void CheckStartingZones(ClassicRules rules) {
         var zones = new List<string>();
-        var startingZone = ConfigurationManager.Settings["Character.StartingZone"].AsString();
+        var startingZone = rules.UsesClassicStart
+            ? ClassicStart.StartingZone
+            : ConfigurationManager.Settings["Character.StartingZone"].AsString();
         if (!ConfigurationManager.Settings["Character.TutorialDisabled"].AsBool()) {
             zones.Add(TutorialStartingZone);
         }
@@ -186,6 +189,20 @@ public static class ClassicStartup {
                     Logger.Args(rules.Profile.Id, zone, decision.Reason));
             }
         }
+    }
+
+    private static void LogClassicStart(ClassicRules rules) {
+        if (!rules.UsesClassicStart) {
+            Logger.Information("Classic profile {Profile} does not set rules.tutorial: {Tutorial}; new characters get stock Imlight's start.",
+                Logger.Args(rules.Profile.Id, ClassicSchema.ClassicTutorial));
+
+            return;
+        }
+
+        Logger.Information("Classic start: new characters leave the tutorial for {Zone} with starter items {Items} and no pet; "
+            + "Character.StartingZone ({StartingZone}) and Character.DefaultItems are not used.",
+            Logger.Args(ClassicStart.StartingZone, string.Join(",", ClassicStart.StarterItemTemplateIds),
+                ConfigurationManager.Settings["Character.StartingZone"].AsString()));
     }
 
     private static void CheckRuleTables(ClassicRules rules) {

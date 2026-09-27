@@ -168,7 +168,7 @@ internal class CommandQuest : CommandProtocol {
             .ToArray();
 
         // "Roll" the drop tables to get the actual items.
-        var rollResult = DropTableRoller.Roll(dropTableNames, Context.SessionActor, Context.CharacterObject, Context.Character);
+        var rollResult = DropTableRoller.Roll(dropTableNames, Context.SessionActor, Context.CharacterObject, Context.Character, questReward: true); // CLASSIC
 
         // Convert the result into something we can send over the network.
         var convertedResults = DropTableConverter.ToLootInfoList(rollResult);

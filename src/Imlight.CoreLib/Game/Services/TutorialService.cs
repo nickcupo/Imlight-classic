@@ -25,6 +25,7 @@ using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
+using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.Game.Results;
 using Imlight.CoreLib.Shared.Items;
 using Imlight.CoreLib.Shared.Networking;
@@ -34,7 +35,7 @@ using Imlight.CoreLib.WizardData.Models.Player;
 
 namespace Imlight.CoreLib.Game.Services;
 
-internal sealed class TutorialService(SessionActor sessionActor) : MessageService(sessionActor) {
+internal sealed partial class TutorialService(SessionActor sessionActor) : MessageService(sessionActor) { // CLASSIC: partial for TutorialService.ClassicStart.cs.
 
     private const string TUTORIAL_QUEST_NAME = "WC-TUT-C05-001";
     private const string TUTORIAL_INTRO_QUEST_NAME = "Tutorial_Intro";
@@ -117,6 +118,8 @@ internal sealed class TutorialService(SessionActor sessionActor) : MessageServic
         }
 
         if (!IsTutorialZone(wizard.Zone)) {
+            GrantClassicEnrollment(wizard); // CLASSIC: also opens the office doors for characters made before the classic start.
+
             return;
         }
 
@@ -284,7 +287,8 @@ internal sealed class TutorialService(SessionActor sessionActor) : MessageServic
             RemoveControlQuests(wizard);
             CompleteTutorialIntro(wizard, playerObj);
             EquipStarterWandAndDeck(wizard);
-            Teleport(ConfigurationManager.Settings["Character.StartingZone"]);
+            FinishClassicStart(wizard); // CLASSIC
+            Teleport(TutorialExitZone()); // CLASSIC: was Character.StartingZone.
 
             return true;
         }
@@ -293,7 +297,8 @@ internal sealed class TutorialService(SessionActor sessionActor) : MessageServic
         // player out of the tutorial interior.
         if (goalName == "Teleport") {
             RemoveControlQuests(wizard);
-            Teleport(ConfigurationManager.Settings["Character.StartingZone"]);
+            CompleteClassicStart(wizard); // CLASSIC
+            Teleport(TutorialExitZone()); // CLASSIC: was Character.StartingZone.
 
             return true;
         }
@@ -602,10 +607,12 @@ internal sealed class TutorialService(SessionActor sessionActor) : MessageServic
             return;
         }
 
-        var templateIds = ConfigurationManager.Settings["Character.DefaultItems"].AsList()
-            .Select(id => ulong.TryParse(id, out var parsed) ? parsed : 0)
-            .Where(id => id > 0)
-            .ToArray();
+        var templateIds = ClassicStart.IsActive // CLASSIC: the classic kit replaces Character.DefaultItems.
+            ? ClassicStart.StarterItemTemplateIds.ToArray()
+            : ConfigurationManager.Settings["Character.DefaultItems"].AsList()
+                .Select(id => ulong.TryParse(id, out var parsed) ? parsed : 0)
+                .Where(id => id > 0)
+                .ToArray();
         if (templateIds.Length == 0) {
             return;
         }
@@ -618,6 +625,11 @@ internal sealed class TutorialService(SessionActor sessionActor) : MessageServic
         // runs, so push each item to the client explicitly or the kit stays invisible this session.
         foreach (var item in grantedItems) {
             SendInventoryAdd(wizard, item);
+        }
+
+        // CLASSIC: without the tutorial there is no finale to give the school spell and equip the kit.
+        if (!IsTutorialZone(wizard.Zone)) {
+            CompleteClassicStart(wizard);
         }
     }
 

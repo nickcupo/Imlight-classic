@@ -38,7 +38,7 @@ namespace Imlight.CoreLib.Game.Zone.Supervisors;
 /// <param name="zone">The zone that this supervisor is responsible for.</param>
 /// <remarks>Triggers are any event that can happen within a zone. Zone transfers, POI
 /// text, etc.</remarks>
-internal sealed class ZoneTriggerSupervisor(Core.Zone zone) : ZoneEntitySupervisor(zone) {
+internal sealed partial class ZoneTriggerSupervisor(Core.Zone zone) : ZoneEntitySupervisor(zone) { // CLASSIC: partial for ZoneTriggerSupervisor.Activation.cs.
 
     private static readonly bool s_randomizeGateways 
         = ConfigurationManager.Settings["April Fools.RandomizeGateways"].AsBool();
@@ -55,10 +55,12 @@ internal sealed class ZoneTriggerSupervisor(Core.Zone zone) : ZoneEntitySupervis
         UpdateSpawnResultTriggers(ref replacedTriggers, spawners, message.PathData.m_pathList, message.NodeData.m_nodeList);
 
         _orderedTriggers.Clear();
+        _activation.Clear(); // CLASSIC
         foreach (var trigger in replacedTriggers) {
             var triggerActor = Context.ActorOf(Props.Create(() => new ZoneTrigger(ZoneRef, Zone, trigger)));
             BeginEntityLoad(triggerActor, trigger?.m_triggerName);
             _orderedTriggers.Add((trigger, triggerActor));
+            TrackActivation(trigger, triggerActor); // CLASSIC
         }
 
         ReportLoadedWhenEntitiesLoad();
@@ -73,8 +75,13 @@ internal sealed class ZoneTriggerSupervisor(Core.Zone zone) : ZoneEntitySupervis
         // (their results are independent), but paired teleporter triggers must not both win:
         // only the first ResTeleport in wad order may execute.
         var teleportDispatched = false;
+        ObserveActivationEvent(message); // CLASSIC
         foreach (var (trigger, triggerActor) in _orderedTriggers) {
             if (trigger.m_fireEvents is null || !trigger.m_fireEvents.Any(x => x == message.EventName)) {
+                continue;
+            }
+
+            if (!IsArmed(triggerActor, message.PlayerActor)) { // CLASSIC
                 continue;
             }
 
