@@ -1582,7 +1582,7 @@ public class Wizard {
                 Logger.Warning("Found duplicate quest instance {0} for player {1}. Removing duplicate.",
                     Logger.Args(quest.QuestName, PlayerNameBehavior.GetWizardName()));
 
-                QuestBehavior.CurrentQuestInstances.Remove(quest);
+                QuestBehavior.RemoveQuestInstanceObject(quest); // CLASSIC
                 QuestInstanceCollection.RemoveQuestInstance(CharId, quest.QuestName);
 
                 continue;
@@ -1590,7 +1590,7 @@ public class Wizard {
 
             // Remove completed quests.
             if (QuestBehavior.HasCompletedQuest(quest.QuestName)) {
-                QuestBehavior.CurrentQuestInstances.Remove(quest);
+                QuestBehavior.RemoveQuestInstanceObject(quest); // CLASSIC
                 QuestInstanceCollection.RemoveQuestInstance(CharId, quest.QuestName);
 
                 continue;
@@ -1599,11 +1599,8 @@ public class Wizard {
             uniqueQuests.Add(quest);
         }
 
-        QuestBehavior.CurrentQuestInstances = uniqueQuests;
-
         // Prune stale quest IDs whose instance docs were removed above, and persist.
-        QuestBehavior.CurrentQuestIDs.Clear();
-        QuestBehavior.CurrentQuestIDs.AddRange(uniqueQuests.Select(q => q.ID));
+        QuestBehavior.ReplaceQuests(uniqueQuests); // CLASSIC: both lists at once, under the behavior's lock.
         WizardCollection.UpdateCharacterQuestBehavior(this);
     }
 

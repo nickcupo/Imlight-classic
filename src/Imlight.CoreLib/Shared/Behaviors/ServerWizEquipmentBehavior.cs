@@ -19,7 +19,9 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using Newtonsoft.Json;
+using Imlight.Classic.Collections;
 using Imlight.Common;
 using Imlight.CoreLib.Shared.Character;
 using Imlight.CoreLib.Shared.Items;
@@ -34,13 +36,21 @@ public class ServerWizEquipmentBehavior : IClientBehaviorProvider<ClientWizEquip
 
     [JsonIgnore] public bool NoTransfer { get; set; } = false;
 
+    // CLASSIC: SlotList and EquippedItemIds are replaced, never changed in place, under s_writeLock.
+    // An equip on the player's actor, a starter-kit or reward equip on another actor and a RavenDB save
+    // serializing these lists (UpdateCharacterItems) used to meet on one List<T>; the save threw or wrote
+    // a torn list, and two equips could both pass the "slot free" check.
+    private static readonly Lock s_writeLock = new(); // CLASSIC: static, so it is never serialized.
+
     public List<EquipmentSlot> SlotList;
     public List<ulong> EquippedItemIds;
 
-    [JsonIgnore] public List<WizClientObjectItem> EquippedItems;
+    [JsonIgnore] public CopyOnWriteList<WizClientObjectItem> EquippedItems; // CLASSIC: readers on other actors never see a write in progress.
 
     public bool EquipItem(WizClientObjectItem item, EquipmentSlotType slotType) {
         var itemId = item.m_globalID;
+
+        using var writeScope = s_writeLock.EnterScope(); // CLASSIC
 
         // Prerequisite checks.
         if (HasItemEquipped(itemId)) {
@@ -49,13 +59,13 @@ public class ServerWizEquipmentBehavior : IClientBehaviorProvider<ClientWizEquip
 
         var existingItem = GetItemInSlot(slotType);
         if (existingItem is not null) {
-            EquippedItemIds.Remove(existingItem.m_globalID);
+            EquippedItemIds = [.. EquippedItemIds.Where(id => id != existingItem.m_globalID)]; // CLASSIC
             EquippedItems.Remove(existingItem);
         }
 
         // Finally, update the slot.
         UpdateEquipmentSlot(slotType, item.m_debugName, itemId);
-        EquippedItemIds.Add(itemId);
+        EquippedItemIds = [.. EquippedItemIds ?? [], itemId]; // CLASSIC
         EquippedItems.Add(item);
         
         return true;
@@ -63,11 +73,17 @@ public class ServerWizEquipmentBehavior : IClientBehaviorProvider<ClientWizEquip
 
     public void ForceEquipItem(WizClientObjectItem item) {
         var itemId = item.m_globalID;
-        EquippedItemIds.Add(itemId);
+        using var writeScope = s_writeLock.EnterScope(); // CLASSIC
+        if (HasItemEquipped(itemId)) {
+            return; // CLASSIC: a second force-equip of the same item used to duplicate it.
+        }
+        EquippedItemIds = [.. EquippedItemIds ?? [], itemId]; // CLASSIC
         EquippedItems.Add(item);
     }
 
     public bool UnequipItem(ulong itemId) {
+        using var writeScope = s_writeLock.EnterScope(); // CLASSIC
+
         // Prerequisite checks.
         if (!HasItemEquipped(itemId)) {
             return false;
@@ -77,8 +93,10 @@ public class ServerWizEquipmentBehavior : IClientBehaviorProvider<ClientWizEquip
         var slot = SlotList.Find(eSlot => eSlot.ItemId == itemId);
 
         // Finally, update the slot.
-        ClearEquipmentSlot(slot.SlotType);
-        EquippedItemIds.Remove(itemId);
+        if (slot is not null) { // CLASSIC: a force-equipped item has no slot.
+            ClearEquipmentSlot(slot.SlotType);
+        }
+        EquippedItemIds = [.. EquippedItemIds.Where(id => id != itemId)]; // CLASSIC
         EquippedItems.Remove(item);
 
         return true;
@@ -127,12 +145,12 @@ public class ServerWizEquipmentBehavior : IClientBehaviorProvider<ClientWizEquip
     }
 
     public WizClientObjectItem GetItemInSlot(EquipmentSlotType slotType) {
-        var slotIndex = SlotList.FindIndex(item => item.SlotType == slotType);
-        if (slotIndex == -1) {
+        var slot = SlotList.Find(item => item.SlotType == slotType); // CLASSIC: one read of the list.
+        if (slot is null) {
             return null;
         }
 
-        return EquippedItems.FirstOrDefault(item => item.m_globalID == SlotList[slotIndex].ItemId);
+        return EquippedItems.FirstOrDefault(item => item.m_globalID == slot.ItemId);
     }
 
     public WizItemTemplate GetTemplateInSlot(string slotName) {
@@ -147,12 +165,12 @@ public class ServerWizEquipmentBehavior : IClientBehaviorProvider<ClientWizEquip
     }
 
     public WizItemTemplate GetTemplateInSlot(EquipmentSlotType slotType) {
-        var slotIndex = SlotList.FindIndex(item => item.SlotType == slotType);
-        if (slotIndex == -1) {
+        var slot = SlotList.Find(item => item.SlotType == slotType); // CLASSIC: one read of the list.
+        if (slot is null) {
             return null;
         }
 
-        return ItemHelper.GetItemTemplate(EquippedItems.FirstOrDefault(item => item.m_globalID == SlotList[slotIndex].ItemId));
+        return ItemHelper.GetItemTemplate(EquippedItems.FirstOrDefault(item => item.m_globalID == slot.ItemId));
     }
 
     public byte GetSlotOfItem(ulong itemId) {
@@ -175,15 +193,15 @@ public class ServerWizEquipmentBehavior : IClientBehaviorProvider<ClientWizEquip
             ItemId = (GID) newItemId,
             EquippedSince = DateTime.Now,
         };
-        SlotList.Add(newSlot);
+        SlotList = [.. SlotList ?? [], newSlot]; // CLASSIC: replaced, as a save may be serializing the old list.
     }
 
     private void ClearEquipmentSlot(EquipmentSlotType slotType) {
         // Find the slot in the list. If it does, remove it.
-        var slotIndex = SlotList.FindIndex(eSlot => eSlot.SlotType == slotType);
-        if (slotIndex != -1) {
-            SlotList.RemoveAt(slotIndex);
+        if (SlotList is null || !SlotList.Exists(eSlot => eSlot.SlotType == slotType)) {
+            return;
         }
+        SlotList = [.. SlotList.Where(eSlot => eSlot.SlotType != slotType)]; // CLASSIC: replaced, not changed in place.
     }
 
     public ulong GetEquippedPetId() {

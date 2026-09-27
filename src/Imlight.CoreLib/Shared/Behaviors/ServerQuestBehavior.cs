@@ -17,8 +17,10 @@
  */
 
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using Imlight.CoreLib.WizardData.Models.Player;
 using Newtonsoft.Json;
 
@@ -29,26 +31,57 @@ public class ServerQuestBehavior : IClientBehaviorProvider<ServerQuestBehavior> 
 
     [JsonIgnore] public bool NoTransfer { get; set; } = true;
 
-    public readonly Dictionary<string, ulong> Registry = [];
+    // CLASSIC: quest, goal and zone-trigger result lists run on their own executor and handler actors
+    // (ResultExecutorActor), so ResModifyEntry, quest completion on the player's actor and the RavenDB save
+    // of this behavior (UpdateCharacterQuestBehavior serializes the live object) used to meet on one
+    // Dictionary and two Lists. The registry is now a ConcurrentDictionary, and both quest lists are
+    // replaced under s_writeLock instead of being changed in place, so a reader or a save always sees
+    // a whole list.
+    private static readonly Lock s_writeLock = new(); // CLASSIC: static, so it is never serialized.
+
+    public readonly ConcurrentDictionary<string, ulong> Registry = new(); // CLASSIC: was Dictionary.
 
     // In database, only store the quest IDs to reduce storage size.
     // The quest instances are loaded from the quest instance database on demand.
-    public readonly List<ulong> CurrentQuestIDs = [];
-    [JsonIgnore] public List<QuestInstance> CurrentQuestInstances { get; set; } = [];
+    public List<ulong> CurrentQuestIDs { get; set; } = []; // CLASSIC: replaced, never changed in place.
+    [JsonIgnore] public List<QuestInstance> CurrentQuestInstances { get; set; } = []; // CLASSIC: as CurrentQuestIDs.
 
     public bool AddQuest(QuestInstance quest) {
         if (quest == null) {
             return false;
         }
 
+        using var writeScope = s_writeLock.EnterScope(); // CLASSIC
         if (CurrentQuestIDs.Contains(quest.ID)
             || CurrentQuestInstances.Any(q => q is not null && q.QuestName == quest.QuestName)) {
             return false;
         }
 
-        CurrentQuestIDs.Add(quest.ID);
-        CurrentQuestInstances.Add(quest);
+        CurrentQuestIDs = [.. CurrentQuestIDs, quest.ID]; // CLASSIC
+        CurrentQuestInstances = [.. CurrentQuestInstances, quest]; // CLASSIC
 
+        return true;
+    }
+
+    /// <summary>
+    /// Replaces both quest lists at once (after a database load).
+    /// </summary>
+    public void ReplaceQuests(IEnumerable<QuestInstance> quests) { // CLASSIC
+        var list = quests?.Where(q => q is not null).ToList() ?? [];
+        using var writeScope = s_writeLock.EnterScope();
+        CurrentQuestInstances = list;
+        CurrentQuestIDs = [.. list.Select(q => q.ID)];
+    }
+
+    /// <summary>
+    /// Removes one quest instance object (a duplicate found on load).
+    /// </summary>
+    public bool RemoveQuestInstanceObject(QuestInstance quest) { // CLASSIC
+        using var writeScope = s_writeLock.EnterScope();
+        if (!CurrentQuestInstances.Contains(quest)) {
+            return false;
+        }
+        CurrentQuestInstances = [.. CurrentQuestInstances.Where(q => !ReferenceEquals(q, quest))];
         return true;
     }
 
@@ -57,7 +90,7 @@ public class ServerQuestBehavior : IClientBehaviorProvider<ServerQuestBehavior> 
             return false;
         }
 
-        var quest = CurrentQuestInstances.Find(q => q.QuestName == questName);
+        var quest = CurrentQuestInstances.Find(q => q?.QuestName == questName);
         if (quest == null) {
             return false;
         }
@@ -70,12 +103,14 @@ public class ServerQuestBehavior : IClientBehaviorProvider<ServerQuestBehavior> 
             return false;
         }
 
-        if (!CurrentQuestIDs.Contains(quest.ID)) {
-            return false;
-        }
+        using (s_writeLock.EnterScope()) { // CLASSIC
+            if (!CurrentQuestIDs.Contains(quest.ID)) {
+                return false;
+            }
 
-        CurrentQuestIDs.Remove(quest.ID);
-        CurrentQuestInstances.RemoveAll(q => q.QuestName == quest.QuestName);
+            CurrentQuestIDs = [.. CurrentQuestIDs.Where(id => id != quest.ID)]; // CLASSIC
+            CurrentQuestInstances = [.. CurrentQuestInstances.Where(q => q?.QuestName != quest.QuestName)]; // CLASSIC
+        }
 
         // Mark the quest as completed in the registry:
         AddToQuestRegistry(quest.QuestName, "Complete", 1);
@@ -101,13 +136,18 @@ public class ServerQuestBehavior : IClientBehaviorProvider<ServerQuestBehavior> 
             return false;
         }
 
+        using var writeScope = s_writeLock.EnterScope(); // CLASSIC
         var idsToDrop = new HashSet<ulong>(
-            CurrentQuestInstances.Where(q => q.QuestName == quest.QuestName).Select(q => q.ID)) {
+            CurrentQuestInstances.Where(q => q?.QuestName == quest.QuestName).Select(q => q.ID)) {
             quest.ID
         };
 
-        var removedInstances = CurrentQuestInstances.RemoveAll(q => q.QuestName == quest.QuestName);
-        var removedIds = CurrentQuestIDs.RemoveAll(idsToDrop.Contains);
+        var keptInstances = CurrentQuestInstances.Where(q => q?.QuestName != quest.QuestName).ToList();
+        var keptIds = CurrentQuestIDs.Where(id => !idsToDrop.Contains(id)).ToList();
+        var removedInstances = CurrentQuestInstances.Count - keptInstances.Count;
+        var removedIds = CurrentQuestIDs.Count - keptIds.Count;
+        CurrentQuestInstances = keptInstances; // CLASSIC
+        CurrentQuestIDs = keptIds; // CLASSIC
 
         return removedInstances > 0 || removedIds > 0;
     }
@@ -117,8 +157,9 @@ public class ServerQuestBehavior : IClientBehaviorProvider<ServerQuestBehavior> 
             return;
         }
 
+        using var writeScope = s_writeLock.EnterScope(); // CLASSIC
         var liveIds = new HashSet<ulong>(CurrentQuestInstances.Select(q => q.ID));
-        CurrentQuestIDs.RemoveAll(id => !liveIds.Contains(id));
+        CurrentQuestIDs = [.. CurrentQuestIDs.Where(liveIds.Contains)]; // CLASSIC
     }
 
     public bool HasQuest(string questName) {
@@ -138,7 +179,7 @@ public class ServerQuestBehavior : IClientBehaviorProvider<ServerQuestBehavior> 
         // <quest_name>_Complete
         var completedKey = $"{questName}_Complete";
 
-        return Registry.ContainsKey(completedKey) && Registry[completedKey] > 0;
+        return Registry.TryGetValue(completedKey, out var completed) && completed > 0; // CLASSIC: one read.
     }
 
     public bool StartQuestGoal(string questName, string goalName) {
@@ -191,12 +232,7 @@ public class ServerQuestBehavior : IClientBehaviorProvider<ServerQuestBehavior> 
             return false;
         }
 
-        if (Registry.ContainsKey(entryName)) {
-            return true;
-        }
-        else {
-            Registry[entryName] = value;
-        }
+        Registry.TryAdd(entryName, value); // CLASSIC: keeps an existing value, atomically.
 
         return true;
     }
@@ -217,7 +253,7 @@ public class ServerQuestBehavior : IClientBehaviorProvider<ServerQuestBehavior> 
             return false;
         }
 
-        return Registry.Remove(entryName);
+        return Registry.TryRemove(entryName, out _); // CLASSIC
     }
 
     public bool RemoveFromQuestRegistry(string questName, string entryName) {
