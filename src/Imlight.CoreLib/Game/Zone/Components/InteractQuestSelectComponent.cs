@@ -66,7 +66,8 @@ internal sealed class InteractQuestSelectComponent(ZoneEntity entity)
 
     public static bool ShouldAttachToEntity(CoreTemplate template)
         => template is GameObjectTemplate
-        && template.m_behaviors.Any(x => x is not null && x.m_behaviorName == "WizardSelectBehavior");
+        && (template.m_behaviors.Any(x => x is not null && x.m_behaviorName is "WizardSelectBehavior" or "WizadSelectBehavior") // CLASSIC: MS_Candle's template misspells it.
+            || QuestUsedObjects.IsUsedByQuests(template)); // CLASSIC: usable through a server-side InteractableBehavior only.
 
     public IEnumerable<ServiceOptionBase> GetServiceOptions(Wizard playerCharacter) {
         if (playerCharacter?.QuestBehavior?.CurrentQuestInstances == null) {
