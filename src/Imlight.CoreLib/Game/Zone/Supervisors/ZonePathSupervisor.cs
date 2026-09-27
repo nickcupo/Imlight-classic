@@ -20,7 +20,9 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using Akka.Actor;
+using Imlight.Classic.Quests;
 using Imlight.Common;
+using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.Game.Zone.Core;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;
@@ -33,6 +35,11 @@ using Imlight.CoreLib.Game.Requirements.Contexts;
 namespace Imlight.CoreLib.Game.Zone.Supervisors;
 
 internal sealed class ZonePathSupervisor(Core.Zone zone) : ZoneEntitySupervisor(zone) {
+
+    // CLASSIC: dormant spawners a joining wizard's goals may start (ClassicQuestSpawns), and their paths.
+    private static readonly TimeSpan s_dormantSpawnDelay = TimeSpan.FromSeconds(5);
+    private ZoneQuestSpawns _questSpawns = new([], new HashSet<uint>());
+    private readonly Dictionary<uint, IActorRef> _pathBySpawner = [];
 
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_ZONELOADRESULTS))]
     public override void ReceiveZoneLoadResults(ZONE_102_PROTOCOL.MSG_ZONELOADRESULTS message) {
@@ -55,9 +62,43 @@ internal sealed class ZonePathSupervisor(Core.Zone zone) : ZoneEntitySupervisor(
             var creatures = GetCreaturesForPath(path, creatureSpawnData);
             var pathActor = Context.ActorOf(Props.Create(() => new ZonePath(path, nodes, creatures, ZoneRef, Zone)));
             BeginEntityLoad(pathActor, path.m_name);
+            foreach (var creature in creatures) { // CLASSIC
+                _pathBySpawner.TryAdd((uint) creature.m_id.Full, pathActor);
+            }
+        }
+
+        if (ClassicQuestEngine.IsActive) { // CLASSIC: spawners only a quest starts.
+            var found = ClassicQuestSpawns.Find(message.ZoneData, creatureSpawnData, message.TriggerData);
+            _questSpawns = found with { Dormant = found.Dormant.Where(spawner => _pathBySpawner.ContainsKey(spawner.Id)).ToList() };
         }
 
         ReportLoadedWhenEntitiesLoad();
+    }
+
+    // CLASSIC: a joining wizard whose open goals talk to or fight someone kept on a dormant spawner
+    // starts it (Imlight.Classic.Quests.DormantSpawners); the delay lets the wizard finish joining.
+    [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_ZONEBROADCAST))]
+    public override void ReceiveZoneBroadcast(ZONE_102_PROTOCOL.MSG_ZONEBROADCAST message) {
+        base.ReceiveZoneBroadcast(message);
+        if (_questSpawns.Dormant.Count == 0 || message.Messages is null) {
+            return;
+        }
+
+        foreach (var join in message.Messages.OfType<ZONE_102_PROTOCOL.MSG_ADDPLAYER>()) {
+            var wizard = join.Wizard;
+            if (wizard is null) {
+                continue;
+            }
+
+            var planned = DormantSpawners.Plan(_questSpawns.Dormant, templateId => ClassicQuestSpawns.Needs(wizard, templateId),
+                _questSpawns.Placed);
+            foreach (var spawnerId in planned) {
+                Logger.Debug("Zone {Zone} starts dormant spawner {Spawner} for {Wizard}'s open goal.",
+                    Logger.Args(Zone.ZonePath, spawnerId, join.ActualWizardName));
+                Context.System.Scheduler.ScheduleTellOnce(s_dormantSpawnDelay, _pathBySpawner[spawnerId],
+                    new ZONE_102_PROTOCOL.MSG_ZONEPATHSPAWN { SpawnObjectID = spawnerId }, Self);
+            }
+        }
     }
 
     private static bool TryGetNodesForPath(PathObjectTemplate path, Dictionary<ulong, NodeObject> nodesById,

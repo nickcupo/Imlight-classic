@@ -18,6 +18,10 @@
 
 using System.Linq;
 using Imcodec.ObjectProperty.TypeCache;
+using Imlight.Classic.Quests;
+using Imlight.CoreLib.Classic;
+using Imlight.CoreLib.WizardData.Collections;
+using Imlight.CoreLib.WizardData.Models.Player;
 
 namespace Imlight.CoreLib.Game.Requirements.Handlers;
 
@@ -46,7 +50,8 @@ internal sealed class ReqHasGoalHandler : BaseRequirementHandler<ReqHasGoal> {
         }
 
         var goal = quest.GoalProgress
-            .FirstOrDefault(g => g.GoalName == goalName);
+            .FirstOrDefault(g => g.GoalName == goalName)
+            ?? FindKingsIsleGoal(quest, questName, goalName); // CLASSIC: "Goal 2" for a captured "2_WizardQuestGoals_...".
         if (goal == null) {
             return false;
         }
@@ -57,6 +62,25 @@ internal sealed class ReqHasGoalHandler : BaseRequirementHandler<ReqHasGoal> {
             GoalStatusRequirement.Incomplete => goal.DoesPlayerHaveGoal() && !goal.IsGoalCompleted(),
             _ => false
         };
+    }
+
+    // CLASSIC: the client's zone data checks KingsIsle's goal names; SpiralDB captured other names.
+    private static GoalInstance FindKingsIsleGoal(QuestInstance quest, string questName, string goalName) {
+        if (!ClassicQuestEngine.IsActive) {
+            return null;
+        }
+
+        var template = QuestTemplateCollection.GetQuestByName(questName);
+        if (template?.m_goals is null) {
+            return null;
+        }
+
+        var resolved = KingsIsleGoalNames.Resolve(questName, template.m_goals.Select(g => g?.m_goalName).ToList(), goalName);
+        if (resolved is null || resolved == goalName) {
+            return null;
+        }
+
+        return quest.GoalProgress.FirstOrDefault(g => g.GoalName == resolved);
     }
 
 }
