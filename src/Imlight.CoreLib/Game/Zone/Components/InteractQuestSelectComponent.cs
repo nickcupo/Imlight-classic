@@ -28,6 +28,9 @@
  * NOTE:
  * Collection goals (tally count > 1) consume the object on use; single-use goals
  * leave the object in place and drive post-use state via completeResults.
+ * CLASSIC: a collection object leaves only the collector's view and comes back
+ * for them after CollectedObject's respawn delay, and one use completes every
+ * open waypoint goal the object's quest event names.
  *
  * TODO:
  *
@@ -36,6 +39,7 @@
  * Last Updated: 09/27/2026
  */
 
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using Akka.Actor;
@@ -47,6 +51,7 @@ using Imlight.CoreLib.Game.Requirements;
 using Imlight.CoreLib.Game.Requirements.Contexts;
 using Imlight.CoreLib.Game.WizBang;
 using Imlight.CoreLib.Game.Zone.Core;
+using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;
 using Imlight.CoreLib.WizardData.Collections;
 using Imlight.CoreLib.WizardData.Models.Player;
@@ -54,7 +59,9 @@ using Imlight.CoreLib.WizardData.Models.Player;
 namespace Imlight.CoreLib.Game.Zone.Components;
 
 internal sealed class InteractQuestSelectComponent(ZoneEntity entity)
-    : ZoneEntityComponent(entity), IServiceComponent, IComponentFactory {
+    : ZoneEntityComponent(entity), IServiceComponent, IComponentFactory, IWithTimers {
+
+    public ITimerScheduler Timers { get; set; } // CLASSIC: collection-object respawns.
 
     public string ServiceName => "Interact";
     public string NpcIcon { get; private set; } = null;
@@ -68,6 +75,10 @@ internal sealed class InteractQuestSelectComponent(ZoneEntity entity)
 
     private readonly Dictionary<string, List<GoalTemplate>> _usageGoalsByQuest = [];
 
+    // CLASSIC: who took this collection object (a usage goal counted above 1) and their sessions.
+    private readonly CollectedObject<ulong> _collected = new(CollectedObject<ulong>.DefaultRespawnDelay);
+    private readonly Dictionary<ulong, IActorRef> _collectors = [];
+
     public static bool ShouldAttachToEntity(CoreTemplate template)
         => template is GameObjectTemplate
         && (template.m_behaviors.Any(x => x is not null && x.m_behaviorName is "WizardSelectBehavior" or "WizadSelectBehavior") // CLASSIC: MS_Candle's template misspells it.
@@ -75,6 +86,11 @@ internal sealed class InteractQuestSelectComponent(ZoneEntity entity)
 
     public IEnumerable<ServiceOptionBase> GetServiceOptions(Wizard playerCharacter) {
         if (playerCharacter?.QuestBehavior?.CurrentQuestInstances == null) {
+            yield break;
+        }
+
+        // CLASSIC: a collection object this player took is gone for them until it respawns.
+        if (ClassicQuestEngine.IsActive && _collected.IsTakenBy(playerCharacter.CharId, DateTime.UtcNow)) {
             yield break;
         }
 
@@ -134,6 +150,12 @@ internal sealed class InteractQuestSelectComponent(ZoneEntity entity)
     }
 
     public void OnServiceInteraction(IActorRef playerActor, Wizard playerCharacter, CoreObject playerObject, uint serviceOptionIndex) {
+        if (ClassicQuestEngine.IsActive) {
+            OnClassicServiceInteraction(playerActor, playerCharacter, playerObject);
+
+            return;
+        }
+
         // Find the first active goal that matches this object's client tags.
         // This ensures we only complete one goal per interaction, even if multiple goals match.
         var activeGoalData = FindActiveMatchingGoal(playerCharacter);
@@ -173,6 +195,82 @@ internal sealed class InteractQuestSelectComponent(ZoneEntity entity)
 
             Entity.DeleteObject();
         }
+    }
+
+    // CLASSIC: one use completes every open waypoint goal the object's quest event names (the Map Room staff counts for
+    // KT-PYMHub-C01-005 and KT-PYM4-C01-003 at once) and counts once toward the first open usage goal. A
+    // collection object leaves only this player's view and respawns for them (CollectedObject); stock Imlight
+    // deletes it for the whole zone.
+    private void OnClassicServiceInteraction(IActorRef playerActor, Wizard playerCharacter, CoreObject playerObject) {
+        if (_collected.IsTakenBy(playerCharacter.CharId, DateTime.UtcNow)) {
+            return;
+        }
+
+        var matches = FindActiveMatchingGoals(playerCharacter);
+        StartUseSpawns(playerActor, playerCharacter, playerObject);
+
+        foreach (var (quest, goal, goalProgress) in matches.Where(match => match.Goal.m_goalType == GOAL_TYPE.GOAL_TYPE_WAYPOINT)) {
+            playerActor.Tell(new ZONE_102_PROTOCOL.MSG_COMPLETEPROXIMITYGOAL { QuestID = quest.ID, GoalID = goalProgress.ID });
+        }
+
+        var usage = matches.FirstOrDefault(match => match.Goal.m_goalType != GOAL_TYPE.GOAL_TYPE_WAYPOINT);
+        if (usage.Goal is null) {
+            return;
+        }
+
+        playerActor.Tell(new CHARACTER_103_PROTOCOL.MSG_COMPLETEUSAGEGOAL {
+            QuestID = usage.Quest.ID,
+            GoalID = usage.GoalProgress.ID,
+        });
+
+        if ((usage.Goal.m_tallyCounter?.m_count ?? 1) <= 1) {
+            return;
+        }
+
+        var characterId = playerCharacter.CharId;
+        _collected.Take(characterId, DateTime.UtcNow);
+        _collectors[characterId] = playerActor;
+        playerActor.Tell(new GAME_5_PROTOCOL.MSG_LEAVESERVICERANGE {
+            MobileID = Entity.ActiveGameObject.m_globalID.Full
+        });
+        Entity.GetComponentOfType<RenderComponent>()?.HideCollectedForPlayer(playerActor);
+        Timers?.StartSingleTimer(characterId, new ZONE_102_PROTOCOL.MSG_CLASSICCOLLECTRESPAWN { CharacterId = characterId },
+            _collected.RespawnDelay);
+    }
+
+    [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_CLASSICCOLLECTRESPAWN))]
+    private void ReceiveCollectRespawn(ZONE_102_PROTOCOL.MSG_CLASSICCOLLECTRESPAWN message) {
+        _collected.Release(message.CharacterId);
+        if (_collectors.Remove(message.CharacterId, out var playerActor)) {
+            Entity.GetComponentOfType<RenderComponent>()?.ShowCollectedForPlayer(playerActor);
+        }
+    }
+
+    public override void OnPlayerLeave(IActorRef playerActor, ulong id) {
+        // CLASSIC: the object is back when the player returns (the zone sends it again on join).
+        foreach (var characterId in _collectors.Where(entry => entry.Value.Equals(playerActor)).Select(entry => entry.Key).ToList()) {
+            _collectors.Remove(characterId);
+            _collected.Release(characterId);
+            Timers?.Cancel(characterId);
+        }
+    }
+
+    private List<(QuestInstance Quest, GoalTemplate Goal, GoalInstance GoalProgress)> FindActiveMatchingGoals(Wizard playerCharacter) {
+        var found = new List<(QuestInstance, GoalTemplate, GoalInstance)>();
+        foreach (var quest in GetQuestsWithActiveUsageGoals(playerCharacter) ?? []) {
+            if (!_usageGoalsByQuest.TryGetValue(quest.QuestName, out var goals)) {
+                continue;
+            }
+
+            foreach (var goal in goals) {
+                var goalProgress = quest.GoalProgress.FirstOrDefault(gp => IsActiveUsageGoal(gp, goal.m_goalName));
+                if (goalProgress != null) {
+                    found.Add((quest, goal, goalProgress));
+                }
+            }
+        }
+
+        return found;
     }
 
     private bool HasActiveMatchingUsageGoal(Wizard playerCharacter)

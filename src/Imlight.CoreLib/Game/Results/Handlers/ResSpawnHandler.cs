@@ -17,6 +17,7 @@
  */
 
 using Akka.Actor;
+using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.Shared.Packets;
 using Imcodec.ObjectProperty.TypeCache;
 
@@ -32,6 +33,12 @@ internal sealed class ResSpawnHandler : BaseResultHandler<ResSpawn> {
 
         if (Result is null) {
             return false;
+        }
+
+        // CLASSIC: m_activate false deactivates the spawner (a boss's death trigger, after its ResDespawn); it must not
+        // spawn the boss again. The spawner keeps its own respawn timer, as before Monster_Killed was posted.
+        if (ClassicQuestEngine.IsActive && !Result.m_activate) {
+            return true;
         }
 
         var broadcastMsg = new ZONE_102_PROTOCOL.MSG_ZONEBROADCAST {
