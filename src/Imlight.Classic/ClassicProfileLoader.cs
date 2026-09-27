@@ -62,7 +62,8 @@ public static class ClassicProfileLoader {
     private static readonly string[] s_inheritedKeys = ["cutoff", "level_cap", "worlds", "features", "rules", "world_unlocks"];
     internal static readonly FrozenSet<string> s_worldUnlockKeys = FrozenSet.Create(StringComparer.Ordinal, "any_of", "source", "notes");
     private static readonly FrozenSet<string> s_ruleKeys = FrozenSet.Create(StringComparer.Ordinal,
-        "accuracy_table", "xp_table", "mob_rewards", "badges", "quest_cards", "power_pips_from_rank", "dragonspyre_difficulty", "tutorial");
+        "accuracy_table", "xp_table", "mob_rewards", "badges", "quest_cards", "power_pips_from_rank", "dragonspyre_difficulty", "tutorial",
+        "teleport_stones");
 
     /// <summary>
     /// Loads the profile <paramref name="id"/> from <paramref name="profilesDir"/>, following its extends chain.
@@ -389,6 +390,9 @@ public static class ClassicProfileLoader {
                 case "tutorial":
                     _ = diagnostics.ReadEnum(entry.Value, path, ClassicSchema.Tutorials);
                     break;
+                case "teleport_stones":
+                    _ = diagnostics.ReadEnum(entry.Value, path, ClassicSchema.TeleportStoneRules);
+                    break;
             }
         }
     }
@@ -426,6 +430,7 @@ public static class ClassicProfileLoader {
                 PowerPipsFromRank = ScalarOf(rules, "power_pips_from_rank"),
                 DragonspyreDifficulty = ScalarOf(rules, "dragonspyre_difficulty"),
                 Tutorial = ScalarOf(rules, "tutorial"),
+                TeleportStones = ScalarOf(rules, "teleport_stones"),
             },
             WorldUnlocks = BuildWorldUnlocks(merged.Find("world_unlocks")?.Value as YMap),
             Notes = child.Find("notes")?.Value is YSeq notes

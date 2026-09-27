@@ -35,6 +35,7 @@
  * Last Updated: 09/27/2026
  */
 
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using Imlight.Classic.Travel;
@@ -266,6 +267,37 @@ public sealed class TravelTests {
 
         Assert.Equal("WizardCity", rules.HomeHubKeyFor("GrizzleheimLite/GH_GrizzleheimHubLite", trader));
         Assert.Equal("Grizzleheim", rules.HomeHubKeyFor("GrizzleheimLite/GH_GrizzleheimHubLite", new Progress { Level = 20 }));
+    }
+
+    [Fact]
+    public void Late2009NeedsTeleportStonesDiscoveredAndTheH1VariantInheritsIt() {
+        Assert.True(ClassicDataFixture.RealRules("late-2009").TeleportStonesNeedDiscovery);
+        Assert.True(ClassicDataFixture.RealRules("arc1-2009h1").TeleportStonesNeedDiscovery);
+        Assert.False(ClassicRules.Stock.TeleportStonesNeedDiscovery);
+    }
+
+    [Theory]
+    [InlineData("discover", true)]
+    [InlineData("open", false)]
+    [InlineData(null, false)]
+    public void TeleportStonesRuleIsReadFromTheProfile(string? value, bool discover) {
+        using var data = new TempClassicData();
+        data.WriteProfile("p", "id: p\ntitle: P\nstatus: canonical\ncutoff: 2010-05-25\nworlds: [wizard_city]\n"
+            + (value is null ? "" : $"rules:\n  teleport_stones: {value}\n"));
+
+        var profile = ClassicProfileLoader.Load(data.ProfilesPath, "p");
+
+        Assert.Equal(value, profile.Rules.TeleportStones);
+        Assert.Equal(discover, string.Equals(profile.Rules.TeleportStones, ClassicSchema.DiscoverTeleportStones, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void BadTeleportStonesRuleIsRefused() {
+        using var data = new TempClassicData();
+        data.WriteProfile("p", "id: p\ntitle: P\nstatus: canonical\ncutoff: 2010-05-25\nrules:\n  teleport_stones: sometimes\n");
+
+        var ex = Assert.Throws<ClassicDataException>(() => ClassicProfileLoader.Load(data.ProfilesPath, "p"));
+        Assert.Contains(ex.Errors, error => error.ToString().Contains("rules.teleport_stones"));
     }
 
     [Fact]

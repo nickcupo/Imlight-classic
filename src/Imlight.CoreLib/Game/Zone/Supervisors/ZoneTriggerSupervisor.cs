@@ -52,6 +52,7 @@ internal sealed partial class ZoneTriggerSupervisor(Core.Zone zone) : ZoneEntity
         // Our QA team has manually recreated this trigger data, and is available within the database.
         // Words cannot describe how thankful I am for QA. They are the unsung heroes of the development team.
         var replacedTriggers = ReplaceTriggerDataWithDatabase(message.TriggerData);
+        ApplyStoneDiscovery(replacedTriggers); // CLASSIC
         var spawners = message.SpawnData.m_spawners;
         UpdateSpawnResultTriggers(ref replacedTriggers, spawners, message.PathData.m_pathList, message.NodeData.m_nodeList);
 

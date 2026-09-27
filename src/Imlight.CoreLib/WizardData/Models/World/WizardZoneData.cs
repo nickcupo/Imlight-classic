@@ -30,11 +30,64 @@ public class WizardZoneData {
     // (a null Teleport removes one) instead of replacing the record (SpiralDB.LoadZoneData, ZoneTransferMerge).
     public bool Merge { get; set; }
 
+    // CLASSIC: the classic travel overlay's zone-level data (the teleport stones' discovery triggers), or null.
+    public ClassicZoneTravel Classic { get; set; }
+
 }
 
 public class WizardTeleportData {
 
     public string TriggerName { get; set; }
     public ResTeleport Teleport { get; set; }
+
+    // CLASSIC: the classic travel overlay's data for a press-X teleport object's entry, or null.
+    public ClassicTeleportObject Classic { get; set; }
+
+}
+
+// CLASSIC: a press-X teleport object's classic travel data (InteractTeleportObjectComponent). The entry is named after
+// the placed object's m_zoneTag; two placements that share a tag get "<tag>#<n>" entries told apart by At.
+public class ClassicTeleportObject {
+
+    // The placement's location (X, Y, Z), telling apart the entries of placements that share a tag.
+    public List<float> At { get; set; }
+
+    // The object's template name, for objects whose name does not say they teleport (the Dragonspyre battledrake,
+    // the Grand Chasm time crystal): the component attaches to every template an entry names.
+    public string Template { get; set; }
+
+    // The profile feature the object needs, such as hub_teleporters (the Oct 2009 Marleybone and MooShu stones).
+    public string Feature { get; set; }
+
+    // Client tags the wizard must have turned "On" (per-wizard dynamods, set by the zone's discovery trigger) before
+    // the object teleports: a teleport stone works once its pair is discovered.
+    public List<string> DiscoveredBy { get; set; }
+
+    // The object state the template's option needs ("On": the Malistaire lair portal to Ambrose, the MooShu spirit
+    // world portals, which a zone event opens); the wizard must have the object in that state (a dynamod on its tag),
+    // or the object must be placed in it.
+    public string RequiresState { get; set; }
+
+    // The template InteractableBehavior's icon, title key and prompt key (the client's "Teleport Stone" / "Press X").
+    public string Icon { get; set; }
+    public string TitleKey { get; set; }
+    public string TextKey { get; set; }
+
+}
+
+// CLASSIC: a zone's classic travel data.
+public class ClassicZoneTravel {
+
+    // Teleport stone discovery triggers: in the r806919 client they fire on EnterZone (every stone is found on
+    // arrival); with the profile's rules.teleport_stones: discover they fire only on their volume beside the far
+    // stone, as in 2009 ("discover both points before you can teleport between them").
+    public List<ClassicDiscoveryTrigger> DiscoveryTriggers { get; set; }
+
+}
+
+public class ClassicDiscoveryTrigger {
+
+    public string Trigger { get; set; }
+    public string Event { get; set; }
 
 }

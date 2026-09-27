@@ -127,6 +127,14 @@ public sealed class ClassicRules {
         => IsRestricted && string.Equals(Profile.Rules.Tutorial, ClassicSchema.ClassicTutorial, StringComparison.Ordinal);
 
     /// <summary>
+    /// True when teleport stones must be discovered by reaching the far stone of each pair
+    /// (<c>rules.teleport_stones: discover</c>): the stones' discovery triggers fire on their volume only, not on
+    /// arriving in the zone.
+    /// </summary>
+    public bool TeleportStonesNeedDiscovery
+        => IsRestricted && string.Equals(Profile.Rules.TeleportStones, ClassicSchema.DiscoverTeleportStones, StringComparison.Ordinal);
+
+    /// <summary>
     /// Decides whether a player may enter <paramref name="zone"/>. The first failing check decides.
     /// </summary>
     /// <param name="zone">The zone name.</param>

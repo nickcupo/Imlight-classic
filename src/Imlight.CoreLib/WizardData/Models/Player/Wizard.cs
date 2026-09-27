@@ -939,6 +939,13 @@ public class Wizard {
         return true;
     }
 
+    // CLASSIC: true when this wizard has turned the client tag to the state in the zone (a teleport stone's discovery).
+    public bool HasDynamod(string zoneName, string clientTag, string modState)
+        => DynamodSet?.Dynamods?.Any(dynamod => dynamod is not null
+            && string.Equals(dynamod.ZoneName, zoneName, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(dynamod.ClientTag, clientTag, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(dynamod.ModState, modState, StringComparison.OrdinalIgnoreCase)) == true;
+
     public bool RemoveDynamod(string clientTag) {
         if (DynamodSet is null) {
             return false;

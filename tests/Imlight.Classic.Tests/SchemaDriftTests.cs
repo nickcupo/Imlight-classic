@@ -101,7 +101,9 @@ public sealed class SchemaDriftTests {
         Assert.Equal(EnumValues(rules.GetProperty("power_pips_from_rank")), ClassicSchema.PowerPipRanks.Cast<string?>().Append(null).ToArray());
         Assert.Equal(EnumValues(rules.GetProperty("dragonspyre_difficulty")), ClassicSchema.DragonspyreDifficulties.ToArray());
         Assert.Equal(EnumValues(rules.GetProperty("tutorial")), ClassicSchema.Tutorials.ToArray());
-        Assert.Equal(new[] { "accuracy_table", "xp_table", "mob_rewards", "badges", "quest_cards", "power_pips_from_rank", "dragonspyre_difficulty", "tutorial" },
+        Assert.Equal(EnumValues(rules.GetProperty("teleport_stones")), ClassicSchema.TeleportStoneRules.ToArray());
+        Assert.Equal(new[] { "accuracy_table", "xp_table", "mob_rewards", "badges", "quest_cards", "power_pips_from_rank", "dragonspyre_difficulty", "tutorial",
+                             "teleport_stones" },
             rules.EnumerateObject().Select(rule => rule.Name).ToArray());
     }
 

@@ -41,13 +41,16 @@
  * Last Updated: 09/27/2026
  */
 
+using System.Collections.Generic;
 using System.Linq;
 using Akka.Actor;
 using Imcodec.ObjectProperty.TypeCache;
+using Imlight.Classic;
 using Imlight.Classic.Quests;
 using Imlight.Common;
 using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.Shared.Packets;
+using Imlight.CoreLib.WizardData.Collections;
 
 namespace Imlight.CoreLib.Game.Zone.Supervisors;
 
@@ -95,6 +98,41 @@ internal sealed partial class ZoneTriggerSupervisor {
     private static bool HasUndecodedRequirement(RequirementList requirements)
         => requirements?.m_requirements?.Any(requirement => requirement is null
             || (requirement is RequirementList nested && HasUndecodedRequirement(nested))) == true;
+
+    // The r806919 client fires every teleport stone's discovery trigger on EnterZone, so a wizard finds every stone of
+    // a zone on arrival. Under rules.teleport_stones: discover the trigger fires on its volume beside the far stone
+    // instead (the classic travel overlay names the trigger and the volume's enter event), as in 2009.
+    private void ApplyStoneDiscovery(List<Trigger> triggers) {
+        if (!ClassicQuestEngine.IsActive || !ClassicRuntime.Rules.TeleportStonesNeedDiscovery) {
+            return;
+        }
+
+        var discovery = ZoneDataCollection.GetZoneData(Zone.ZonePath)?.Classic?.DiscoveryTriggers;
+        if (discovery is not { Count: > 0 }) {
+            return;
+        }
+
+        foreach (var entry in discovery) {
+            if (string.IsNullOrEmpty(entry?.Trigger) || string.IsNullOrEmpty(entry.Event)) {
+                continue;
+            }
+
+            foreach (var trigger in triggers) {
+                if (trigger is null || (string) trigger.m_triggerName != entry.Trigger) {
+                    continue;
+                }
+
+                var events = (trigger.m_fireEvents ?? []).Where(name => (string) name != ENTER_ZONE_EVENT).ToList();
+                if (!events.Any(name => (string) name == entry.Event)) {
+                    events.Add(entry.Event);
+                }
+
+                trigger.m_fireEvents = events;
+            }
+        }
+    }
+
+    private const string ENTER_ZONE_EVENT = "EnterZone";
 
     private static bool HasTeleportDestination(Trigger trigger)
         => trigger.m_results?.m_results?.Any(result => result is ResTeleport teleport
