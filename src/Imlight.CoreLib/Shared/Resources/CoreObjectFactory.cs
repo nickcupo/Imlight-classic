@@ -37,7 +37,7 @@
  * 
  * Created by: Jooty
  * Version: KALI 1.0
- * Last Updated: 09/26/2026
+ * Last Updated: 09/27/2026
  */
 
 using System;
@@ -176,7 +176,9 @@ public class CoreObjectFactory : RootSingleResourceSingleton<CoreObjectFactory>,
                 return null;
             }
 
-            var templateObj = RootArchiveLoader.GetFile<CoreTemplate>(templateLocation.m_filename);
+            var templateObj = WorldDataArchiveLoader.IsWorldDataPath(templateLocation.m_filename) // CLASSIC: a WorldData WAD's template, e.g. "|Krokotopia|WorldData|ObjectData/...".
+                ? WorldDataArchiveLoader.GetFile<CoreTemplate>(templateLocation.m_filename)
+                : RootArchiveLoader.GetFile<CoreTemplate>(templateLocation.m_filename);
             if (templateObj is null) {
                 Logger.Error("Could not load CoreTemplate from {Loc}. Could not get file from root archive.",
                     Logger.Args(templateLocation.m_filename));
