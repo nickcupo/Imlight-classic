@@ -28,7 +28,8 @@ using Newtonsoft.Json;
 
 namespace Imlight.CoreLib.WizardData;
 
-public static class SpiralDB {
+// CLASSIC: partial so the overlay loader can live in SpiralDB.Overlay.cs.
+public static partial class SpiralDB {
 
     private static readonly string s_remote
         = ConfigurationManager.Settings["Database.SpiralDBRemote"];
@@ -82,8 +83,10 @@ public static class SpiralDB {
     /// </summary>
     public static void Load() {
         var basePath = Path.GetFullPath(s_localPath);
+        var overlayRoots = ResolveOverlayRoots(); // CLASSIC
 
-        if (!s_disableRemote) {
+        // CLASSIC: never sync when git could reach an overlay directory.
+        if (!s_disableRemote && CanSyncWithoutTouchingOverlays(basePath, overlayRoots)) {
             try {
                 SyncRepository(basePath);
             }
@@ -133,6 +136,14 @@ public static class SpiralDB {
             filesLoaded += LoadTreasureCardInventories(basePath, treasureCardInventories);
             filesLoaded += LoadQuestTemplates(basePath, questTemplates, questTemplatesByName);
             filesLoaded += LoadZoneData(basePath, zoneData);
+
+            // CLASSIC: layer the overlay roots over the base data, then rebuild the quest list from the
+            // by-name map; the loader only appends, so a replaced or disabled base quest would otherwise
+            // still register its offers and goals.
+            filesLoaded += LoadOverlays(overlayRoots, spellbooks, dropTables, globalRegistry, npcInventories,
+                npcSpellInventories, npcDropTables, treasureCardInventories, questTemplates, questTemplatesByName,
+                zoneData);
+            questTemplates = RebuildQuestList(questTemplates, questTemplatesByName);
 
             // Atomically swap.
             s_creatureSpellbooks = spellbooks;
