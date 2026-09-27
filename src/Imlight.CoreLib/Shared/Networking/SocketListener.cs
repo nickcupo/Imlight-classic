@@ -35,7 +35,7 @@
  * 
  * Created by: Jooty
  * Version: KALI 1.0
- * Last Updated: 06/28/2026
+ * Last Updated: 09/27/2026
  */
 
 using System;
@@ -45,6 +45,7 @@ using System.Net.Sockets;
 using Akka.Actor;
 using Imcodec.MessageLayer;
 using Imcodec.MessageLayer.Generated;
+using Imlight.Classic.Net;
 using Imlight.Common;
 using Imlight.CoreLib.Shared.Packets;
 
@@ -61,6 +62,7 @@ internal sealed class SocketListener : ReceiveActor, IDisposable {
     private readonly Socket _socket;
     private readonly ushort _sessionid;
     private readonly TokenBucket _tokenBucket;
+    private readonly KinpFrameAssembler _frames = new(); // CLASSIC: one read can hold several frames, or part of one.
     private readonly List<Type> _suppressedPackets = [
             typeof(GAME_5_PROTOCOL.MSG_CLIENTMOVE),
             typeof(GAME_5_PROTOCOL.MSG_CLIENTMOVESTATE),
@@ -162,37 +164,11 @@ internal sealed class SocketListener : ReceiveActor, IDisposable {
                 
                 return;
             }
-            if (!_tokenBucket.TryAcquire()) {
-                Logger.Warning("SessionActor {SessionId} failed to acquire token.", Logger.Args(_sessionid));
-
-                // The rate limit was reached.
-                var failedAcquisitionCount = _tokenBucket.GetFailedAcquisitionCount();
-                if (failedAcquisitionCount >= _tokenBucketFailedAcquisitionLimit) {
-                    // Log warning.
-                    Logger.Warning("SessionActor {SessionId} failed to acquire token {FailedAcquisitionCount} times.",
-                        Logger.Args(_sessionid, failedAcquisitionCount));
-
-                    // The session has exceeded the failed acquisition limit. We'll dispose of the session.
-                    this.Dispose();
-
+            _frames.Append(new ReadOnlySpan<byte>(buffer, 0, bytesReceived)); // CLASSIC
+            for (var read = _frames.Next(); read.Status != KinpReadStatus.Incomplete; read = _frames.Next()) {
+                if (!ProcessFrame(read)) {
                     return;
                 }
-
-                return;
-            }
-
-            var packets = GetPacketsFromBuffer(buffer, bytesReceived);
-            if (packets is null) {
-                Logger.Verbose("SessionActor {Id} received invalid packet.", Logger.Args(_sessionid));
-                
-                return;
-            }
-
-            foreach (var packet in packets) {
-                LogReceivedPacket(packet);
-
-                var msgPacket = new SERVER_100_PROTOCOL.MSG_RECEIVEDPACKET { Packet = packet };
-                _sessionActorRef.Tell(msgPacket);
             }
 
         }
@@ -202,6 +178,66 @@ internal sealed class SocketListener : ReceiveActor, IDisposable {
         finally {
             StartReceive();
         }
+    }
+
+    private bool ProcessFrame(KinpRead read) {
+        if (read.Status == KinpReadStatus.Oversized) {
+            Logger.Warning("SessionActor {SessionId} announced a {ByteCount} byte frame; closing the session.",
+                Logger.Args(_sessionid, read.ByteCount));
+            this.Dispose();
+
+            return false;
+        }
+
+        // CLASSIC: skipped bytes and dropped large frames cost a token too, so they cannot flood the log.
+        if (!_tokenBucket.TryAcquire()) {
+            Logger.Warning("SessionActor {SessionId} failed to acquire token.", Logger.Args(_sessionid));
+
+            // The rate limit was reached.
+            var failedAcquisitionCount = _tokenBucket.GetFailedAcquisitionCount();
+            if (failedAcquisitionCount >= _tokenBucketFailedAcquisitionLimit) {
+                // Log warning.
+                Logger.Warning("SessionActor {SessionId} failed to acquire token {FailedAcquisitionCount} times.",
+                    Logger.Args(_sessionid, failedAcquisitionCount));
+
+                // The session has exceeded the failed acquisition limit. We'll dispose of the session.
+                this.Dispose();
+
+                return false;
+            }
+
+            return true;
+        }
+
+        switch (read.Status) {
+            case KinpReadStatus.Skipped:
+                Logger.Debug("SessionActor {SessionId} received non-KINP packet ({ByteCount} bytes skipped)",
+                    Logger.Args(_sessionid, read.ByteCount));
+
+                return true;
+            case KinpReadStatus.LargeFrame:
+                // todo: MessageEncoder.Decode reads only the 16-bit length. Does any client send large frames?
+                Logger.Warning("SessionActor {SessionId} dropped a {ByteCount} byte large frame.",
+                    Logger.Args(_sessionid, read.ByteCount));
+
+                return true;
+        }
+
+        var packets = GetPacketsFromBuffer(read.Frame, read.Frame.Length);
+        if (packets is null) {
+            Logger.Verbose("SessionActor {Id} received invalid packet.", Logger.Args(_sessionid));
+
+            return true;
+        }
+
+        foreach (var packet in packets) {
+            LogReceivedPacket(packet);
+
+            var msgPacket = new SERVER_100_PROTOCOL.MSG_RECEIVEDPACKET { Packet = packet };
+            _sessionActorRef.Tell(msgPacket);
+        }
+
+        return true;
     }
 
     private IMessage[] GetPacketsFromBuffer(byte[] buffer, int bytesReceived) {

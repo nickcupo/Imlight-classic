@@ -20,7 +20,10 @@ using System;
 using System.Diagnostics;
 using Akka.Actor;
 using Imcodec.MessageLayer;
+using Imcodec.MessageLayer.Generated;
+using Imlight.Classic.Net;
 using Imlight.Common;
+using Imlight.CoreLib.Patch;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;
 
@@ -39,11 +42,15 @@ internal class ControlService : MessageService, IHandshakeService {
 
     private bool _sessionValid;
     private readonly Stopwatch _responseStopwatch;
+    private readonly HeartbeatPolicy _heartbeat;
     private bool _isWaitingForHeartbeatResponse;
     private bool _isInGameServer;
+    private TimeSpan _heartbeatSentAt;
 
     public ControlService(SessionActor parentActor) : base(parentActor) {
         this._responseStopwatch = new Stopwatch();
+        // CLASSIC: a client busy loading a zone gets as long to answer as one busy starting up.
+        this._heartbeat = new HeartbeatPolicy(_keepAliveInterval, _keepAliveRspWaitTime, _sessionAcceptWaitTime);
 
         SendSessionOffer();
     }
@@ -111,8 +118,11 @@ internal class ControlService : MessageService, IHandshakeService {
 
         // Once the session is created, we need to send a heartbeat to keep it active.
         // To do that. we'll have this actor send a message to itself on interval to check on the heartbeat.
-        var heartbeatInterval = TimeSpan.FromSeconds(_keepAliveInterval);
-        Timers.StartPeriodicTimer("SessionAcceptTimer", "SessionAcceptTimer", heartbeatInterval, heartbeatInterval);
+        Timers.Cancel("SessionAcceptTimer"); // CLASSIC: was a periodic SessionAcceptTimer.
+        // CLASSIC: a launcher's patch connection may idle without answering, so it gets no heartbeat, as before.
+        if (_heartbeat.IsEnabled && !SessionActor.ServerRef.Equals(PatchServer.Instance)) {
+            Timers.StartPeriodicTimer("KeepAliveHeartbeat", "KeepAliveHeartbeat", _heartbeat.Interval, _heartbeat.Interval);
+        }
 
         _responseStopwatch.Reset();
     }
@@ -149,6 +159,15 @@ internal class ControlService : MessageService, IHandshakeService {
     [MessageHandler(typeof(SERVICE_101_PROTOCOL.MSG_OPCODE_RESUME))]
     private void ReceiveResume(SERVICE_101_PROTOCOL.MSG_OPCODE_RESUME message) => _isInGameServer = false;
 
+    [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_PRELOGIN))]
+    private void ReceivePreLogin(ZONE_102_PROTOCOL.MSG_PRELOGIN message) {
+        // CLASSIC: AttachService sends it just before MSG_LOGINCOMPLETE, when the client starts loading the zone.
+        _heartbeat.ZoneLoadStarted(HeartbeatPolicy.Clock);
+    }
+
+    [MessageHandler(typeof(GAME_5_PROTOCOL.MSG_CLIENTMOVE))]
+    private void ReceiveClientMove(GAME_5_PROTOCOL.MSG_CLIENTMOVE message) => _heartbeat.ClientMoved(); // CLASSIC
+
     private void SendHeartbeat() {
         if (!_sessionValid) {
             Logger.Error("{Name} {SessionID} tried to send heartbeat to an invalid session",
@@ -157,9 +176,15 @@ internal class ControlService : MessageService, IHandshakeService {
             return;
         }
 
+        // CLASSIC: restarting a pending check's timer would postpone it, forever when the wait is not below the interval.
+        if (Timers.IsTimerActive("KeepAliveEndTimes")) {
+            return;
+        }
+
         // We're going to send a heartbeat to our connected session.
         // If we don't receive a response for `KEEP_ALIVE_RSP_WAIT_TIME` time, we'll drop the session.
         _isWaitingForHeartbeatResponse = true;
+        _heartbeatSentAt = HeartbeatPolicy.Clock; // CLASSIC
 
         var keepAlive = new ControlMessageProtocol.KeepAliveServer() {
             SessionId = SessionActor.SessionID,
@@ -181,10 +206,26 @@ internal class ControlService : MessageService, IHandshakeService {
             return;
         }
 
+        // CLASSIC: any frame from the client answers, and a client loading a zone may be silent for a while.
+        var now = HeartbeatPolicy.Clock;
+        var lastHeardAt = SessionActor.LastPacketReceivedAt;
+        var verdict = _heartbeat.Judge(_heartbeatSentAt, lastHeardAt, now);
+        if (verdict == HeartbeatVerdict.Alive) {
+            _isWaitingForHeartbeatResponse = false;
+
+            return;
+        }
+        if (verdict == HeartbeatVerdict.Loading) {
+            Logger.Debug("SessionActor {SessionID} is silent while loading a zone; the next heartbeat checks again.",
+                Logger.Args(SessionActor.SessionID));
+
+            return;
+        }
+
         // A heartbeat-response timeout is a real drop the player sees as "connection lost"; it needs to be
         // visible in the log. It only fires outside the game server (_isInGameServer guards it above).
-        Logger.Warning("SessionActor {SessionID} heartbeat response timed out after {Wait}s; closing session.",
-            Logger.Args(SessionActor.SessionID, _keepAliveRspWaitTime));
+        Logger.Warning("SessionActor {SessionID} heartbeat response timed out after {Silence}s of silence; closing session.",
+            Logger.Args(SessionActor.SessionID, (int) (now - lastHeardAt).TotalSeconds)); // CLASSIC: was _keepAliveRspWaitTime.
         CloseSession();
     }
 

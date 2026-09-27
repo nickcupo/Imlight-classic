@@ -19,7 +19,9 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using Newtonsoft.Json;
+using Imlight.Classic.Collections;
 using Imlight.Common;
 using Imcodec.ObjectProperty.TypeCache;
 
@@ -33,10 +35,11 @@ public class ServerWizInventoryBehavior : IClientBehaviorProvider<ClientWizInven
     private static int s_maxItemsAllowed = ConfigurationManager.Settings["Character.MaxInventoryItems"].AsInt();
     private static readonly int s_maxJewelsAllowed = ConfigurationManager.Settings["Character.MaxJewelsAllowed"].AsInt();
     private static readonly int s_maxItemsAllowedFallback = 20;
+    private static readonly Lock s_writeLock = new(); // CLASSIC: static, so it is never serialized.
 
     public List<ulong> InventoryItemIds { get; set; }
 
-    [JsonIgnore] public List<WizClientObjectItem> Items { get; set; }
+    [JsonIgnore] public CopyOnWriteList<WizClientObjectItem> Items { get; set; } // CLASSIC: other services' actors read it while one of them writes.
 
     /// <summary>
     /// Adds an item to the player's inventory.
@@ -52,6 +55,7 @@ public class ServerWizInventoryBehavior : IClientBehaviorProvider<ClientWizInven
             s_maxItemsAllowed = s_maxItemsAllowedFallback;
         }
 
+        using var writeScope = s_writeLock.EnterScope(); // CLASSIC: services on other actors add to the same inventory.
         if (Items.Count >= s_maxItemsAllowed) {
             Logger.Debug("Player inventory is full. Cannot add item with global id {0}.", Logger.Args(item.m_globalID));
 
@@ -64,7 +68,7 @@ public class ServerWizInventoryBehavior : IClientBehaviorProvider<ClientWizInven
             return false;
         }
 
-        InventoryItemIds.Add(item.m_globalID);
+        InventoryItemIds = [.. InventoryItemIds, item.m_globalID]; // CLASSIC: a save on another actor may be serializing the old list.
         Items.Add(item);
         
         return true;
@@ -99,6 +103,7 @@ public class ServerWizInventoryBehavior : IClientBehaviorProvider<ClientWizInven
         if (item is null) {
             throw new NullReferenceException("Item cannot be null.");
         }
+        using var writeScope = s_writeLock.EnterScope(); // CLASSIC
         if (!Items.Remove(item)) {
             Logger.Debug("Tried to remove item with global id {0} that does not exist in player inventory.",
                 Logger.Args(item.m_globalID));
@@ -106,12 +111,14 @@ public class ServerWizInventoryBehavior : IClientBehaviorProvider<ClientWizInven
             return false;
         }
 
-        if (!InventoryItemIds.Remove(item.m_globalID)) {
+        var remainingIds = new List<ulong>(InventoryItemIds); // CLASSIC: as in AddItem, a save may be serializing the old list.
+        if (!remainingIds.Remove(item.m_globalID)) {
             Logger.Debug("Tried to remove item with global id {0} that does not exist in player inventory.",
                 Logger.Args(item.m_globalID));
 
             return false;
         }
+        InventoryItemIds = remainingIds; // CLASSIC
 
         return true;
     }

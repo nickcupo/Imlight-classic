@@ -33,7 +33,7 @@
  * 
  * Created by: Jooty, Jeff
  * Version: KALI 1.0
- * Last Updated: 08/14/2026
+ * Last Updated: 09/27/2026
  */
 
 using System;
@@ -156,7 +156,8 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
         if (message.SendToClient && zoneDetails.ErrorCode == 0) {
             // Check if the destination zone is the same as the current zone. If so, just teleport the player.
             if (message.DestinationZone == GetActiveWizard().Zone) {
-                DoTeleport(message.DestinationLocation);
+                // CLASSIC: the zone resolves named locations such as a hub's "Start"; was message.DestinationLocation.
+                DoTeleport(new Imcodec.Math.Vector4(zoneDetails.Location, zoneDetails.Orientation));
 
                 return;
             }
@@ -814,8 +815,9 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
         });
     }
 
-    private void DoTeleport(string location) {
-        var coords = Util.GetVectorFromCompactString(location);
+    private void DoTeleport(string location) => DoTeleport(Util.GetVectorFromCompactString(location)); // CLASSIC
+
+    private void DoTeleport(Imcodec.Math.Vector4 coords) { // CLASSIC: was a location string.
         var compressedCoords = coords / 4;
 
         var directionYaw = coords.W % (2 * Math.PI);

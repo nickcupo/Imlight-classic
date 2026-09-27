@@ -37,15 +37,17 @@
  * 
  * Created by: Jooty
  * Version: KALI 1.0
- * Last Updated: 06/27/2026
+ * Last Updated: 09/27/2026
  */
 
 using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net.Sockets;
+using System.Threading;
 using Akka.Actor;
 using Imcodec.MessageLayer;
+using Imlight.Classic.Net;
 using Imlight.Common;
 using Imlight.CoreLib.Game.Services;
 using Imlight.CoreLib.Shared.Packets;
@@ -72,6 +74,7 @@ public sealed class SessionActor : ReceiveActor, IDisposable {
     public ushort QueuePosition                              { get; private set; }
     public IMessage CachedDequeueMessage                     { get; set; }
     public long Ping                                         { get; private set; }
+    public TimeSpan LastPacketReceivedAt                     => TimeSpan.FromTicks(Interlocked.Read(ref _lastPacketReceivedTicks)); // CLASSIC: a HeartbeatPolicy.Clock reading.
 
     public string Ip;
     public string RemoteIp;
@@ -84,6 +87,7 @@ public sealed class SessionActor : ReceiveActor, IDisposable {
     private IActorRef _socketListenerRef;
     private IActorRef _socketSenderRef;
     private bool _isDisposed;
+    private long _lastPacketReceivedTicks;
 
     // ctor
     public SessionActor(Socket socket, ushort sessionId, IActorRef server, IActorRef actorFactoryRef = null) {
@@ -414,6 +418,8 @@ public sealed class SessionActor : ReceiveActor, IDisposable {
     }
 
     private void HandlePacket(IMessage packet) {
+        Interlocked.Exchange(ref _lastPacketReceivedTicks, HeartbeatPolicy.Clock.Ticks); // CLASSIC: ControlService's heartbeat reads it.
+
         // If the session still is not valid (the client hasn't completed the session handshake)
         // we'll cache all non-control messages for later processing.
         if (!SessionValid && packet.ServiceId != 0) {
