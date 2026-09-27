@@ -33,7 +33,7 @@
  *
  * Created by: Jooty
  * Version: KALI 1.0
- * Last Updated: 08/22/2026
+ * Last Updated: 09/27/2026
  */
 
 using System.Collections.Generic;
@@ -119,7 +119,7 @@ internal sealed class InteractQuestSelectComponent(ZoneEntity entity)
             }
         }
 
-        InteractableQuestEvents.AddGoalsCompletedBy(gameObjectTemplate, _usageGoalsByQuest); // CLASSIC: waypoint goals this object's quest event completes.
+        InteractableQuestEvents.AddGoalsCompletedBy(gameObjectTemplate, Entity.Zone?.ZonePath, _usageGoalsByQuest); // CLASSIC: waypoint goals this object's quest event completes.
     }
 
     public void OnServiceInteraction(IActorRef playerActor, Wizard playerCharacter, CoreObject playerObject, uint serviceOptionIndex) {
