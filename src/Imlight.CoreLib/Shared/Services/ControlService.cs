@@ -20,6 +20,7 @@ using System;
 using System.Diagnostics;
 using Akka.Actor;
 using Imcodec.MessageLayer;
+using Imlight.Classic.Net;
 using Imlight.Common;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;
@@ -39,11 +40,16 @@ internal class ControlService : MessageService, IHandshakeService {
 
     private bool _sessionValid;
     private readonly Stopwatch _responseStopwatch;
+    private readonly HeartbeatPolicy _heartbeat;
     private bool _isWaitingForHeartbeatResponse;
     private bool _isInGameServer;
+    private DateTimeOffset _heartbeatSentAt;
+    private DateTimeOffset? _zoneLoadStartedAt;
 
     public ControlService(SessionActor parentActor) : base(parentActor) {
         this._responseStopwatch = new Stopwatch();
+        // CLASSIC: a client busy loading a zone gets as long to answer as one busy starting up.
+        this._heartbeat = new HeartbeatPolicy(_keepAliveInterval, _keepAliveRspWaitTime, _sessionAcceptWaitTime);
 
         SendSessionOffer();
     }
@@ -111,8 +117,10 @@ internal class ControlService : MessageService, IHandshakeService {
 
         // Once the session is created, we need to send a heartbeat to keep it active.
         // To do that. we'll have this actor send a message to itself on interval to check on the heartbeat.
-        var heartbeatInterval = TimeSpan.FromSeconds(_keepAliveInterval);
-        Timers.StartPeriodicTimer("SessionAcceptTimer", "SessionAcceptTimer", heartbeatInterval, heartbeatInterval);
+        Timers.Cancel("SessionAcceptTimer"); // CLASSIC: was a periodic SessionAcceptTimer.
+        if (_heartbeat.IsEnabled) {
+            Timers.StartPeriodicTimer("KeepAliveHeartbeat", "KeepAliveHeartbeat", _heartbeat.Interval, _heartbeat.Interval);
+        }
 
         _responseStopwatch.Reset();
     }
@@ -149,6 +157,12 @@ internal class ControlService : MessageService, IHandshakeService {
     [MessageHandler(typeof(SERVICE_101_PROTOCOL.MSG_OPCODE_RESUME))]
     private void ReceiveResume(SERVICE_101_PROTOCOL.MSG_OPCODE_RESUME message) => _isInGameServer = false;
 
+    [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_PRELOGIN))]
+    private void ReceivePreLogin(ZONE_102_PROTOCOL.MSG_PRELOGIN message) {
+        // CLASSIC: AttachService sends it just before MSG_LOGINCOMPLETE, when the client starts loading the zone.
+        _zoneLoadStartedAt = DateTimeOffset.UtcNow;
+    }
+
     private void SendHeartbeat() {
         if (!_sessionValid) {
             Logger.Error("{Name} {SessionID} tried to send heartbeat to an invalid session",
@@ -160,6 +174,7 @@ internal class ControlService : MessageService, IHandshakeService {
         // We're going to send a heartbeat to our connected session.
         // If we don't receive a response for `KEEP_ALIVE_RSP_WAIT_TIME` time, we'll drop the session.
         _isWaitingForHeartbeatResponse = true;
+        _heartbeatSentAt = DateTimeOffset.UtcNow; // CLASSIC
 
         var keepAlive = new ControlMessageProtocol.KeepAliveServer() {
             SessionId = SessionActor.SessionID,
@@ -178,6 +193,20 @@ internal class ControlService : MessageService, IHandshakeService {
 
     private void ReceiveKeepAliveEndTimes() {
         if (!_isWaitingForHeartbeatResponse || _isInGameServer) {
+            return;
+        }
+
+        // CLASSIC: any frame from the client answers, and a client loading a zone may be silent for a while.
+        var verdict = _heartbeat.Judge(_heartbeatSentAt, SessionActor.LastPacketReceivedAt, _zoneLoadStartedAt, DateTimeOffset.UtcNow);
+        if (verdict == HeartbeatVerdict.Alive) {
+            _isWaitingForHeartbeatResponse = false;
+
+            return;
+        }
+        if (verdict == HeartbeatVerdict.Loading) {
+            Logger.Debug("SessionActor {SessionID} is silent while loading a zone; the next heartbeat checks again.",
+                Logger.Args(SessionActor.SessionID));
+
             return;
         }
 
