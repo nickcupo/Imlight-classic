@@ -34,6 +34,7 @@
  * 
  * TODO:
  * - Does KingsIsle's reader give AND precedence over OR? Every r806919 trigger and spawn list reads the same either way.
+ * - Does a list that starts with AND bind it to the next item only, or to the whole OR run after it, as stock reads it? Only WC_Shop_Area Trigger_Teleport_2_PartyRoom (a post-2010 event door) has that shape.
  * 
  * Created by: Nick with Claude Code (claude-opus-5-5)
  * Version: KALI 1.0

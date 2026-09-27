@@ -22,6 +22,7 @@ using System.Linq;
 using Akka.Actor;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
+using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.Game.Requirements;
 using Imlight.CoreLib.Game.Requirements.Contexts;
 using Imlight.CoreLib.Game.Zone.Core;
@@ -74,14 +75,15 @@ internal sealed partial class ZoneTriggerSupervisor(Core.Zone zone) : ZoneEntity
         // Client wads pair multiple triggers on the same event; every passing trigger fires
         // (their results are independent), but paired teleporter triggers must not both win:
         // only the first ResTeleport in wad order may execute.
+        if (ClassicQuestEngine.IsActive) { // CLASSIC: the classic decision is ZoneTriggerSupervisor.Activation.cs.
+            ReceiveClassicPostEvent(message);
+
+            return;
+        }
+
         var teleportDispatched = false;
-        ObserveActivationEvent(message); // CLASSIC
         foreach (var (trigger, triggerActor) in _orderedTriggers) {
             if (trigger.m_fireEvents is null || !trigger.m_fireEvents.Any(x => x == message.EventName)) {
-                continue;
-            }
-
-            if (!IsArmed(triggerActor, message.PlayerActor)) { // CLASSIC
                 continue;
             }
 

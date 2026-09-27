@@ -1026,7 +1026,7 @@ internal partial class QuestService(SessionActor sessionActor) : MessageService(
             .ToArray();
 
         // "Roll" the drop tables to get the actual items.
-        var rollResult = DropTableRoller.Roll(dropTableNames, playerActor, playerObj, playerWizard, questReward: true); // CLASSIC
+        var rollResult = DropTableRoller.RollQuestReward(dropTableNames, playerActor, playerObj, playerWizard); // CLASSIC: was Roll.
 
         // Convert the result into something we can send over the network.
         var convertedResults = DropTableConverter.ToLootInfoList(rollResult);

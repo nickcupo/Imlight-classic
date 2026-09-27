@@ -22,7 +22,7 @@
  * PURPOSE:
  * Where a new character starts and what it carries when the profile sets
  * rules.tutorial: unicorn-way-classic: Ambrose's office, with only the
- * tutorial's wand and deck.
+ * tutorial's wand and deck, the deck holding the school spell.
  * 
  * USAGE EXAMPLE:
  * var zone = ClassicStart.IsActive ? ClassicStart.StartingZone : ConfigurationManager.Settings["Character.StartingZone"];
@@ -69,6 +69,11 @@ internal static class ClassicStart {
     /// Wand-T1-016 (87256) and Deck-Tutorial-001 (126983): the wand and deck the tutorial equips.
     /// </summary>
     internal static ImmutableArray<ulong> StarterItemTemplateIds { get; } = [87256, 126983];
+
+    /// <summary>
+    /// Copies of the school spell the starter deck holds when the classic start ends.
+    /// </summary>
+    internal const int SchoolSpellDeckCopies = 3;
 
     /// <summary>
     /// True when the active profile gives new characters the classic start.

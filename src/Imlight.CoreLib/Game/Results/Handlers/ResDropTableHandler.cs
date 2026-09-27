@@ -52,11 +52,10 @@ internal sealed class ResDropTableHandler : BaseResultHandler<ResDropTable> {
 
         // The drop table doesn't really mean anything yet. It's just a template.
         // We need to actually "roll" it.
-        var rollResults = DropTableRoller.Roll([Result.m_tableName],
+        var rollResults = DropTableRoller.RollQuestReward([Result.m_tableName], // CLASSIC: was Roll.
                                                context.GetPlayerRef(),
                                                context.GetPlayerObj(),
-                                               wizard,
-                                               questReward: true); // CLASSIC
+                                               wizard);
 
         // Process the results.
         LootGranter.GrantAndDisplay(context.GetPlayerRef(), wizard, rollResults);

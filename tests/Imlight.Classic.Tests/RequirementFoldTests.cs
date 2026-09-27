@@ -124,7 +124,7 @@ public sealed class RequirementFoldTests {
         And("HasQuest MB-SPELL-C07-001"),
     ];
 
-    // WizardCity-WC_Shop_Area "Trigger_Teleport_2_PartyRoom": the one Wizard City list that starts with AND.
+    // WizardCity-WC_Shop_Area "Trigger_Teleport_2_PartyRoom": the one Wizard City list that starts with AND (a post-2010 event).
     private static readonly Req[] s_partyRoom = [
         And("EntryValue Decaversary == 1"),
         Or("HasQuest WC-BIRTHDAY-TEN-001A"), Or("HasQuest WC-BIRTHDAY-TEN-001B"),
@@ -180,9 +180,11 @@ public sealed class RequirementFoldTests {
     }
 
     [Fact]
-    public void LeadingAndBindsOnlyToTheNextItem() {
+    public void PartyRoomNeedsTheFlagForTheFirstQuest() {
+        // todo: unverified. Does the leading AND bind only to the next item? If it binds to the whole OR run, as
+        // stock reads it, HasQuest WC-BIRTHDAY-TEN-001B alone would not pass. Only the cases both readings share are asserted.
         Assert.True(LeftToRight(s_partyRoom, "EntryValue Decaversary == 1", "HasQuest WC-BIRTHDAY-TEN-001A"));
-        Assert.True(LeftToRight(s_partyRoom, "HasQuest WC-BIRTHDAY-TEN-001B"));
+        Assert.True(Stock(s_partyRoom, "EntryValue Decaversary == 1", "HasQuest WC-BIRTHDAY-TEN-001A"));
         Assert.False(LeftToRight(s_partyRoom, "HasQuest WC-BIRTHDAY-TEN-001A"));
         Assert.False(LeftToRight(s_partyRoom, "EntryValue Decaversary == 1"));
     }

@@ -22,8 +22,9 @@
  * PURPOSE:
  * CLASSIC: the classic start. A new character leaves the Golem Court
  * tutorial (finale or Skip), or starts without it, in Ambrose's office
- * with the school spell learned, the starter wand and deck equipped, and
- * GainedEnrollment set so the office doors let it out.
+ * with the school spell learned and three copies of it in the starter deck,
+ * the starter wand and deck equipped, and GainedEnrollment set so the office
+ * doors let it out.
  * 
  * USAGE EXAMPLE:
  * CompleteClassicStart(wizard) before the tutorial's final teleport.
@@ -31,20 +32,29 @@
  * NOTE:
  * The client asks for Tutorial_Intro's OnlyGoal only after its final
  * teleport lands, outside the tutorial zones, where tutorial commands are
- * not taken; so the finale gives the school spell here. The office's exit
- * triggers require GainedEnrollment, which only the 2019 first quest set.
- * Every step is gated by ClassicStart.IsActive and runs once per character.
+ * not taken. The school spell is Tutorial_Intro's ResLearnSpell whose
+ * requirements the wizard meets. The office's exit triggers require
+ * GainedEnrollment, which only the 2019 first quest set. Every step is gated
+ * by ClassicStart.IsActive and runs once per character. The office attach
+ * carries the filled deck; without the tutorial the deck shows its cards
+ * from the next zone change.
  * 
  * TODO:
- * - KingsIsle's tutorial script also put three copies of the school spell in the deck; the deck starts empty here.
  * 
  * Created by: Nick with Claude Code (claude-opus-5-5)
  * Version: KALI 1.0
  * Last Updated: 09/27/2026
  */
 
+using System.Linq;
+using Imcodec.MessageLayer.Generated;
+using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
 using Imlight.CoreLib.Classic;
+using Imlight.CoreLib.Game.Requirements;
+using Imlight.CoreLib.Game.Requirements.Contexts;
+using Imlight.CoreLib.Game.Spells;
+using Imlight.CoreLib.WizardData.Collections;
 using Imlight.CoreLib.WizardData.Models.Player;
 
 namespace Imlight.CoreLib.Game.Services;
@@ -78,8 +88,57 @@ internal sealed partial class TutorialService {
             wizard.CompleteQuest(TUTORIAL_INTRO_QUEST_NAME);
         }
 
+        if (!wizard.HasRegistryValue(ClassicStart.CompletedEntry)) {
+            DeckSchoolSpell(wizard);
+        }
+
         wizard.SetRegistryValue(ClassicStart.CompletedEntry, 1);
         GrantClassicEnrollment(wizard);
+    }
+
+    private void DeckSchoolSpell(Wizard wizard) {
+        var spell = FindSchoolSpell(wizard);
+        if (spell is null) {
+            Logger.Warning("Classic start for {Wizard}: Tutorial_Intro gives this school no spell; the deck stays empty.",
+                Logger.Args(wizard.PlayerNameBehavior.GetWizardName()));
+
+            return;
+        }
+
+        // The deck never holds a spell the book lacks; Tutorial_Intro's own ResLearnSpell may not have run yet.
+        if (!wizard.SpellbookBehavior.LearnedSpellTemplateIds.Contains(spell.m_templateID) && wizard.LearnSpell(spell)) {
+            SendToSocket(new WIZARD_12_PROTOCOL.MSG_ADDSPELLTOBOOK {
+                SpellID = (int) spell.m_templateID,
+            });
+        }
+
+        var deck = wizard.EquipmentBehavior.GetItemInSlot(EquipmentSlotType.Deck);
+        if (deck is null) {
+            Logger.Warning("Classic start for {Wizard}: no deck is equipped, so the school spell is not put in one.",
+                Logger.Args(wizard.PlayerNameBehavior.GetWizardName()));
+
+            return;
+        }
+
+        var copies = wizard.SpellbookBehavior.SpellList?.FirstOrDefault(card => card.m_templateID == spell.m_templateID)?.m_quantity ?? 0;
+        while (copies < ClassicStart.SchoolSpellDeckCopies && wizard.AddSpellToDeck(spell.m_templateID, deck.m_globalID.Full)) {
+            copies++;
+        }
+
+        Logger.Information("Classic start for {Wizard}: the deck holds {Copies} of school spell {Spell}.",
+            Logger.Args(wizard.PlayerNameBehavior.GetWizardName(), copies, spell.m_templateID));
+    }
+
+    private Spell FindSchoolSpell(Wizard wizard) {
+        var goal = QuestTemplateCollection.GetQuestByName(TUTORIAL_INTRO_QUEST_NAME)?.m_goals?
+            .FirstOrDefault(template => template.m_goalName == TUTORIAL_INTRO_GOAL_NAME);
+        var playerObj = GetActiveGameObject();
+        var learn = goal?.m_completeResults?.m_results?
+            .OfType<ResLearnSpell>()
+            .FirstOrDefault(result => RequirementDispatcher.EvaluateRequirements(result.m_requirements,
+                new GenericRequirementContext(result.m_requirements, SessionActor.ActorRef, playerObj, wizard)));
+
+        return learn is null ? null : SpellFactory.GetSpell(learn.m_templateID);
     }
 
     private static void GrantClassicEnrollment(Wizard wizard) {

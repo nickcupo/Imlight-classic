@@ -22,7 +22,6 @@ using System.Linq;
 using Akka.Actor;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
-using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.Game.Requirements;
 using Imlight.CoreLib.Game.Requirements.Contexts;
 using Imlight.CoreLib.WizardData.Collections;
@@ -40,14 +39,12 @@ public static partial class DropTableRoller { // CLASSIC: partial for DropTableR
     /// <param name="playerRef">Player actor reference for requirements context</param>
     /// <param name="playerObj">Player core object for requirements context</param>
     /// <param name="wizard">Player wizard data for requirements context</param>
-    /// <param name="questReward">CLASSIC: the tables are a quest's reward, so on a classic profile every item that passes its requirements is granted.</param>
     /// <returns>Combined DropTableResult containing all rolled loot that passed requirements</returns>
     public static DropTableResult Roll(
         string[] dropTableNames,
         IActorRef playerRef,
         CoreObject playerObj,
-        Wizard wizard,
-        bool questReward = false) {
+        Wizard wizard) {
 
         if (dropTableNames == null || dropTableNames.Length == 0) {
             return CreateEmptyResult("no_tables_specified");
@@ -82,16 +79,14 @@ public static partial class DropTableRoller { // CLASSIC: partial for DropTableR
             }
 
             // Roll the table with context for item requirements.
-            var tableResult = RollSingleTable(dropTable, playerRef, playerObj, wizard, random, questReward);
+            var tableResult = RollSingleTable(dropTable, playerRef, playerObj, wizard, random);
 
             // Accumulate rewards.
             combinedResult.GoldAmount += tableResult.GoldAmount;
             combinedResult.ExperienceAmount += tableResult.ExperienceAmount;
             combinedResult.TrainingPoints += tableResult.TrainingPoints;
             combinedResult.Items.AddRange(tableResult.Items);
-            combinedResult.GrantsPotionSlot = ClassicQuestEngine.IsActive // CLASSIC: any rolled table's potion slot counts.
-                ? combinedResult.GrantsPotionSlot || tableResult.GrantsPotionSlot
-                : tableResult.GrantsPotionSlot;
+            combinedResult.GrantsPotionSlot = tableResult.GrantsPotionSlot;
             
         }
 
@@ -102,8 +97,7 @@ public static partial class DropTableRoller { // CLASSIC: partial for DropTableR
                                                              IActorRef playerRef,
                                                              CoreObject playerObj,
                                                              Wizard wizard,
-                                                             Random random,
-                                                             bool questReward) {
+                                                             Random random) {
 
         var result = new DropTableResult {
             DropTableId = dropTable.Id
@@ -122,12 +116,9 @@ public static partial class DropTableRoller { // CLASSIC: partial for DropTableR
         result.ExperienceAmount = dropTable.ExperienceAmount;
         result.MagicSchool = "All"; 
         result.TrainingPoints = dropTable.TrainingPoints;
-        result.GrantsPotionSlot = ClassicQuestEngine.IsActive && dropTable.GrantsPotionSlot; // CLASSIC: stock never reads the table's flag.
         
         // Roll items with requirements validation.
-        result.Items = questReward && ClassicQuestEngine.IsActive // CLASSIC: a quest reward table is a list, not a pool.
-            ? EveryRewardItem(dropTable, playerRef, playerObj, wizard)
-            : RollTableItems(dropTable, playerRef, playerObj, wizard, random);
+        result.Items = RollTableItems(dropTable, playerRef, playerObj, wizard, random);
             
         return result;
     }

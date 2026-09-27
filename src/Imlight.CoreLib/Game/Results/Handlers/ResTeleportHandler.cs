@@ -28,7 +28,7 @@ namespace Imlight.CoreLib.Game.Results.Handlers;
 
 internal sealed class ResTeleportHandler : BaseResultHandler<ResTeleport> {
 
-    private static readonly ConcurrentDictionary<string, bool> s_reportedMissingDestinations = new(); // CLASSIC
+    private static readonly ConcurrentDictionary<(string Zone, string Source), bool> s_reportedMissingDestinations = new(); // CLASSIC
 
     public override bool Execute(IResultContext context) {
         if (context.GetPlayerObj() is not WizClientObject playerObj) {
@@ -40,11 +40,12 @@ internal sealed class ResTeleportHandler : BaseResultHandler<ResTeleport> {
             var source = context is GenericResultContext generic
                 ? generic.TriggerName ?? generic.QuestName ?? "?"
                 : "?";
-            if (s_reportedMissingDestinations.TryAdd(source, true)) {
-                Logger.Warning("Skipped a teleport from {Source}: it has no destination zone (no SpiralDB ZoneTransfer record).",
-                    Logger.Args(source));
+            var zone = context.GetZoneActor()?.Path.Name ?? "?";
+            if (s_reportedMissingDestinations.TryAdd((zone, source), true)) {
+                Logger.Warning("Skipped a teleport from {Source} in {Zone}: it has no destination zone (no SpiralDB ZoneTransfer record).",
+                    Logger.Args(source, zone));
             } else {
-                Logger.Debug("Skipped a teleport from {Source}: no destination zone.", Logger.Args(source));
+                Logger.Debug("Skipped a teleport from {Source} in {Zone}: no destination zone.", Logger.Args(source, zone));
             }
 
             return true;

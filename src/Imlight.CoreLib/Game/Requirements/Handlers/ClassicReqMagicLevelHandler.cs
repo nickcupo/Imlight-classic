@@ -29,10 +29,12 @@
  * NOTE:
  * Off unless ClassicQuestEngine.IsActive: stock Imlight has no handler for
  * ReqMagicLevel and reads it as unmet. The client's zone triggers use it with
- * an empty m_magicSchool (Gamma's teleport tips, level 15 or lower).
+ * an empty m_magicSchool (Gamma's teleport tips, level 15 or lower). The
+ * comparison is Imlight.Classic.Quests.NumericRequirement.
  * 
  * TODO:
  * - Does a non-empty m_magicSchool ask for the level in that school only?
+ * - Once upstream ships its own ReqMagicLevel handler, is this one still needed? Both would register for the type.
  * 
  * Created by: Nick with Claude Code (claude-opus-5-5)
  * Version: KALI 1.0
@@ -40,11 +42,12 @@
  */
 
 using Imcodec.ObjectProperty.TypeCache;
+using Imlight.Classic.Quests;
 using Imlight.CoreLib.Classic;
 
 namespace Imlight.CoreLib.Game.Requirements.Handlers;
 
-internal sealed class ReqMagicLevelHandler : BaseRequirementHandler<ReqMagicLevel> {
+internal sealed class ClassicReqMagicLevelHandler : BaseRequirementHandler<ReqMagicLevel> {
 
     public override bool Evaluate(IRequirementContext context) {
         if (!ClassicQuestEngine.IsActive) {
@@ -56,17 +59,7 @@ internal sealed class ReqMagicLevelHandler : BaseRequirementHandler<ReqMagicLeve
             return false;
         }
 
-        float actual = level.Value;
-        var required = Requirement.m_numericValue;
-
-        return Requirement.m_operatorType switch {
-            OPERATOR_TYPE.OPERATOR_EQUALS => actual == required,
-            OPERATOR_TYPE.OPERATOR_GREATER_THAN => actual > required,
-            OPERATOR_TYPE.OPERATOR_LESS_THAN => actual < required,
-            OPERATOR_TYPE.OPERATOR_GREATER_THAN_EQ => actual >= required,
-            OPERATOR_TYPE.OPERATOR_LESS_THAN_EQ => actual <= required,
-            _ => false
-        };
+        return NumericRequirement.Meets(level.Value, Requirement.m_operatorType.ToString(), Requirement.m_numericValue);
     }
 
 }

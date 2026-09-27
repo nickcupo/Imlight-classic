@@ -20,17 +20,19 @@
  * ========================================================================
  * 
  * PURPOSE:
- * CLASSIC: honours a trigger's m_deactivateEvents and m_activateEvents per
- * player, so a trigger that disables itself stops firing for that player.
+ * CLASSIC: which triggers fire on a posted event. Honours a trigger's
+ * m_deactivateEvents and m_activateEvents per player, and lets only a
+ * teleport with a destination take the event's one teleport.
  * 
  * USAGE EXAMPLE:
- * Called from ZoneTriggerSupervisor.ReceivePostEvent before any trigger fires.
+ * ReceivePostEvent hands every event here when ClassicQuestEngine.IsActive.
  * 
  * NOTE:
- * Only triggers with a deactivate event are tracked; the rest are always
- * armed, as in stock Imlight. Every posted event carries its player (volumes,
- * trigger results, the tutorial, zone entry), so state is kept per player
- * actor. See Imlight.Classic.Quests.TriggerActivation for the rules.
+ * The decision itself is Imlight.Classic.Quests.TriggerEventDispatch, where
+ * it is tested. Only triggers with a deactivate event are tracked; the rest
+ * are always armed, as in stock Imlight. Every posted event carries its
+ * player (volumes, trigger results, the tutorial, zone entry), so state is
+ * kept per player actor.
  * 
  * TODO:
  * 
@@ -39,7 +41,6 @@
  * Last Updated: 09/27/2026
  */
 
-using System.Collections.Generic;
 using System.Linq;
 using Akka.Actor;
 using Imcodec.ObjectProperty.TypeCache;
@@ -52,32 +53,38 @@ namespace Imlight.CoreLib.Game.Zone.Supervisors;
 
 internal sealed partial class ZoneTriggerSupervisor {
 
-    private readonly Dictionary<IActorRef, (string Name, TriggerActivation<IActorRef> State)> _activation = [];
+    private readonly TriggerEventDispatch<IActorRef, IActorRef> _activation = new();
 
     private void TrackActivation(Trigger trigger, IActorRef triggerActor) {
         if (trigger is null || !ClassicQuestEngine.IsActive) {
             return;
         }
 
-        var state = new TriggerActivation<IActorRef>(
+        _activation.Track(triggerActor, (string) trigger.m_triggerName,
             trigger.m_activateEvents?.Select(name => (string) name),
             trigger.m_deactivateEvents?.Select(name => (string) name));
-        if (state.CanDisarm) {
-            _activation[triggerActor] = ((string) trigger.m_triggerName, state);
+    }
+
+    private void ReceiveClassicPostEvent(ZONE_102_PROTOCOL.MSG_POSTEVENT message) {
+        var fires = _activation.Dispatch(_orderedTriggers, entry => entry.Actor, message.EventName, message.PlayerActor,
+            listens: entry => entry.Trigger?.m_fireEvents?.Any(x => x == message.EventName) == true,
+            meetsRequirements: entry => EvaluateRequirements(entry.Trigger, message),
+            teleportsSomewhere: entry => HasTeleportDestination(entry.Trigger),
+            stateChanged: (name, armed) => Logger.Debug("Zone {Zone} trigger {Trigger} is {State} for {Player} by {Event}.",
+                Logger.Args(Zone.ZonePath, name, armed ? "armed" : "disarmed", message.PlayerActor?.Path.Name, message.EventName)));
+
+        foreach (var fire in fires) {
+            fire.Trigger.Actor.Forward(new ZONE_102_PROTOCOL.MSG_POSTEVENT {
+                EventName = message.EventName,
+                PlayerActor = message.PlayerActor,
+                PlayerGameObject = message.PlayerGameObject,
+                SuppressTeleportResults = fire.SuppressTeleport,
+            });
         }
     }
 
-    private void ObserveActivationEvent(ZONE_102_PROTOCOL.MSG_POSTEVENT message) {
-        foreach (var (name, state) in _activation.Values) {
-            if (state.Observe(message.EventName, message.PlayerActor)) {
-                Logger.Debug("Zone {Zone} trigger {Trigger} is {State} for {Player} by {Event}.",
-                    Logger.Args(Zone.ZonePath, name, state.IsArmed(message.PlayerActor) ? "armed" : "disarmed",
-                        message.PlayerActor?.Path.Name, message.EventName));
-            }
-        }
-    }
-
-    private bool IsArmed(IActorRef triggerActor, IActorRef player)
-        => !_activation.TryGetValue(triggerActor, out var entry) || entry.State.IsArmed(player);
+    private static bool HasTeleportDestination(Trigger trigger)
+        => trigger.m_results?.m_results?.Any(result => result is ResTeleport teleport
+            && !string.IsNullOrEmpty(teleport.m_destinationZone)) == true;
 
 }

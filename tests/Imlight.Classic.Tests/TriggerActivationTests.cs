@@ -27,9 +27,11 @@
  * dotnet test server/tests/Imlight.Classic.Tests
  * 
  * NOTE:
- * PostEvents mirrors ZoneTriggerSupervisor: every trigger observes an event
- * before any trigger fires on it, and a fired trigger's posted events queue
- * behind it in order, as the zone actor's mailbox does.
+ * PostEvents decides each event with TriggerEventDispatch, the code
+ * ZoneTriggerSupervisor runs on a classic profile, and queues a fired
+ * trigger's posted events behind it in order, as the zone actor's mailbox
+ * does. With honourDeactivation false no trigger is tracked, as on stock
+ * Imlight.
  * 
  * TODO:
  * 
@@ -67,36 +69,31 @@ public sealed class TriggerActivationTests {
     // capped at 50 fires.
     private static List<string> PostEvents(IReadOnlyList<TriggerData> triggers, bool honourDeactivation,
                                            params (string Event, Player Player)[] posts) {
-        var states = triggers.ToDictionary(trigger => trigger,
-            trigger => new TriggerActivation<Player>(trigger.Activate, trigger.Deactivate));
+        var dispatch = new TriggerEventDispatch<TriggerData, Player>();
+        if (honourDeactivation) {
+            foreach (var trigger in triggers) {
+                dispatch.Track(trigger, trigger.Name, trigger.Activate, trigger.Deactivate);
+            }
+        }
+
         var fired = new List<string>();
         foreach (var initial in posts) {
             var queue = new Queue<(string Event, Player Player)>([initial]);
-            Drain(queue);
-        }
-
-        return fired;
-
-        void Drain(Queue<(string Event, Player Player)> queue) {
             while (queue.TryDequeue(out var post) && fired.Count < 50) {
-                if (honourDeactivation) {
-                    foreach (var state in states.Values) {
-                        state.Observe(post.Event, post.Player);
-                    }
-                }
-
-                foreach (var trigger in triggers) {
-                    if (!trigger.Fire.Contains(post.Event) || !states[trigger].IsArmed(post.Player)) {
-                        continue;
-                    }
-
-                    fired.Add(trigger.Name + ":" + post.Player);
-                    foreach (var posted in trigger.Posts) {
+                var fires = dispatch.Dispatch(triggers, trigger => trigger, post.Event, post.Player,
+                    listens: trigger => trigger.Fire.Contains(post.Event),
+                    meetsRequirements: _ => true,
+                    teleportsSomewhere: _ => false);
+                foreach (var fire in fires) {
+                    fired.Add(fire.Trigger.Name + ":" + post.Player);
+                    foreach (var posted in fire.Trigger.Posts) {
                         queue.Enqueue((posted, post.Player));
                     }
                 }
             }
         }
+
+        return fired;
     }
 
     [Fact]
