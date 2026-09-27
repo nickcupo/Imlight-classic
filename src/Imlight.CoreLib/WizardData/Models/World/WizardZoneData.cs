@@ -59,6 +59,11 @@ public class ClassicTeleportObject {
     // the object teleports: a teleport stone works once its pair is discovered.
     public List<string> DiscoveredBy { get; set; }
 
+    // The object state the template's option needs ("On": the Malistaire lair portal to Ambrose, the MooShu spirit
+    // world portals, which a zone event opens); the wizard must have the object in that state (a dynamod on its tag),
+    // or the object must be placed in it.
+    public string RequiresState { get; set; }
+
     // The template InteractableBehavior's icon, title key and prompt key (the client's "Teleport Stone" / "Press X").
     public string Icon { get; set; }
     public string TitleKey { get; set; }

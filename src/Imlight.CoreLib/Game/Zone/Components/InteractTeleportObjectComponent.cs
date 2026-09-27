@@ -32,8 +32,8 @@
  * Attaches to teleport and portal object templates; an object whose zone has
  * no entry for its zone tag stays inert.
  *
- * The teleport stones (Dragonspyre's, and the Oct 2009 Marleybone and MooShu
- * stones) work the same way: each placed stone has one entry, leading to the
+ * The teleport stones (Grizzleheim's rune stones, Dragonspyre's, and the Oct
+ * 2009 Marleybone and MooShu stones) work the same way: each placed stone has one entry, leading to the
  * other stone of its pair in the same zone. The client's own flow is a plain
  * press-X interaction: the template's InteractableBehavior has one option per
  * zone the template is placed in (a ReqInZone each), so a stone never offers a
@@ -106,8 +106,10 @@ internal sealed class InteractTeleportObjectComponent(ZoneEntity entity)
             return false; // InteractDungeonSigilComponent's
         }
 
+        // The Grizzleheim rune stones (GH_RunestoneMainBearClaw, GH_Runestone_BearClaw, ...) are teleport stones too.
         return name.Contains("Teleport", StringComparison.OrdinalIgnoreCase)
-            || name.Contains("Portal", StringComparison.OrdinalIgnoreCase);
+            || name.Contains("Portal", StringComparison.OrdinalIgnoreCase)
+            || (name.StartsWith("GH_Runestone", StringComparison.Ordinal) && !name.Contains("Minor"));
     }
 
     public IEnumerable<ServiceOptionBase> GetServiceOptions(Wizard playerCharacter) {
@@ -133,8 +135,9 @@ internal sealed class InteractTeleportObjectComponent(ZoneEntity entity)
             return;
         }
 
-        // The Basilica portals are placed "Off"; light them for a wizard who may use them.
-        if (MayUse(playerActor, playerObj, playerWizard)
+        // The Basilica portals are placed "Off"; light them for a wizard who may use them. An object whose option needs
+        // a state is opened by its zone event, not here.
+        if (Entry.Classic?.RequiresState is not { Length: > 0 } && MayUse(playerActor, playerObj, playerWizard)
                 && string.Equals(Entity.Info?.m_startState, OFF_STATE, StringComparison.Ordinal)) {
             Entity.ChangeStateExclusiveSender(ON_STATE, playerActor);
         }
@@ -215,8 +218,20 @@ internal sealed class InteractTeleportObjectComponent(ZoneEntity entity)
             && Entry.Classic.DiscoveredBy.Any(tag => wizard.HasDynamod(zonePath, tag, ON_STATE));
     }
 
+    private bool InRequiredState(Wizard wizard) {
+        var state = Entry?.Classic?.RequiresState;
+        if (string.IsNullOrEmpty(state)) {
+            return true;
+        }
+
+        var tag = Entity.Info?.m_zoneTag?.ToString();
+
+        return string.Equals(Entity.Info?.m_startState?.ToString(), state, StringComparison.OrdinalIgnoreCase)
+            || (wizard is not null && !string.IsNullOrEmpty(tag) && wizard.HasDynamod(Entity.Zone?.ZonePath, tag, state));
+    }
+
     private bool MayUse(IActorRef playerActor, CoreObject playerObj, Wizard wizard) {
-        if (!FeatureOn || !Discovered(wizard)) {
+        if (!FeatureOn || !Discovered(wizard) || !InRequiredState(wizard)) {
             return false;
         }
 
