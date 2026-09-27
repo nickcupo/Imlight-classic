@@ -20,8 +20,9 @@
  * ========================================================================
  * 
  * PURPOSE:
- * Pins the names the C# code knows (world ids, feature paths, rule enums)
- * to classic-data's JSON Schemas, so the two cannot drift apart.
+ * Pins the names the C# code knows (world ids, feature paths, rule enums,
+ * spell and accuracy table fields) to classic-data's JSON Schemas, so the
+ * two cannot drift apart.
  * 
  * USAGE EXAMPLE:
  * dotnet test server/tests/Imlight.Classic.Tests
@@ -32,7 +33,7 @@
  * 
  * Created by: Nick with Claude Code (claude-opus-5-5)
  * Version: KALI 1.0
- * Last Updated: 09/26/2026
+ * Last Updated: 09/27/2026
  */
 
 using System;
@@ -40,6 +41,8 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
+using Imlight.Classic.Rules;
+using Imlight.Classic.Spells;
 using Imlight.Classic.Zones;
 using Xunit;
 
@@ -128,6 +131,57 @@ public sealed class SchemaDriftTests {
         var schema = ReadSchema("profile.schema.json");
 
         Assert.Equal(ClassicSchema.IdPattern, schema.GetProperty("properties").GetProperty("id").GetProperty("pattern").GetString());
+    }
+
+    private static string[] PropertyNames(JsonElement element)
+        => [.. element.GetProperty("properties").EnumerateObject().Select(property => property.Name).Order(StringComparer.Ordinal)];
+
+    private static string[] Sorted(IEnumerable<string> keys) => [.. keys.Order(StringComparer.Ordinal)];
+
+    [Fact]
+    public void SpellEnumsMatchSpellSchema() {
+        var schema = ReadSchema("spell.schema.json");
+        var defs = schema.GetProperty("$defs");
+        var effect = defs.GetProperty("effect").GetProperty("properties");
+
+        Assert.Equal(EnumValues(defs.GetProperty("school")), ClassicSpellSchema.Schools.ToArray());
+        Assert.Equal(EnumValues(defs.GetProperty("effectSchool")), ClassicSpellSchema.EffectSchools.ToArray());
+        Assert.Equal(EnumValues(schema.GetProperty("properties").GetProperty("kind")), ClassicSpellSchema.Kinds.ToArray());
+        Assert.Equal(EnumValues(effect.GetProperty("type")), ClassicSpellSchema.EffectTypes.ToArray());
+        Assert.Equal(EnumValues(effect.GetProperty("targets")), ClassicSpellSchema.Targets.ToArray());
+        Assert.Equal(EnumValues(defs.GetProperty("licenseTag")), ClassicSpellSchema.LicenseTags.ToArray());
+        Assert.Equal(14, defs.GetProperty("pips").GetProperty("oneOf")[0].GetProperty("maximum").GetInt32());
+    }
+
+    [Fact]
+    public void SpellEnumTypesFollowTheSchemaNames() {
+        Assert.Equal(ClassicSpellSchema.EffectTypes.Select(name => name.Replace("_", "")),
+            Enum.GetValues<SpellEffectKind>().Select(kind => kind.ToString().ToLowerInvariant()));
+        Assert.Equal(ClassicSpellSchema.Targets.Select(name => name.Replace("_", "")),
+            Enum.GetValues<SpellTargets>().Select(target => target.ToString().ToLowerInvariant()));
+    }
+
+    [Fact]
+    public void SpellLoaderKeysMatchSpellSchema() {
+        var schema = ReadSchema("spell.schema.json");
+        var defs = schema.GetProperty("$defs");
+
+        Assert.Equal(PropertyNames(schema), Sorted(ClassicSpellLoader.s_recordKeys));
+        Assert.Equal(PropertyNames(defs.GetProperty("values")), Sorted(ClassicSpellLoader.s_valuesKeys));
+        Assert.Equal(PropertyNames(defs.GetProperty("valuesOverride")), Sorted(ClassicSpellLoader.s_valuesKeys));
+        Assert.Equal(PropertyNames(defs.GetProperty("effect")), Sorted(ClassicSpellLoader.s_effectKeys));
+        Assert.Equal(PropertyNames(schema.GetProperty("properties").GetProperty("modern_values")), Sorted(ClassicSpellLoader.s_modernValuesKeys));
+        Assert.Equal(PropertyNames(defs.GetProperty("provenance")), Sorted(ClassicSpellLoader.s_provenanceKeys));
+        Assert.Equal(PropertyNames(defs.GetProperty("laterChange")), Sorted(ClassicSpellLoader.s_laterChangeKeys));
+    }
+
+    [Fact]
+    public void AccuracyTableKeysMatchAccuracySchema() {
+        var schema = ReadSchema("accuracy.schema.json");
+
+        Assert.Equal(PropertyNames(schema), Sorted(AccuracyTableLoader.s_rootKeys));
+        Assert.Equal(PropertyNames(schema.GetProperty("$defs").GetProperty("school")), Sorted(AccuracyTableLoader.s_schoolKeys));
+        Assert.Equal(PropertyNames(schema.GetProperty("properties").GetProperty("schools")), Sorted(ClassicSpellSchema.Schools));
     }
 
 }

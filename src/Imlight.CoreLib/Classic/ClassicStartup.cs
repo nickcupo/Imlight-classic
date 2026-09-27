@@ -20,9 +20,9 @@
  * ========================================================================
  * 
  * PURPOSE:
- * Loads the [Classic] profile and zone map at boot, before any resource or
- * server reads them, and checks them against the client's resources once
- * those have loaded.
+ * Loads the [Classic] profile, zone map and spell values at boot, before
+ * any resource or server reads them, and checks them against the client's
+ * resources once those have loaded.
  * 
  * USAGE EXAMPLE:
  * if (!ClassicStartup.Initialize()) { Environment.ExitCode = 1; return; }   // after the ini loads
@@ -32,13 +32,15 @@
  * No [Classic] section, or an empty Profile, runs stock Imlight without
  * reading classic-data. A configured profile that fails to load stops the
  * boot. The zone census logs counts and unmapped first segments only;
- * zone names come from the client's WAD, so never commit the log.
+ * zone names come from the client's WAD, so never commit the log. Spell
+ * values load only for a restricted profile; the spell census names
+ * classic record ids, never client template paths.
  * 
  * TODO:
  * 
  * Created by: Nick with Claude Code (claude-opus-5-5)
  * Version: KALI 1.0
- * Last Updated: 09/26/2026
+ * Last Updated: 09/27/2026
  */
 
 #nullable enable
@@ -84,6 +86,8 @@ public static class ClassicStartup {
                 ConfigurationManager.Settings["Classic.ProfilesPath"].AsString(), baseDirectory);
             var zoneWorldsPath = ClassicDataLocator.ResolveZoneWorldsPath(
                 ConfigurationManager.Settings["Classic.ZoneWorldsPath"].AsString(), profilesPath, baseDirectory);
+            var spellsPath = ClassicDataLocator.ResolveSpellsPath(
+                ConfigurationManager.Settings["Classic.SpellsPath"].AsString(), profilesPath, baseDirectory);
             var auditVerbose = ConfigurationManager.Settings["Classic.AuditVerbose"].AsBool();
             Logger.Information("Classic rules: profiles {ProfilesPath}, zone map {ZoneWorldsPath}.",
                 Logger.Args(profilesPath, zoneWorldsPath));
@@ -94,8 +98,16 @@ public static class ClassicStartup {
             // stop the profile meant to tell an Imlight bug from a Classic-layer one.
             var zones = profile.IsUnrestricted ? ZoneWorldMap.Empty : ZoneWorldMapLoader.Load(zoneWorldsPath);
             var rules = new ClassicRules(profile, zones);
+            var classicDataRoot = Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(profilesPath));
+            if (rules.IsRestricted) {
+                var accuracyTablePath = profile.Rules.AccuracyTable is { } table && classicDataRoot is not null
+                    ? Path.Combine(classicDataRoot, table)
+                    : null;
+                ClassicSpellTemplates.Initialize(profile, spellsPath, accuracyTablePath);
+            }
+
             ClassicRuntime.Initialize(rules, new LoggerAuditSink(), auditVerbose);
-            s_classicDataRoot = Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(profilesPath));
+            s_classicDataRoot = classicDataRoot;
 
             Logger.Information("Classic profile chain: {Chain}.", Logger.Args(string.Join(" -> ", profile.SourceFiles)));
             if (profile.IsUnrestricted) {
@@ -135,6 +147,7 @@ public static class ClassicStartup {
             CheckStartingZones(rules);
             CheckRuleTables(rules);
             LogZoneCensus(rules);
+            ClassicSpellTemplates.LogCensus();
         }
         catch (Exception ex) {
             Logger.Error("Classic startup checks failed: {Error}", Logger.Args(ex.Message));

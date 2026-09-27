@@ -1,0 +1,178 @@
+/*
+ * Imlight
+ * Copyright (C) 2025 Revive101
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program. If not, see <http://www.gnu.org/licenses/>.
+ *
+ * ========================================================================
+ * CLASSIC SPELL VALUES
+ * ========================================================================
+ *
+ * PURPOSE:
+ * A server-neutral picture of a client spell template: its pip cost,
+ * accuracy and effect tree, and the changes a plan makes to it. The server
+ * builds the shape from its generated SpellTemplate and applies the changes
+ * back, so the planning itself stays testable without the client types.
+ *
+ * USAGE EXAMPLE:
+ * var shape = new SpellTemplateShape { Path = path, Name = "Fire Cat", Rank = 1, Accuracy = 75, Effects = [...] };
+ * var plan = overrides.PlanFor(shape);
+ *
+ * NOTE:
+ * An address is the effect's index in the template's effect list, and the
+ * child index inside a random or per-pip effect (-1 for the effect itself).
+ *
+ * TODO:
+ *
+ * Created by: Nick with Claude Code (claude-opus-5-5)
+ * Version: KALI 1.0
+ * Last Updated: 09/27/2026
+ */
+
+using System.Collections.Immutable;
+
+namespace Imlight.Classic.Spells;
+
+/// <summary>
+/// The template effect types the classic values can override. Anything else is <see cref="Other"/>.
+/// </summary>
+public enum TemplateEffectKind {
+    Other,
+    Damage,
+    DamageOverTime,
+    Heal,
+    HealOverTime,
+    StealHealth,
+    ModifyOutgoingDamage,
+    ModifyIncomingDamage,
+    ModifyAccuracy,
+    ModifyOutgoingHeal,
+    ModifyIncomingHeal,
+    AbsorbDamage,
+    ModifyPips,
+}
+
+/// <summary>
+/// Who a template effect lands on. Minion targets count as single targets.
+/// </summary>
+public enum TemplateTarget {
+    Other,
+    EnemySingle,
+    FriendlySingle,
+    MinionSingle,
+    Self,
+    EnemyTeam,
+    FriendlyTeam,
+    Global,
+}
+
+/// <summary>
+/// How a template effect holds its values.
+/// </summary>
+public enum TemplateComposition {
+
+    /// <summary>
+    /// One effect with one value.
+    /// </summary>
+    Plain,
+
+    /// <summary>
+    /// One of the children is rolled per cast (a damage range).
+    /// </summary>
+    Random,
+
+    /// <summary>
+    /// One child per pip paid, for X cards.
+    /// </summary>
+    PerPip,
+
+    /// <summary>
+    /// A structure the classic values do not reach (effect lists, conditions).
+    /// </summary>
+    Other,
+
+}
+
+/// <summary>
+/// One effect of a template, with its children for random and per-pip effects.
+/// </summary>
+public sealed record TemplateEffectNode {
+
+    public TemplateComposition Composition { get; init; } = TemplateComposition.Plain;
+    public TemplateEffectKind Kind { get; init; } = TemplateEffectKind.Other;
+    public TemplateTarget Target { get; init; } = TemplateTarget.Other;
+
+    /// <summary>
+    /// The school the effect deals or guards against, such as <c>Fire</c> or <c>All</c>.
+    /// </summary>
+    public string DamageType { get; init; } = "";
+
+    public int Param { get; init; }
+    public int Rounds { get; init; }
+
+    /// <summary>
+    /// The pip tier of a per-pip child, 1-based; 0 when unset.
+    /// </summary>
+    public int PipNumber { get; init; }
+
+    public float HealModifier { get; init; }
+    public ImmutableArray<TemplateEffectNode> Children { get; init; } = [];
+
+}
+
+/// <summary>
+/// A client spell template as the classic values see it.
+/// </summary>
+public sealed record SpellTemplateShape {
+
+    /// <summary>
+    /// The template's Root.wad path, such as <c>Spells/Tiered Spells/Fire Cat.xml</c>.
+    /// </summary>
+    public required string Path { get; init; }
+
+    public required string Name { get; init; }
+
+    /// <summary>
+    /// The pip cost (spell rank); 0 on X cards.
+    /// </summary>
+    public int Rank { get; init; }
+
+    public bool IsXPip { get; init; }
+
+    /// <summary>
+    /// The school pips the rank requires, all schools together.
+    /// </summary>
+    public int SchoolPips { get; init; }
+
+    /// <summary>
+    /// The accuracy as a whole percentage.
+    /// </summary>
+    public int Accuracy { get; init; }
+
+    public ImmutableArray<TemplateEffectNode> Effects { get; init; } = [];
+
+}
+
+/// <summary>
+/// Where an effect sits in a template.
+/// </summary>
+/// <param name="Index">The index in the template's effect list.</param>
+/// <param name="Child">The child index inside a random or per-pip effect, or -1 for the listed effect itself.</param>
+public readonly record struct EffectAddress(int Index, int Child = -1);
+
+/// <summary>
+/// New values for one template effect; a null field stays as it is.
+/// </summary>
+public sealed record EffectChange(EffectAddress Address, int? Param = null, int? Rounds = null, float? HealModifier = null,
+                                  TemplateTarget? Target = null);

@@ -31,7 +31,7 @@
  * 
  * Created by: Nick with Claude Code (claude-opus-5-5)
  * Version: KALI 1.0
- * Last Updated: 09/26/2026
+ * Last Updated: 09/27/2026
  */
 
 using System;
@@ -125,6 +125,20 @@ public sealed class ClassicDataLocatorTests : IDisposable {
 
         Assert.Equal("classic-data/profiles/late-2009.yaml", ClassicDataLocator.DisplayPath(file));
         Assert.Equal(Path.Combine(_top, "elsewhere.yaml"), ClassicDataLocator.DisplayPath(Path.Combine(_top, "elsewhere.yaml")));
+    }
+
+    [Fact]
+    public void SpellsPathDefaultsNextToTheProfiles() {
+        var profiles = Path.Combine(_top, "classic-data", "profiles");
+        var bin = Path.Combine(_top, "bin");
+
+        Assert.Equal(Path.Combine(_top, "classic-data", "spells"), ClassicDataLocator.ResolveSpellsPath(" ", profiles, "/unused"));
+        Assert.Equal(Path.Combine(bin, "data", "spells"), ClassicDataLocator.ResolveSpellsPath(Path.Combine("data", "spells"), profiles, bin));
+    }
+
+    [Fact]
+    public void LineageFallsBackToTheIdWithoutSourceFiles() {
+        Assert.Equal(new[] { "test" }, ZoneFixture.Profile().Lineage);
     }
 
 }

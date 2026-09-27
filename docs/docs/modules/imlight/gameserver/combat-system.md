@@ -171,6 +171,55 @@ int modifiedDamage = CombatCharms.GetOutgoingDamageFromCharms(charms, baseDamage
 int finalDamage = CombatWards.GetIncomingDamageFromWards(wards, modifiedDamage);
 ```
 
+### Classic Spell Values
+
+With a restricted classic profile (`late-2009`, `arc1-2009h1`), the server loads the spell records in
+`classic-data/spells` at boot (`[Classic] SpellsPath`, default: next to the profiles) and writes the
+profile's numbers into each client spell template as it is deserialized: `SpellFactory`'s copy and the
+`CoreObjectFactory` copy combat reads (`ClassicSpellTemplates.Apply`). Combat code does not know about it.
+`dev-unrestricted`, or no profile, loads nothing and keeps the client's values.
+
+**Matching.** A template takes the record whose `client_template` is its Root.wad path, else the record with
+its card name (ignoring case). Templates with no record keep the client's values. A record's numbers are
+`values`, then any `profile_values` entry of the active profile or a profile it extends.
+
+**Applied**
+- Pip cost (the spell rank, with school pips cleared), when record and template are both fixed-cost.
+- Accuracy.
+- Effect amounts: `damage`, `heal`, `steal` (and its heal share from `percent`), `pip` (a drain keeps its
+  sign), `ward` (absorb amount), `dot` and `hot` (total and rounds).
+- Effect percentages: `blade`, `charm` (damage, accuracy or heal), `trap`, `shield`, `global`.
+- Targets, only when the classic target is wider (single to all, or to self): the client sends no
+  target for a card it thinks is area-of-effect, so a card can never become single-target.
+
+A damage range is spread over the template's rolled children, lowest first, because the client replays the
+server's roll by index; a single-value effect takes the range's mean; X cards scale the per-pip amount by
+tier. Effects are paired by kind, school and target, then by looser rules only when the pairing is the only
+one left. A percent never flips an effect's sign, and effects are never added, removed or reordered.
+
+**Not applied yet**
+- Stun length (the server always stuns for one round), minions (the records hold no creature ids),
+  threat, beguile, prisms, mutations, dispels, reshuffle, charm and ward removal counts, and Treasure Card
+  enchantments (the server does not implement them).
+- Classic effects with no template counterpart, such as Power Nova's weakness, Orthrus's two hits,
+  Immolate's self-hit and Empower's health cost; and globals whose meaning changed, such as Power Play
+  (a power pip bubble in 2009).
+- Template effects with no classic counterpart keep the client's values, such as the up-front heal of
+  Helping Hands and the up-front hit and heal of Link.
+- `rules/accuracy-2009.yaml` is loaded and checked, but spells without a record keep their own accuracy.
+
+The startup log counts templates matched and changed, effects applied and skipped with the reason, and
+records no template matched; with `LogLevel = DEBUG` each changed spell gets a line.
+
+**What players may notice.** The client draws cards and tooltips from its own templates, so they show modern
+numbers; the damage numbers in a cinematic are most likely the client's replay of its own template, while
+health follows the server. The
+`Spell` objects in a hand carry the classic pip cost and accuracy; whether the client greys cards by them is
+untested. Some cards cost more in 2009 (Donate Power 3 instead of 1, Power Play 4 instead of 2, and in
+`arc1-2009h1` Wyldfire, Balefrost, Darkwind and Time of Legend 4), a few less (Taunt 2, Distract 0, Rebirth 7).
+Accuracy charm percentages are written, but `CombatResolver` consumes an accuracy charm only when its damage
+type is the spell's school, and then adds about one point, so Precision and Black Mantle barely matter yet.
+
 ## Combat AI System
 
 The **Combat AI** provides "journeyman level" decision-making for NPC creatures during combat encounters through the `CombatCreatureAIComponent`. 
