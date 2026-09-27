@@ -16,21 +16,23 @@
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
  *
  * ========================================================================
- * QUEST SERVICE SCAVENGE GOALS
+ * QUEST SERVICE INDEXED COMBAT GOALS
  * ========================================================================
  *
  * PURPOSE:
- * CLASSIC: credits "Defeat and Collect" (GOAL_TYPE_SCAVENGE) goals on a
- * combat win.
+ * CLASSIC: credits the captured combat goals that CombatGoalTargetIndex
+ * describes on a combat win: "Defeat and Collect" (GOAL_TYPE_SCAVENGE)
+ * goals, and "Defeat" bounty goals captured without adjectives.
  *
  * USAGE EXAMPLE:
  * Called from QuestService.ReceiveCombatVictory with the defeated mobs'
  * template IDs.
  *
  * NOTE:
- * The quest items have no client item templates, so, like BOUNTYCOLLECT,
- * the item is only the goal tally; ScavengeGoalIndex says which mobs drop
- * it. Nothing enters the backpack, so nothing is removed on completion.
+ * The adjective match in ProcessCombatGoal never fires for these goals, so
+ * each defeated target mob counts once here instead. The scavenge quest
+ * items have no client item templates, so, like BOUNTYCOLLECT, the item is
+ * only the goal tally; nothing enters the backpack or is removed later.
  *
  * TODO:
  *
@@ -48,7 +50,7 @@ namespace Imlight.CoreLib.Game.Services;
 
 internal partial class QuestService {
 
-    private void ProcessScavengeGoals(Wizard wizard, ulong[] defeatedMobTemplateIds) {
+    private void ProcessIndexedCombatGoals(Wizard wizard, ulong[] defeatedMobTemplateIds) {
         if (defeatedMobTemplateIds is not { Length: > 0 }) {
             return;
         }
@@ -60,36 +62,44 @@ internal partial class QuestService {
                 continue;
             }
 
-            foreach (var goal in qTemplate.m_goals.OfType<ScavengeGoalTemplate>()) {
-                if (qInstance.IsGoalActive(goal.m_goalName)) {
-                    ProcessScavengeGoal(wizard, qInstance, goal, defeatedMobTemplateIds);
+            // Only goals active before this win count it; one it completes may start the next.
+            var activeGoals = qTemplate.m_goals
+                .Where(goal => CombatGoalTargetIndex.IsIndexedGoal(qInstance.QuestName, goal)
+                    && qInstance.IsGoalActive(goal.m_goalName))
+                .ToArray();
+
+            foreach (var goal in activeGoals) {
+                if (!wizard.QuestBehavior.CurrentQuestInstances.Contains(qInstance)) {
+                    break;
                 }
+
+                ProcessIndexedCombatGoal(wizard, qInstance, goal, defeatedMobTemplateIds);
             }
         }
     }
 
-    private void ProcessScavengeGoal(Wizard wizard,
-                                     QuestInstance qInstance,
-                                     ScavengeGoalTemplate goalTemplate,
-                                     ulong[] defeatedMobTemplateIds) {
-        // Each player in the duel gets their own MSG_COMBATWIN, so each rolls for themselves.
+    private void ProcessIndexedCombatGoal(Wizard wizard,
+                                          QuestInstance qInstance,
+                                          GoalTemplate goalTemplate,
+                                          ulong[] defeatedMobTemplateIds) {
+        // Each player in the duel gets their own MSG_COMBATWIN, so each is credited on their own.
         var gInstance = qInstance.GoalProgress.FirstOrDefault(g => g.GoalName == goalTemplate.m_goalName);
-        if (gInstance == null) {
+        if (gInstance == null || !qInstance.IsGoalActive(goalTemplate.m_goalName)) {
             return;
         }
 
         var goalMax = goalTemplate.m_tallyCounter?.m_count ?? 1;
         var chance = goalTemplate.m_tallyCounter?.m_percentChance ?? DEFAULT_KILL_COLLECT_CHANCE;
 
-        var collected = ScavengeGoalIndex.RollDrops(qInstance.QuestName, goalTemplate.m_goalName,
+        var credited = CombatGoalTargetIndex.RollCredits(qInstance.QuestName, goalTemplate.m_goalName,
             defeatedMobTemplateIds, chance, goalMax - gInstance.CurrentProgress);
 
         // A saved tally already at the total (the index's count was lowered) completes here too.
-        if (collected == 0 && gInstance.CurrentProgress < goalMax) {
+        if (credited == 0 && gInstance.CurrentProgress < goalMax) {
             return;
         }
 
-        for (var i = 0; i < collected; i++) {
+        for (var i = 0; i < credited; i++) {
             wizard.IncrementQuestGoal(qInstance.QuestName, goalTemplate.m_goalName);
         }
 
