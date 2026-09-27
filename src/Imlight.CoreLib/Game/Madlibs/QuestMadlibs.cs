@@ -66,6 +66,7 @@ internal static class QuestMadlibs {
             GOAL_TYPE.GOAL_TYPE_BOUNTY 
                 or GOAL_TYPE.GOAL_TYPE_BOUNTYCOLLECT 
                 or GOAL_TYPE.GOAL_TYPE_USAGE 
+                or GOAL_TYPE.GOAL_TYPE_SCAVENGE // CLASSIC: "Defeat and Collect" goals are tallied too.
                     => GetMadlibBlockForTalliedGoal(gTemplate, gInstance),
             _ => new MadlibBlock()
         };

@@ -477,6 +477,7 @@ public static class SpiralDB {
                 var json = File.ReadAllText(file);
                 var quest = JsonConvert.DeserializeObject<QuestTemplate>(json, s_jsonSettings);
                 if (quest != null) {
+                    Collections.ScavengeGoalIndex.ApplyTo(quest); // CLASSIC: captured scavenge goals lack their tally data.
                     targetList.Add(quest);
                     targetDict[quest.m_questName] = quest;
                     count++;
