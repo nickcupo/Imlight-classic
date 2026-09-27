@@ -47,6 +47,7 @@ using System.Net.Sockets;
 using System.Threading;
 using Akka.Actor;
 using Imcodec.MessageLayer;
+using Imlight.Classic.Net;
 using Imlight.Common;
 using Imlight.CoreLib.Game.Services;
 using Imlight.CoreLib.Shared.Packets;
@@ -73,7 +74,7 @@ public sealed class SessionActor : ReceiveActor, IDisposable {
     public ushort QueuePosition                              { get; private set; }
     public IMessage CachedDequeueMessage                     { get; set; }
     public long Ping                                         { get; private set; }
-    public DateTimeOffset LastPacketReceivedAt               => new(Interlocked.Read(ref _lastPacketReceivedTicks), TimeSpan.Zero); // CLASSIC
+    public TimeSpan LastPacketReceivedAt                     => TimeSpan.FromTicks(Interlocked.Read(ref _lastPacketReceivedTicks)); // CLASSIC: a HeartbeatPolicy.Clock reading.
 
     public string Ip;
     public string RemoteIp;
@@ -417,7 +418,7 @@ public sealed class SessionActor : ReceiveActor, IDisposable {
     }
 
     private void HandlePacket(IMessage packet) {
-        Interlocked.Exchange(ref _lastPacketReceivedTicks, DateTimeOffset.UtcNow.UtcTicks); // CLASSIC: ControlService's heartbeat reads it.
+        Interlocked.Exchange(ref _lastPacketReceivedTicks, HeartbeatPolicy.Clock.Ticks); // CLASSIC: ControlService's heartbeat reads it.
 
         // If the session still is not valid (the client hasn't completed the session handshake)
         // we'll cache all non-control messages for later processing.

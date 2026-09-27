@@ -27,8 +27,9 @@
  * dotnet test server/tests/Imlight.Classic.Tests
  *
  * NOTE:
- * The timeline tests drive the policy as ControlService does: a heartbeat
- * every Interval, judged ResponseWait later.
+ * The timeline tests drive the policy as ControlService does: a tick every
+ * Interval sends a heartbeat unless the last one's check is still pending,
+ * and the check runs ResponseWait after the heartbeat.
  *
  * TODO:
  *
@@ -45,15 +46,20 @@ namespace Imlight.Classic.Tests;
 
 public sealed class HeartbeatPolicyTests {
 
-    private static readonly DateTimeOffset s_accepted = new(2026, 9, 27, 12, 0, 0, TimeSpan.Zero);
-    private readonly HeartbeatPolicy _stock = new(intervalSeconds: 60, responseWaitSeconds: 15, zoneLoadWaitSeconds: 300);
+    private static readonly TimeSpan s_accepted = TimeSpan.FromHours(5);
+
+    private static HeartbeatPolicy Stock() => new(intervalSeconds: 60, responseWaitSeconds: 15, zoneLoadWaitSeconds: 300);
+
+    private static TimeSpan At(double seconds) => s_accepted + TimeSpan.FromSeconds(seconds);
 
     [Fact]
     public void StockSettingsScheduleEverySixtySecondsAndWaitFifteen() {
-        Assert.True(_stock.IsEnabled);
-        Assert.Equal(TimeSpan.FromSeconds(60), _stock.Interval);
-        Assert.Equal(TimeSpan.FromSeconds(15), _stock.ResponseWait);
-        Assert.Equal(TimeSpan.FromSeconds(300), _stock.ZoneLoadWait);
+        var policy = Stock();
+
+        Assert.True(policy.IsEnabled);
+        Assert.Equal(TimeSpan.FromSeconds(60), policy.Interval);
+        Assert.Equal(TimeSpan.FromSeconds(15), policy.ResponseWait);
+        Assert.Equal(TimeSpan.FromSeconds(300), policy.ZoneLoadWait);
     }
 
     [Theory]
@@ -68,75 +74,160 @@ public sealed class HeartbeatPolicyTests {
     }
 
     [Fact]
-    public void AnyFrameAfterTheHeartbeatIsAnAnswer() {
-        var sent = s_accepted.AddSeconds(60);
+    public void ClockNeverRunsBackwards() {
+        var first = HeartbeatPolicy.Clock;
+        var second = HeartbeatPolicy.Clock;
 
-        Assert.Equal(HeartbeatVerdict.Alive, _stock.Judge(sent, sent.AddSeconds(3), null, sent.AddSeconds(15)));
-        Assert.Equal(HeartbeatVerdict.Alive, _stock.Judge(sent, sent, null, sent.AddSeconds(15)));
+        Assert.True(first > TimeSpan.Zero);
+        Assert.True(second >= first);
+    }
+
+    [Fact]
+    public void AnyFrameAfterTheHeartbeatIsAnAnswer() {
+        var policy = Stock();
+        var sent = At(60);
+
+        Assert.Equal(HeartbeatVerdict.Alive, policy.Judge(sent, At(63), At(75)));
+        Assert.Equal(HeartbeatVerdict.Alive, policy.Judge(sent, sent, At(75)));
     }
 
     [Fact]
     public void SilenceSinceTheHeartbeatIsDead() {
-        var sent = s_accepted.AddSeconds(60);
+        var policy = Stock();
+        var sent = At(60);
 
-        Assert.Equal(HeartbeatVerdict.Dead, _stock.Judge(sent, sent.AddSeconds(-1), null, sent.AddSeconds(15)));
-        Assert.Equal(HeartbeatVerdict.Dead, _stock.Judge(sent, DateTimeOffset.MinValue, null, sent.AddSeconds(15)));
+        Assert.Equal(HeartbeatVerdict.Dead, policy.Judge(sent, At(59), At(75)));
+        Assert.Equal(HeartbeatVerdict.Dead, policy.Judge(sent, TimeSpan.Zero, At(75)));
     }
 
     [Fact]
     public void SilenceWhileLoadingAZoneIsToleratedUntilTheZoneLoadWaitEnds() {
-        var loadStarted = s_accepted.AddSeconds(2);
-        var sent = s_accepted.AddSeconds(60);
+        var policy = Stock();
+        policy.ZoneLoadStarted(At(2));
+        var sent = At(60);
 
-        Assert.Equal(HeartbeatVerdict.Loading, _stock.Judge(sent, loadStarted, loadStarted, sent.AddSeconds(15)));
-        Assert.Equal(HeartbeatVerdict.Loading, _stock.Judge(sent, loadStarted, loadStarted, loadStarted.AddSeconds(299)));
-        Assert.Equal(HeartbeatVerdict.Dead, _stock.Judge(sent, loadStarted, loadStarted, loadStarted.AddSeconds(300)));
+        Assert.Equal(HeartbeatVerdict.Loading, policy.Judge(sent, At(2), At(75)));
+        Assert.Equal(HeartbeatVerdict.Loading, policy.Judge(sent, At(2), At(301)));
+        Assert.Equal(HeartbeatVerdict.Dead, policy.Judge(sent, At(2), At(302)));
+    }
+
+    [Fact]
+    public void FirstMoveEndsTheZoneLoadWait() {
+        var policy = Stock();
+        policy.ZoneLoadStarted(At(2));
+
+        policy.ClientMoved();
+
+        Assert.Null(policy.ZoneLoadStartedAt);
+        Assert.Equal(HeartbeatVerdict.Dead, policy.Judge(At(60), At(40), At(75)));
     }
 
     [Fact]
     public void ClientThatSendsItsOwnKeepAlivesIsNeverDropped() {
         // It never answers the server's KeepAlive, but its own every 10 s is traffic.
-        var dropped = Run(minutes: 30, lastHeardAt: now => s_accepted.AddSeconds(Math.Floor((now - s_accepted).TotalSeconds / 10) * 10),
-                          zoneLoadStartedAt: null);
+        var dropped = Run(Stock(), minutes: 30, lastHeardAt: now => At(Math.Floor((now - s_accepted).TotalSeconds / 10) * 10));
 
         Assert.Null(dropped);
     }
 
     [Fact]
     public void ClientThatStopsIsDroppedWithinOneIntervalAndWait() {
-        var stoppedAt = s_accepted.AddSeconds(200);
+        var policy = Stock();
+        var stoppedAt = At(200);
 
-        var dropped = Run(minutes: 30, lastHeardAt: now => now < stoppedAt ? now : stoppedAt, zoneLoadStartedAt: null);
+        var dropped = Run(policy, minutes: 30, lastHeardAt: now => now < stoppedAt ? now : stoppedAt);
 
         Assert.NotNull(dropped);
-        Assert.InRange(dropped.Value - stoppedAt, TimeSpan.Zero, _stock.Interval + _stock.ResponseWait);
+        Assert.InRange(dropped.Value - stoppedAt, TimeSpan.Zero, policy.Interval + policy.ResponseWait);
     }
 
     [Fact]
     public void ClientSilentForNinetySecondsWhileLoadingAZoneSurvives() {
-        var loadStarted = s_accepted.AddSeconds(5);
-        var loaded = loadStarted.AddSeconds(90);
+        var loadStarted = At(5);
+        var loaded = At(95);
 
-        var dropped = Run(minutes: 30, lastHeardAt: now => now < loaded ? loadStarted : now, zoneLoadStartedAt: loadStarted);
+        var dropped = Run(Stock(), minutes: 30, lastHeardAt: now => now < loaded ? loadStarted : now,
+                          zoneLoadAt: loadStarted, movedAt: loaded);
 
         Assert.Null(dropped);
     }
 
     [Fact]
     public void ClientThatDiesWhileLoadingIsDroppedAfterTheZoneLoadWait() {
-        var loadStarted = s_accepted.AddSeconds(5);
+        var policy = Stock();
+        var loadStarted = At(5);
 
-        var dropped = Run(minutes: 30, lastHeardAt: _ => loadStarted, zoneLoadStartedAt: loadStarted);
+        var dropped = Run(policy, minutes: 30, lastHeardAt: _ => loadStarted, zoneLoadAt: loadStarted);
 
         Assert.NotNull(dropped);
-        Assert.InRange(dropped.Value - loadStarted, _stock.ZoneLoadWait, _stock.ZoneLoadWait + _stock.Interval + _stock.ResponseWait);
+        Assert.InRange(dropped.Value - loadStarted, policy.ZoneLoadWait, policy.ZoneLoadWait + policy.Interval + policy.ResponseWait);
     }
 
-    private DateTimeOffset? Run(int minutes, Func<DateTimeOffset, DateTimeOffset> lastHeardAt, DateTimeOffset? zoneLoadStartedAt) {
-        for (var sent = s_accepted + _stock.Interval; sent < s_accepted.AddMinutes(minutes); sent += _stock.Interval) {
-            var judgedAt = sent + _stock.ResponseWait;
-            if (_stock.Judge(sent, lastHeardAt(judgedAt), zoneLoadStartedAt, judgedAt) == HeartbeatVerdict.Dead) {
-                return judgedAt;
+    [Fact]
+    public void ClientThatLoadsMovesAndThenDiesIsDroppedWithoutTheZoneLoadWait() {
+        var policy = Stock();
+        var loadStarted = At(5);
+        var diedAt = At(105);
+
+        var dropped = Run(policy, minutes: 30, lastHeardAt: now => now < diedAt ? now : diedAt,
+                          zoneLoadAt: loadStarted, movedAt: At(20));
+
+        Assert.NotNull(dropped);
+        Assert.InRange(dropped.Value - diedAt, TimeSpan.Zero, policy.Interval + policy.ResponseWait);
+    }
+
+    [Fact]
+    public void ClientThatNeverMovesKeepsTheZoneLoadWait() {
+        var policy = Stock();
+        var loadStarted = At(5);
+        var diedAt = At(105);
+
+        var dropped = Run(policy, minutes: 30, lastHeardAt: now => now < diedAt ? now : diedAt, zoneLoadAt: loadStarted);
+
+        Assert.NotNull(dropped);
+        Assert.InRange(dropped.Value - loadStarted, policy.ZoneLoadWait, policy.ZoneLoadWait + policy.Interval + policy.ResponseWait);
+    }
+
+    [Theory]
+    [InlineData(10, 15)]
+    [InlineData(15, 15)]
+    [InlineData(10, 45)]
+    public void WaitNotBelowTheIntervalStillDrops(int interval, int wait) {
+        var policy = new HeartbeatPolicy(interval, wait, 300);
+        var stoppedAt = At(200);
+
+        var dropped = Run(policy, minutes: 30, lastHeardAt: now => now < stoppedAt ? now : stoppedAt);
+
+        Assert.NotNull(dropped);
+        Assert.InRange(dropped.Value - stoppedAt, policy.ResponseWait, 2 * (policy.Interval + policy.ResponseWait));
+    }
+
+    private static TimeSpan? Run(HeartbeatPolicy policy, int minutes, Func<TimeSpan, TimeSpan> lastHeardAt,
+                                 TimeSpan? zoneLoadAt = null, TimeSpan? movedAt = null) {
+        var sentAt = TimeSpan.Zero;
+        TimeSpan? checkAt = null;
+        var nextTick = s_accepted + policy.Interval;
+        for (var now = s_accepted; now < s_accepted + TimeSpan.FromMinutes(minutes); now += TimeSpan.FromSeconds(1)) {
+            if (now == zoneLoadAt) {
+                policy.ZoneLoadStarted(now);
+            }
+            if (now == movedAt) {
+                policy.ClientMoved();
+            }
+
+            if (now == checkAt) {
+                checkAt = null;
+                if (policy.Judge(sentAt, lastHeardAt(now), now) == HeartbeatVerdict.Dead) {
+                    return now;
+                }
+            }
+
+            if (now == nextTick) {
+                nextTick += policy.Interval;
+                if (checkAt is null) {
+                    sentAt = now;
+                    checkAt = now + policy.ResponseWait;
+                }
             }
         }
 

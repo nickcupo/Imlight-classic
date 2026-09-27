@@ -21,17 +21,18 @@
  *
  * PURPOSE:
  * When the server sends its KeepAlive, and whether a session that has not
- * answered one is dead.
+ * answered one is dead. One per session.
  *
  * USAGE EXAMPLE:
  * var policy = new HeartbeatPolicy(keepAliveInterval, keepAliveRspWaitTime, sessionAcceptWaitTime);
- * if (policy.Judge(sentAt, lastHeardAt, zoneLoadStartedAt, now) == HeartbeatVerdict.Dead) { close(); }
+ * policy.ZoneLoadStarted(HeartbeatPolicy.Clock);
+ * if (policy.Judge(sentAt, lastHeardAt, HeartbeatPolicy.Clock) == HeartbeatVerdict.Dead) { close(); }
  *
  * NOTE:
  * Any frame from the client counts as an answer; the client sends its own
  * KeepAlive every 10 seconds. A client that is loading a zone may not read
- * its socket, so silence is tolerated for the zone-load wait after the load
- * starts.
+ * its socket, so silence is tolerated until it first moves in the zone, for
+ * at most the zone-load wait. Times are readings of Clock, not wall time.
  *
  * TODO:
  *
@@ -41,6 +42,7 @@
  */
 
 using System;
+using System.Diagnostics;
 
 namespace Imlight.Classic.Net;
 
@@ -67,7 +69,7 @@ public enum HeartbeatVerdict {
 }
 
 /// <summary>
-/// The server heartbeat's timing and its rule for a silent session.
+/// One session's server heartbeat: its timing, its zone-load wait, and its rule for a silent session.
 /// </summary>
 public sealed class HeartbeatPolicy {
 
@@ -84,6 +86,12 @@ public sealed class HeartbeatPolicy {
     }
 
     /// <summary>
+    /// A monotonic reading for every time the policy compares, so a step of the system clock cannot
+    /// make a live client look silent.
+    /// </summary>
+    public static TimeSpan Clock => Stopwatch.GetElapsedTime(0);
+
+    /// <summary>
     /// Time between heartbeats.
     /// </summary>
     public TimeSpan Interval { get; }
@@ -94,7 +102,7 @@ public sealed class HeartbeatPolicy {
     public TimeSpan ResponseWait { get; }
 
     /// <summary>
-    /// Silence tolerated after a zone load starts.
+    /// Silence tolerated after a zone load starts, when the client never moves.
     /// </summary>
     public TimeSpan ZoneLoadWait { get; }
 
@@ -104,20 +112,34 @@ public sealed class HeartbeatPolicy {
     public bool IsEnabled => Interval > TimeSpan.Zero && ResponseWait > TimeSpan.Zero;
 
     /// <summary>
+    /// When the zone load in progress started, or null when no zone is loading.
+    /// </summary>
+    public TimeSpan? ZoneLoadStartedAt { get; private set; }
+
+    /// <summary>
+    /// Starts the zone-load wait.
+    /// </summary>
+    /// <param name="now">A reading of <see cref="Clock"/>.</param>
+    public void ZoneLoadStarted(TimeSpan now) => ZoneLoadStartedAt = now;
+
+    /// <summary>
+    /// Ends the zone-load wait: the client moves only once it has loaded the zone.
+    /// </summary>
+    public void ClientMoved() => ZoneLoadStartedAt = null;
+
+    /// <summary>
     /// Judges a session when a heartbeat's response wait ends.
     /// </summary>
     /// <param name="sentAt">When the heartbeat went out.</param>
     /// <param name="lastHeardAt">When the last frame arrived from the client.</param>
-    /// <param name="zoneLoadStartedAt">When the session's latest zone load started, if it has had one.</param>
-    /// <param name="now">The time now.</param>
+    /// <param name="now">A reading of <see cref="Clock"/>.</param>
     /// <returns>Whether the session is alive, loading, or dead.</returns>
-    public HeartbeatVerdict Judge(DateTimeOffset sentAt, DateTimeOffset lastHeardAt, DateTimeOffset? zoneLoadStartedAt,
-                                  DateTimeOffset now) {
+    public HeartbeatVerdict Judge(TimeSpan sentAt, TimeSpan lastHeardAt, TimeSpan now) {
         if (lastHeardAt >= sentAt) {
             return HeartbeatVerdict.Alive;
         }
 
-        if (zoneLoadStartedAt is { } loadStarted && now - loadStarted < ZoneLoadWait) {
+        if (ZoneLoadStartedAt is { } loadStarted && now - loadStarted < ZoneLoadWait) {
             return HeartbeatVerdict.Loading;
         }
 
