@@ -217,10 +217,18 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
         // Check if the creature is now in range of the object.
         // If there's a slot available, add the creature to the duel.
         if (IsInRadius(creature, _combatSigilObjectInfo.m_radius) && !_entitiesInRange.ContainsKey(creature)) {
+            var npcComponent = entity.GetComponentOfType<NpcComponent>();
+            var isMonster = npcComponent == null || npcComponent.IsMonster;
+
+            // CLASSIC: a monster kept out only by the enemies-per-player cap is not recorded or removed; it keeps
+            // walking and is checked again on its next move, so it can join once another wizard joins.
+            if (isMonster && ClassicRuntime.IsActive && CreatureCount < 4 && !IsSlotAvailable(CombatTeam.Monster)) {
+                return;
+            }
+
             _entitiesInRange.Add(creature, suspect);
 
-            var npcComponent = entity.GetComponentOfType<NpcComponent>();
-            if (npcComponent != null && !npcComponent.IsMonster) {
+            if (!isMonster) {
                 return;
             }
 
@@ -1429,8 +1437,19 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
         circle.ParticipantActor.Tell(stateMsg);
     });
 
+    // CLASSIC: Wizard City's first streets, where a random fight had at most one enemy per player (MMORPG.com
+    // "Combat Primer", 2009-01-22: "In the 'beginner' zones, you'll face a maximum of one enemy per player";
+    // from Colossus Boulevard on, one more enemy than there are players). The 2009 story reaches them before
+    // Colossus: Unicorn Way, Triton Avenue, Cyclops Lane, Firecat Alley.
+    private static readonly HashSet<string> s_classicBeginnerStreets = new(StringComparer.OrdinalIgnoreCase) {
+        "WizardCity/WC_Streets/WC_Unicorn",
+        "WizardCity/WC_Streets/WC_Triton",
+        "WizardCity/WC_Streets/WC_Cyclops",
+        "WizardCity/WC_Streets/WC_Firecat",
+    };
+
     private bool IsSlotAvailable(CombatTeam team) {
-        var IsNewbieZone = false;
+        var IsNewbieZone = ClassicRuntime.IsActive && s_classicBeginnerStreets.Contains(Entity.Zone?.ZonePath ?? "");
         var IsDangerousZone = false;
 
         // Newbie zones (like Unicorn Way) can only have 1 creature as a base.
