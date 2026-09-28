@@ -118,7 +118,7 @@ public static class ClassicSpellTemplates {
             return;
         }
 
-        var shape = ShapeOf(spell, path);
+        var shape = SpellTemplateEditor.ShapeOf(spell, path);
         var plan = overrides.PlanFor(shape);
         if (census) {
             s_census?.Add(shape, spell.m_sMagicSchoolName, plan);
@@ -128,7 +128,7 @@ public static class ClassicSpellTemplates {
             return;
         }
 
-        ApplyPlan(spell, plan);
+        SpellTemplateEditor.ApplyPlan(spell, plan);
         if (census) {
             Logger.Debug("Classic spell {Record}: pips {OldPips} -> {NewPips}, accuracy {OldAccuracy} -> {NewAccuracy}, {Effects} effect changes.",
                 Logger.Args(plan.Record.Id, shape.Rank, plan.Rank ?? shape.Rank, shape.Accuracy, plan.Accuracy ?? shape.Accuracy,
@@ -162,10 +162,13 @@ public static class ClassicSpellTemplates {
         var summary = census.Summarize(overrides);
         Logger.Information("Classic spell census over {Templates} client spell templates: {ByPath} matched by client_template, {ByTreasureCard} as the Treasure Card of a trained card, {ByName} by name, {Unmatched} without a record keep the client's values.",
             Logger.Args(summary.Templates, summary.MatchedByClientTemplate, summary.MatchedByTreasureCard, summary.MatchedByName, summary.Unmatched));
-        Logger.Information("Classic spell values changed {Changed} templates: pip cost {Pips} (school pips cleared on {SchoolPips}), accuracy {Accuracy}, effect amounts and percentages {Params}, rounds {Rounds}, drain heal shares {Heal}, targets {Targets}, effect types {Kinds}.",
-            Logger.Args(summary.ChangedTemplates, summary.PipsChanged, summary.SchoolPipsCleared, summary.AccuracyChanged,
-                summary.EffectValuesChanged, summary.RoundsChanged, summary.HealModifiersChanged, summary.TargetsChanged, summary.KindsChanged));
-        Logger.Information("Classic spell effects applied: {Applied}. Not applied, the server reads no such value from a template: {NotApplied}. Not applied, no number to apply: {NoValues}. Not applied, no matching template effect: {NoMatch}. Not applied, the pip cost did not fit the template: {PipsNotApplied}.",
+        Logger.Information("Classic spell values changed {Changed} templates: pip cost {Pips} (school pips cleared on {SchoolPips}), accuracy {Accuracy}, effect lists rebuilt {Structures}, effect amounts and percentages {Params}, rounds {Rounds}, drain heal shares {Heal}, targets {Targets}, effect types {Kinds}, schools {Schools}.",
+            Logger.Args(summary.ChangedTemplates, summary.PipsChanged, summary.SchoolPipsCleared, summary.AccuracyChanged, summary.StructuresRebuilt,
+                summary.EffectValuesChanged, summary.RoundsChanged, summary.HealModifiersChanged, summary.TargetsChanged, summary.KindsChanged,
+                summary.DamageTypesChanged));
+        Logger.Information("Classic spell mechanics: {Full} of {Matched} matched templates carry every 2009 mechanic of their record (see classic-data/spells/APPLIED.md).",
+            Logger.Args(summary.TemplatesFullyApplied, summary.Templates - summary.Unmatched));
+        Logger.Information("Classic spell effects applied: {Applied}. Carried by the client's own effect, with no number to write (the mechanics check covers their type and target): {NotApplied}. Not applied, no number to apply: {NoValues}. Not applied, no matching template effect: {NoMatch}. Not applied, the pip cost did not fit the template: {PipsNotApplied}.",
             Logger.Args(summary.DescribeApplied(), summary.DescribeSkipped(EffectSkipReason.KindNotApplied),
                 summary.DescribeSkipped(EffectSkipReason.NoValues), summary.DescribeSkipped(EffectSkipReason.NoMatchingTemplateEffect),
                 summary.DescribeSkipped(EffectSkipReason.PipsNotApplied)));
@@ -178,9 +181,9 @@ public static class ClassicSpellTemplates {
                     summary.PipsSkipped.GetValueOrDefault(PipsSkip.FixedOnXTemplate)));
         }
 
-        if (summary.TargetsNotRepresentable > 0) {
-            Logger.Warning("Classic spell targets not applied on {Count} effects: the client sends no target for them.",
-                Logger.Args(summary.TargetsNotRepresentable));
+        if (!summary.RecordsNotFullyApplied.IsEmpty) {
+            Logger.Warning("Classic spell records whose templates still differ from the 2009 card (see classic-data/spells/APPLIED.md): {Records}.",
+                Logger.Args(string.Join(", ", summary.RecordsNotFullyApplied)));
         }
 
         if (!summary.RecordsWithoutTemplate.IsEmpty) {
@@ -200,96 +203,13 @@ public static class ClassicSpellTemplates {
     }
 
     private static void CheckClientNames() {
-        var missing = SpellTemplateMapping.EffectTypeNames.Where(name => !Enum.TryParse<kSpellEffects>(name, out _))
+        var missing = SpellTemplateMapping.EffectTypeNames.Concat(SpellEffectMeaning.AllClientTypes)
+            .Where(name => !Enum.TryParse<kSpellEffects>(name, out _))
             .Concat(SpellTemplateMapping.TargetNames.Where(name => !Enum.TryParse<kEffectTarget>(name, out _)))
             .ToList();
         if (missing.Count > 0) {
             throw new InvalidOperationException(
                 $"The client's spell effect enums lack names the classic spell values use: {string.Join(", ", missing)}.");
-        }
-    }
-
-    private static SpellTemplateShape ShapeOf(SpellTemplate template, string path) {
-        var rank = template.m_spellRank;
-        var effects = template.m_effects ?? [];
-
-        return new SpellTemplateShape {
-            Path = path,
-            Name = template.m_name ?? "",
-            Rank = rank?.m_spellRank ?? 0,
-            IsXPip = rank?.m_xPipSpell == true || effects.Any(effect => effect is VariableSpellEffect),
-            SchoolPips = rank is null ? 0 : rank.m_balancePips + rank.m_deathPips + rank.m_firePips + rank.m_icePips
-                + rank.m_lifePips + rank.m_mythPips + rank.m_stormPips + rank.m_shadowPips,
-            Accuracy = template.m_accuracy,
-            Effects = [.. effects.Select(effect => SpellTemplateMapping.NodeOf(effect, FieldsOf, ChildrenOf))],
-        };
-    }
-
-    private static ClientEffectFields FieldsOf(SpellEffect effect)
-        => new(TypeChainOf(effect.GetType()), effect.m_effectType.ToString(), effect.m_effectTarget.ToString(), effect.m_sDamageType,
-            effect.m_effectParam, effect.m_numRounds, effect.m_pipNum, effect.m_healModifier);
-
-    private static List<string> TypeChainOf(System.Type? type) {
-        var chain = new List<string>();
-        for (; type is not null && type != typeof(object); type = type.BaseType) {
-            chain.Add(type.Name);
-        }
-
-        return chain;
-    }
-
-    private static IReadOnlyList<SpellEffect?>? ChildrenOf(SpellEffect effect)
-        => effect switch {
-            RandomSpellEffect random => random.m_effectList,
-            VariableSpellEffect variable => variable.m_effectList,
-            _ => null,
-        };
-
-    private static void ApplyPlan(SpellTemplate template, SpellOverridePlan plan) {
-        if (plan.Rank is { } rank) {
-            template.m_spellRank ??= new SpellRank();
-            template.m_spellRank.m_spellRank = (byte) rank;
-        }
-
-        if (plan.ClearSchoolPips && template.m_spellRank is { } spellRank) {
-            spellRank.m_balancePips = 0;
-            spellRank.m_deathPips = 0;
-            spellRank.m_firePips = 0;
-            spellRank.m_icePips = 0;
-            spellRank.m_lifePips = 0;
-            spellRank.m_mythPips = 0;
-            spellRank.m_stormPips = 0;
-            spellRank.m_shadowPips = 0;
-        }
-
-        if (plan.Accuracy is { } accuracy) {
-            template.m_accuracy = accuracy;
-        }
-
-        foreach (var change in plan.EffectChanges) {
-            if (SpellTemplateMapping.EffectAt(template.m_effects, change.Address, ChildrenOf) is not { } effect) {
-                continue;
-            }
-
-            if (change.Kind is { } kind) {
-                effect.m_effectType = Enum.Parse<kSpellEffects>(SpellTemplateMapping.EffectTypeName(kind));
-            }
-
-            if (change.Param is { } param) {
-                effect.m_effectParam = param;
-            }
-
-            if (change.Rounds is { } rounds) {
-                effect.m_numRounds = rounds;
-            }
-
-            if (change.HealModifier is { } heal) {
-                effect.m_healModifier = heal;
-            }
-
-            if (change.Target is { } target && SpellTemplateMapping.EffectTargetName(target) is { } targetName) {
-                effect.m_effectTarget = Enum.Parse<kEffectTarget>(targetName);
-            }
         }
     }
 

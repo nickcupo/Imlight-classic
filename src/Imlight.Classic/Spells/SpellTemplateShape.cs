@@ -130,6 +130,38 @@ public sealed record TemplateEffectNode {
     public float HealModifier { get; init; }
     public ImmutableArray<TemplateEffectNode> Children { get; init; } = [];
 
+    /// <summary>
+    /// The client's kSpellEffects member name, such as <c>kStun</c>, including types <see cref="Kind"/> calls <see cref="TemplateEffectKind.Other"/>.
+    /// </summary>
+    public string EffectType { get; init; } = "";
+
+    /// <summary>
+    /// The client's kEffectTarget member name, such as <c>kEnemySingle</c>.
+    /// </summary>
+    public string TargetName { get; init; } = "";
+
+    /// <summary>
+    /// The effect's class name, such as <c>SpellEffect</c> or <c>ConditionalSpellEffect</c>.
+    /// </summary>
+    public string ClassName { get; init; } = "";
+
+    /// <summary>
+    /// <see cref="EffectType"/>, or the member <see cref="Kind"/> names when the node was built without one.
+    /// </summary>
+    public string EffectTypeName
+        => EffectType.Length > 0 ? EffectType : Kind == TemplateEffectKind.Other ? "" : SpellTemplateMapping.EffectTypeName(Kind);
+
+    /// <summary>
+    /// <see cref="TargetName"/>, or the member <see cref="Target"/> names when the node was built without one.
+    /// </summary>
+    public string TargetMemberName => TargetName.Length > 0 ? TargetName : SpellTemplateMapping.EffectTargetName(Target) ?? "";
+
+    /// <summary>
+    /// The type the effect deals in: its own, or for a container (a roll, an effect list, a condition) its first child's.
+    /// </summary>
+    public string LeadType
+        => EffectTypeName is "" or "kInvalidSpellEffect" && !Children.IsEmpty ? Children[0].LeadType : EffectTypeName;
+
 }
 
 /// <summary>
@@ -181,5 +213,16 @@ public readonly record struct EffectAddress(int Index, int Child = -1);
 /// <param name="HealModifier">The new heal share of a drain.</param>
 /// <param name="Target">The new target.</param>
 /// <param name="Kind">The new effect type, when the classic effect means something else than the client's.</param>
+/// <param name="EffectType">The new effect type as a kSpellEffects member name, for types <see cref="TemplateEffectKind"/> does not name
+/// (a power pip chance bubble); wins over <paramref name="Kind"/>.</param>
+/// <param name="DamageType">The new school the effect deals or guards against, such as <c>Myth</c> or <c>All</c>.</param>
 public sealed record EffectChange(EffectAddress Address, int? Param = null, int? Rounds = null, float? HealModifier = null,
-                                  TemplateTarget? Target = null, TemplateEffectKind? Kind = null);
+                                  TemplateTarget? Target = null, TemplateEffectKind? Kind = null, string? EffectType = null,
+                                  string? DamageType = null) {
+
+    /// <summary>
+    /// The kSpellEffects member the change writes, or null when the type stays.
+    /// </summary>
+    public string? EffectTypeName => EffectType ?? (Kind is { } kind ? SpellTemplateMapping.EffectTypeName(kind) : null);
+
+}

@@ -56,6 +56,8 @@ using Imcodec.ObjectProperty;
 using Imcodec.ObjectProperty.TypeCache;
 using Imcodec.Types;
 using Imlight.Classic;
+using Imlight.Classic.Spells;
+using Imlight.CoreLib.Classic;
 using Imlight.Common;
 using Imlight.CoreLib.Game.Combat;
 using Imlight.CoreLib.Game.Sigils;
@@ -1093,12 +1095,48 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
             target = SubCircles[spellTarget];
         }
 
+        // CLASSIC: a card the classic values made single-target (Orthrus) is cast by a client without the card overlay
+        // with no target, and a card they made area or self may still carry one; the card's own effects decide.
+        if (ClassicRuntime.IsActive) {
+            target = ClassicCastTarget(spell, caster, target);
+        }
+
         CombatResolver.AddCombatMove(CombatMoveType.Attack, caster, target, spell);
 
         // Minions are AI-driven; their telegraph comes from ResendMinionMoveSelections, not an echo.
         if (!caster.IsSummonedMinion && caster.OccupiedTeam == CombatTeam.Player) {
             SendCombatMoveSelection(caster.ParticipantObject.m_globalID, (byte) CombatMoveType.Attack, spell, (byte) spellTarget);
         }
+    }
+
+    private CombatDuelSubCircle ClassicCastTarget(Spell spell, CombatDuelSubCircle caster, CombatDuelSubCircle target) {
+        if (CoreObjectFactory.GetCoreTemplate(spell.m_templateID) is not SpellTemplate template || template.m_effects is null) {
+            return target;
+        }
+
+        // A roll's or per-pip list's own target is not the card's; its children's are.
+        var targets = template.m_effects.SelectMany(effect => SpellTemplateEditor.ChildrenOf(effect) is { Count: > 0 } children
+                && effect is RandomSpellEffect or VariableSpellEffect
+            ? children.Where(child => child is not null).Select(child => child!.m_effectTarget.ToString())
+            : [effect.m_effectTarget.ToString()]);
+        var side = CastTargeting.SideOf(targets);
+        if (side == CastTargetSide.None) {
+            return target;
+        }
+
+        static CastCircle CircleOf(CombatDuelSubCircle circle)
+            => new(circle.SlotIndex, (int) circle.OccupiedTeam, circle.IsAlive && circle.AddedToDuel);
+
+        var circles = SubCircles.Where(circle => circle.Occupied).Select(CircleOf).ToList();
+        var slot = CastTargeting.Choose(side, CircleOf(caster), CircleOf(target), circles);
+        if (slot == target.SlotIndex) {
+            return target;
+        }
+
+        Logger.Debug("Duel {0} | Slot {1} | Classic target for spell {2}: slot {3} instead of {4}.",
+            Logger.Args(Duel.m_duelID.Full, caster.SlotIndex, spell.m_templateID, slot, target.SlotIndex));
+
+        return SubCircles.First(circle => circle.SlotIndex == slot);
     }
 
     private void HandleChangeMindAction(CombatDuelSubCircle caster) {

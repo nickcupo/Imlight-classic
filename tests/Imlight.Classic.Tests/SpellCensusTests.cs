@@ -173,9 +173,12 @@ public sealed class SpellCensusTests {
         Assert.Equal(2, summary.ChangedTemplates);
         Assert.Equal(0, summary.PipsChanged);
         Assert.Equal(1, summary.AccuracyChanged);
-        Assert.Equal(4, summary.EffectValuesChanged);
+        // Link's up-front hit, which the 2009 card lacked, is dropped from its rebuilt list rather than zeroed.
+        Assert.Equal(3, summary.EffectValuesChanged);
         Assert.Equal(1, summary.RoundsChanged);
-        Assert.Equal(1, summary.ZeroedTemplateEffects);
+        Assert.Equal(1, summary.StructuresRebuilt);
+        Assert.Equal(0, summary.ZeroedTemplateEffects);
+        Assert.Empty(summary.RecordsNotFullyApplied);
         Assert.Equal(0, summary.UnmatchedTemplateEffects);
         Assert.Equal(new[] { "spell.fire.krokomummy" }, summary.RecordsWithoutTemplate);
         Assert.Equal(new[] { "spell.fire.fire_cat", "spell.fire.krokomummy", "spell.fire.link", "spell.fire.lost" }, summary.RecordsNotInProfile);

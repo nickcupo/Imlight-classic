@@ -108,8 +108,9 @@ internal static class SpellFixture {
             """;
 
     public static SpellEffectValues Effect(SpellEffectKind kind, string school = "fire", int? min = null, int? max = null,
-                                           int? percent = null, int? rounds = null, SpellTargets? targets = SpellTargets.Single)
-        => new(kind, school, min, max ?? min, percent, rounds, targets, null);
+                                           int? percent = null, int? rounds = null, SpellTargets? targets = SpellTargets.Single,
+                                           string? notes = null)
+        => new(kind, school, min, max ?? min, percent, rounds, targets, notes);
 
     public static ClassicSpellRecord Record(SpellPips pips, double accuracy, params SpellEffectValues[] effects)
         => new() {

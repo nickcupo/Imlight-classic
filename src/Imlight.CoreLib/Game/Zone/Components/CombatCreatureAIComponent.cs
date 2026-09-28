@@ -43,6 +43,7 @@ using System.Linq;
 using Akka.Actor;
 using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty.TypeCache;
+using Imlight.Classic;
 using Imlight.Common;
 using Imlight.CoreLib.Game.Combat;
 using Imlight.CoreLib.Game.Spells;
@@ -196,6 +197,18 @@ internal sealed class CombatCreatureAIComponent(ZoneEntity entity) : ZoneEntityC
         // Ignore if the caster is on my team.
         var isOnMyTeam = message.Caster.OccupiedTeam == _currentSubCircle.OccupiedTeam;
         if (isOnMyTeam) {
+            return;
+        }
+
+        // CLASSIC: a threat card cast on the caster's own side (Pacify, Calm, Soothe, Subdue on an ally) changes how much
+        // every enemy hates the wizards it lands on; one cast on enemies (Taunt, Distract) is handled below.
+        if (ClassicRuntime.IsActive && message.Effect.m_effectType is kSpellEffects.kPacify or kSpellEffects.kTaunt
+            && !message.Targets.Any(x => x.SlotIndex == _currentSubCircle.SlotIndex)) {
+            var change = message.Effect.m_effectType is kSpellEffects.kPacify ? -_pacifyAggroDecrease : _provokeAggroIncrease;
+            foreach (var protectedWizard in message.Targets.Where(x => x.OccupiedTeam == message.Caster.OccupiedTeam)) {
+                UpdateHateTable(protectedWizard.SlotIndex, change);
+            }
+
             return;
         }
 

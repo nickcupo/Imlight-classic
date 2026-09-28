@@ -211,12 +211,14 @@ public sealed class SpellTemplateMappingTests {
             Effects = [.. effects.Select(effect => SpellTemplateMapping.NodeOf(effect, Read, Children))],
         };
 
-        var plan = SpellFixture.Plan(shape, SpellPips.Of(1), 0.75, SpellFixture.Effect(SpellEffectKind.Damage, min: 80, max: 120));
+        var plan = SpellFixture.Plan(shape, SpellPips.Of(1), 0.75, SpellFixture.Effect(SpellEffectKind.Damage, min: 80, max: 120),
+            SpellFixture.Effect(SpellEffectKind.Damage, min: 40));
 
+        Assert.Null(plan.Structure);
         var written = plan.EffectChanges.ToDictionary(change => SpellTemplateMapping.EffectAt(effects, change.Address, Children)!, change => change.Param);
         Assert.Equal(80, written[roll.Children[0]!]);
         Assert.Equal(120, written[roll.Children[1]!]);
-        Assert.Equal(0, written[hit]);
+        Assert.Equal(40, written[hit]);
     }
 
 }

@@ -176,7 +176,11 @@ public sealed class SpellOverridePlannerTests {
             Effect(SpellEffectKind.Damage, "fire", 190),
             Effect(SpellEffectKind.Damage, "ice", 210));
 
-        Assert.Equal(new int?[] { 190, 210, 250 }, plan.EffectChanges.OrderBy(c => c.Address.Index).Select(c => c.Param).ToArray());
+        // The record lists the hits in card order, so the template's hits are put in that order.
+        var after = SpellPlanSimulator.Apply(shape, plan);
+        Assert.Equal(new[] { ("Storm", 250), ("Fire", 190), ("Ice", 210) }, after.Effects.Select(e => (e.DamageType, e.Param)).ToArray());
+        Assert.Equal(new[] { new EffectAddress(2), new EffectAddress(0), new EffectAddress(1) }, plan.Structure!.Value.ToArray());
+        Assert.Empty(plan.RemainingIssues);
     }
 
     [Fact]
@@ -222,18 +226,18 @@ public sealed class SpellOverridePlannerTests {
     }
 
     [Fact]
-    public void AGlobalOfAnotherMeaningIsZeroed() {
+    public void AGlobalOfAnotherMeaningIsRetyped() {
         // Power Play: a 2009 power pip bubble for everyone; the client's is a Balance damage bubble. The bubble
-        // still replaces the one on the battlefield, but boosts nothing.
+        // becomes the power pip chance bubble of the record.
         var shape = Shape(2, 100, Plain(TemplateEffectKind.ModifyOutgoingDamage, 25, TemplateTarget.Global, "Balance"));
 
-        var plan = Plan(shape, SpellPips.Of(4), 1.0, Effect(SpellEffectKind.Global, "all", percent: 35, targets: null));
+        var plan = Plan(shape, SpellPips.Of(4), 1.0,
+            Effect(SpellEffectKind.Global, "all", percent: 35, targets: null, notes: "bubble: +35% power pip chance for every combatant"));
 
-        Assert.Equal(new EffectChange(new EffectAddress(0), Param: 0), Assert.Single(plan.EffectChanges));
+        Assert.Equal(new EffectChange(new EffectAddress(0), Param: 35, EffectType: "kModifyPowerPipChance"), Assert.Single(plan.EffectChanges));
+        Assert.Null(plan.Structure);
         Assert.Equal(4, plan.Rank);
-        Assert.Equal(new SkippedEffect(SpellEffectKind.Global, EffectSkipReason.NoMatchingTemplateEffect), Assert.Single(plan.SkippedEffects));
-        Assert.Equal(1, plan.ZeroedTemplateEffects);
-        Assert.Equal(0, plan.UnmatchedTemplateEffects);
+        Assert.Empty(plan.RemainingIssues);
     }
 
     [Fact]
@@ -241,14 +245,15 @@ public sealed class SpellOverridePlannerTests {
         // Doom and Gloom: -50% to every heal; the client files the bubble under Life, the record under all.
         var shape = Shape(2, 100, Plain(TemplateEffectKind.ModifyOutgoingHeal, -35, TemplateTarget.Global, "Life"));
 
-        var plan = Plan(shape, SpellPips.Of(3), 1.0, Effect(SpellEffectKind.Global, "all", percent: -50, targets: null));
+        var plan = Plan(shape, SpellPips.Of(3), 1.0,
+            Effect(SpellEffectKind.Global, "all", percent: -50, targets: null, notes: "bubble: every healing spell heals 50% less"));
 
         Assert.Equal(new EffectChange(new EffectAddress(0), Param: -50), Assert.Single(plan.EffectChanges));
         Assert.Equal(0, plan.ZeroedTemplateEffects);
     }
 
     [Fact]
-    public void AnUpFrontHitAndHealTheCardLackedAreZeroed() {
+    public void AnUpFrontHitAndHealTheCardLackedAreRemoved() {
         // Link: 180 over 3 rounds and 120 back over 3 rounds, with no up-front hit or heal in 2009.
         var shape = Shape(2, 75,
             Plain(TemplateEffectKind.Damage, 30),
@@ -260,13 +265,13 @@ public sealed class SpellOverridePlannerTests {
             Effect(SpellEffectKind.Dot, min: 180, rounds: 3),
             Effect(SpellEffectKind.Hot, min: 120, rounds: 3, targets: SpellTargets.Self));
 
-        Assert.Equal(new int?[] { 0, 180, 0, 120 }, plan.EffectChanges.OrderBy(c => c.Address.Index).Select(c => c.Param).ToArray());
-        Assert.Equal(2, plan.ZeroedTemplateEffects);
-        Assert.Equal(0, plan.UnmatchedTemplateEffects);
+        Assert.Equal(new[] { new EffectAddress(1), new EffectAddress(3) }, plan.Structure!.Value.ToArray());
+        Assert.Equal(new int?[] { 180, 120 }, plan.EffectChanges.OrderBy(c => c.Address.Index).Select(c => c.Param).ToArray());
+        Assert.Empty(plan.RemainingIssues);
     }
 
     [Fact]
-    public void AnUpFrontHealBesideAHealOverTimeIsZeroed() {
+    public void AnUpFrontHealBesideAHealOverTimeIsRemoved() {
         // Helping Hands: 540 over 3 rounds on an ally; the client adds a 120 heal up front.
         var shape = Shape(3, 85,
             Plain(TemplateEffectKind.Heal, 120, TemplateTarget.FriendlySingle, "Life"),
@@ -274,8 +279,8 @@ public sealed class SpellOverridePlannerTests {
 
         var plan = Plan(shape, SpellPips.Of(3), 1.0, Effect(SpellEffectKind.Hot, "balance", 540, rounds: 3));
 
-        Assert.Equal(new EffectChange(new EffectAddress(0), Param: 0), ChangesAt(plan, 0).Single());
-        Assert.Equal(new EffectChange(new EffectAddress(1), Param: 540, Rounds: 3), ChangesAt(plan, 1).Single());
+        Assert.Equal(new[] { new EffectAddress(1) }, plan.Structure!.Value.ToArray());
+        Assert.Equal(new EffectChange(new EffectAddress(0), Param: 540, Rounds: 3), Assert.Single(plan.EffectChanges));
     }
 
     [Fact]
@@ -322,13 +327,15 @@ public sealed class SpellOverridePlannerTests {
     }
 
     [Fact]
-    public void AShareOfMaxHealthOnOtherTargetsStaysAsItIs() {
+    public void AShareOfMaxHealthOnOtherTargetsBecomesTheRecordsHit() {
+        // The values alone never turn an enemy's share of max health into the caster's own hit; the rebuilt card does.
         var shape = Shape(2, 100, Plain(TemplateEffectKind.MaxHealthDamage, 10, TemplateTarget.EnemySingle, "Death"));
 
         var plan = Plan(shape, SpellPips.Of(2), 1.0, Effect(SpellEffectKind.Damage, "death", 300, targets: SpellTargets.Self));
 
-        Assert.Empty(plan.EffectChanges);
-        Assert.Equal(new SkippedEffect(SpellEffectKind.Damage, EffectSkipReason.NoMatchingTemplateEffect), Assert.Single(plan.SkippedEffects));
+        Assert.Equal(new EffectChange(new EffectAddress(0), Param: 300, Target: TemplateTarget.Self, EffectType: "kDamage"),
+            Assert.Single(plan.EffectChanges));
+        Assert.Empty(plan.RemainingIssues);
     }
 
     [Fact]
@@ -379,20 +386,30 @@ public sealed class SpellOverridePlannerTests {
     }
 
     [Fact]
-    public void AnAmbiguousPairingIsLeftAlone() {
-        // Orthrus: two hits in 2009, one area hit in the client. Neither hit may claim it.
-        var shape = Shape(6, 80, Plain(TemplateEffectKind.Damage, 700, TemplateTarget.EnemyTeam, "Myth"));
+    public void OrthrusBecomesTwoHitsOnOneEnemy() {
+        // Orthrus: 50 then 650 Myth damage on one enemy in 2009, 700 to every enemy in the client. The values alone
+        // cannot pair two hits with one; the rebuilt list copies the area hit twice and narrows both copies.
+        var shape = Shape(7, 80, Plain(TemplateEffectKind.Damage, 700, TemplateTarget.EnemyTeam, "Myth"));
 
-        var plan = Plan(shape, SpellPips.Of(6), 0.8,
-            Effect(SpellEffectKind.Damage, "myth", 50),
-            Effect(SpellEffectKind.Damage, "myth", 650));
+        var plan = Plan(shape, SpellPips.Of(7), 0.8,
+            Effect(SpellEffectKind.Damage, "myth", 50, notes: "first hit"),
+            Effect(SpellEffectKind.Damage, "myth", 650, notes: "second hit, same target"));
 
-        Assert.Empty(plan.EffectChanges);
-        Assert.Equal(2, plan.SkippedEffects.Count(skip => skip.Reason == EffectSkipReason.NoMatchingTemplateEffect));
+        Assert.Equal(new[] { new EffectAddress(0), new EffectAddress(0) }, plan.Structure!.Value.ToArray());
+        Assert.Equal(new[] {
+            new EffectChange(new EffectAddress(0), Param: 50, Target: TemplateTarget.EnemySingle),
+            new EffectChange(new EffectAddress(1), Param: 650, Target: TemplateTarget.EnemySingle),
+        }, plan.EffectChanges.ToArray());
+        var after = SpellPlanSimulator.Apply(shape, plan);
+        Assert.Equal(new[] { (50, TemplateTarget.EnemySingle), (650, TemplateTarget.EnemySingle) },
+            after.Effects.Select(e => (e.Param, e.Target)).ToArray());
+        Assert.Empty(plan.RemainingIssues);
     }
 
     [Fact]
-    public void TargetsWidenButNeverNarrowToASingleTarget() {
+    public void TargetsWidenAndNarrow() {
+        // The overlay makes the client ask for the target a narrowed card needs, and the combat server picks one for a
+        // client without it (CastTargeting), so a single target is written like any other.
         var single = Shape(2, 100, Plain(TemplateEffectKind.ModifyOutgoingDamage, -25, TemplateTarget.EnemySingle, "All"));
         var area = Shape(2, 100, Plain(TemplateEffectKind.ModifyOutgoingDamage, -25, TemplateTarget.EnemyTeam, "All"));
 
@@ -401,8 +418,8 @@ public sealed class SpellOverridePlannerTests {
 
         Assert.Equal(TemplateTarget.EnemyTeam, Assert.Single(widened.EffectChanges).Target);
         Assert.Null(Assert.Single(widened.EffectChanges).Param);
-        Assert.Empty(narrowed.EffectChanges);
-        Assert.Equal(1, narrowed.TargetsNotRepresentable);
+        Assert.Equal(TemplateTarget.EnemySingle, Assert.Single(narrowed.EffectChanges).Target);
+        Assert.Empty(narrowed.RemainingIssues);
     }
 
     [Fact]

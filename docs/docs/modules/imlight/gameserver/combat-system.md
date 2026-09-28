@@ -184,7 +184,8 @@ but does not exist stops the boot; the default path only warns.
 Card (`Spells/TreasureCards/<card> TC.xml`), the trained or crossover record whose name or client template file
 is `<card>`, since one record covers both copies of a card; else a record with no `client_template` and its card
 name. A record never takes a different template that shares its name, such as `Spells/Gobbler.xml`, a
-310-damage card that is not the Gobbler Treasure Card.
+310-damage card that is not the Gobbler Treasure Card, nor a Treasure Card or same-named template that carries
+none of its kinds of effect (r806919's damage-dealing Fire Elemental Treasure Card is not the 2009 minion's).
 Templates with no record keep the client's values. A record's numbers are `values`, then any `profile_values`
 entry of the active profile or a profile it extends.
 
@@ -199,17 +200,27 @@ entry of the active profile or a profile it extends.
   so the caster's own blades, shields and resist change it and are used up by it.
 - Effect percentages: `blade`, `charm` (damage, accuracy or heal), `trap`, `shield`, `global`. A healing
   bubble matches whatever school the client files it under (Doom and Gloom).
-- Targets, only when the classic target is wider (single to all, or to self): the client sends no
-  target for a card it thinks is area-of-effect, so a card can never become single-target.
-- Zeroed template effects the classic card did not have: an up-front hit or heal beside the record's own
-  damage or heal on the same targets, once every amount the record gives has landed (Link's 30 and 15,
-  Helping Hands' 120), and a global whose meaning the record does not share (Power Play's Balance boost: the
-  bubble still replaces the one in play, but boosts nothing).
+- Targets, in any direction (area to one enemy, self to an ally). The client asks for a target when one
+  of its card's effects is single-target, so a card that becomes single-target needs the card overlay
+  (`tools/overlay-wad`) to ask for one; a client without it casts the card with no target, and combat then
+  uses the first living enemy for an enemy card or the caster for a friendly one (`CastTargeting`).
+- Effect types (Power Play's damage bubble becomes the 2009 power pip bubble; Distract taunts) and schools.
+- A rebuilt effect list, when the values alone still leave the card's mechanics different from the record
+  (`SpellMechanicsAudit`): each record effect, in card order, takes the template effect that best carries it
+  or a copy of a plain one retyped for it, and template effects the 2009 card lacked are dropped. Orthrus
+  becomes 50 then 650 Myth damage on one enemy (r806919: 700 to every enemy); Power Nova gets its -25%
+  weakness on every enemy; Immolate hits the caster for a flat 250; Link and Helping Hands lose their
+  up-front hit and heal; Stun Block gives one block. Effects outside the records' vocabulary (a sacrifice's
+  minion kill) stay where they were.
 
 A damage range is spread over the template's rolled children, lowest first, because the client replays the
 server's roll by index; a single-value effect takes the range's mean; X cards scale the per-pip amount by
 tier. Effects are paired by kind, school and target, then by looser rules only when the pairing is the only
-one left. A percent never flips an effect's sign, and effects are never added, removed or reordered.
+one left. A percent never flips an effect's sign. Because the client replays the server's effect choices
+against its own copy of the card, a rebuilt list needs the card overlay, which writes the same list.
+`classic-data/spells/APPLIED.md` (`overlay-wad audit`) lists, for every record, whether combat carries all
+of its 2009 mechanics. Threat cards cast on an ally (Pacify, Calm, Soothe, Subdue) lower every enemy's
+hate for that ally, and Taunt raises it for the caster with every enemy (`CombatCreatureAIComponent`).
 
 **Combat rules a classic profile changes.** Each is tagged `// CLASSIC:` and applies only with a restricted
 profile; `dev-unrestricted` keeps stock Imlight.

@@ -28,8 +28,7 @@
  * var plan = SpellOverridePlanner.Plan(record, SpellMatch.ClientTemplate, record.ValuesFor(lineage), shape);
  *
  * NOTE:
- * Matching never adds, removes or reorders template effects: the client
- * replays the server's effect choices by index against its own template.
+ * The values pass never adds, removes or reorders template effects.
  * A classic effect matches a template effect of the same kind in four
  * passes, strictest first: school and target, then school alone, then
  * target alone, then kind alone. The looser passes need the pairing to be
@@ -39,6 +38,14 @@
  * clearly has no such effect: an up-front hit or heal beside the record's
  * damage or heal on the same targets (Link, Helping Hands), or a global
  * whose meaning the record does not share (Power Play).
+ * When the values alone still leave the card's mechanics different from
+ * the record (SpellMechanicsAudit: a changed target, another number or
+ * order of hits, a missing or extra effect, another effect type), the plan
+ * rebuilds the effect list from the record instead (Structure), copying
+ * the template's own effects, and keeps it when it comes closer to the
+ * card. The client replays the server's effect choices by index against
+ * its own template, so a rebuilt list needs the card overlay
+ * (tools/overlay-wad), which writes the same list into the client's card.
  *
  * TODO:
  *
@@ -126,7 +133,7 @@ public sealed record SkippedEffect(SpellEffectKind Kind, EffectSkipReason Reason
 /// <summary>
 /// What the classic values change on one template.
 /// </summary>
-public sealed class SpellOverridePlan {
+public sealed record SpellOverridePlan {
 
     public required ClassicSpellRecord Record { get; init; }
     public required SpellMatch Match { get; init; }
@@ -170,19 +177,25 @@ public sealed class SpellOverridePlan {
     public int UnmatchedTemplateEffects { get; init; }
 
     /// <summary>
-    /// Paired effects whose classic target could not be written, because the client would not send a target for it.
-    /// </summary>
-    public int TargetsNotRepresentable { get; init; }
-
-    /// <summary>
     /// Template effects the record has no counterpart for that are zeroed (an up-front hit or heal, a global with another meaning).
     /// </summary>
     public int ZeroedTemplateEffects { get; init; }
 
     /// <summary>
+    /// The template's new effect list, each entry a copy of the original effect at that address (a listed effect or a rolled
+    /// child); null when the list keeps its effects. <see cref="EffectChanges"/> then address the new list.
+    /// </summary>
+    public ImmutableArray<EffectAddress>? Structure { get; init; }
+
+    /// <summary>
+    /// What still differs from the record once the plan is applied (<see cref="SpellMechanicsAudit"/>).
+    /// </summary>
+    public ImmutableArray<MechanicsIssue> RemainingIssues { get; init; } = [];
+
+    /// <summary>
     /// True when applying the plan changes anything.
     /// </summary>
-    public bool ChangesTemplate => Rank is not null || ClearSchoolPips || Accuracy is not null || !EffectChanges.IsEmpty;
+    public bool ChangesTemplate => Rank is not null || ClearSchoolPips || Accuracy is not null || !EffectChanges.IsEmpty || Structure is not null;
 
 }
 
@@ -253,20 +266,40 @@ public static class SpellOverridePlanner {
     /// <returns>The plan; empty changes when the template already carries the classic numbers.</returns>
     public static SpellOverridePlan Plan(ClassicSpellRecord record, SpellMatch match, SpellValues values, SpellTemplateShape shape,
                                          int? inheritedFixedPips = null) {
+        var plan = PlanValues(record, match, values, shape, inheritedFixedPips);
+        var issues = SpellMechanicsAudit.Compare(values, SpellPlanSimulator.Apply(shape, plan), record.School);
+        plan = plan with { RemainingIssues = issues };
+        // An X card's amounts are per pip and a fixed card's are whole, so neither is rebuilt across the other.
+        if (!issues.Any(IsStructural) || (plan.PipsSkip != PipsSkip.None && values.Effects.Any(effect => effect.HasAmount))) {
+            return plan;
+        }
+
+        // The values alone leave the card's effects different (a changed target, a missing or extra effect, another
+        // number of hits): rebuild the effect list from the record, and keep it when it comes closer to the card.
+        if (PlanStructure(values, shape, plan, record.School) is not { } rebuilt) {
+            return plan;
+        }
+
+        var rebuiltIssues = SpellMechanicsAudit.Compare(values, SpellPlanSimulator.Apply(shape, rebuilt), record.School);
+
+        return rebuiltIssues.Length < issues.Length ? rebuilt with { RemainingIssues = rebuiltIssues } : plan;
+    }
+
+    private static bool IsStructural(MechanicsIssue issue)
+        => issue.Kind is not (MechanicsIssueKind.Pips or MechanicsIssueKind.SchoolPips or MechanicsIssueKind.Accuracy);
+
+    private static SpellOverridePlan PlanValues(ClassicSpellRecord record, SpellMatch match, SpellValues values, SpellTemplateShape shape,
+                                                int? inheritedFixedPips) {
         var (rank, clearSchoolPips, pipsSkip) = PlanPips(values.Pips, shape, inheritedFixedPips);
         var accuracy = values.AccuracyPercent;
         var slots = BuildSlots(shape.Effects);
         var pairs = Pair(values.Effects, slots, amountsFit: pipsSkip == PipsSkip.None, out var skipped);
 
         var changes = new List<EffectChange>();
-        var targetsNotRepresentable = 0;
         foreach (var (effectIndex, slotIndex) in pairs) {
             var effect = values.Effects[effectIndex];
             var slot = slots[slotIndex];
-            var target = NewTarget(effect, slot, out var representable);
-            if (!representable) {
-                targetsNotRepresentable++;
-            }
+            var target = NewTarget(effect, slot);
 
             changes.AddRange(ChangesFor(effect, slot, target));
         }
@@ -289,7 +322,6 @@ public static class SpellOverridePlanner {
             AppliedEffects = [.. pairs.OrderBy(pair => pair.Effect).Select(pair => values.Effects[pair.Effect].Kind)],
             SkippedEffects = skipped,
             UnmatchedTemplateEffects = slots.Count - pairs.Count - zeroed.Count,
-            TargetsNotRepresentable = targetsNotRepresentable,
             ZeroedTemplateEffects = zeroed.Count,
         };
     }
@@ -506,25 +538,16 @@ public static class SpellOverridePlanner {
                 _ => TargetCategory.Other,
             };
 
-    private static TemplateTarget? NewTarget(SpellEffectValues effect, Slot slot, out bool representable) {
-        representable = true;
+    private static TemplateTarget? NewTarget(SpellEffectValues effect, Slot slot) {
         var have = CategoryOf(slot.Target);
         var want = CategoryOf(effect);
         if (effect.Targets is null || want == have || have is TargetCategory.Global or TargetCategory.Other) {
             return null;
         }
 
-        // The client asks for a target only when its own template is single-target, so a card the client
-        // casts without one cannot become single-target on the server.
-        TemplateTarget? target = want switch {
-            TargetCategory.Self => TemplateTarget.Self,
-            TargetCategory.AllEnemies => TemplateTarget.EnemyTeam,
-            TargetCategory.AllAllies => TemplateTarget.FriendlyTeam,
-            _ => null,
-        };
-        representable = target is not null;
-
-        return target;
+        // A card that becomes single-target asks for a target once the overlay rewrites the client's card, and the
+        // combat server picks one for a client that still casts the area card (CombatActionResolver).
+        return want == TargetCategory.Other ? null : SpellEffectMeaning.TargetFor(effect);
     }
 
     private static IEnumerable<EffectChange> ChangesFor(SpellEffectValues effect, Slot slot, TemplateTarget? target) {
@@ -583,6 +606,199 @@ public static class SpellOverridePlanner {
         }
 
         return values;
+    }
+
+    private sealed record StructureItem(EffectAddress Source, TemplateEffectNode Node, SpellEffectValues? Effect, int Order);
+
+    /// <summary>
+    /// Rebuilds the effect list from the record: each record effect takes the template effect that best carries it, or a
+    /// copy of a plain template effect retyped for it; template effects the record does not have are dropped, except those
+    /// the record's vocabulary cannot name (a sacrifice's minion kill), which stay where they were.
+    /// </summary>
+    private static SpellOverridePlan? PlanStructure(SpellValues values, SpellTemplateShape shape, SpellOverridePlan valuesPlan,
+                                                    string cardSchool) {
+        var effects = shape.Effects;
+        var used = new HashSet<int>();
+        var items = new List<StructureItem>();
+        for (var e = 0; e < values.Effects.Length; e++) {
+            var effect = values.Effects[e];
+            var want = SpellEffectMeaning.ClientTypes(effect);
+            var rolled = effect.HasAmount && effect.Min != effect.Max;
+            var perPip = values.Pips.IsX && effect.HasAmount;
+            var carries = Enumerable.Range(0, effects.Length)
+                .Where(i => !used.Contains(i) && CarriesAt(effects[i], effect, rolled, perPip))
+                .OrderByDescending(i => StructureScore(effects[i], effect, cardSchool, want))
+                .ThenBy(i => i)
+                .ToList();
+            if (carries.Count > 0) {
+                used.Add(carries[0]);
+                items.Add(new StructureItem(new EffectAddress(carries[0]), effects[carries[0]], effect, e));
+                continue;
+            }
+
+            // A single amount or percentage can be carried by a copy of any plain template effect.
+            if (SpellEffectMeaning.ValueKinds.Contains(effect.Kind) && !rolled && !perPip && (effect.HasAmount || effect.Percent is not null)
+                && PrototypeFor(effects, want) is { } prototype) {
+                items.Add(new StructureItem(prototype, SpellPlanSimulator.NodeAt(effects, prototype)!, effect, e));
+            }
+        }
+
+        if (items.Count == 0) {
+            return null;
+        }
+
+        // Effects outside the record's vocabulary stay, at their place in the list.
+        var list = items.OrderBy(item => item.Order).ToList();
+        for (var i = 0; i < effects.Length; i++) {
+            if (!used.Contains(i) && !SpellEffectMeaning.AllClientTypes.Contains(TypeOf(effects[i]))) {
+                list.Insert(Math.Min(i, list.Count), new StructureItem(new EffectAddress(i), effects[i], null, -1));
+            }
+        }
+
+        var changes = new List<EffectChange>();
+        for (var index = 0; index < list.Count; index++) {
+            if (list[index].Effect is { } effect) {
+                changes.AddRange(StructureChanges(effect, list[index].Node, index, cardSchool));
+            }
+        }
+
+        var identity = list.Count == effects.Length && list.Select((item, i) => item.Source == new EffectAddress(i)).All(same => same);
+
+        return valuesPlan with {
+            Structure = identity ? null : [.. list.Select(item => item.Source)],
+            EffectChanges = [.. changes],
+            AppliedEffects = [.. items.OrderBy(item => item.Order).Select(item => item.Effect!.Kind)],
+            SkippedEffects = [],
+            UnmatchedTemplateEffects = 0,
+            ZeroedTemplateEffects = 0,
+        };
+    }
+
+    private static string TypeOf(TemplateEffectNode node) => node.LeadType;
+
+    private static bool CarriesAt(TemplateEffectNode node, SpellEffectValues effect, bool rolled, bool perPip) {
+        if (!SpellEffectMeaning.CanCarry(effect.Kind, TypeOf(node))) {
+            return false;
+        }
+
+        // An effect without numbers (a stun, a minion) keeps whatever structure carries it.
+        if (!SpellEffectMeaning.ValueKinds.Contains(effect.Kind) || (!effect.HasAmount && effect.Percent is null)) {
+            return true;
+        }
+
+        // Numbers are written into plain effects, rolls and per-pip lists whose children are all of one type.
+        var children = node.Children;
+        var uniform = !children.IsEmpty && children.All(child => child.Composition == TemplateComposition.Plain
+            && child.EffectTypeName == children[0].EffectTypeName
+            && string.Equals(child.DamageType, children[0].DamageType, StringComparison.OrdinalIgnoreCase));
+
+        return node.Composition switch {
+            TemplateComposition.Plain => !rolled && !perPip,
+            TemplateComposition.Random => uniform && !perPip,
+            TemplateComposition.PerPip => uniform && perPip,
+            _ => false,
+        };
+    }
+
+    private static int StructureScore(TemplateEffectNode node, SpellEffectValues effect, string cardSchool, ImmutableArray<string> want) {
+        var first = node.Children.IsEmpty ? node : node.Children[0];
+        var score = 0;
+        if (string.Equals(want[0], TypeOf(node), StringComparison.Ordinal)) {
+            score += 16;
+        }
+
+        if (CategoryOf(effect) == CategoryOf(first.Target)) {
+            score += 8;
+        }
+
+        if (SpellEffectMeaning.SchoolFits(effect, cardSchool, TypeOf(node), first.DamageType)) {
+            score += 4;
+        }
+
+        if (effect.HasAmount && first.Param == effect.Min) {
+            score += 2;
+        }
+
+        return score;
+    }
+
+    private static EffectAddress? PrototypeFor(ImmutableArray<TemplateEffectNode> effects, ImmutableArray<string> want) {
+        // A plain effect of the wanted type first, then any plain effect, then a plain child of a roll or per-pip list.
+        var plain = Enumerable.Range(0, effects.Length).Where(i => effects[i].Composition == TemplateComposition.Plain).ToList();
+        foreach (var i in plain.Where(i => want.Contains(effects[i].EffectTypeName, StringComparer.Ordinal)).Concat(plain)) {
+            return new EffectAddress(i);
+        }
+
+        for (var i = 0; i < effects.Length; i++) {
+            if (effects[i].Composition is TemplateComposition.Random or TemplateComposition.PerPip) {
+                var child = effects[i].Children.IndexOf(effects[i].Children.FirstOrDefault(node => node.Composition == TemplateComposition.Plain)!);
+                if (child >= 0) {
+                    return new EffectAddress(i, child);
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private static IEnumerable<EffectChange> StructureChanges(SpellEffectValues effect, TemplateEffectNode node, int index, string cardSchool) {
+        var want = SpellEffectMeaning.ClientTypes(effect);
+        var isList = node.Composition is TemplateComposition.Random or TemplateComposition.PerPip;
+        var nodes = isList ? node.Children : [node];
+        var addresses = isList
+            ? [.. nodes.Select((_, child) => new EffectAddress(index, child))]
+            : ImmutableArray.Create(new EffectAddress(index));
+        var shape = node.Composition switch {
+            TemplateComposition.Random => SlotShape.Range,
+            TemplateComposition.PerPip => SlotShape.PerPip,
+            _ => SlotShape.Single,
+        };
+        var hasNumbers = SpellEffectMeaning.ValueKinds.Contains(effect.Kind) && (effect.HasAmount || effect.Percent is not null)
+            && node.Composition != TemplateComposition.Other;
+        var slot = new Slot(shape, addresses, nodes);
+        var values = hasNumbers && s_templateKinds.ContainsKey(effect.Kind) ? NewParams(effect, slot) : null;
+        for (var i = 0; i < nodes.Length; i++) {
+            var current = nodes[i];
+            if (node.Composition == TemplateComposition.Other) {
+                // Kept whole (a roll between creatures): only the target of its children can change.
+                break;
+            }
+
+            var type = TypeChange(effect, current, want);
+            int? param = values is not null && values[i] != current.Param ? values[i] : null;
+            if (values is null && hasNumbers && effect.HasAmount && effect.Min!.Value != current.Param) {
+                param = effect.Min;
+            }
+            else if (values is null && hasNumbers && effect.Percent is { } percent && percent != current.Param) {
+                param = percent;
+            }
+
+            int? rounds = effect.Kind is SpellEffectKind.Dot or SpellEffectKind.Hot && effect.Rounds is { } r && r != current.Rounds ? r : null;
+            float? heal = effect.Kind == SpellEffectKind.Steal && effect.Percent is { } p && Math.Abs(p / 100f - current.HealModifier) > 0.0001f
+                ? p / 100f
+                : null;
+            TemplateTarget? target = null;
+            if ((effect.Targets is not null || effect.Kind == SpellEffectKind.Global) && CategoryOf(effect) != CategoryOf(current.Target)) {
+                target = SpellEffectMeaning.TargetFor(effect);
+            }
+
+            var newType = type ?? current.EffectTypeName;
+            string? damageType = SpellEffectMeaning.SchoolFits(effect, cardSchool, newType, current.DamageType)
+                ? null
+                : SpellEffectMeaning.DamageTypeOf(effect.School);
+            if (type is not null || param is not null || rounds is not null || heal is not null || target is not null || damageType is not null) {
+                yield return new EffectChange(addresses[i], param, rounds, heal, target, EffectType: type, DamageType: damageType);
+            }
+        }
+    }
+
+    private static string? TypeChange(SpellEffectValues effect, TemplateEffectNode node, ImmutableArray<string> want) {
+        var type = node.EffectTypeName;
+        if (want.Contains(type, StringComparer.Ordinal)) {
+            return null;
+        }
+
+        return want[0];
     }
 
     private static int Round(double value)

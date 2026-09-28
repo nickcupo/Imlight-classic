@@ -189,9 +189,9 @@ public static class SpellTemplateMapping {
 
         var fields = read(effect);
         var composition = CompositionOf(fields.TypeChain);
-        var children = composition is TemplateComposition.Random or TemplateComposition.PerPip
-            ? [.. (childrenOf(effect) ?? []).Select(child => NodeOf(child, read, childrenOf))]
-            : ImmutableArray<TemplateEffectNode>.Empty;
+        // Containers of other kinds (effect lists, conditions) list their children too, so their types can be read; the
+        // classic values only write into rolls and per-pip lists.
+        var children = ImmutableArray.CreateRange((childrenOf(effect) ?? []).Select(child => NodeOf(child, read, childrenOf)));
 
         return new TemplateEffectNode {
             Composition = composition,
@@ -203,6 +203,9 @@ public static class SpellTemplateMapping {
             PipNumber = fields.PipNumber,
             HealModifier = fields.HealModifier,
             Children = children,
+            EffectType = fields.EffectType ?? "",
+            TargetName = fields.Target ?? "",
+            ClassName = fields.TypeChain.Count > 0 ? fields.TypeChain[0] : "",
         };
     }
 

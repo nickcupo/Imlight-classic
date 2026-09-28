@@ -39,6 +39,7 @@
 
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Classic;
+using Imlight.Common;
 using System;
 using System.Linq;
 
@@ -306,7 +307,10 @@ internal static class CombatEffectApplicator {
             cinematicTime += wards.Count * HANGING_EFFECT_CONSUME_TIME;
             damage = CombatWards.GetIncomingDamageFromWards(wards, damage);
 
-            damageDealt += DoDamageToTarget(target, damage, finalSchool);
+            var dealt = DoDamageToTarget(target, damage, finalSchool);
+            damageDealt += dealt;
+            Logger.Debug("Duel {0} | Slot {1} | {2} {3} damage ({4}) to slot {5}: {6} dealt.",
+                Logger.Args(duel.m_duelID.Full, caster.SlotIndex, effect.m_effectParam, effect.m_sDamageType, effect.m_effectType, target.SlotIndex, dealt));
 
             // Remove the wards that were applied to this spell from the target's hanging effects.
             target._hangingEffects.RemoveAll(x => wards.Contains(x) && x.m_paramPerRound <= 0);

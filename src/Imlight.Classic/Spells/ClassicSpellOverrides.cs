@@ -104,6 +104,32 @@ public sealed class ClassicSpellOverrides {
     }
 
     /// <summary>
+    /// The record for a template, as <see cref="Find"/> finds it, when the template is that card: a Treasure Card or a
+    /// same-named template that carries none of the record's effects is another card (r806919's damage-dealing
+    /// "Fire Elemental" Treasure Card is not the 2009 Fire Elemental minion's).
+    /// </summary>
+    /// <param name="shape">The template.</param>
+    /// <returns>The record and how it was found, or null.</returns>
+    public (ClassicSpellRecord Record, SpellMatch Match)? Match(SpellTemplateShape shape) {
+        if (Find(shape.Path, shape.Name) is not var (record, match)) {
+            return null;
+        }
+
+        if (match == SpellMatch.ClientTemplate) {
+            return (record, match);
+        }
+
+        var effects = ValuesOf(record).Effects;
+        var types = shape.Effects.SelectMany(node => node.Children.IsEmpty ? [node] : node.Children.Add(node))
+            .Select(node => node.EffectTypeName)
+            .ToHashSet(StringComparer.Ordinal);
+
+        return effects.IsEmpty || effects.Any(effect => types.Any(type => SpellEffectMeaning.CanCarry(effect.Kind, type)))
+            ? (record, match)
+            : null;
+    }
+
+    /// <summary>
     /// True when a spell trainer may teach the template in the active profile: a trained or crossover record
     /// names it as its client template and lists the profile. Trainers in the r806919 client also teach cards
     /// from after the cutoff (Summon Sandstorm, Elemental Golem, Gearhead Destroyer, ...), which have no record.
@@ -127,7 +153,7 @@ public sealed class ClassicSpellOverrides {
     /// <param name="shape">The template.</param>
     /// <returns>The plan, or null when no record matches the template.</returns>
     public SpellOverridePlan? PlanFor(SpellTemplateShape shape) {
-        if (Find(shape.Path, shape.Name) is not var (record, match)) {
+        if (Match(shape) is not var (record, match)) {
             return null;
         }
 
