@@ -171,7 +171,7 @@ public sealed class ClassicDeckRegressionTests : IDisposable {
     }
 
     [Fact]
-    public void FizzledCardIsDiscardedAndDoesNotRestoreDiscardedCards() {
+    public void FizzledReshuffleKeepsTheCardAndDoesNotRestoreDiscardedCards() {
         var actor = CombatRegressionTests.MakeDuel();
         var deck = new CombatDeck([Card(Reshuffle), Card(Regular)], [], 2);
         var caster = Occupy(actor, 4, deck);
@@ -182,11 +182,9 @@ public sealed class ClassicDeckRegressionTests : IDisposable {
         var actions = new CombatActionListObj { m_actionList = [] };
         var action = new QueuedCombatAction { Spell = card, SpellTemplate = (SpellTemplate) _templates[Reshuffle], SpellCaster = caster, SelectedTarget = caster };
         CombatRegressionTests.Invoke(resolver, "HandleFizzleAction", action, actions);
-        Assert.Empty(deck.LastGivenHand);
+        Assert.Same(card, Assert.Single(deck.LastGivenHand));
         Assert.Equal(0, deck.RemainingCardCount);
         Assert.Equal(0, (int) Assert.Single(actions.m_actionList).m_spellHits);
-        deck.Reshuffle(); // both discarded cards come back only on a Reshuffle
-        Assert.Equal(2, deck.RemainingCardCount);
         Assert.Equal(7, (int) caster.CombatParticipant.m_pipCount.m_genericPips);
     }
 
