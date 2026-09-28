@@ -14,6 +14,25 @@
  *
  * You should have received a copy of the GNU Affero General Public License
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
+ *
+ * ========================================================================
+ * RESULT EXECUTION
+ * ========================================================================
+ *
+ * PURPOSE:
+ * Runs result handlers in order and schedules timed waits.
+ *
+ * USAGE EXAMPLE:
+ * Created by ResultDispatcher for one result activation.
+ *
+ * NOTE:
+ * Classic waits preserve the client data's double precision.
+ *
+ * TODO:
+ *
+ * Created by: Jay with Codex (GPT-6)
+ * Version: KALI 1.0
+ * Last Updated: 09/28/2026
  */
 
 using System;
@@ -22,6 +41,7 @@ using System.Linq;
 using Akka.Actor;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
+using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;
 
@@ -104,7 +124,7 @@ public class ResultExecutorActor(IResultContext context) : ReceiveProtocolDispat
                     Success = true,
                     ResultType = resultType
                 },
-                timeout: TimeSpan.FromMilliseconds(resWait.m_secondsToWait * 1000)
+                timeout: TimeSpan.FromSeconds(resWait is ClassicResWait classicWait ? classicWait.Seconds : resWait.m_secondsToWait)
             );
 
             return;
@@ -113,8 +133,7 @@ public class ResultExecutorActor(IResultContext context) : ReceiveProtocolDispat
         var handlerType = ResultDispatcher.FindHandlerForResult(resultType, _context);
 
         if (handlerType is null) {
-            // CLASSIC: once per type (ResModifyTriggerObject, the trigger object animations the client plays itself,
-            // came 6 times per tutorial entry), then at debug.
+            // Report unsupported result types once, then keep repeats at debug level.
             if (s_reportedUnhandled.TryAdd(resultType, true)) {
                 Logger.Warning("No handler registered for result type: {0} (reported once; skipped).",
                     Logger.Args(resultType.Name));

@@ -52,9 +52,9 @@
  *
  * TODO:
  *
- * Created by: Nick with Claude Code (claude-opus-5-5)
+ * Created by: Nick with Claude Code (claude-opus-5-5) and Codex (GPT-6)
  * Version: KALI 1.0
- * Last Updated: 09/27/2026
+ * Last Updated: 09/28/2026
  */
 
 using System;
@@ -226,6 +226,9 @@ internal sealed class InteractTeleportObjectComponent(ZoneEntity entity)
             return true;
         }
 
+        if (Entity.TriggerObjectState is { } runtimeState) {
+            return string.Equals(runtimeState, state, StringComparison.OrdinalIgnoreCase);
+        }
         var tag = Entity.Info?.m_zoneTag?.ToString();
 
         return string.Equals(Entity.Info?.m_startState?.ToString(), state, StringComparison.OrdinalIgnoreCase)

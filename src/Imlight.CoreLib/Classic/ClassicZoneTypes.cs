@@ -40,9 +40,9 @@
  * TODO:
  * - KingsIsle's name for the class is unknown; ClassicReqMonsterKilled is ours.
  *
- * Created by: Nick with Claude Code (claude-opus-5-5)
+ * Created by: Nick with Claude Code (claude-opus-5-5) and Codex (GPT-6)
  * Version: KALI 1.0
- * Last Updated: 09/27/2026
+ * Last Updated: 09/28/2026
  */
 
 using System;
@@ -221,6 +221,8 @@ public sealed class ClassicZoneTypeRegistry : TypeRegistry {
         [82637767] = typeof(ClassicResCinematic),
         [145615551] = typeof(ClassicResStartStagedCinematic),
         [ClassicResZoneTimer.TypeHash] = typeof(ClassicResZoneTimer),
+        [ClassicResModifyTriggerObject.TypeHash] = typeof(ClassicResModifyTriggerObject),
+        [ClassicResWait.TypeHash] = typeof(ClassicResWait),
     };
 
     public override void RegisterType(uint hash, Type t)
