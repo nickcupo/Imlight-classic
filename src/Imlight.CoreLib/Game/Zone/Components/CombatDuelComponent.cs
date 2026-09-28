@@ -1234,20 +1234,20 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
 
     private CombatTeam _randomFirstTeam;
 
-    // CLASSIC: the side that acts first is random per duel, but a side of four wizards goes first (owner, 2026-09-28).
-    // Checked each round, so it applies from the round after a fourth wizard joins.
+    // CLASSIC: the side that acts first is set once, when combat starts (the first round, after the join grace
+    // period), and never changes: the wizards if four of them are in the duel then, else the duel's random side
+    // (owner ruling 2026-09-28).
     private void ApplyFullTeamGoesFirst() {
-        if (!ClassicRuntime.IsActive || IsScriptedDuel()) {
+        if (!ClassicRuntime.IsActive || IsScriptedDuel() || Duel.m_roundNum != 1) {
             return;
         }
 
         var wizards = SubCircles.Count(circle => circle is { Occupied: true, AddedToDuel: true, IsSummonedMinion: false }
             && circle.OccupiedTeam == CombatTeam.Player);
         var first = wizards >= 4 ? CombatTeam.Player : _randomFirstTeam;
-        if (Duel.m_firstTeamToAct != (int) first) {
-            Duel.m_firstTeamToAct = (int) first;
-            Logger.Debug("Duel {0} | {1} wizards: team {2} acts first.", Logger.Args(Duel.m_duelID.Full, wizards, first));
-        }
+        Duel.m_firstTeamToAct = (int) first;
+        Logger.Debug("Duel {0} | combat starts with {1} wizards: team {2} acts first for the whole duel.",
+            Logger.Args(Duel.m_duelID.Full, wizards, first));
     }
 
     private Random _rng;

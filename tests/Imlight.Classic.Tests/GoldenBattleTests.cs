@@ -119,21 +119,27 @@ public sealed class GoldenBattleTests : IDisposable {
         return list.m_actionList;
     }
 
-    [Fact]
-    public void FourWizardsGoFirstOtherwiseTheDuelsRandomSideDoes() {
+    [Theory]
+    [InlineData(3, (int) CombatTeam.Monster)]
+    [InlineData(4, (int) CombatTeam.Player)]
+    public void TheFirstSideIsSetWhenCombatStartsAndNeverChanges(int wizardsAtStart, int expectedFirst) {
         var duel = CombatRegressionTests.MakeDuel();
         CombatRegressionTests.SetProperty(duel, "Duel", new Duel { m_duelModifier = new DuelModifier { m_battlefieldEffects = [] } });
         typeof(CombatDuelComponent).GetField("_randomFirstTeam", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(duel, CombatTeam.Monster);
+        duel.Duel.m_firstTeamToAct = (int) CombatTeam.Monster;
         Occupy(duel, 0, false);
-        foreach (var slot in new[] { 4, 5, 6 }) Occupy(duel, slot, true);
+        foreach (var slot in new[] { 4, 5, 6, 7 }.Take(wizardsAtStart)) Occupy(duel, slot, true);
         var apply = typeof(CombatDuelComponent).GetMethod("ApplyFullTeamGoesFirst", BindingFlags.Instance | BindingFlags.NonPublic)!;
 
+        duel.Duel.m_roundNum = 1;
         apply.Invoke(duel, []);
-        Assert.Equal((int) CombatTeam.Monster, duel.Duel.m_firstTeamToAct);
+        Assert.Equal(expectedFirst, duel.Duel.m_firstTeamToAct);
 
-        Occupy(duel, 7, true);
+        // A fourth wizard joining later, or one leaving, changes nothing.
+        if (wizardsAtStart < 4) Occupy(duel, 7, true); else duel.SubCircles[7].AddedToDuel = false;
+        duel.Duel.m_roundNum = 2;
         apply.Invoke(duel, []);
-        Assert.Equal((int) CombatTeam.Player, duel.Duel.m_firstTeamToAct);
+        Assert.Equal(expectedFirst, duel.Duel.m_firstTeamToAct);
     }
 
     [Fact]
