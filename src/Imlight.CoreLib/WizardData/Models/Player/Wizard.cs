@@ -14,7 +14,26 @@
  *
  * You should have received a copy of the GNU Affero General Public License
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
-*/
+ *
+ * ========================================================================
+ * WIZARD RUNTIME AND PERSISTED STATE
+ * ========================================================================
+ *
+ * PURPOSE:
+ * Holds player data and runtime state shared by character services.
+ *
+ * USAGE EXAMPLE:
+ * Services access the active wizard through their session.
+ *
+ * NOTE:
+ * GameEffects provides synchronized operations and detached snapshots.
+ *
+ * TODO:
+ *
+ * Created by: Jay with Codex (GPT-6)
+ * Version: KALI 1.0
+ * Last Updated: 09/28/2026
+ */
 
 using System;
 using System.Collections.Generic;
@@ -127,7 +146,7 @@ public class Wizard {
     } = new();
     // Set when attachment replaces the offline data object; does not imply zone entry.
     [JsonIgnore] public bool HasInitializedGameObject { get; private set; }
-    [JsonIgnore] public List<GameEffectBase> GameEffects = [];
+    [JsonIgnore] public WizardEffectCollection GameEffects { get; } = new();
     [JsonIgnore] public string GameServerIp;
     [JsonIgnore] public ushort GameServerPort;
     [JsonIgnore] public string QueuedZoneName;

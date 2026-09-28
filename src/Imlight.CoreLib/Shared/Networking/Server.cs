@@ -37,9 +37,9 @@
  * 
  * TODO:
  * 
- * Created by: Jooty
+ * Created by: Jooty with Codex (GPT-6)
  * Version: KALI 1.0
- * Last Updated: 3/18/2025
+ * Last Updated: 09/28/2026
  */
 
 using System;
@@ -160,7 +160,7 @@ public abstract class Server : ReceiveProtocolDispatcher {
                 }
 
                 Logger.Error("SessionActor {Source} has failed with exception {Exception}",
-                    Logger.Args(ex.InnerException.Source, ex));
+                    Logger.Args(ex.InnerException?.Source ?? ex.Source ?? ex.GetType().Name, ex));
                 return Directive.Stop;
             }
         );
