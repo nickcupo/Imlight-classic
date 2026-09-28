@@ -229,6 +229,13 @@ internal class PetService(SessionActor sessionActor) : MessageService(sessionAct
     }
 
     private void HatchEgg(Wizard wizard, CraftingSlot egg) {
+        // CLASSIC: pet hatching came with the May 2010 Pet Pavilion update.
+        if (!ClassicRuntime.Rules.IsFeatureEnabled(ClassicFeatures.PetsHatching)) {
+            Logger.Debug("HatchEgg: refused, pet hatching is off in this profile (egg {0}).", Logger.Args(egg.m_globalID));
+
+            return;
+        }
+
         // Resolve the pet template from the egg's recipe name.
         if (!ServerPetOwnerBehavior.TryGetPetTemplateFromEgg(egg, out var petTemplateId)) {
             Logger.Debug("HatchEgg: could not parse pet template from egg {0}, recipe='{1}'.",
