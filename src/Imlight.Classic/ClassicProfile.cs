@@ -159,6 +159,11 @@ public sealed class ProfileRules {
     public string? TreasurePrices { get; init; }
 
     /// <summary>
+    /// Path under classic-data of creature health at the cutoff, if any.
+    /// </summary>
+    public string? MobStats { get; init; }
+
+    /// <summary>
     /// The rank from which power pips appear; null when unset or set to null.
     /// </summary>
     public string? PowerPipsFromRank { get; init; }

@@ -41,6 +41,7 @@ using System.Linq;
 using Akka.Actor;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
+using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.Game.Effects;
 using Imlight.CoreLib.Game.Zone.Core;
 using Imlight.CoreLib.Shared.Behaviors;
@@ -90,7 +91,8 @@ internal sealed class NpcComponent : ZoneEntityComponent, IComponentFactory, ICl
         this.IntelligenceFactor = _npcBehaviorTemplate.m_fIntelligence;
         this.SelfishnessFactor = _npcBehaviorTemplate.m_fSelfishFactor;
         this.AggressiveFactor = _npcBehaviorTemplate.m_nAggressiveFactor;
-        this.StartingHealth = _npcBehaviorTemplate.m_nStartingHealth;
+        // CLASSIC: the creature's health at the profile's cutoff, where a dated value exists.
+        this.StartingHealth = (entity.Template is GameObjectTemplate gameTemplate ? ClassicProgression.MobStats?.HealthOf(gameTemplate.m_templateID) : null) ?? _npcBehaviorTemplate.m_nStartingHealth;
 
         this.IsMonster = _duelistBehaviorTemplate is not null;
         this.Proximity = _duelistBehaviorTemplate?.m_npcProximity ?? 0;

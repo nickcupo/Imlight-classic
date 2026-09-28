@@ -61,6 +61,7 @@ public static class ClassicProgression {
     private static volatile BadgeRules? s_badges;
     private static volatile QuestCardRewards? s_questCards;
     private static volatile TreasurePrices? s_treasurePrices; // CLASSIC
+    private static volatile MobStats? s_mobStats; // CLASSIC
 
     /// <summary>
     /// The profile's XP table, or null for the client's curve.
@@ -86,6 +87,11 @@ public static class ClassicProgression {
     /// The profile's library treasure-card prices, or null for none.
     /// </summary>
     public static TreasurePrices? TreasurePrices => s_treasurePrices;
+
+    /// <summary>
+    /// The profile's creature health at the cutoff, or null for template health.
+    /// </summary>
+    public static MobStats? MobStats => s_mobStats;
 
     /// <summary>
     /// Loads the tables a restricted profile names.
@@ -123,6 +129,12 @@ public static class ClassicProgression {
             s_treasurePrices = TreasurePricesLoader.Load(Path.Combine(classicDataRoot, prices));
             Logger.Information("Classic treasure prices {Table}: library prices for {Count} cards; other cards cost their template price.",
                 Logger.Args(s_treasurePrices.Id, s_treasurePrices.ByName.Count));
+        }
+
+        if (profile.Rules.MobStats is { } mobStats && File.Exists(Path.Combine(classicDataRoot, mobStats))) {
+            s_mobStats = MobStatsLoader.Load(Path.Combine(classicDataRoot, mobStats));
+            Logger.Information("Classic mob stats {Table}: dated health for {Count} creature templates; others keep template health.",
+                Logger.Args(s_mobStats.Id, s_mobStats.HealthByTemplate.Count));
         }
     }
 
