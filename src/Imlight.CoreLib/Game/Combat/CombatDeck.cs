@@ -37,6 +37,7 @@
 
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.CoreLib.Game.Spells;
+using Imlight.Classic;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -61,6 +62,8 @@ internal class CombatDeck {
     private readonly List<CombatDeckSpellData> _usedUpSpellData;
     private readonly List<CombatDeckSpellData> _treasureVaultUsed;
     private readonly List<Spell> _cardsDiscardedThisTurn;
+    // Classic cards leave the draw pile on draw, and enter this pile only when actually spent/discarded.
+    private readonly List<CombatDeckSpellData> _classicDiscardPile = [];
 
     // ctor
     internal CombatDeck(List<CombatDeckSpellData> spellDatas, List<CombatDeckSpellData> treasureVault, byte handSize) {
@@ -162,6 +165,17 @@ internal class CombatDeck {
     /// </summary>
     /// <param name="spell">The spell to discard.</param>
     internal void Discard(Spell spell) {
+        if (ClassicRuntime.IsActive && !spell.m_treasureCard) {
+            if (RemoveHeldCard(spell)) {
+                _classicDiscardPile.Add(new CombatDeckSpellData {
+                    TemplateId = spell.m_templateID, Quantity = 1,
+                    IsBattleCard = spell.m_battleCard, IsItemCard = spell.m_itemCard,
+                });
+            }
+            // Drawing already removed this copy from the draw pile. A repeated discard is a no-op.
+            return;
+        }
+
         if (spell.m_treasureCard) {
             ReturnToVault(spell);
         }
@@ -240,8 +254,16 @@ internal class CombatDeck {
             return;
         }
 
-        // Remove from hand.
-        LastGivenHand.Remove(spell);
+        // Classic removals are by card instance and idempotent: a repeated request cannot create
+        // a vault copy or consume a second persistent copy with the same template ID.
+        if (ClassicRuntime.IsActive) {
+            if (!RemoveHeldCard(spell)) {
+                return;
+            }
+        }
+        else {
+            LastGivenHand.Remove(spell);
+        }
         if (TreasureCardsInHand > 0) {
             TreasureCardsInHand--;
         }
@@ -269,8 +291,14 @@ internal class CombatDeck {
             return 0;
         }
 
-        // Remove from hand.
-        LastGivenHand.Remove(spell);
+        if (ClassicRuntime.IsActive) {
+            if (!RemoveHeldCard(spell)) {
+                return 0;
+            }
+        }
+        else {
+            LastGivenHand.Remove(spell);
+        }
         if (TreasureCardsInHand > 0) {
             TreasureCardsInHand--;
         }
@@ -294,6 +322,23 @@ internal class CombatDeck {
     /// Vault cards are NOT returned to the deck on reshuffle.
     /// </summary>
     internal void Reshuffle() {
+        if (ClassicRuntime.IsActive) {
+            // Return only spent/discarded regular cards. The current hand, undrawn deck and treasure
+            // vault already own their copies and must not be duplicated by a full-deck reset.
+            foreach (var card in _classicDiscardPile) {
+                var existing = _usedUpSpellData.FirstOrDefault(s => s.TemplateId == card.TemplateId
+                    && s.IsItemCard == card.IsItemCard && s.IsBattleCard == card.IsBattleCard);
+                if (existing is null) {
+                    _usedUpSpellData.Add(card);
+                }
+                else {
+                    existing.Quantity += card.Quantity;
+                }
+            }
+            _classicDiscardPile.Clear();
+            return;
+        }
+
         // Copy spell data back to used up spell data.
         _usedUpSpellData.Clear();
         foreach (var originalSpellData in _spellData) {
@@ -309,5 +354,14 @@ internal class CombatDeck {
         _cardsDiscardedThisTurn.Clear();
     }
     
+    private bool RemoveHeldCard(Spell spell) {
+        int index = LastGivenHand.FindIndex(card => ReferenceEquals(card, spell));
+        if (index < 0) {
+            return false;
+        }
+        LastGivenHand.RemoveAt(index);
+        return true;
+    }
+
 }
 
