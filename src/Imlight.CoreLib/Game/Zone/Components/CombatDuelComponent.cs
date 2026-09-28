@@ -1437,15 +1437,19 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
         circle.ParticipantActor.Tell(stateMsg);
     });
 
-    // CLASSIC: Wizard City's first streets, where a random fight had at most one enemy per player (MMORPG.com
-    // "Combat Primer", 2009-01-22: "In the 'beginner' zones, you'll face a maximum of one enemy per player";
-    // from Colossus Boulevard on, one more enemy than there are players). The 2009 story reaches them before
-    // Colossus: Unicorn Way, Triton Avenue, Cyclops Lane, Firecat Alley.
+    // CLASSIC: Wizard City streets where a random fight had at most one enemy per player (MMORPG.com "Combat
+    // Primer", 2009-01-22: "In the 'beginner' zones, you'll face a maximum of one enemy per player"). Owner
+    // decision 2026-09-28: every Wizard City street is a beginner zone except Colossus Boulevard, which allows
+    // one more enemy than there are players. (The article says "from that point forward" after Colossus; the
+    // owner's recollection wins for Olde Town and Sunken City.) Towers and instances are not listed.
     private static readonly HashSet<string> s_classicBeginnerStreets = new(StringComparer.OrdinalIgnoreCase) {
         "WizardCity/WC_Streets/WC_Unicorn",
         "WizardCity/WC_Streets/WC_Triton",
         "WizardCity/WC_Streets/WC_Cyclops",
         "WizardCity/WC_Streets/WC_Firecat",
+        "WizardCity/WC_Streets/WC_HauntedCave",
+        "WizardCity/WC_Streets/WC_OldeTown",
+        "WizardCity/WC_Streets/WC_Sunken_City",
     };
 
     private bool IsSlotAvailable(CombatTeam team) {
