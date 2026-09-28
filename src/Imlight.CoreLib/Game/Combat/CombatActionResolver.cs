@@ -66,6 +66,10 @@ internal static class CombatActionResolver {
     /// <param name="cinematicTime">The cinematic time to be updated.</param>
     /// <returns>True if the spell is worth casting, otherwise false.</returns>
     internal static bool ProcessedQueuedCombatAction(QueuedCombatAction action, ref CombatAction combatAction, ref float cinematicTime) {
+        // A failed sacrifice prerequisite must also suppress its later self heal/pip reward.
+        if (ClassicRuntime.IsActive && RequiresOwnedMinion(action.SpellTemplate.m_effects)
+            && (action.SelectedTarget is null || !action.SelectedTarget.IsOwnedMinionOf(action.SpellCaster))) return false;
+
         var spellWorthCasting = false;
         var effectStack = new CombatEffectStack();
         var charmsAffectingThisSpell = new List<SpellEffect>();
@@ -305,6 +309,15 @@ internal static class CombatActionResolver {
         }
     }
 
+    private static bool RequiresOwnedMinion(IEnumerable<SpellEffect> effects)
+        => effects.Any(effect => effect.m_effectTarget is kEffectTarget.kMinion or kEffectTarget.kCasterMinion
+            || effect switch {
+                RandomSpellEffect random => RequiresOwnedMinion(random.m_effectList),
+                VariableSpellEffect variable => RequiresOwnedMinion(variable.m_effectList),
+                EffectListSpellEffect list => RequiresOwnedMinion(list.m_effectList),
+                _ => false,
+            });
+
     private static CombatDuelSubCircle[] GetEffectTargets(SpellEffect effect, CombatDuelSubCircle caster, CombatDuelSubCircle target) {
         var targets = Array.Empty<CombatDuelSubCircle>();
         var _activeSubCircles = caster._duelActor.ActiveSubCircles;
@@ -315,8 +328,13 @@ internal static class CombatActionResolver {
                 targets = [target];
                 break;
             case kEffectTarget.kMinion:
-            case kEffectTarget.kFriendlyMinion:
             case kEffectTarget.kCasterMinion:
+                if (ClassicRuntime.IsActive) {
+                    targets = target is not null && target.IsOwnedMinionOf(caster) ? [target] : [];
+                    break;
+                }
+                goto case kEffectTarget.kFriendlyMinion;
+            case kEffectTarget.kFriendlyMinion:
                 // The client drives minion selection; validate the pick belongs to the caster's team.
                 targets = target is not null && target.IsSummonedMinion && target.OccupiedTeam == caster.OccupiedTeam
                     ? [target]
