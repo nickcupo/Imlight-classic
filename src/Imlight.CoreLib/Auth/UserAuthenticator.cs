@@ -77,6 +77,10 @@ internal static class UserAuthenticator {
         = ConfigurationManager.Settings["Global Settings.EnforceRevision"].AsBool();
     private static readonly string s_serverRevision 
         = ConfigurationManager.Settings["Global Settings.GameRevision"].AsString();
+    // CLASSIC: private two-player server. When true, any password (even an empty one) logs
+    // in to an existing account; only the username has to match.
+    private static readonly bool s_anyPasswordLogin
+        = ConfigurationManager.Settings["Classic.AnyPasswordLogin"].AsBool(false);
 
     internal class AuthenticationDetails {
         
@@ -156,7 +160,7 @@ internal static class UserAuthenticator {
 
         details._account = matchedAccount;
 
-        var doesPasswordMatch = ClientKey.VerifyCK1(matchedAccount.PasswordHash, sessionId, offerTime, offerMilli, clientKey1);
+        var doesPasswordMatch = s_anyPasswordLogin || ClientKey.VerifyCK1(matchedAccount.PasswordHash, sessionId, offerTime, offerMilli, clientKey1);
         if (doesPasswordMatch) {
             // Create a new session key and store it in the database.
             var sessionKey = ClientKey.HashSessionKey(sessionId, offerTime, offerMilli);
