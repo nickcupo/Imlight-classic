@@ -97,6 +97,12 @@ internal class SpellFactory : RootDirectoryResourceSingleton<SpellFactory>, IMem
     }
 
     /// <summary>
+    /// The spell template named <paramref name="spellName"/>, or null when there is none.
+    /// </summary>
+    internal static SpellTemplate GetTemplate(string spellName) // CLASSIC: the library reads a card's m_baseCost.
+        => spellName is not null && s_spellTemplates.TryGetValue(StringHash.Compute(spellName), out var template) ? template : null;
+
+    /// <summary>
     /// Retrieves a spell by its name.
     /// </summary>
     /// <param name="spellName">The name of the spell.</param>

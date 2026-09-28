@@ -191,6 +191,14 @@ public class CoreObjectFactory : RootSingleResourceSingleton<CoreObjectFactory>,
         });
     }
 
+    /// <summary>
+    /// The archive path of the template with the specified ID, or null when there is none.
+    /// </summary>
+    /// <param name="id">The ID of the CoreTemplate.</param>
+    /// <returns>The path, such as <c>Spells/Fire Cat.xml</c>.</returns>
+    public static string GetTemplatePath(ulong id) // CLASSIC: classic spell records are keyed by template path.
+        => TemplateLocations().TryGetValue(id, out var location) ? location.m_filename : null;
+
     private static Dictionary<ulong, TemplateLocation> TemplateLocations()
         => LazyInitializer.EnsureInitialized(ref s_templateLocations, IndexTemplateLocations);
 

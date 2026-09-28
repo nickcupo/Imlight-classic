@@ -102,8 +102,8 @@ public sealed class SchemaDriftTests {
         Assert.Equal(EnumValues(rules.GetProperty("dragonspyre_difficulty")), ClassicSchema.DragonspyreDifficulties.ToArray());
         Assert.Equal(EnumValues(rules.GetProperty("tutorial")), ClassicSchema.Tutorials.ToArray());
         Assert.Equal(EnumValues(rules.GetProperty("teleport_stones")), ClassicSchema.TeleportStoneRules.ToArray());
-        Assert.Equal(new[] { "accuracy_table", "xp_table", "mob_rewards", "badges", "quest_cards", "power_pips_from_rank", "dragonspyre_difficulty", "tutorial",
-                             "teleport_stones" },
+        Assert.Equal(new[] { "accuracy_table", "xp_table", "mob_rewards", "badges", "quest_cards", "treasure_prices", "power_pips_from_rank",
+                             "dragonspyre_difficulty", "tutorial", "teleport_stones" },
             rules.EnumerateObject().Select(rule => rule.Name).ToArray());
     }
 
@@ -120,6 +120,15 @@ public sealed class SchemaDriftTests {
             Sorted(BadgeRulesLoader.s_awardKeys));
         Assert.Equal(Keys(cards), Sorted(QuestCardRewardsLoader.s_rootKeys));
         Assert.Equal(Keys(cards.GetProperty("$defs").GetProperty("quest")), Sorted(QuestCardRewardsLoader.s_questKeys));
+    }
+
+    [Fact]
+    public void TreasurePriceLoaderKeysMatchTheirSchema() {
+        string[] Keys(System.Text.Json.JsonElement node) => [.. node.GetProperty("properties").EnumerateObject().Select(p => p.Name).Order(StringComparer.Ordinal)];
+        var prices = ReadSchema("treasure-prices.schema.json");
+
+        Assert.Equal(Keys(prices), Sorted(TreasurePricesLoader.s_rootKeys));
+        Assert.Equal(Keys(prices.GetProperty("$defs").GetProperty("card")), Sorted(TreasurePricesLoader.s_cardKeys));
     }
 
     [Theory]

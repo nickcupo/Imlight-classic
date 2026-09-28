@@ -86,8 +86,8 @@ internal sealed class InteractServiceMementoComponent(ZoneEntity entity)
     private const float DEFAULT_RENDER_DISTANCE = 5000.0f; // Default wizbang render distance.
 
     private readonly float _interactionRadius = 300.0f;
-    private readonly Dictionary<ulong, IActorRef> _playersInInteractionRange = [];
-    private readonly Dictionary<ulong, IActorRef> _playersInRenderRange = [];
+    private readonly PlayersInRange _playersInInteractionRange = new(); // CLASSIC: a new session actor replaces a stale one.
+    private readonly PlayersInRange _playersInRenderRange = new(); // CLASSIC
     private List<IServiceComponent> _serviceComponents = [];
     private Dictionary<int, IServiceComponent> _optionIndexToComponent = [];
     private ServiceMementoBase _serviceMemento;
@@ -117,16 +117,8 @@ internal sealed class InteractServiceMementoComponent(ZoneEntity entity)
 
     public override void OnPlayerLeave(IActorRef playerActor, ulong id) {
         _sentTeleportOptions.Remove(playerActor); // CLASSIC
-
-        if (_playersInInteractionRange.Any(x => x.Value == playerActor)) {
-            var playerObj = _playersInInteractionRange.First(x => x.Value == playerActor).Key;
-            _playersInInteractionRange.Remove(playerObj);
-        }
-        
-        if (_playersInRenderRange.Any(x => x.Value == playerActor)) {
-            var playerObj = _playersInRenderRange.First(x => x.Value == playerActor).Key;
-            _playersInRenderRange.Remove(playerObj);
-        }
+        _playersInInteractionRange.Remove(playerActor);
+        _playersInRenderRange.Remove(playerActor);
 
     }
 
@@ -143,27 +135,18 @@ internal sealed class InteractServiceMementoComponent(ZoneEntity entity)
             : _interactionRadius;
 
         // Handle interaction range (for service options).
-        if (IsInRadius(playerObj, interactionRadius)
-            && !_playersInInteractionRange.ContainsKey(playerId)) {
-            _playersInInteractionRange.Add(playerId, playerActor);
-            SendActorServiceOptions(playerActor);
-        }
-        else if (!IsInRadius(playerObj, interactionRadius)
-                 && _playersInInteractionRange.ContainsKey(playerId)) {
-            _playersInInteractionRange.Remove(playerId);
-            _sentTeleportOptions.Remove(playerActor); // CLASSIC
-            SendLeaveServiceRange(playerActor);
+        switch (_playersInInteractionRange.Update(playerId, playerActor, IsInRadius(playerObj, interactionRadius))) {
+            case RangeChange.Entered:
+                SendActorServiceOptions(playerActor);
+                break;
+            case RangeChange.Left:
+                _sentTeleportOptions.Remove(playerActor); // CLASSIC
+                SendLeaveServiceRange(playerActor);
+                break;
         }
 
         // Handle render range (for wizbangs).
-        if (IsInRadius(playerObj, _renderDistance)) {
-            if (!_playersInRenderRange.ContainsKey(playerId)) {
-                _playersInRenderRange.Add(playerId, playerActor);
-            }
-        }
-        else if (_playersInRenderRange.ContainsKey(playerId)) {
-            _playersInRenderRange.Remove(playerId);
-        }
+        _playersInRenderRange.Update(playerId, playerActor, IsInRadius(playerObj, _renderDistance));
     }
 
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_ZONEINTERACTION))]
@@ -213,7 +196,7 @@ internal sealed class InteractServiceMementoComponent(ZoneEntity entity)
 
         // Query every nearby player's wizard concurrently instead of
         // blocking on each one sequentially.
-        var playerActors = _playersInRenderRange.Values.ToArray();
+        var playerActors = _playersInRenderRange.Actors;
         var queryTasks = playerActors.Select(async playerActor => {
             try {
                 var msg = new CHARACTER_103_PROTOCOL.MSG_QUERYACTIVEWIZARD();
@@ -252,7 +235,7 @@ internal sealed class InteractServiceMementoComponent(ZoneEntity entity)
     private readonly Dictionary<IActorRef, int> _sentTeleportOptions = [];
 
     private void ResendTeleportOptionsIfChanged(IActorRef playerActor, Wizard wizard) {
-        if (!ClassicQuestEngine.IsActive || !_playersInInteractionRange.ContainsValue(playerActor)
+        if (!ClassicQuestEngine.IsActive || !_playersInInteractionRange.Contains(playerActor)
                 || !_serviceComponents.OfType<InteractTeleportObjectComponent>().Any()) {
             return;
         }

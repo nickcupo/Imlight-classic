@@ -223,9 +223,11 @@ public static class ClassicStartup {
             return;
         }
 
-        Logger.Information("Classic start: new characters leave the tutorial for {Zone} with starter items {Items} and no pet; "
-            + "Character.StartingZone ({StartingZone}) and Character.DefaultItems are not used.",
-            Logger.Args(ClassicStart.StartingZone, string.Join(",", ClassicStart.StarterItemTemplateIds),
+        Logger.Information("Classic start: new characters leave the tutorial for {Zone} with their school's starter wand ({Wands}), "
+            + "deck {Deck} and no pet; Character.StartingZone ({StartingZone}) and Character.DefaultItems are not used.",
+            Logger.Args(ClassicStart.StartingZone,
+                string.Join(",", ClassicStart.StarterWandTemplateIds.OrderBy(pair => pair.Key.ToString()).Select(pair => $"{pair.Key}={pair.Value}")),
+                ClassicStart.StarterDeckTemplateId,
                 ConfigurationManager.Settings["Character.StartingZone"].AsString()));
     }
 
@@ -240,6 +242,7 @@ public static class ClassicStartup {
             ("rules.mob_rewards", rules.Profile.Rules.MobRewards),
             ("rules.badges", rules.Profile.Rules.Badges), // CLASSIC
             ("rules.quest_cards", rules.Profile.Rules.QuestCards), // CLASSIC
+            ("rules.treasure_prices", rules.Profile.Rules.TreasurePrices), // CLASSIC
         };
         foreach (var (key, relativePath) in tables) {
             if (relativePath is null || File.Exists(Path.Combine(s_classicDataRoot, relativePath))) {

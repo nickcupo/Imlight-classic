@@ -35,7 +35,12 @@ using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty;
 using Imcodec.ObjectProperty.TypeCache;
 using Imcodec.Types;
+using Imlight.Classic;
+using Imlight.Classic.Rules;
 using Imlight.Common;
+using Imlight.CoreLib.Classic;
+using Imlight.CoreLib.Game.Spells;
+using Imlight.CoreLib.Shared.Items;
 using Imlight.CoreLib.Game.WizBang;
 using Imlight.CoreLib.Game.World;
 using Imlight.CoreLib.Game.Zone.Core;
@@ -109,7 +114,27 @@ internal sealed class InteractTreasureVendorComponent(ZoneEntity entity) : ZoneE
 
     public int GetSpellPrice(string spellName) {
         var entry = _inventory.Find(x => x.SpellName == spellName);
-        return entry?.Price ?? 0;
+        if (entry is null) {
+            return 0;
+        }
+
+        // CLASSIC: SpiralDB's price matches neither the 2009 library nor the price the client shows (Fire Shield: 100
+        // charged, 150 shown and in 2009). The profile's table gives the 2009 price; a card it does not list costs what
+        // the client shows, the template's base cost times the client's library markup.
+        if (ClassicRuntime.IsInitialized && ClassicRuntime.IsActive) {
+            var template = SpellFactory.GetTemplate(spellName);
+            if (ClassicProgression.TreasurePrices?.Find(spellName) is null && template is null) {
+                Logger.Warning("Library {0}: no template for {1}; charging the SpiralDB price {2}.",
+                    Logger.Args(Entity.ActiveGameObject.m_templateID, spellName, entry.Price));
+
+                return entry.Price;
+            }
+
+            return TreasurePrices.PriceOf(ClassicProgression.TreasurePrices, spellName, (int) (template?.m_baseCost ?? 0),
+                PriceModifiersConfig.TreasureBuyPriceMultiplier);
+        }
+
+        return entry.Price;
     }
 
     /// <summary>

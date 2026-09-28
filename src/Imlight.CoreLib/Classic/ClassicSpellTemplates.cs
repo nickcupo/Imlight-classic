@@ -137,6 +137,21 @@ public static class ClassicSpellTemplates {
     }
 
     /// <summary>
+    /// True when a spell trainer may offer the spell template at <paramref name="path"/>: always when no classic
+    /// spell records are loaded, else only when a record of the active profile teaches it (see
+    /// <see cref="ClassicSpellOverrides.IsTrainable"/>).
+    /// </summary>
+    /// <param name="path">The template's Root.wad path, or null when unknown.</param>
+    /// <returns>True if the spell may be trained.</returns>
+    public static bool IsTrainable(string? path)
+        => s_overrides is not { } overrides || overrides.IsTrainable(path);
+
+    /// <summary>
+    /// True when spell records restrict what trainers teach.
+    /// </summary>
+    public static bool RestrictsTraining => s_overrides is not null;
+
+    /// <summary>
     /// Logs what the spell values changed. Call after the resources have loaded.
     /// </summary>
     public static void LogCensus() {

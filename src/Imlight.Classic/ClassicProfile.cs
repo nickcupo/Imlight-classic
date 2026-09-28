@@ -154,6 +154,11 @@ public sealed class ProfileRules {
     public string? QuestCards { get; init; }
 
     /// <summary>
+    /// Path under classic-data of what a library charged for each treasure card, if any.
+    /// </summary>
+    public string? TreasurePrices { get; init; }
+
+    /// <summary>
     /// The rank from which power pips appear; null when unset or set to null.
     /// </summary>
     public string? PowerPipsFromRank { get; init; }

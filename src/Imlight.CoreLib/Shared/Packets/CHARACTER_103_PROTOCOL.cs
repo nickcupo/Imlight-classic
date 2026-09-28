@@ -247,6 +247,21 @@ public class CHARACTER_103_PROTOCOL : IServerProtocol {
     }
 
     /// <summary>
+    /// CLASSIC: tells a wizard's session that a friend used the wizard's True Friend code.
+    /// </summary>
+    public sealed class MSG_TRUEFRIENDFWD : IServerMessage {
+
+        public byte MessageOrder { get; } = 23;
+        public byte ServiceID { get; } = 103;
+
+        // Saved character IDs: the code's creator (the recipient of this message) and the friend who used it.
+        public ulong CreatorCharId;
+        public ulong UserCharId;
+        public string Code;
+
+    }
+
+    /// <summary>
     /// Sent by the ShopService to the EquipmentService after the equipped pet item changed its look or
     /// name: the pet following its owner is replaced by one built from <see cref="PetItemId"/>.
     /// </summary>

@@ -669,6 +669,109 @@ internal class FriendsService(SessionActor sessionActor) : MessageService(sessio
         SendToSocket(msg);
     }
 
+    // CLASSIC: True Friend codes (TrueFriendCodes has the rules and their evidence). The client asks for a code with
+    // MSG_REQUESTCHATCODE and shows MSG_SENDCHATCODE's Code; the friend enters it with MSG_USECHATCODE, and a
+    // MSG_SENDCHATCODE naming the creator in UseSuccess tells the client "You are now True Friends with ...".
+    [MessageHandler(typeof(GAME_5_PROTOCOL.MSG_REQUESTCHATCODE))]
+    private void ReceiveRequestChatCode(GAME_5_PROTOCOL.MSG_REQUESTCHATCODE message) {
+        var wizard = GetActiveWizard();
+        if (wizard is null) {
+            return;
+        }
+
+        var name = wizard.PlayerNameBehavior.GetWizardName();
+        var (code, error) = TrueFriendCodes.Create(TrueFriendCodeCollection.Instance, wizard.CharId, name, DateTimeOffset.UtcNow);
+        if (code is null) {
+            Logger.Warning("{0} could not get a True Friend code: {1}.", Logger.Args(name, error));
+            SendChatCode(wizard, "", error, 0, "");
+
+            return;
+        }
+
+        Logger.Information("{0} (character {1}) made a True Friend code.", Logger.Args(name, wizard.CharId));
+        SendChatCode(wizard, code.Code, TrueFriendCodeError.None, 0, name);
+    }
+
+    [MessageHandler(typeof(GAME_5_PROTOCOL.MSG_USECHATCODE))]
+    private void ReceiveUseChatCode(GAME_5_PROTOCOL.MSG_USECHATCODE message) {
+        var wizard = GetActiveWizard();
+        if (wizard is null) {
+            return;
+        }
+
+        var name = wizard.PlayerNameBehavior.GetWizardName();
+        string typed = message.Code;
+        var (code, error) = TrueFriendCodes.Use(TrueFriendCodeCollection.Instance, wizard.CharId, typed, DateTimeOffset.UtcNow,
+            creatorId => WizardCollection.GetCharacter(creatorId) is not null,
+            creatorId => wizard.FriendsBehavior.TryGetRelationship(creatorId, out var relationship)
+                         && relationship is { IsBrokenUp: false, Blocked: false });
+        if (code is null) {
+            Logger.Information("{0} entered a True Friend code that was not accepted: {1}.", Logger.Args(name, error));
+            SendChatCode(wizard, TrueFriendCodes.Normalize(typed), error, 0, "");
+
+            return;
+        }
+
+        MarkTrueFriends(wizard, code.CreatorCharId);
+        BuddyRelationshipCollection.SetTrueFriends(wizard.CharId, code.CreatorCharId);
+        var creator = WizardCollection.GetCharacter(code.CreatorCharId);
+        var creatorName = creator?.PlayerNameBehavior.GetWizardName() ?? code.CreatorName;
+        Logger.Information("{0} and {1} are now True Friends.", Logger.Args(name, creatorName));
+
+        SendChatCode(wizard, code.Code, TrueFriendCodeError.None, code.CreatorCharId, creatorName);
+        if (creator is not null) {
+            ResendBuddyEntry(wizard, creator);
+        }
+
+        if (TryGetOnlinePlayer(code.CreatorCharId, out var onlineCreator)) {
+            Context.ActorSelection(onlineCreator.ActorPath).Tell(new CHARACTER_103_PROTOCOL.MSG_TRUEFRIENDFWD {
+                CreatorCharId = code.CreatorCharId,
+                UserCharId = wizard.CharId,
+                Code = code.Code,
+            });
+        }
+    }
+
+    [MessageHandler(typeof(CHARACTER_103_PROTOCOL.MSG_TRUEFRIENDFWD))]
+    private void ReceiveTrueFriendFwd(CHARACTER_103_PROTOCOL.MSG_TRUEFRIENDFWD message) {
+        // A friend used this wizard's code: the creator becomes their True Friend too and is told so.
+        var wizard = GetActiveWizard();
+        if (wizard is null || wizard.CharId != message.CreatorCharId) {
+            return;
+        }
+
+        MarkTrueFriends(wizard, message.UserCharId);
+        var user = WizardCollection.GetCharacter(message.UserCharId);
+        if (user is null) {
+            return;
+        }
+
+        SendChatCode(wizard, message.Code, TrueFriendCodeError.None, message.UserCharId, user.PlayerNameBehavior.GetWizardName());
+        ResendBuddyEntry(wizard, user);
+    }
+
+    private static void MarkTrueFriends(Wizard wizard, ulong friendCharId) {
+        if (wizard.FriendsBehavior.TryGetRelationship(friendCharId, out var relationship) && relationship is not null) {
+            relationship.AddedViaTrueFriend = true;
+        }
+    }
+
+    private void ResendBuddyEntry(Wizard owner, Wizard friend) {
+        if (owner.FriendsBehavior.TryGetRelationship(friend.CharId, out var relationship) && relationship is not null) {
+            SendBuddyEntry(friend, relationship, owner);
+            SendBuddyListEnd(owner);
+        }
+    }
+
+    private void SendChatCode(Wizard wizard, string code, TrueFriendCodeError error, ulong trueFriendCharId, string name)
+        => SendToSocket(new GAME_5_PROTOCOL.MSG_SENDCHATCODE {
+            ListOwnerGID = wizard.GameObjectID,
+            Code = code ?? "",
+            Error = TrueFriendCodes.ErrorCode(error),
+            UseSuccess = trueFriendCharId,
+            CreatorName = name ?? "",
+        });
+
     [MessageHandler(typeof(GAME_5_PROTOCOL.MSG_CLIENT_DISCONNECT))]
     private void ReceiveClientDisconnect()
         => InformBuddiesOfStatusChange(false);
@@ -697,7 +800,7 @@ internal class FriendsService(SessionActor sessionActor) : MessageService(sessio
             Name = buddyByteName,
             Status = isOnline ? ONLINE_STATUS_CODE : OFFLINE_STATUS_CODE,
             FriendInfo = 5702144,                                     // TODO: What is this?
-            PasswordChat = 0,                                         // TODO: What is this?
+            PasswordChat = (byte) (relationship.AddedViaTrueFriend ? 1 : 0), // CLASSIC: secure (True Friend) chat, as MSG_REQUESTCHATCODE calls it.
             Permissions = (uint) buddy.Account.GetAccountFlags(),
             ZoneName = onlinePlayer?.CurrentZoneDisplayName ?? string.Empty,
             RealmName = onlinePlayer?.CurrentRealm ?? string.Empty,

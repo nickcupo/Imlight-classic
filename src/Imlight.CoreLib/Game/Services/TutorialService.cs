@@ -607,12 +607,12 @@ internal sealed partial class TutorialService(SessionActor sessionActor) : Messa
     }
 
     private void GrantStarterKitIfNeeded(Wizard wizard) {
-        if (wizard is null || wizard.InventoryBehavior.Items.Count > 0) {
+        if (!NeedsStarterKit(wizard, ClassicStart.IsActive)) {
             return;
         }
 
-        var templateIds = ClassicStart.IsActive // CLASSIC: the classic kit replaces Character.DefaultItems.
-            ? ClassicStart.StarterItemTemplateIds.ToArray()
+        var templateIds = ClassicStart.IsActive // CLASSIC: the classic kit (the school's own wand) replaces Character.DefaultItems.
+            ? ClassicStart.StarterItemTemplateIds(wizard.MagicSchoolBehavior.MagicSchool).ToArray()
             : ConfigurationManager.Settings["Character.DefaultItems"].AsList()
                 .Select(id => ulong.TryParse(id, out var parsed) ? parsed : 0)
                 .Where(id => id > 0)
@@ -622,8 +622,12 @@ internal sealed partial class TutorialService(SessionActor sessionActor) : Messa
         }
 
         var grantedItems = wizard.GrantStarterItems(templateIds);
-        Logger.Information("Granted starter kit ({0} items) to {1}.",
-            Logger.Args(grantedItems.Count, wizard.PlayerNameBehavior.GetWizardName()));
+        if (ClassicStart.IsActive) {
+            wizard.SetRegistryValue(ClassicStart.StarterKitGivenEntry, 1); // CLASSIC
+        }
+        Logger.Information("Granted starter kit ({0} items: {1}) to {2} ({3}).",
+            Logger.Args(grantedItems.Count, string.Join(",", templateIds), wizard.PlayerNameBehavior.GetWizardName(),
+                wizard.MagicSchoolBehavior.MagicSchool));
 
         // The attach payload (which carries the inventory) was already sent by the time this
         // runs, so push each item to the client explicitly or the kit stays invisible this session.
@@ -636,6 +640,18 @@ internal sealed partial class TutorialService(SessionActor sessionActor) : Messa
             CompleteClassicStart(wizard);
         }
     }
+
+    /// <summary>
+    /// True when <paramref name="wizard"/> has never had the starter kit: nothing in the backpack or worn and,
+    /// under the classic start, no mark that the kit was given. The classic start equips the kit's wand and
+    /// deck, which empties the backpack, so an empty backpack alone gave the kit again on the next zone.
+    /// </summary>
+    internal static bool NeedsStarterKit(Wizard wizard, bool classicStart)
+        => wizard is not null
+            && wizard.InventoryBehavior.Items.Count == 0
+            && wizard.EquipmentBehavior.EquippedItems.Count == 0
+            && !(classicStart && (wizard.HasRegistryValue(ClassicStart.StarterKitGivenEntry) // CLASSIC
+                                  || wizard.HasRegistryValue(ClassicStart.CompletedEntry)));
 
     private void SendInventoryAdd(Wizard wizard, WizClientObjectItem item) {
         if (!s_configureItemSerializer.Serialize(item, INVENTORY_ADD_SERIALIZATION_FLAGS, out var serializedItem)) {

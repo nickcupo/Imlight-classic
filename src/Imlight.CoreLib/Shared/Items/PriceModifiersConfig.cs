@@ -55,6 +55,7 @@ internal class PriceModifiersConfig : RootSingleResourceSingleton<PriceModifiers
     protected override string ResourceName => "PriceModifiers.xml";
 
     private static DyeShopModifiers s_dyeShopModifiers;
+    private static int s_treasureBuyPriceMultiplier = 1; // CLASSIC
 
     protected override void AfterLoad() {
         var serializer = new BindSerializer();
@@ -69,6 +70,9 @@ internal class PriceModifiersConfig : RootSingleResourceSingleton<PriceModifiers
         }
 
         s_dyeShopModifiers = priceModifiers.m_dyeShopMods;
+        s_treasureBuyPriceMultiplier = System.Math.Max(1, priceModifiers.m_treasureMods?.m_buyPriceMultiplier ?? 1); // CLASSIC
+        Logger.Information("Loaded library prices: a treasure card costs {0} times its template's base cost.",
+            Logger.Args(s_treasureBuyPriceMultiplier));
 
         Logger.Information("Loaded dye shop prices: dye at {0} of the item cost plus {1}, pet rename {2} gold.",
             Logger.Args(s_dyeShopModifiers?.m_multiplierTemplateCost, s_dyeShopModifiers?.m_costFloorAdditive,
@@ -76,6 +80,12 @@ internal class PriceModifiersConfig : RootSingleResourceSingleton<PriceModifiers
     }
 
     internal static int GetPetRenameCost() => s_dyeShopModifiers?.m_petRenameCost ?? 0;
+
+    /// <summary>
+    /// The client's library markup (TreasureShopModifiers.m_buyPriceMultiplier, 2 in r806919): the library window shows a
+    /// card at its template's m_baseCost times this.
+    /// </summary>
+    internal static int TreasureBuyPriceMultiplier => s_treasureBuyPriceMultiplier; // CLASSIC
 
     internal static int GetDyeCost(WizItemTemplate template, int primaryDye, int secondaryDye) {
         // The pattern never changes the price.

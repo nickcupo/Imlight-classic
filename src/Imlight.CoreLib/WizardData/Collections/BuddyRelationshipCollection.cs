@@ -144,6 +144,28 @@ public static class BuddyRelationshipCollection {
     }
 
     /// <summary>
+    /// Marks the friendship of two players as made through a True Friend code.
+    /// </summary>
+    /// <param name="firstId">One player's character ID.</param>
+    /// <param name="secondId">The other's.</param>
+    /// <returns>The stored relationship, or null when the two are not friends.</returns>
+    public static Relationship SetTrueFriends(ulong firstId, ulong secondId) { // CLASSIC
+        using var session = s_store.OpenSession();
+
+        var existingRelationship = session.Query<Relationship>(collectionName: CollectionName)
+            .FirstOrDefault(r => (r.FirstPlayerId == firstId  && r.SecondPlayerId == secondId)
+                              || (r.FirstPlayerId == secondId && r.SecondPlayerId == firstId));
+        if (existingRelationship is null || existingRelationship.IsBrokenUp || existingRelationship.Blocked) {
+            return null;
+        }
+
+        existingRelationship.AddedViaTrueFriend = true;
+        session.SaveChanges();
+
+        return existingRelationship;
+    }
+
+    /// <summary>
     /// Gets all relationships for a player.
     /// </summary>
     /// <param name="playerId">The player ID to get relationships for.</param>

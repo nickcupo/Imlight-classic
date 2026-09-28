@@ -22,7 +22,7 @@
  * PURPOSE:
  * Where a new character starts and what it carries when the profile sets
  * rules.tutorial: unicorn-way-classic: Ambrose's office, with only the
- * tutorial's wand and deck, the deck holding the school spell.
+ * school's starter wand and the tutorial deck, the deck holding the school spell.
  * 
  * USAGE EXAMPLE:
  * var zone = ClassicStart.IsActive ? ClassicStart.StartingZone : ConfigurationManager.Settings["Character.StartingZone"];
@@ -33,8 +33,14 @@
  * two exit triggers ("Trigger Teleport Outside" and "Trigger Teleport")
  * require the player registry entry GainedEnrollment.
  * 
+ * Each school starts with its own Tier 1 wand, which gives one item card of
+ * each other school's first spell (Wizard101 wiki: Antiquated_Wand oldid 9135,
+ * 2009-03-05, "the Wand that all wizards start with", the missing card
+ * depending on the school; Tutorial oldid 62614, 2010-02-17, "Wand according
+ * to School"). The kit is given once: CL_StarterKitGiven marks it, because
+ * the classic start equips the wand and deck and leaves the backpack empty.
+ *
  * TODO:
- * - Which starter wand did a 2009 wizard get? The Jan 2009 notes describe a 1-pip wand this client may not have.
  * 
  * Created by: Nick with Claude Code (claude-opus-5-5)
  * Version: KALI 1.0
@@ -43,8 +49,11 @@
 
 #nullable enable
 
+using System.Collections.Frozen;
+using System.Collections.Generic;
 using System.Collections.Immutable;
 using Imlight.Classic;
+using Imlight.CoreLib.Shared.Behaviors;
 
 namespace Imlight.CoreLib.Classic;
 
@@ -66,9 +75,45 @@ internal static class ClassicStart {
     internal const string CompletedEntry = "CL_ClassicStartDone";
 
     /// <summary>
-    /// Wand-T1-016 (87256) and Deck-Tutorial-001 (126983): the wand and deck the tutorial equips.
+    /// Set once the starter kit has been given, so a wizard whose kit is all equipped is not given it again.
     /// </summary>
-    internal static ImmutableArray<ulong> StarterItemTemplateIds { get; } = [87256, 126983];
+    internal const string StarterKitGivenEntry = "CL_StarterKitGiven";
+
+    /// <summary>
+    /// Deck-Tutorial-001: the starter deck every school gets.
+    /// </summary>
+    internal const ulong StarterDeckTemplateId = 126983;
+
+    /// <summary>
+    /// Each school's starting wand: the Tier 1 wand whose six item cards are the other schools' first spells.
+    /// </summary>
+    /// <remarks>
+    /// Wizard101 wiki revisions before 2010-05-26: Symmetrical_Wand oldid 23422 (2009-06-26, reward of
+    /// "Enrollment - Balance School"), Wand_of_Repose oldid 38843 (2009-08-08, "Starting a student for the
+    /// School of Death"), Antiquated_Wand oldid 58707 (2010-01-23, "the Conjurer's (Myth wizards) starting
+    /// wand"), Fairy's_Wand oldid 58719 (2010-01-24, "the Theurge's (Life wizard's) starting wand"), Tutorial
+    /// oldid 62614 (2010-02-17, Storm: Charged Wand) and Thunder_Snake_Item_Card oldid 12231 (2009-04-04, lists
+    /// Branded Wand among the wands giving that card). Fire (Branded Wand) and Ice (Insulated Wand) have no
+    /// dated page of their own; they are the r806919 templates that follow the same pattern (the school's own
+    /// first spell left out, <c>m_school</c> set to the school).
+    /// </remarks>
+    internal static FrozenDictionary<MagicSchool, ulong> StarterWandTemplateIds { get; } = new Dictionary<MagicSchool, ulong> {
+        [MagicSchool.Balance] = 87241, // Wand-T1-001, Symmetrical Wand
+        [MagicSchool.Death]   = 87244, // Wand-T1-004, Wand of Repose
+        [MagicSchool.Fire]    = 87247, // Wand-T1-007, Branded Wand
+        [MagicSchool.Ice]     = 87250, // Wand-T1-010, Insulated Wand
+        [MagicSchool.Life]    = 87253, // Wand-T1-013, Fairy's Wand
+        [MagicSchool.Myth]    = 87256, // Wand-T1-016, Antiquated Wand
+        [MagicSchool.Storm]   = 87259, // Wand-T1-019, Charged Wand
+    }.ToFrozenDictionary();
+
+    /// <summary>
+    /// The starter kit of a wizard of <paramref name="school"/>: its school's wand and the starter deck.
+    /// </summary>
+    /// <param name="school">The wizard's school.</param>
+    /// <returns>The template ids; the Myth wand for a school without a starter wand.</returns>
+    internal static ImmutableArray<ulong> StarterItemTemplateIds(MagicSchool school)
+        => [StarterWandTemplateIds.GetValueOrDefault(school, StarterWandTemplateIds[MagicSchool.Myth]), StarterDeckTemplateId];
 
     /// <summary>
     /// Copies of the school spell the starter deck holds when the classic start ends.

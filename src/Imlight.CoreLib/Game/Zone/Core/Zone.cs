@@ -239,6 +239,10 @@ public class Zone : ReceiveProtocolDispatcher, IWithTimers {
             return;
         }
 
+        // CLASSIC: a move of this player still waiting for the flush would reach the zone's objects after this removal,
+        // and an object that tracks players in range (InteractServiceMementoComponent) would take the player back with
+        // an actor that is going away: no more quest markers or NPC options for that character in this zone.
+        _pendingPlayerMoves.RemoveAll(move => Equals(move.PlayerActor, message.PlayerActor));
         InformZoneSupervisors(message.PlayerActor, message);
         _players.Remove(message.PlayerActor);
         ReleaseObjectIdentifier(message.MobileId);
@@ -253,6 +257,11 @@ public class Zone : ReceiveProtocolDispatcher, IWithTimers {
         }
 
         if (!IsMobileIdInUse(message.PlayerObject.m_nMobileID)) {
+            return;
+        }
+
+        // CLASSIC: the mobile id alone lets through a move of a player who has left, once another player has its id.
+        if (message.PlayerActor is not null && !_players.Contains(message.PlayerActor)) {
             return;
         }
 

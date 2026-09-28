@@ -36,11 +36,13 @@
  * Last Updated: 3/18/2025
  */
 
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using Akka.Actor;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
+using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.Game.WizBang;
 using Imlight.CoreLib.Game.Zone.Core;
 using Imlight.CoreLib.Shared.Resources;
@@ -80,8 +82,80 @@ internal sealed class InteractTrainerComponent(ZoneEntity entity) : ZoneEntityCo
             return;
         }
 
-        SpellInventory = spellInventory.Spells;
+        SpellInventory = OfferedSpells(spellInventory.Spells); // CLASSIC: was every spell in the inventory.
         InitializeServiceBases();
+    }
+
+    // CLASSIC: the spells this trainer teaches in the active profile, in the inventory's order. A spell whose
+    // template (or required spell's template) does not load is left out here rather than skipped when the options
+    // are built, so an option's training index and the inventory stay aligned for MSG_TRAIN.
+    private List<NPCSpellEntry> OfferedSpells(List<NPCSpellEntry> inventory) {
+        var names = new Dictionary<ulong, string>();
+        bool Loads(ulong templateId) {
+            if (CoreObjectFactory.GetCoreTemplate(templateId) is not SpellTemplate template) {
+                Logger.Error("Trainer {0} has an invalid spell template with ID {1}",
+                    Logger.Args(Entity.ActiveGameObject.m_debugName, templateId));
+
+                return false;
+            }
+
+            names[templateId] = template.m_name;
+
+            return true;
+        }
+
+        var offered = OfferedSpells(inventory, Loads,
+            templateId => ClassicSpellTemplates.IsTrainable(CoreObjectFactory.GetTemplatePath(templateId)));
+        if (offered.Count < inventory.Count) {
+            var kept = offered.Select(spell => spell.TemplateID).ToHashSet();
+            Logger.Information("Classic trainer {0} teaches {1} of its {2} spells ({3}); not in the profile: {4}.",
+                Logger.Args(Entity.ActiveGameObject.m_debugName, offered.Count, inventory.Count,
+                    string.Join(", ", offered.Select(spell => names.GetValueOrDefault(spell.TemplateID, spell.TemplateID.ToString()))),
+                    string.Join(", ", inventory.Where(spell => !kept.Contains(spell.TemplateID))
+                        .Select(spell => names.GetValueOrDefault(spell.TemplateID, spell.TemplateID.ToString())))));
+        }
+
+        return offered;
+    }
+
+    /// <summary>
+    /// The entries of a trainer's inventory it may teach: those whose templates load and that the profile can train,
+    /// in order. An entry whose required spell cannot be trained requires that spell's own requirement instead
+    /// (Power Play follows Gearhead Destroyer in the r806919 Balance tree, and Sandstorm in 2009), or nothing when
+    /// the chain leaves the inventory. Such entries are copies; the inventory is not changed.
+    /// </summary>
+    /// <param name="inventory">The trainer's SpiralDB inventory.</param>
+    /// <param name="loads">True when a spell template loads.</param>
+    /// <param name="trainable">True when the profile can train a spell.</param>
+    internal static List<NPCSpellEntry> OfferedSpells(IReadOnlyList<NPCSpellEntry> inventory, Func<ulong, bool> loads,
+                                                      Func<ulong, bool> trainable) {
+        var byTemplate = new Dictionary<ulong, NPCSpellEntry>();
+        foreach (var spell in inventory) {
+            byTemplate.TryAdd(spell.TemplateID, spell);
+        }
+
+        var offered = new List<NPCSpellEntry>(inventory.Count);
+        foreach (var spell in inventory) {
+            if (!loads(spell.TemplateID) || !trainable(spell.TemplateID)) {
+                continue;
+            }
+
+            var required = spell.RequiredSpellID;
+            var seen = new HashSet<ulong>();
+            while (required != 0 && !trainable(required) && seen.Add(required)) {
+                required = byTemplate.TryGetValue(required, out var link) ? link.RequiredSpellID : 0;
+            }
+
+            if (required != 0 && (seen.Contains(required) || !loads(required))) {
+                required = 0;
+            }
+
+            offered.Add(required == spell.RequiredSpellID
+                ? spell
+                : new NPCSpellEntry { TemplateID = spell.TemplateID, RequiredSpellID = required, Level = spell.Level });
+        }
+
+        return offered;
     }
 
     public IEnumerable<ServiceOptionBase> GetServiceOptions(Wizard wizard) {

@@ -104,6 +104,16 @@ public sealed class ClassicSpellOverrides {
     }
 
     /// <summary>
+    /// True when a spell trainer may teach the template in the active profile: a trained or crossover record
+    /// names it as its client template and lists the profile. Trainers in the r806919 client also teach cards
+    /// from after the cutoff (Summon Sandstorm, Elemental Golem, Gearhead Destroyer, ...), which have no record.
+    /// </summary>
+    /// <param name="templatePath">The spell template's Root.wad path.</param>
+    /// <returns>True if the card can be trained in this profile.</returns>
+    public bool IsTrainable(string? templatePath)
+        => Book.FindByTemplate(templatePath) is { Kind: "trained" or "crossover" } record && record.IsInProfile(ProfileId);
+
+    /// <summary>
     /// The record's values in the active profile.
     /// </summary>
     /// <param name="record">A record of <see cref="Book"/>.</param>
