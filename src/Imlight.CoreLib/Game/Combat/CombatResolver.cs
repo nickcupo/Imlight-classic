@@ -475,8 +475,9 @@ public class CombatResolver(Duel duel, CombatDuelSubCircle[] actorSubCircles) {
 
         // Apply percentages to the spell accuracy
         if (ClassicRuntime.IsActive) {
-            // CLASSIC: accuracy stats scale the spell's accuracy.
-            spellAccuracy = (int) Math.Floor(spellAccuracy * (1 + totalIncrease / 100.0) * (1 - totalDecrease / 100.0));
+            // CLASSIC: gear accuracy adds percentage points to the card's own accuracy (a 90% Imp with
+            // +5% Life accuracy hits 95% of the time), capped to 0..100.
+            spellAccuracy = Math.Clamp(spellAccuracy + (int) Math.Round(totalIncrease) - (int) Math.Round(totalDecrease), 0, 100);
         }
         else {
             spellAccuracy *= (int) Math.Floor((1 + totalIncrease / 100.0) * (1 - totalDecrease / 100.0));
@@ -488,6 +489,11 @@ public class CombatResolver(Duel duel, CombatDuelSubCircle[] actorSubCircles) {
             : ConsumeHangingAccuracyEffects(spellAccuracy, caster, spell.m_magicSchoolID);
 
         var hitChance = Random.Shared.Next(0, 100);
+        if (ClassicRuntime.IsActive) {
+            Logger.Information("[CLASSIC-ACC] template {0}: card {1}%, gear +{2}/-{3}, final {4}%, roll {5} -> {6}",
+                Logger.Args(spell.m_templateID, (int) spell.m_accuracy, totalIncrease, totalDecrease, spellAccuracy,
+                    hitChance, hitChance < spellAccuracy ? "hit" : "fizzle"));
+        }
 
         // CLASSIC: the roll is 0 to 99, so a spell of accuracy A hits on A of the 100 rolls.
         return ClassicRuntime.IsActive ? hitChance < spellAccuracy : hitChance <= spellAccuracy;
