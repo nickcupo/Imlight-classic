@@ -47,6 +47,7 @@ using Imcodec.Math;
 using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
+using Imlight.Classic.Rules;
 using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.Game.Spells;
 using Imlight.CoreLib.Game.Zone.Components;
@@ -693,12 +694,20 @@ public class CombatDuelSubCircle {
         return pipCount;
     }
 
-    private bool DeterminePowerPipGain(CombatParticipant participant) {
-        var stats = participant.m_pGameStats;
-        var powerPipChance = 100 * (stats.m_powerPipBase + stats.m_powerPipBonusPercentAll);
+    private bool DeterminePowerPipGain(CombatParticipant participant)
+        => DeterminePowerPipGain(participant, _duelActor.Duel, Random.Shared.NextDouble());
 
-        var powerPipRoll = Random.Shared.Next(0, 100);
-        return powerPipRoll <= powerPipChance;
+    // The production decision with an explicit roll makes probability boundaries testable without random tests.
+    // Base chance already comes from the participant's school/level stats. Pip capacity, starting pips and
+    // school mastery remain in their existing paths; a global changes chance, not the value of a power pip.
+    internal static bool DeterminePowerPipGain(CombatParticipant participant, Duel duel, double roll) {
+        var stats = participant.m_pGameStats;
+        // Read the current battlefield each round. ApplyGlobalEffect replaces its contents, so the bonus
+        // vanishes immediately when Power Play is replaced; never cache it in the participant's stats.
+        var global = duel?.m_duelModifier?.m_battlefieldEffects?
+            .FirstOrDefault(effect => effect.m_effectType == kSpellEffects.kModifyPowerPipChance);
+        return PowerPipRules.GainsPowerPip(stats.m_powerPipBase, stats.m_powerPipBonusPercentAll,
+            global?.m_effectParam ?? 0, roll);
     }
 
 }
