@@ -86,6 +86,12 @@ internal static class CombatWards {
     /// <returns>The modified incoming damage.</returns>
     internal static int GetIncomingDamageFromWards(List<SpellEffect> wards, int initialDamage = 0) {
         foreach (var ward in wards) {
+            // A selected prism is retained in this list so the damage path consumes it, but its
+            // parameter is a school index, never a percentage damage modifier.
+            if (ward.m_effectType == kSpellEffects.kModifyIncomingDamageType) {
+                continue;
+            }
+
             if (ward.m_effectType == kSpellEffects.kAbsorbDamage) {
                 // Absorbs will absorb the flat damage, up to the effect param.
                 var absorbAmount = ward.m_paramPerRound;
@@ -117,10 +123,18 @@ internal static class CombatWards {
 
         foreach (var ward in wards) {
             if (ward.m_effectType == kSpellEffects.kModifyIncomingDamageType) {
-                finalSchool = MagicSchools.GetMagicSchool(ward.m_effectParam)?.m_schoolName ?? school;
+                // Only the source school can trigger a prism. Keep it among the applied wards so
+                // ApplyDamageEffect removes it after this hit, rather than converting later hits too.
+                if (ward.m_sDamageType == finalSchool
+                    && MagicSchools.GetMagicSchool(ward.m_effectParam) is { } convertedSchool) {
+                    finalSchool = convertedSchool.m_schoolName;
+                    schoolWards.Add(ward);
+                }
+
+                continue;
             }
 
-            if (ward.m_sDamageType == finalSchool.ToString() || ward.m_sDamageType == "All") {
+            if (ward.m_sDamageType == finalSchool || ward.m_sDamageType == "All") {
                 schoolWards.Add(ward);
             }
         }

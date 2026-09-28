@@ -34,9 +34,9 @@
  * 
  * TODO:
  * 
- * Created by: Jooty
+ * Created by: Jooty with Codex (GPT-6)
  * Version: KALI 1.0
- * Last Updated: 3/18/2025
+ * Last Updated: 09/28/2026
  */
 
 using System;
@@ -64,7 +64,7 @@ internal static class CharacterHelper {
 
         // Reset the base stats to the default values.
         wizard.GameStats.SetBaseStats();
-        wizard.GameEffects = [];
+        wizard.GameEffects.Clear();
 
         // Iterate through the equipped items and apply their effects.
         foreach (var item in wizard.EquipmentBehavior.EquippedItems) {

@@ -37,9 +37,9 @@
  * - Review and improve effect serialization mechanisms
  * - Implement additional validation for equipment actions
  * 
- * Created by: Joji
+ * Created by: Joji with Codex (GPT-6)
  * Version: KALI 1.0
- * Last Updated: 09/26/2026
+ * Last Updated: 09/28/2026
  */
 
 using System;
@@ -96,9 +96,9 @@ internal class EquipmentService(SessionActor sessionActor) : MessageService(sess
     private void ReceiveAttachComplete(SERVICE_101_PROTOCOL.MSG_ATTACHCOMPLETE message) {
         try {
             var playerCharacter = GetActiveWizard();
-            var effects = playerCharacter.GameEffects;
+            var effects = playerCharacter.GameEffects.Snapshot();
 
-            SendAddEffects([.. effects]);
+            SendAddEffects(effects);
 
             // Spawn the equipped pet as a zone entity if one is equipped.
             if (playerCharacter.PetOwnerBehavior.EquippedPetTemplateId != 0) {

@@ -118,6 +118,7 @@ internal static class CombatEffectApplicator {
             case kSpellEffects.kAbsorbDamage:
             case kSpellEffects.kCritBoost:
             case kSpellEffects.kCritBlock:
+            case kSpellEffects.kStunBlock:
                 ApplyHangingEffect(effect, targets);
                 break;
             case kSpellEffects.kStun:

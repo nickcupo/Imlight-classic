@@ -1,4 +1,4 @@
-﻿/*
+/*
  * Imlight
  * Copyright (C) 2025 Revive101
  *
@@ -31,9 +31,9 @@
  * 
  * TODO:
  * 
- * Created by: Jooty
+ * Created by: Jooty with Codex (GPT-6)
  * Version: KALI 1.0
- * Last Updated: 3/18/2025
+ * Last Updated: 09/28/2026
  */
 
 using System;
@@ -60,8 +60,8 @@ public class TcpListenerActor : ReceiveActor {
     public TcpListenerActor(string name, int port, IActorRef serverRef) {
         this.Name = name;
         this.Port = port;
-        this.Listener = new TcpListener(IPAddress.Parse("0.0.0.0"), port);
-        this._tokenSource = CancellationTokenSource.CreateLinkedTokenSource(new CancellationToken());
+        this.Listener = new TcpListener(ParseListenAddress(ConfigurationManager.GetSetting("Network.ListenAddress")), port);
+        this._tokenSource = new CancellationTokenSource();
         this._serverRef = serverRef;
 
         Start();
@@ -70,30 +70,47 @@ public class TcpListenerActor : ReceiveActor {
     public static Props Props(string name, int port, IActorRef serverRef) 
         => Akka.Actor.Props.Create(() => new TcpListenerActor(name, port, serverRef));
 
-    public async void Start() {
-        try {
-            this.Listener.Start();
-            this.Listening = true;
-
-            Logger.Information("TcpListener for {Name} bound to port {Port} — listening.",
-                Logger.Args(Name, Port));
-
-            var token = this._tokenSource.Token;
-            await ListenAsync(token);
+    internal static IPAddress ParseListenAddress(string configuredAddress) {
+        if (configuredAddress is null) {
+            return IPAddress.Any;
         }
-        catch (Exception ex) {
-            Logger.Fatal("TcpListener for {Name} on port {Port} failed: {Exception}",
-                Logger.Args(Name, Port, ex));
+
+        if (!IPAddress.TryParse(configuredAddress, out var address)) {
+            throw new ArgumentException("Network.ListenAddress must be a valid IP address.", nameof(configuredAddress));
+        }
+
+        return address;
+    }
+
+    public void Start() {
+        try {
+            Listener.Start();
+            Listening = true;
+            Logger.Information("TcpListener for {Name} bound to {EndPoint}, listening.",
+                Logger.Args(Name, Listener.LocalEndpoint));
+            _ = ListenAsync(_tokenSource.Token);
+        } catch (Exception ex) {
+            Stop();
+            _tokenSource.Dispose();
+            throw new InvalidOperationException($"TcpListener for {Name} could not bind {Listener.LocalEndpoint}.", ex);
         }
     }
 
     public void Stop() {
-        this.Listening = false;
-        this._tokenSource.Cancel();
-        Listener.Stop();
+        if (_tokenSource.IsCancellationRequested) {
+            return;
+        }
 
-        Logger.Debug("TcpListener for {Name} on port {Port} stopped.",
-            Logger.Args(Name, Port));
+        Listening = false;
+        _tokenSource.Cancel();
+        Listener.Stop();
+        Logger.Debug("TcpListener for {Name} on port {Port} stopped.", Logger.Args(Name, Port));
+    }
+
+    protected override void PostStop() {
+        Stop();
+        _tokenSource.Dispose();
+        base.PostStop();
     }
 
     /// <summary>
@@ -103,6 +120,10 @@ public class TcpListenerActor : ReceiveActor {
         while (!token.IsCancellationRequested) {
             try {
                 var socket = await Listener.AcceptSocketAsync(token);
+                if (token.IsCancellationRequested) {
+                    socket.Dispose();
+                    break;
+                }
                 AllocateNewSocket(socket);
             }
             catch (OperationCanceledException) {
