@@ -37,6 +37,8 @@
  */
 
 using System;
+using System.Linq;
+using Imlight.Classic.Inventory;
 using Akka.Actor;
 using Imcodec.Cryptography;
 using Imcodec.MessageLayer.Generated;
@@ -103,6 +105,33 @@ internal class InventoryService(SessionActor sessionActor) : MessageService(sess
         if (!serializer.Deserialize<QuickSellItemList>(message.Data, 4, out var quickSellItemList)) {
             Logger.Log.Error("Failed to deserialize quicksell item list.");
 
+            return;
+        }
+
+        // CLASSIC: only successfully removed, uniquely owned backpack objects earn gold.
+        if (ClassicRuntime.Rules.UsesKingsIsleQuestRules) {
+            var requests = quickSellItemList.m_quickSellItemList?
+                .Where(item => item is not null)
+                .Select(item => new BackpackQuickSell.Request(item.m_sellItemGID, item.m_quantity))
+                ?? Enumerable.Empty<BackpackQuickSell.Request>();
+            var sales = BackpackQuickSell.Execute(requests, id => {
+                var item = wizard.InventoryBehavior.GetItem(id);
+                if (item is null || CoreObjectFactory.GetCoreTemplate(item.m_templateID) is not WizItemTemplate template) return null;
+                var value = Math.Ceiling(template.m_baseCost * 0.05f);
+                if (template.m_numPrimaryColors != 1 && template.m_numSecondaryColors != 0)
+                    value = Math.Ceiling(value * 1.2275f);
+                return value;
+            }, wizard.RemoveItemFromInventory);
+            foreach (var sale in sales)
+                SendToSocket(new GAME_5_PROTOCOL.MSG_INVENTORYBEHAVIOR_REMOVEITEM {
+                    GlobalID = wizard.GameObjectID, ItemID = sale.Id
+                });
+            var applied = BackpackQuickSell.GoldToApply(sales, wizard.GameStats.m_currentGold, wizard.GameStats.m_baseGoldPouch);
+            if (applied > 0) wizard.AddGold(applied);
+            SendToSocket(new WIZARD_12_PROTOCOL.MSG_UPDATEGOLD {
+                Gold = wizard.GameStats.m_currentGold, MaxGold = wizard.GameStats.m_baseGoldPouch
+            });
+            SendToSocket(new WIZARD2_53_PROTOCOL.MSG_QUICKSELLREQUEST());
             return;
         }
 

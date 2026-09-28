@@ -29,7 +29,11 @@
     <ServerIntegrationTest Include="ZoneMarkerLifecycleTests.cs" />
   </ItemGroup>
   <PropertyGroup>
-    <W101CServerIntegrationTests Condition="'$(W101CServerIntegrationTests)' == '' and '@(_PrivateTypes)' != '' and '@(_PrivateMessages)' != ''">true</W101CServerIntegrationTests>
+    <_TypeInputPath>$(MSBuildThisFileDirectory)../../submodule/Imcodec/src/Imcodec.ObjectProperty/GeneratorInput</_TypeInputPath>
+    <_MessageInputPath>$(MSBuildThisFileDirectory)../../submodule/Imcodec/src/Imcodec.MessageLayer/GeneratorInput</_MessageInputPath>
+    <_TypeInputFiles Condition="Exists('$(_TypeInputPath)')">$([System.IO.Directory]::GetFiles('$(_TypeInputPath)', '*.json'))</_TypeInputFiles>
+    <_MessageInputFiles Condition="Exists('$(_MessageInputPath)')">$([System.IO.Directory]::GetFiles('$(_MessageInputPath)', '*Messages*.xml'))</_MessageInputFiles>
+    <W101CServerIntegrationTests Condition="'$(W101CServerIntegrationTests)' == '' and '$(_TypeInputFiles)' != '' and '$(_MessageInputFiles)' != ''">true</W101CServerIntegrationTests>
     <W101CServerIntegrationTests Condition="'$(W101CServerIntegrationTests)' == ''">false</W101CServerIntegrationTests>
   </PropertyGroup>
   <ItemGroup Condition="'$(W101CServerIntegrationTests)' != 'true'">
