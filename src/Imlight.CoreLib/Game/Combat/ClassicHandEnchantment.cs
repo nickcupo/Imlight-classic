@@ -44,17 +44,23 @@ internal static class ClassicHandEnchantment {
             case kSpellEffects.kModifyCardAccuracy when effect.m_effectParam > 0:
                 enchanted.m_accuracy = (byte) Math.Clamp((long) target.m_accuracy + effect.m_effectParam, 0, byte.MaxValue);
                 break;
-            case kSpellEffects.kModifyCardDamage when effect.m_effectParam > 0:
-                // Only one direct hit, or alternative rolls of that hit. Never multiply a flat enchant
-                // across sequential hits, per-pip hits, drains or DoT ticks without established rules.
-                if (original.m_effects.Count != 1 || !CanAdjustDamage(original.m_effects[0], effect.m_effectParam)) {
+            case kSpellEffects.kModifyCardDamage when effect.m_effectParam > 0: {
+                // 2009: "Add 175 (total) damage to any non-Treasure Card Damage spell" (wiki Monstrous Treasure
+                // Card, oldid 54390, 2009-12-20). The bonus is added once per cast: to a damage-over-time total
+                // (spread over its ticks), to a drain's damage, and on a card with several hits to its first damage
+                // hit (inferred from "total"). Alternatives (a roll or a per-pip list) each get it; one resolves.
+                var index = original.m_effects.FindIndex(e => CanAdjustDamage(e, effect.m_effectParam));
+                if (index < 0 || original.m_effects.Take(index).Any(IsDamageBearing)) {
                     return false;
                 }
-                var adjusted = SpellTemplateEditor.Copy(original.m_effects[0]);
+                var adjusted = SpellTemplateEditor.Copy(original.m_effects[index]);
                 AddDamage(adjusted, effect.m_effectParam);
-                castTemplate = original with { m_effects = [adjusted] };
+                var effects = original.m_effects.ToList();
+                effects[index] = adjusted;
+                castTemplate = original with { m_effects = effects };
                 enchanted.m_regularAdjust = effect.m_effectParam;
                 break;
+            }
             case kSpellEffects.kModifyCardMutation:
                 // Offline manifest check: mutation's effect parameter is the output template ID;
                 // validTargetSpells contains input template IDs. Require the explicit input list.
@@ -78,17 +84,32 @@ internal static class ClassicHandEnchantment {
         return true;
     }
 
+    private static readonly kSpellEffects[] s_damageKinds = [kSpellEffects.kDamage, kSpellEffects.kDamageOverTime, kSpellEffects.kStealHealth];
+
     private static bool CanAdjustDamage(SpellEffect effect, int amount) => effect switch {
-        RandomSpellEffect random => random.m_effectList is { Count: > 0 }
-            && random.m_effectList.All(e => e is not RandomSpellEffect && CanAdjustDamage(e, amount)),
+        RandomSpellEffect or VariableSpellEffect or EffectListSpellEffect => Children(effect) is { Count: > 0 } children
+            && children.All(e => e is not (RandomSpellEffect or VariableSpellEffect or EffectListSpellEffect) && CanAdjustDamage(e, amount)),
         _ => effect is not null && effect.GetType() == typeof(SpellEffect)
-            && effect.m_effectType == kSpellEffects.kDamage && effect.m_effectParam >= 0
+            && s_damageKinds.Contains(effect.m_effectType) && effect.m_effectParam >= 0
             && effect.m_effectParam <= int.MaxValue - amount,
     };
 
+    // Any damage the card deals, whether or not the enchantment could be added to it.
+    private static bool IsDamageBearing(SpellEffect effect) => effect switch {
+        RandomSpellEffect or VariableSpellEffect or EffectListSpellEffect => Children(effect)?.Any(IsDamageBearing) == true,
+        _ => effect is not null && s_damageKinds.Contains(effect.m_effectType),
+    };
+
+    private static System.Collections.Generic.List<SpellEffect> Children(SpellEffect effect) => effect switch {
+        RandomSpellEffect random => random.m_effectList,
+        VariableSpellEffect variable => variable.m_effectList,
+        EffectListSpellEffect list => list.m_effectList,
+        _ => null,
+    };
+
     private static void AddDamage(SpellEffect effect, int amount) {
-        if (effect is RandomSpellEffect random) {
-            foreach (var child in random.m_effectList) AddDamage(child, amount);
+        if (Children(effect) is { } children) {
+            foreach (var child in children) AddDamage(child, amount);
         } else {
             effect.m_effectParam += amount;
         }

@@ -195,8 +195,7 @@ public sealed class ClassicEnchantmentPacketTests : IDisposable {
     [InlineData("restriction")]
     [InlineData("specific-target")]
     [InlineData("mutation-without-input-list")]
-    [InlineData("dot")]
-    [InlineData("multi-hit")]
+    [InlineData("no-damage")]
     [InlineData("queued")]
     [InlineData("pvp")]
     public async Task RejectedPacketsLeaveBothCardsAndQueueUnchanged(string kind) {
@@ -211,8 +210,7 @@ public sealed class ClassicEnchantmentPacketTests : IDisposable {
             case "restriction": TargetTemplate.m_noPvEEnchant = true; break;
             case "specific-target": SourceTemplate.m_validTargetSpells = [Mutation]; break;
             case "mutation-without-input-list": SourceTemplate.m_effects[0].m_effectType = kSpellEffects.kModifyCardMutation; break;
-            case "dot": TargetTemplate.m_effects[0].m_effectType = kSpellEffects.kDamageOverTime; break;
-            case "multi-hit": TargetTemplate.m_effects.Add(Damage(50)); break;
+            case "no-damage": TargetTemplate.m_effects[0].m_effectType = kSpellEffects.kHeal; break;
             case "pvp": _duel.Duel.m_bPVP = true; break;
             case "queued": _duel.CombatResolver.AddCombatMove(CombatMoveType.Pass, _caster, null, null); break;
         }
@@ -233,6 +231,31 @@ public sealed class ClassicEnchantmentPacketTests : IDisposable {
         var template = _deck.CastTemplateFor(card, TargetTemplate);
         Assert.Equal(new[] { 250, 300, 350 }, Assert.IsType<RandomSpellEffect>(template.m_effects[0]).m_effectList.Select(e => e.m_effectParam));
         Assert.Equal(new[] { 150, 200, 250 }, Assert.IsType<RandomSpellEffect>(TargetTemplate.m_effects[0]).m_effectList.Select(e => e.m_effectParam));
+    }
+
+    // 2009: a damage enchantment adds its bonus once, in total, to any non-Treasure Card damage spell.
+    [Theory]
+    [InlineData("dot", new[] { 300 })]
+    [InlineData("drain", new[] { 300 })]
+    [InlineData("multi-hit", new[] { 300, 50 })]
+    [InlineData("hit-then-dot", new[] { 300, 90 })]
+    public async Task DamageBonusIsAddedOnceToTheFirstDamageHit(string kind, int[] expected) {
+        switch (kind) {
+            case "dot": TargetTemplate.m_effects[0].m_effectType = kSpellEffects.kDamageOverTime; TargetTemplate.m_effects[0].m_numRounds = 3; break;
+            case "drain": TargetTemplate.m_effects[0].m_effectType = kSpellEffects.kStealHealth; break;
+            case "multi-hit": TargetTemplate.m_effects.Add(Damage(50)); break;
+            case "hit-then-dot":
+                TargetTemplate.m_effects.Add(new SpellEffect { m_effectType = kSpellEffects.kDamageOverTime, m_effectParam = 90,
+                    m_numRounds = 3, m_effectTarget = kEffectTarget.kEnemySingle, m_sDamageType = "Fire" });
+                break;
+        }
+        var before = TargetTemplate.m_effects.Select(e => e.m_effectParam).ToArray();
+        Send();
+        await ReadHand();
+        var card = Assert.Single(_deck.LastGivenHand);
+        Assert.Equal(100, card.m_regularAdjust);
+        Assert.Equal(expected, _deck.CastTemplateFor(card, TargetTemplate).m_effects.Select(e => e.m_effectParam));
+        Assert.Equal(before, TargetTemplate.m_effects.Select(e => e.m_effectParam));
     }
 
     [Fact]

@@ -170,6 +170,9 @@ public static class SpellTemplateEditor {
             case VariableSpellEffect variable when variable.m_effectList is { } list:
                 variable.m_effectList = [.. list.Select(child => child is null ? null! : Copy(child))];
                 break;
+            case EffectListSpellEffect effectList when effectList.m_effectList is { } list:
+                effectList.m_effectList = [.. list.Select(child => child is null ? null! : Copy(child))];
+                break;
         }
 
         return copy;

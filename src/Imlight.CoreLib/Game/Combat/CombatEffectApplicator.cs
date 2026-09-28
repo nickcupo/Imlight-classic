@@ -41,7 +41,6 @@ using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Classic;
 using Imlight.Common;
 using System;
-using System.Reflection;
 using System.Linq;
 
 namespace Imlight.CoreLib.Game.Combat;
@@ -475,12 +474,8 @@ internal static class CombatEffectApplicator {
         }
     }
 
-    private static readonly Func<object, object> s_memberwiseClone = (Func<object, object>) Delegate.CreateDelegate(
-        typeof(Func<object, object>),
-        typeof(object).GetMethod("MemberwiseClone", BindingFlags.Instance | BindingFlags.NonPublic)!);
-
     /// <summary>A shallow copy of <paramref name="effect"/> that keeps its runtime type.</summary>
-    internal static SpellEffect CopyOf(SpellEffect effect) => (SpellEffect) s_memberwiseClone(effect);
+    internal static SpellEffect CopyOf(SpellEffect effect) => effect with { };
 
     // Deals a percentage of the target's maximum health; m_effectParam is the percent.
     private static float ApplyMaxHealthDamageEffect(SpellEffect effect, CombatDuelSubCircle[] targets) {
