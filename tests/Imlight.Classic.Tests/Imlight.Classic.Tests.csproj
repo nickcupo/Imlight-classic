@@ -7,6 +7,39 @@
     <IsPackable>false</IsPackable>
   </PropertyGroup>
 
+
+  <!-- Production-server tests require private generated types. Pure rules remain buildable in public CI. -->
+  <ItemGroup>
+    <_PrivateTypes Include="../../submodule/Imcodec/src/Imcodec.ObjectProperty/GeneratorInput/*.json" />
+    <_PrivateMessages Include="../../submodule/Imcodec/src/Imcodec.MessageLayer/GeneratorInput/*Messages*.xml" />
+    <ServerIntegrationTest Include="ArcFinalReviewTests.cs" />
+    <ServerIntegrationTest Include="BadgeRulesTests.cs" />
+    <ServerIntegrationTest Include="C6ServerGapTests.cs" />
+    <ServerIntegrationTest Include="ClassicCinematicTests.cs" />
+    <ServerIntegrationTest Include="ClassicDeckRegressionTests.cs" />
+    <ServerIntegrationTest Include="ClassicUtilityCombatTests.cs" />
+    <ServerIntegrationTest Include="CombatRegressionTests.cs" />
+    <ServerIntegrationTest Include="EquipmentAttachConcurrencyTests.cs" />
+    <ServerIntegrationTest Include="PowerPipRulesTests.cs" />
+    <ServerIntegrationTest Include="SharedPlayerStateRaceTests.cs" />
+    <ServerIntegrationTest Include="SpellMechanicsTests.cs" />
+    <ServerIntegrationTest Include="TcpListenerLifecycleTests.cs" />
+    <ServerIntegrationTest Include="TriggerObjectResultTests.cs" />
+    <ServerIntegrationTest Include="ZoneMarkerLifecycleTests.cs" />
+  </ItemGroup>
+  <PropertyGroup>
+    <W101CServerIntegrationTests Condition="'$(W101CServerIntegrationTests)' == '' and '@(_PrivateTypes)' != '' and '@(_PrivateMessages)' != ''">true</W101CServerIntegrationTests>
+    <W101CServerIntegrationTests Condition="'$(W101CServerIntegrationTests)' == ''">false</W101CServerIntegrationTests>
+  </PropertyGroup>
+  <ItemGroup Condition="'$(W101CServerIntegrationTests)' != 'true'">
+    <Compile Remove="@(ServerIntegrationTest)" />
+  </ItemGroup>
+  <Target Name="ReportServerTestMode" BeforeTargets="PrepareForBuild">
+    <Error Condition="'$(W101CServerIntegrationTests)' == 'true' and ('@(_PrivateTypes)' == '' or '@(_PrivateMessages)' == '')"
+           Text="Server integration tests require locally staged type and message inputs. Public CI must use W101CServerIntegrationTests=false." />
+    <Message Importance="high" Text="Server integration tests enabled: $(W101CServerIntegrationTests). Pure rules tests always run." />
+  </Target>
+
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.10.1" />
     <PackageReference Include="xunit.v3.mtp-off" Version="4.0.1" />
@@ -19,7 +52,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\Imlight.Classic\Imlight.Classic.csproj" />
     <!-- CLASSIC: the server-side race, cinematic and badge tests use CoreLib's own types. -->
-    <ProjectReference Include="..\..\src\Imlight.CoreLib\Imlight.CoreLib.csproj" />
+    <ProjectReference Include="..\..\src\Imlight.CoreLib\Imlight.CoreLib.csproj" Condition="'$(W101CServerIntegrationTests)' == 'true'" />
   </ItemGroup>
 
 </Project>
