@@ -52,6 +52,7 @@ using Imlight.Classic.Rules;
 using Imlight.Common;
 using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.Game.DropTables;
+using Imlight.CoreLib.Game.Combat;
 using Imlight.CoreLib.Shared.Items;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;
@@ -291,18 +292,22 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
             throw new Exception("Combat move received without a duel actor.");
         }
 
-        // The spell target given by the client is logarithmic. We need to convert it to a linear scale.
-        // A selection of 0 means a target of self.
-        int actualSelection = (int) Math.Log(message.SpellTarget, 2);
+        _currentDuelActor.Tell(TranslateCombatMove(message, SessionActor.ActorRef));
+    }
 
-        var msg = new COMBAT_106_PROTOCOL.MSG_ACTORCOMBATMOVE {
-            Actor = SessionActor.ActorRef,
+    internal static COMBAT_106_PROTOCOL.MSG_ACTORCOMBATMOVE TranslateCombatMove(
+        DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_COMBATMOVE message, IActorRef actor) {
+        // The native enchant extension carries a raw hand index, not a combatant bitmask.
+        var target = message.MoveType == ClassicHandEnchantment.MoveType
+            ? message.SpellTarget
+            : unchecked((uint) (int) Math.Log(message.SpellTarget, 2));
+        return new COMBAT_106_PROTOCOL.MSG_ACTORCOMBATMOVE {
+            Actor = actor,
             MoveType = message.MoveType,
             SpellSelection = message.SpellSelection,
-            SpellTarget = (uint) actualSelection,
+            SpellTarget = target,
             TimeLeft = message.TimeLeft
         };
-        _currentDuelActor.Tell(msg);
     }
 
     [MessageHandler(typeof(COMBAT_106_PROTOCOL.MSG_NOAGGROGRACEOVER))]

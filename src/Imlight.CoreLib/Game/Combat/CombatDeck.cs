@@ -64,6 +64,24 @@ internal class CombatDeck {
     private readonly List<Spell> _cardsDiscardedThisTurn;
     // Classic cards leave the draw pile on draw, and enter this pile only when actually spent/discarded.
     private readonly List<CombatDeckSpellData> _classicDiscardPile = [];
+    private readonly Dictionary<Spell, SpellTemplate> _enchantedCastTemplates = new(ReferenceEqualityComparer.Instance);
+
+    internal SpellTemplate CastTemplateFor(Spell spell, SpellTemplate original)
+        => _enchantedCastTemplates.TryGetValue(spell, out var enchanted) ? enchanted : original;
+
+    // Returns a consumed vault ID for the owning duel to persist, only after successful validation.
+    internal bool TryEnchant(int sourceIndex, uint targetIndex, out uint consumedTreasureId) {
+        consumedTreasureId = 0;
+        if (sourceIndex < 0 || sourceIndex >= LastGivenHand.Count || targetIndex >= LastGivenHand.Count) return false;
+        var source = LastGivenHand[sourceIndex];
+        var target = LastGivenHand[(int) targetIndex];
+        if (!ClassicHandEnchantment.TryPrepare(source, target, out var enchanted, out var template)) return false;
+        LastGivenHand[(int) targetIndex] = enchanted;
+        _enchantedCastTemplates.Add(enchanted, template);
+        if (source.m_treasureCard) consumedTreasureId = ConsumeFromVault(source);
+        else Discard(source);
+        return true;
+    }
 
     // ctor
     internal CombatDeck(List<CombatDeckSpellData> spellDatas, List<CombatDeckSpellData> treasureVault, byte handSize) {
@@ -168,7 +186,7 @@ internal class CombatDeck {
         if (ClassicRuntime.IsActive && !spell.m_treasureCard) {
             if (RemoveHeldCard(spell)) {
                 _classicDiscardPile.Add(new CombatDeckSpellData {
-                    TemplateId = spell.m_templateID, Quantity = 1,
+                    TemplateId = spell.m_premutationSpellID != 0 ? spell.m_premutationSpellID : spell.m_templateID, Quantity = 1,
                     IsBattleCard = spell.m_battleCard, IsItemCard = spell.m_itemCard,
                 });
             }
@@ -192,6 +210,7 @@ internal class CombatDeck {
     /// </summary>
     internal void ClearHand() {
         LastGivenHand.Clear();
+        _enchantedCastTemplates.Clear();
         _cardsDiscardedThisTurn.Clear();
         TreasureCardsInHand = 0;
     }
@@ -360,6 +379,7 @@ internal class CombatDeck {
             return false;
         }
         LastGivenHand.RemoveAt(index);
+        _enchantedCastTemplates.Remove(spell);
         return true;
     }
 
