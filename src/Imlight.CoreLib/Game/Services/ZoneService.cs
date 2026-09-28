@@ -370,11 +370,33 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
 
     // This button and the GoHome button are locked client-side until level 2.
     // jooty, again? cmon man
+    private const string DormZone = "WizardCity/Interiors/WC_Housing_Dorm_Interior"; // CLASSIC
+
     [MessageHandler(typeof(WIZARD_12_PROTOCOL.MSG_GOTODORM))]
     private void ReceiveGotoDorm(WIZARD_12_PROTOCOL.MSG_GOTODORM message) {
-        // CLASSIC: housing is not implemented; a classic profile refuses instead of sending players to the QA island.
+        // CLASSIC: every 2009 wizard had a Ravenwood dorm room (housing, December 2008). The dorm is the wizard's own
+        // private copy of the dorm zone; its door trigger leads back to the Ravenwood dormitory.
         if (ClassicRuntime.IsActive) {
-            ClassicGate.RefuseFeature(ClassicFeatures.Housing, GetActiveWizard().CharId, InformGameClient);
+            if (!ClassicRuntime.Rules.IsFeatureEnabled(ClassicFeatures.Housing)) {
+                ClassicGate.RefuseFeature(ClassicFeatures.Housing, GetActiveWizard().CharId, InformGameClient);
+
+                return;
+            }
+
+            var owner = GetActiveWizard();
+            if (!ClassicGate.AllowsZone(DormZone, owner.CharId, InformGameClient)) {
+                return;
+            }
+
+            SendTeleportEffects();
+            owner.SetTimeHomeLastClicked(DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+            Timers.StartSingleTimer("zonetransfer", new ZONE_102_PROTOCOL.MSG_ZONETRANSFER {
+                DestinationZone = DormZone,
+                DestinationLocation = "Start",
+                SendToClient = true,
+                IsPrivate = true,
+                OwnerCharId = owner.CharId,
+            }, TimeSpan.FromSeconds(TELEPORT_EFFECTS_TIME));
 
             return;
         }
