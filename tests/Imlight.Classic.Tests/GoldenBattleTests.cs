@@ -120,6 +120,23 @@ public sealed class GoldenBattleTests : IDisposable {
     }
 
     [Fact]
+    public void FourWizardsGoFirstOtherwiseTheDuelsRandomSideDoes() {
+        var duel = CombatRegressionTests.MakeDuel();
+        CombatRegressionTests.SetProperty(duel, "Duel", new Duel { m_duelModifier = new DuelModifier { m_battlefieldEffects = [] } });
+        typeof(CombatDuelComponent).GetField("_randomFirstTeam", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(duel, CombatTeam.Monster);
+        Occupy(duel, 0, false);
+        foreach (var slot in new[] { 4, 5, 6 }) Occupy(duel, slot, true);
+        var apply = typeof(CombatDuelComponent).GetMethod("ApplyFullTeamGoesFirst", BindingFlags.Instance | BindingFlags.NonPublic)!;
+
+        apply.Invoke(duel, []);
+        Assert.Equal((int) CombatTeam.Monster, duel.Duel.m_firstTeamToAct);
+
+        Occupy(duel, 7, true);
+        apply.Invoke(duel, []);
+        Assert.Equal((int) CombatTeam.Player, duel.Duel.m_firstTeamToAct);
+    }
+
+    [Fact]
     public void SeededStreamsAreIndependentAndStable() {
         var a = CombatRng.Stream(42, CombatRng.DuelStream).Next();
         var b = CombatRng.Stream(42, CombatRng.DeckStream(0)).Next();

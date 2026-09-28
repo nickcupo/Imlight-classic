@@ -331,6 +331,7 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
         // Pre-planning phase just wants to send who is up first.
         Duel.m_duelPhase = kDuelPhase.kPhase_PrePlanning;
         Duel.m_roundNum++;
+        ApplyFullTeamGoesFirst();
         SendCombatPhase((byte) Duel.m_duelPhase);
         SendUpFirst(Duel.m_roundNum);
 
@@ -602,7 +603,8 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
         Logger.Information("[COMBAT-SEED] Duel {0} | seed {1}", Logger.Args(Duel.m_duelID.Full, DuelSeed));
 
         // Determine which team goes up first. Tutorial duels override this with the golems first.
-        Duel.m_firstTeamToAct = (int) DetermineFirstTeam();
+        _randomFirstTeam = DetermineFirstTeam();
+        Duel.m_firstTeamToAct = (int) _randomFirstTeam;
         _tutorialDirector.OnDuelCreated(Duel);
 
         // When the duel is created, it must be created by two suspects: the player and the creature.
@@ -1230,6 +1232,24 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
     private CombatTeam DetermineFirstTeam()
         => (CombatTeam) Rng.Next(0, 2);
 
+    private CombatTeam _randomFirstTeam;
+
+    // CLASSIC: the side that acts first is random per duel, but a side of four wizards goes first (owner, 2026-09-28).
+    // Checked each round, so it applies from the round after a fourth wizard joins.
+    private void ApplyFullTeamGoesFirst() {
+        if (!ClassicRuntime.IsActive || IsScriptedDuel()) {
+            return;
+        }
+
+        var wizards = SubCircles.Count(circle => circle is { Occupied: true, AddedToDuel: true, IsSummonedMinion: false }
+            && circle.OccupiedTeam == CombatTeam.Player);
+        var first = wizards >= 4 ? CombatTeam.Player : _randomFirstTeam;
+        if (Duel.m_firstTeamToAct != (int) first) {
+            Duel.m_firstTeamToAct = (int) first;
+            Logger.Debug("Duel {0} | {1} wizards: team {2} acts first.", Logger.Args(Duel.m_duelID.Full, wizards, first));
+        }
+    }
+
     private Random _rng;
 
     /// <summary>The seed every roll of the current duel derives from (logged as [COMBAT-SEED]).</summary>
@@ -1242,7 +1262,7 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
     internal Random StreamFor(int stream) => CombatRng.Stream(DuelSeed, stream);
 
     internal bool IsScriptedDuel()
-        => _tutorialDirector.IsActive;
+        => _tutorialDirector?.IsActive == true;
 
     private byte GetUpFirstSigilSlot() {
         // Prefer the acting team's first living participant, else any living participant.
