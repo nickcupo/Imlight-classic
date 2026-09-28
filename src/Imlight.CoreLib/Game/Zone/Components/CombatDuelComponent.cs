@@ -67,6 +67,9 @@ using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;
 using Imlight.CoreLib.Shared.Resources;
 using Imlight.CoreLib.WizardData.Models.Player;
+using Imlight.CoreLib.WizardData.Collections;
+using Imlight.CoreLib.Shared.Items;
+using Imcodec.Cryptography;
 using Imlight.CoreLib.WizardData.Models.World;
 
 namespace Imlight.CoreLib.Game.Zone.Components;
@@ -412,6 +415,13 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
                 Logger.Args(Duel.m_duelID.Full, caster.SlotIndex));
 
             return;
+        }
+
+        if (message.MoveType == ClassicHandEnchantment.MoveType) {
+            if (ClassicRuntime.IsActive) {
+                HandleEnchantMove(caster, message.SpellSelection, message.SpellTarget);
+            }
+            return; // Hand manipulation never queues a round action or advances the phase.
         }
 
         var moveType = (CombatMoveType) message.MoveType;
@@ -1028,12 +1038,35 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
             ParticipantID = participantId,
             MoveType = moveType,
             SpellID = (int) (spell?.m_templateID ?? 0),
+            EnchantmentID = (int) (spell?.m_enchantment ?? 0),
             SpellTargetIndex = actualIndex,
             IsItemCard = isItemCard,
             IsTreasureCard = isTreasureCard,
             IsBattleCard = isBattleCard,
         };
         PlayerBroadcast(msg);
+    }
+
+    private void HandleEnchantMove(CombatDuelSubCircle caster, int sourceIndex, uint targetIndex) {
+        // A queued cast owns its selected card until ChangeMind. Do not invalidate its references.
+        if (!Duel.m_bPVP && caster.AddedToDuel && caster.IsAlive && !caster.IsSummonedMinion && caster.OccupiedTeam == CombatTeam.Player
+            && CombatResolver.GetQueuedAction(caster) is null
+            && caster._combatDeck.TryEnchant(sourceIndex, targetIndex, out var consumedId)
+            && consumedId != 0 && caster._wizard is { } wizard) {
+            wizard.SpellbookBehavior.RemoveTreasureCard(consumedId);
+            WizardCollection.RemoveTreasureCard(wizard, consumedId);
+            var deckSlot = wizard.EquipmentBehavior.SlotList.FirstOrDefault(s => s.SlotType == EquipmentSlotType.Deck);
+            if (deckSlot?.ItemId is { } deckId) {
+                wizard.RemoveSpellFromDeck(consumedId, deckId);
+                if (CoreObjectFactory.GetCoreTemplate(consumedId) is SpellTemplate template) {
+                    caster.ParticipantActor.Tell(new WIZARD_12_PROTOCOL.MSG_REMOVETREASURESPELLFROMDECK {
+                        SpellID = (int) StringHash.Compute(template.m_name), EnchantmentID = 0,
+                        DeckID = deckId, Success = 1, Destroy = 0,
+                    });
+                }
+            }
+        }
+        SendCurrentCombatHand(caster); // authoritative response on success or rejection; never refill
     }
 
     private void HandleDiscardMove(CombatDuelSubCircle caster, int spellSelection) {
@@ -1102,6 +1135,9 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
         }
 
         CombatResolver.AddCombatMove(CombatMoveType.Attack, caster, target, spell);
+        if (ClassicRuntime.IsActive && CombatResolver.GetQueuedAction(caster) is { } queued) {
+            queued.SpellTemplate = caster._combatDeck.CastTemplateFor(spell, queued.SpellTemplate);
+        }
 
         // Minions are AI-driven; their telegraph comes from ResendMinionMoveSelections, not an echo.
         if (!caster.IsSummonedMinion && caster.OccupiedTeam == CombatTeam.Player) {
