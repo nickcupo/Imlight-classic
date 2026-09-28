@@ -48,6 +48,7 @@ using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
 using Imlight.Classic.Rules;
+using Imlight.Classic;
 using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.Game.Spells;
 using Imlight.CoreLib.Game.Zone.Components;
@@ -95,6 +96,21 @@ public class CombatDuelSubCircle {
     internal CombatParticipant CombatParticipant { get; private set; }
     internal bool AddedToDuel { get; set;}
     internal bool IsSummonedMinion { get; private set; }
+    private CoreObject _minionOwnerObject;
+    private CombatTeam _minionTeam = CombatTeam.Player;
+
+    // Capture identity as well as slot: a replacement occupant must not inherit somebody else's minion.
+    internal void CaptureMinionOwner(int ownerSlot) {
+        var owner = _duelActor.SubCircles.FirstOrDefault(c => c.SlotIndex == ownerSlot && c != this && c.Occupied);
+        _minionOwnerObject = owner?.ParticipantObject;
+        _minionTeam = owner?.OccupiedTeam ?? CombatTeam.Player;
+    }
+
+    internal bool IsOwnedMinionOf(CombatDuelSubCircle caster)
+        => IsSummonedMinion && IsAlive && caster is { IsAlive: true, Occupied: true }
+            && ReferenceEquals(_duelActor, caster._duelActor)
+            && _minionOwnerObject is not null && ReferenceEquals(_minionOwnerObject, caster.ParticipantObject)
+            && OccupiedTeam == caster.OccupiedTeam;
     internal List<SpellEffect> _hangingEffects { get {
         if (CombatParticipant is null) {
             return null;
@@ -131,7 +147,7 @@ public class CombatDuelSubCircle {
             }
 
             if (IsSummonedMinion) {
-                return CombatTeam.Player;
+                return ClassicRuntime.IsActive ? _minionTeam : CombatTeam.Player;
             }
 
             return ParticipantObject.m_templateID == 1 ? CombatTeam.Player : CombatTeam.Monster;
@@ -162,6 +178,9 @@ public class CombatDuelSubCircle {
         ParticipantActor = actor;
         ParticipantObject = participantObject;
         IsSummonedMinion = isSummonedMinion;
+        _minionOwnerObject = null;
+        _minionTeam = CombatTeam.Player;
+        if (isSummonedMinion && ClassicRuntime.IsActive) CaptureMinionOwner(minionOwnerSubCircle);
 
         var isHumanPlayer = participantObject.m_templateID == 1;
 
@@ -196,6 +215,9 @@ public class CombatDuelSubCircle {
         ParticipantObject = null;
         CombatParticipant = null;
         AddedToDuel = false;
+        IsSummonedMinion = false;
+        _minionOwnerObject = null;
+        _minionTeam = CombatTeam.Player;
     }
 
     internal Hand DrawHand() {
@@ -608,7 +630,7 @@ public class CombatDuelSubCircle {
             m_zoneID = _duelActor.SigilId,
             m_isMonster = 0, // Live server sends 0
             // Minions are creatures on the player team; m_isPlayer stays false.
-            m_teamID = asMinion ? 0 : 1,
+            m_teamID = asMinion ? (ClassicRuntime.IsActive ? (int) _minionTeam : 0) : 1,
             m_originalTeam = 0,
             m_isMinion = asMinion,
             m_maxHandSize = PLAYER_HAND_SIZE,
@@ -617,7 +639,7 @@ public class CombatDuelSubCircle {
             m_pipRoundRates = new(),
             m_playerHealth = creatureStats.GameStats.m_currentHitpoints,
             m_maxPlayerHealth = creatureStats.GameStats.m_baseHitpoints,
-            m_myTeamTurn = _duelActor.Duel.m_firstTeamToAct == 1,
+            m_myTeamTurn = _duelActor.Duel.m_firstTeamToAct == (asMinion && ClassicRuntime.IsActive ? (int) _minionTeam : 1),
             m_pGameStats = creatureStats.GameStats.GetCombatGameStats(),
             m_mobLevel = creatureStats.CombatLevel,
 
