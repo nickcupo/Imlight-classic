@@ -291,6 +291,14 @@ public class CombatResolver(Duel duel, CombatDuelSubCircle[] actorSubCircles) {
         fizzleAction.m_targetSubcircleList.Add(action.SelectedTarget.SlotIndex);
         combatActionList.m_actionList.Add(fizzleAction);
 
+        // CLASSIC: a fizzled card is used up for the fight: it goes to the discard pile (back only on a
+        // Reshuffle) and its pips and mana are not spent. The Friendly Necromancer, 2009-06-26 ("fizzle too
+        // much and you can run out") and 2010-03-23 (a fizzled card "is reshuffled deeper back into their
+        // deck"). Treasure cards are left as before until their fizzle rule is sourced.
+        if (ClassicRuntime.IsActive && action.Spell is { m_treasureCard: false }) {
+            action.SpellCaster.DiscardCard(action.Spell);
+        }
+
         Logger.Debug("Duel {0} | Slot {1} | Spell fizzled.",
             Logger.Args(_duel.m_duelID.Full, action.SpellCaster.SlotIndex));
 
