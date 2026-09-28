@@ -143,7 +143,21 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
         };
         ZoneActor.Tell(postEventMsg);
 
+        // CLASSIC: every account gets its starting Crowns once. The client shows the balance only after its interface
+        // has loaded (Revive101 found about five seconds), so send it now and again shortly after.
+        ClassicCrowns.EnsureStartingCrowns(wizard.Account);
+        SendToSocket(ClassicCrowns.BalanceMessage(wizard.Account, wizard.CharId));
+        Timers.StartSingleTimer("sync-crowns", ClassicCrowns.BalanceMessage(wizard.Account, wizard.CharId), TimeSpan.FromSeconds(5));
+
         return;
+    }
+
+    // CLASSIC: the delayed Crowns sync; the balance is read again when it fires.
+    [MessageHandler(typeof(WIZARD_12_PROTOCOL.MSG_CROWNBALANCE))]
+    private void ReceiveCrownBalanceSync(WIZARD_12_PROTOCOL.MSG_CROWNBALANCE message) {
+        if (GetActiveWizard() is { } wizard) {
+            SendToSocket(ClassicCrowns.BalanceMessage(wizard.Account, wizard.CharId));
+        }
     }
 
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_ZONETRANSFER))]

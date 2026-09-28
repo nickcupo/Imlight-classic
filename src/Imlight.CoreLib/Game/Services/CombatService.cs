@@ -152,8 +152,9 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
         // CLASSIC: under the profile's mob reward rules, XP per pip, gold and drops come from classic-data
         // and show in one loot popup; SpiralDB mob loot (none for Arc 1) still rolls after it.
         if (ClassicProgression.MobRewards is { } classicRewards) {
-            GrantClassicCombatRewards(classicRewards, message.UsedPips, message.MobTemplateIds);
-            GrantMobLoot(message.MobTemplateIds);
+            var classicGold = GrantClassicCombatRewards(classicRewards, message.UsedPips, message.MobTemplateIds);
+            var lootGold = GrantMobLoot(message.MobTemplateIds);
+            GrantMobCrowns(classicGold + lootGold);
 
             return;
         }
@@ -167,12 +168,22 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
         };
         TellOtherServices(msg);
 
-        GrantMobLoot(message.MobTemplateIds);
+        GrantMobCrowns(GrantMobLoot(message.MobTemplateIds));
+    }
+
+    // CLASSIC: on this server a defeated mob pays as many Crowns as gold (owner decision 2026-09-28).
+    private void GrantMobCrowns(int gold) {
+        if (!ClassicCrowns.CrownsFromMobs || gold <= 0 || GetActiveWizard() is not { } wizard) {
+            return;
+        }
+
+        ClassicCrowns.Add(wizard.Account, gold);
+        SendToSocket(ClassicCrowns.BalanceMessage(wizard.Account, wizard.CharId));
     }
 
     // CLASSIC: XP for the pips this player used, then per defeated mob gold, items, Treasure Cards and reagents
     // (each list entry rolls on its own, capped per mob; see MobRewardRules.Roll).
-    private void GrantClassicCombatRewards(MobRewardRules rules, int usedPips, ulong[] defeatedMobTemplateIds) {
+    private int GrantClassicCombatRewards(MobRewardRules rules, int usedPips, ulong[] defeatedMobTemplateIds) {
         var result = new DropTableResult {
             DropTableId = "classic_mob_rewards",
             ExperienceAmount = rules.CombatXp.Xp(usedPips),
@@ -208,20 +219,24 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
         }
 
         if (!result.HasRewards) {
-            return;
+            return 0;
         }
 
         LootGranter.GrantAndDisplay(SessionActor.ActorRef, GetActiveWizard(), result);
+
+        return result.GoldAmount;
     }
 
-    private void GrantMobLoot(ulong[] defeatedMobTemplateIds) {
+    // Returns the gold granted.
+    private int GrantMobLoot(ulong[] defeatedMobTemplateIds) {
         // Rolls and grants drop-table loot for the defeated mobs (raw template ids). Each mob's tables
         // come from NpcDropTableCollection; a single roll across all of a mob's tables yields one combined
         // loot popup for that mob.
         if (defeatedMobTemplateIds is not { Length: > 0 }) {
-            return;
+            return 0;
         }
 
+        var gold = 0;
         var wizard = GetActiveWizard();
         var playerRef = SessionActor.ActorRef;
         var playerObj = GetActiveGameObject();
@@ -233,7 +248,10 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
 
             var loot = DropTableRoller.Roll(npcDropTable.DropTableNames.ToArray(), playerRef, playerObj, wizard);
             LootGranter.GrantAndDisplay(playerRef, wizard, loot);
+            gold += loot.GoldAmount;
         }
+
+        return gold;
     }
 
     [MessageHandler(typeof(DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_COMBATDRAW))]

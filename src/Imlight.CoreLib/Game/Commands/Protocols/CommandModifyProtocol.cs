@@ -714,4 +714,21 @@ internal class CommandModifyProtocol : CommandProtocol {
         InformSenderClient($"Added {xpInt} XP.");
     }
 
+
+    // CLASSIC: set the account's Crowns (ClassicCrowns).
+    [Command("setcrowns")]
+    [AuthRequired(AuthLevel.QualityAssurance)]
+    private void SetCrownsCommand(string crowns) {
+        if (!int.TryParse(crowns, out var amount) || amount < 0) {
+            InformSenderClient("Usage: setcrowns <amount>");
+
+            return;
+        }
+
+        var account = Context.Character.Account;
+        Classic.ClassicCrowns.Add(account, amount - account.Crowns);
+        Context.SessionActor.Tell(Classic.ClassicCrowns.BalanceMessage(account, Context.Character.CharId), Akka.Actor.ActorRefs.NoSender);
+        InformSenderClient($"Crowns set to {account.Crowns}.");
+    }
+
 }

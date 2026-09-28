@@ -89,6 +89,13 @@ public static class AccountCollection {
         });
     }
 
+    // CLASSIC: saves the Crowns balance (ClassicCrowns).
+    public static bool UpdateCrowns(ulong accountId, int crowns, bool startingCrownsGranted)
+        => UpdateAccount(accountId, account => {
+            account.Crowns = crowns;
+            account.StartingCrownsGranted = startingCrownsGranted;
+        });
+
     private static ulong? GetAccountId(string username) {
         using var session = s_store.OpenSession();
 

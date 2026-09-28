@@ -97,6 +97,10 @@ public class Account {
     public bool IsLocked { get; set; }
     public int PurchasedCharacterSlots { get; set; }
 
+    // CLASSIC: the account's Crowns, and whether the server's starting Crowns were given (ClassicCrowns).
+    public int Crowns { get; set; }
+    public bool StartingCrownsGranted { get; set; }
+
     [JsonIgnore] public List<Wizard> Characters = new();
     [JsonIgnore] public InfractionHistory InfractionHistory { get; set; }
     [JsonIgnore] public SessionActor SessionActor { get; set; }
