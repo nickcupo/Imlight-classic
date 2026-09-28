@@ -32,9 +32,9 @@
  *
  * TODO:
  * 
- * Created by: Jooty
+ * Created by: Jooty with Codex (GPT-6)
  * Version: KALI 1.0
- * Last Updated: 08/14/2026
+ * Last Updated: 09/27/2026
  */
 
 using System;
@@ -160,7 +160,7 @@ internal sealed class CombatCreatureAIComponent(ZoneEntity entity) : ZoneEntityC
         _currentDuelComponent = message.Duel;
         _currentSubCircle = message.SubCircle;
         _pathMovementComponent?.Stop(); // null for a summoned minion, which has no world movement
-        InitiatizeHateTable();
+        InitializeHateTable();
     }
 
     [MessageHandler(typeof(COMBAT_106_PROTOCOL.MSG_NEWROUND))]
@@ -506,18 +506,19 @@ internal sealed class CombatCreatureAIComponent(ZoneEntity entity) : ZoneEntityC
         return SpellEffectFilter.FilterSpellsByDebuff(castableSpells);
     }
 
-    private void InitiatizeHateTable() {
-        // Create the hate table.
-        int start = (_currentSubCircle.SlotIndex < 3) ? 4 : 0;
-        int end = (_currentSubCircle.SlotIndex < 3) ? _currentDuelComponent.SubCircles.Length : _currentDuelComponent.SubCircles.Length / 2;
+    private void InitializeHateTable() {
+        _hateTable.Clear();
+        var teamSize = _currentDuelComponent.SubCircles.Length / 2;
+        var start = _currentSubCircle.SlotIndex < teamSize ? teamSize : 0;
+        var end = start + teamSize;
 
-        for (int i = start; i < end; i++) {
+        for (var i = start; i < end; i++) {
             _hateTable.Add(i, 0);
         }
 
         // Our initial target will be whomever is across from us. The wrap matters for a summoned
         // minion, which sits in a player slot (4-7): +4 alone would land outside the hate table.
-        var targetIdx = (_currentSubCircle.SlotIndex + 4) % _currentDuelComponent.SubCircles.Length;
+        var targetIdx = (_currentSubCircle.SlotIndex + teamSize) % _currentDuelComponent.SubCircles.Length;
         UpdateHateTable(targetIdx, 1);
     }
 
