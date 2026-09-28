@@ -18,6 +18,7 @@
 
 using Imlight.CoreLib.Shared.Packets;
 using Imlight.CoreLib.WizardData.Models.Player;
+using System;
 using System.Text;
 
 namespace Imlight.CoreLib.Game.Commands.Protocols;
@@ -25,6 +26,28 @@ namespace Imlight.CoreLib.Game.Commands.Protocols;
 internal class CommandDebugProtocol : CommandProtocol {
 
     internal override string Group { get; set; } = "debug";
+
+    // CLASSIC: replay a fight. Every duel started after this uses the given seed; "off" returns to random seeds.
+    // A duel's seed is in the server log as [COMBAT-SEED].
+    [Command("seed")]
+    [AuthRequired(AuthLevel.QualityAssurance)]
+    private void SeedCommand(string seed) {
+        if (string.Equals(seed, "off", StringComparison.OrdinalIgnoreCase)) {
+            Combat.CombatRng.FixedSeed = null;
+            InformSenderClient("New duels use random seeds.");
+
+            return;
+        }
+
+        if (!ulong.TryParse(seed, out var value)) {
+            InformSenderClient("Usage: seed <number> | seed off");
+
+            return;
+        }
+
+        Combat.CombatRng.FixedSeed = value;
+        InformSenderClient($"Every new duel uses seed {value} until 'seed off'. This applies to all players.");
+    }
 
     [Command("gps")]
     [AuthRequired(AuthLevel.QualityAssurance)]
