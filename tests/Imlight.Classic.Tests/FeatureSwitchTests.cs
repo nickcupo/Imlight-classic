@@ -55,6 +55,8 @@ public sealed class FeatureSwitchTests {
         Assert.False(rules.IsFeatureEnabled(ClassicFeatures.Jewels));
         Assert.True(rules.IsFeatureEnabled(ClassicFeatures.Seamstress));
         Assert.False(rules.CriticalAndBlockEnabled);
+        Assert.False(rules.UntargetedAreaSpells);
+        Assert.True(ClassicRules.Stock.UntargetedAreaSpells);
     }
 
     [Fact]
@@ -65,6 +67,7 @@ public sealed class FeatureSwitchTests {
         Assert.False(rules.IsFeatureEnabled(ClassicFeatures.Seamstress));
         Assert.True(rules.IsFeatureEnabled(ClassicFeatures.Housing));
         Assert.False(rules.CriticalAndBlockEnabled);
+        Assert.False(rules.UntargetedAreaSpells);
     }
 
     [Fact]

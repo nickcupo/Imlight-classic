@@ -81,6 +81,7 @@ public sealed class ClassicRules {
         _xpPolicy = xpPolicy;
         IsRestricted = !profile.IsUnrestricted;
         CriticalAndBlockEnabled = profile.Features.IsEnabled(ClassicFeatures.CriticalAndBlock);
+        UntargetedAreaSpells = profile.Features.IsEnabled(ClassicFeatures.UntargetedAreaSpells);
 
         if (IsRestricted) {
             CrossValidate();
@@ -111,6 +112,12 @@ public sealed class ClassicRules {
     /// The <c>critical_and_block</c> switch, precomputed for the combat hot path.
     /// </summary>
     public bool CriticalAndBlockEnabled { get; }
+
+    /// <summary>
+    /// The <c>untargeted_area_spells</c> switch (May 2010). Off: a spell that attacks all enemies takes an enemy
+    /// target and is not cast when that enemy is defeated before it resolves.
+    /// </summary>
+    public bool UntargetedAreaSpells { get; }
 
     /// <summary>
     /// True when quest data is read the KingsIsle way: requirement lists left to right, every item of a quest

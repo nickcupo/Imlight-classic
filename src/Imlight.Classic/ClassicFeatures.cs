@@ -74,6 +74,7 @@ public static class ClassicFeatures {
     public const string Cantrips = "cantrips";
     public const string Monstrology = "monstrology";
     public const string TeamUp = "team_up";
+    public const string UntargetedAreaSpells = "untargeted_area_spells";
 
     /// <summary>
     /// The name of the nested switch group; its members are the <c>pets.*</c> paths.
@@ -87,7 +88,7 @@ public static class ClassicFeatures {
         TrainingPoints, TreasureCards, Housing, PvpArena, Crafting, Bazaar, Mounts, Henchmen,
         Elixirs, Seamstress, HubTeleporters, PetsEnabled, PetsLeveling, PetsTalents, PetsHatching,
         PetsEnergy, CriticalAndBlock, ArmorPiercing, ShadowMagic, Archmastery, Gardening, Fishing,
-        Jewels, Cantrips, Monstrology, TeamUp
+        Jewels, Cantrips, Monstrology, TeamUp, UntargetedAreaSpells
     ];
 
     private static readonly FrozenSet<string> s_known = All.ToFrozenSet(StringComparer.Ordinal);

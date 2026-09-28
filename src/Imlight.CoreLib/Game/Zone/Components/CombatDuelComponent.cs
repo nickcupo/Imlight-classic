@@ -1163,7 +1163,7 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
                 && effect is RandomSpellEffect or VariableSpellEffect
             ? children.Where(child => child is not null).Select(child => child!.m_effectTarget.ToString())
             : [effect.m_effectTarget.ToString()]);
-        var side = CastTargeting.SideOf(targets);
+        var side = CastTargeting.SideOf(targets, !ClassicRuntime.Rules.UntargetedAreaSpells);
         if (side == CastTargetSide.None) {
             return target;
         }

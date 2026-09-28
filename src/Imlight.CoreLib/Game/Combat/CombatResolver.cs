@@ -254,7 +254,10 @@ public class CombatResolver(Duel duel, CombatDuelSubCircle[] actorSubCircles) {
             if (    action.SpellCaster.CombatParticipant.m_stunned > 0 
                 || !action.SelectedTarget.IsAlive
                 || !action.SelectedTarget.AddedToDuel) {
-                action.SpellCaster.CombatParticipant.m_stunned--;
+                // A defeated target does not use up a stun the caster does not have.
+                if (action.SpellCaster.CombatParticipant.m_stunned > 0) {
+                    action.SpellCaster.CombatParticipant.m_stunned--;
+                }
 
                 cinematicTime += HandlePassAction(action, combatActionList);
 

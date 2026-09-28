@@ -289,6 +289,17 @@ public sealed class SpellMechanicsTests {
     }
 
     [Fact]
+    public void BeforeMay2010AnAllEnemySpellTakesAnEnemyTarget() {
+        // May 2010 Update Notes: "Spells that attack all enemies will no longer require a target."
+        Assert.Equal(CastTargetSide.Enemy, CastTargeting.SideOf(["kEnemyTeamAllAtOnce"], areaNeedsTarget: true));
+        Assert.Equal(CastTargetSide.Enemy, CastTargeting.SideOf(["kEnemyTeam", "kSelf"], areaNeedsTarget: true));
+        Assert.Equal(CastTargetSide.Friend, CastTargeting.SideOf(["kFriendlySingle", "kEnemyTeam"], areaNeedsTarget: true));
+        // All-ally spells were not part of that change.
+        Assert.Equal(CastTargetSide.None, CastTargeting.SideOf(["kFriendlyTeamAllAtOnce"], areaNeedsTarget: true));
+        Assert.Equal(CastTargetSide.None, CastTargeting.SideOf(["kGlobal"], areaNeedsTarget: true));
+    }
+
+    [Fact]
     public void ACastWithoutAFittingTargetGetsOne() {
         var caster = new CastCircle(0, 0, true);
         var ally = new CastCircle(1, 0, true);

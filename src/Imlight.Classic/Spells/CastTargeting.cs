@@ -78,8 +78,13 @@ public static class CastTargeting {
     /// The side of the card's first single-target effect, in effect order (a roll's or per-pip list's children included).
     /// </summary>
     /// <param name="effectTargets">The kEffectTarget member names of the card's effects, in order.</param>
+    /// <param name="areaNeedsTarget">
+    /// True before the May 2010 change (feature <c>untargeted_area_spells</c> off): a card that attacks all enemies
+    /// and has no single-target effect takes an enemy target, and is not cast if that enemy is defeated first.
+    /// </param>
     /// <returns>The side, or <see cref="CastTargetSide.None"/> when no effect takes a single target.</returns>
-    public static CastTargetSide SideOf(IEnumerable<string> effectTargets) {
+    public static CastTargetSide SideOf(IEnumerable<string> effectTargets, bool areaNeedsTarget = false) {
+        var attacksAllEnemies = false;
         foreach (var target in effectTargets) {
             switch (target) {
                 case "kEnemySingle":
@@ -87,10 +92,14 @@ public static class CastTargeting {
                 case "kFriendlySingle":
                 case "kFriendlySingleNotMe":
                     return CastTargetSide.Friend;
+                case "kEnemyTeam":
+                case "kEnemyTeamAllAtOnce":
+                    attacksAllEnemies = true;
+                    break;
             }
         }
 
-        return CastTargetSide.None;
+        return areaNeedsTarget && attacksAllEnemies ? CastTargetSide.Enemy : CastTargetSide.None;
     }
 
     /// <summary>
