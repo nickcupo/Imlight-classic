@@ -57,6 +57,7 @@ public sealed class FeatureSwitchTests {
         Assert.False(rules.CriticalAndBlockEnabled);
         Assert.False(rules.UntargetedAreaSpells);
         Assert.True(ClassicRules.Stock.UntargetedAreaSpells);
+        Assert.True(rules.StunGivesStunBlock);
     }
 
     [Fact]
@@ -68,6 +69,7 @@ public sealed class FeatureSwitchTests {
         Assert.True(rules.IsFeatureEnabled(ClassicFeatures.Housing));
         Assert.False(rules.CriticalAndBlockEnabled);
         Assert.False(rules.UntargetedAreaSpells);
+        Assert.False(rules.StunGivesStunBlock);
     }
 
     [Fact]

@@ -550,7 +550,8 @@ internal static class CombatEffectApplicator {
                 continue;
             }
 
-            if (target.TryStun()) {
+            // CLASSIC: before the July 2009 update a stun left no stun block.
+            if (target.TryStun() && ClassicRuntime.Rules.StunGivesStunBlock) {
                 // Creature was stunned. Add a stun block hanging effect.
                 var stunBlockEffect = new SpellEffect {
                     m_effectType = kSpellEffects.kStunBlock,

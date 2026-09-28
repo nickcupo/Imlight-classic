@@ -240,6 +240,20 @@ public class CombatResolver(Duel duel, CombatDuelSubCircle[] actorSubCircles) {
             // This is because the overtime effects can kill a participant, and we want to see the animation.
             cinematicTime += InvokeOverTimeEffects(action.SpellCaster);
 
+            // A stun is used up at the stunned wizard's next action: this round's if it landed before they
+            // acted (owner ruling 2026-09-28: it applies immediately), else next round's, when a stunned
+            // wizard can only pass. This is the only place a stun is used up.
+            if (action.SpellCaster.CombatParticipant.m_stunned > 0) {
+                action.SpellCaster.CombatParticipant.m_stunned--;
+
+                cinematicTime += HandlePassAction(action, combatActionList);
+
+                Logger.Debug("Duel {0} | Slot {1} | Caster is stunned. Passing.",
+                    Logger.Args(_duel.m_duelID.Full, action.SpellCaster.SlotIndex));
+
+                continue;
+            }
+
             // A null spell indicates the caster is passing their turn.
             if (action.Spell is null || action.SelectedTarget is null) {
                 Logger.Debug("Duel {0} | Slot {1} | Caster is passing their turn.",
@@ -250,18 +264,11 @@ public class CombatResolver(Duel duel, CombatDuelSubCircle[] actorSubCircles) {
                 continue;
             }
 
-            // If our target is gone or we're stunned, pass the turn.
-            if (    action.SpellCaster.CombatParticipant.m_stunned > 0 
-                || !action.SelectedTarget.IsAlive
-                || !action.SelectedTarget.AddedToDuel) {
-                // A defeated target does not use up a stun the caster does not have.
-                if (action.SpellCaster.CombatParticipant.m_stunned > 0) {
-                    action.SpellCaster.CombatParticipant.m_stunned--;
-                }
-
+            // If our target is gone, pass the turn.
+            if (!action.SelectedTarget.IsAlive || !action.SelectedTarget.AddedToDuel) {
                 cinematicTime += HandlePassAction(action, combatActionList);
 
-                Logger.Debug("Duel {0} | Slot {1} | Spell cannot occur because target is dead or caster is stunned.",
+                Logger.Debug("Duel {0} | Slot {1} | Spell cannot occur because target is dead.",
                     Logger.Args(_duel.m_duelID.Full, action.SpellCaster.SlotIndex));
 
                 continue;

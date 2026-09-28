@@ -82,6 +82,7 @@ public sealed class ClassicRules {
         IsRestricted = !profile.IsUnrestricted;
         CriticalAndBlockEnabled = profile.Features.IsEnabled(ClassicFeatures.CriticalAndBlock);
         UntargetedAreaSpells = profile.Features.IsEnabled(ClassicFeatures.UntargetedAreaSpells);
+        StunGivesStunBlock = profile.Cutoff is not { } cutoff || cutoff >= StunBlockRuleDate;
 
         if (IsRestricted) {
             CrossValidate();
@@ -118,6 +119,17 @@ public sealed class ClassicRules {
     /// target and is not cast when that enemy is defeated before it resolves.
     /// </summary>
     public bool UntargetedAreaSpells { get; }
+
+    /// <summary>
+    /// The July 2009 update (1.90, 2009-07-01) that gives a stunned target one stun block.
+    /// </summary>
+    public static readonly DateOnly StunBlockRuleDate = new(2009, 7, 1);
+
+    /// <summary>
+    /// True when a stun leaves its target one stun block: every profile whose cutoff is on or after
+    /// <see cref="StunBlockRuleDate"/>, and stock. Off for arc1-2009h1.
+    /// </summary>
+    public bool StunGivesStunBlock { get; }
 
     /// <summary>
     /// True when quest data is read the KingsIsle way: requirement lists left to right, every item of a quest

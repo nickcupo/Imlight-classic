@@ -66,6 +66,31 @@ public sealed class ClassicUtilityCombatTests : IDisposable {
     }
 
     [Fact]
+    public void AStunnedWizardWhoPassesUsesTheStunUp() {
+        var target = Circle();
+        Apply(Stun(), target);
+        Assert.Equal(1, target.CombatParticipant.m_stunned);
+
+        // The client lets a stunned wizard only pass; that pass must use the stun up.
+        Resolve(target, new QueuedCombatAction { SpellCaster = target, Spell = null, SelectedTarget = null });
+        Assert.Equal(0, target.CombatParticipant.m_stunned);
+
+        // A pass by a wizard who is not stunned leaves the counter alone.
+        Resolve(target, new QueuedCombatAction { SpellCaster = target, Spell = null, SelectedTarget = null });
+        Assert.Equal(0, target.CombatParticipant.m_stunned);
+    }
+
+    [Fact]
+    public void BeforeJuly2009AStunLeavesNoStunBlock() {
+        ClassicRuntime.ResetForTests();
+        ClassicRuntime.Initialize(ClassicDataFixture.RealRules("arc1-2009h1"));
+        var target = Circle();
+        Apply(Stun(), target);
+        Assert.Equal(1, target.CombatParticipant.m_stunned);
+        Assert.Empty(target._hangingEffects);
+    }
+
+    [Fact]
     public void TwoCastStunBlocksAreConsumedOneAtATimeAndDoNotAbsorbDamage() {
         var target = Circle();
         Apply(Block(), target);
@@ -273,6 +298,16 @@ public sealed class ClassicUtilityCombatTests : IDisposable {
     private static void Tick(CombatDuelSubCircle target) {
         var resolver = new CombatResolver(target._duelActor.Duel, [target]);
         typeof(CombatResolver).GetMethod("InvokeOverTimeEffects", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(resolver, [target]);
+    }
+
+    private static void Resolve(CombatDuelSubCircle caster, QueuedCombatAction action) {
+        var resolver = new CombatResolver(caster._duelActor.Duel, [caster]);
+        resolver.Reset();
+        var queue = (List<QueuedCombatAction>) typeof(CombatResolver)
+            .GetField("_queuedCombatActions", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(resolver)!;
+        queue.Add(action);
+        typeof(CombatResolver).GetMethod("ProcessQueuedActions", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .Invoke(resolver, [new CombatActionListObj { m_actionList = [] }]);
     }
 
     private static SpellEffect Block() => new() {
