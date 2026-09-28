@@ -116,7 +116,8 @@ internal class InventoryService(SessionActor sessionActor) : MessageService(sess
                 ?? Enumerable.Empty<BackpackQuickSell.Request>();
             var sales = BackpackQuickSell.Execute(requests, id => {
                 var item = wizard.InventoryBehavior.GetItem(id);
-                if (item is null || CoreObjectFactory.GetCoreTemplate(item.m_templateID) is not WizItemTemplate template) return null;
+                if (item is null || CoreObjectFactory.GetCoreTemplate(item.m_templateID) is not WizItemTemplate template
+                    || !BackpackQuickSell.IsSellable(template.m_adjectiveList)) return null;
                 var value = Math.Ceiling(template.m_baseCost * 0.05f);
                 if (template.m_numPrimaryColors != 1 && template.m_numSecondaryColors != 0)
                     value = Math.Ceiling(value * 1.2275f);

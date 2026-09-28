@@ -7,6 +7,17 @@ namespace Imlight.Classic.Tests;
 
 public class BackpackQuickSellTests {
     [Fact]
+    public void Unsellable_flag_used_by_both_shop_paths_blocks_removal() {
+        Assert.False(BackpackQuickSell.IsSellable(["Equipment", "FLAG_NoSell"]));
+        Assert.True(BackpackQuickSell.IsSellable(["Equipment"]));
+        Assert.True(BackpackQuickSell.IsSellable(null));
+        var sales = BackpackQuickSell.Execute([new(1, 1)],
+            _ => BackpackQuickSell.IsSellable(["FLAG_NoSell"]) ? 10 : null,
+            _ => throw new Exception("Must not remove unsellable item"));
+        Assert.Empty(sales);
+    }
+
+    [Fact]
     public void Forged_quantities_duplicates_and_missing_items_never_create_gold() {
         var owned = new HashSet<ulong> { 1, 2, 3 };
         var sales = BackpackQuickSell.Execute([

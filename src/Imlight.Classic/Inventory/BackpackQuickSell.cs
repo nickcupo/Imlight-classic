@@ -24,6 +24,13 @@ namespace Imlight.Classic.Inventory;
 
 // CLASSIC: backpack objects have unique IDs, not client-controlled stack quantities.
 public static class BackpackQuickSell {
+    public static bool IsSellable(IEnumerable<string>? adjectives) {
+        if (adjectives is null) return true;
+        foreach (var adjective in adjectives)
+            if (string.Equals(adjective, "FLAG_NoSell", StringComparison.Ordinal)) return false;
+        return true;
+    }
+
     public readonly record struct Request(ulong Id, long Quantity);
     public readonly record struct Sale(ulong Id, int Gold);
 

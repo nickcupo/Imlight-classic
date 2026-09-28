@@ -137,6 +137,13 @@ internal class ShopService(SessionActor sessionActor) : MessageService(sessionAc
     private void ReceiveShopSellRequest(WIZARD_12_PROTOCOL.MSG_SHOPSELLREQUEST message) {
         var wizard = GetActiveWizard();
         var item = wizard.InventoryBehavior.GetItem(message.GlobalID);
+        // CLASSIC: reject an unsellable item before removing it from the backpack.
+        if (ClassicRuntime.Rules.UsesKingsIsleQuestRules
+            && (item is null || CoreObjectFactory.GetCoreTemplate(item.m_templateID) is not WizItemTemplate sellTemplate
+                || !Imlight.Classic.Inventory.BackpackQuickSell.IsSellable(sellTemplate.m_adjectiveList))) {
+            ProcessFailedSale();
+            return;
+        }
 
         var removedItemSuccess = wizard.RemoveItemFromInventory(message.GlobalID);
         if (!removedItemSuccess) {
