@@ -42,6 +42,7 @@ using System.Collections.Generic;
 using System.Linq;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.CoreLib.Game.Spells;
+using Imlight.Classic;
 
 namespace Imlight.CoreLib.Game.Combat;
 
@@ -64,7 +65,10 @@ internal static class CombatWards {
     internal static List<SpellEffect> FindAppliedWards(CombatDuelSubCircle target,
                                                        SpellEffect spellEffect,
                                                        kHangingDisposition disposition = kHangingDisposition.kBoth) {
-        var appliedCharms = new List<SpellEffect>();
+        if (ClassicRuntime.IsActive && disposition != kHangingDisposition.kBoth) {
+            return [.. FindRemovableWards(target, disposition).DistinctBy(x => x.m_spellTemplateID)];
+        }
+        // Keep damage application order independent of utility-spell disposition selection.
 
         // Choose the beneficial or harmful wards based on the disposition.
         var beneficialWards = GetBeneficialWards(target);
@@ -141,6 +145,21 @@ internal static class CombatWards {
 
         return schoolWards;
     }
+
+    // Utility spells select newest matching wards, including duplicates, rather than damage's
+    // grouped/deduplicated list. A shield/absorb benefits its bearer; a trap/prism harms them.
+    internal static List<SpellEffect> FindRemovableWards(CombatDuelSubCircle target, kHangingDisposition disposition)
+        => [.. target._hangingEffects.Where(w => {
+            bool beneficial = w.m_effectType == kSpellEffects.kAbsorbDamage
+                || w.m_effectType == kSpellEffects.kModifyIncomingDamage && w.m_effectParam < 0;
+            bool harmful = w.m_effectType == kSpellEffects.kModifyIncomingDamageType
+                || w.m_effectType == kSpellEffects.kModifyIncomingDamage && w.m_effectParam > 0;
+            return disposition switch {
+                kHangingDisposition.kBeneficial => beneficial,
+                kHangingDisposition.kHarmful => harmful,
+                _ => beneficial || harmful,
+            };
+        }).Reverse()];
 
     private static List<SpellEffect> GetBeneficialWards(CombatDuelSubCircle target) => [.. target._hangingEffects
             .Where(x => x.m_effectType is kSpellEffects.kModifyIncomingDamage && x.m_effectParam > 0

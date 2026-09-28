@@ -70,6 +70,13 @@ internal static class CombatActionResolver {
         var effectStack = new CombatEffectStack();
         var charmsAffectingThisSpell = new List<SpellEffect>();
         var allEffects = action.SpellTemplate.m_effects.ToList();
+        // A successful pre-2013 Reshuffle returns its own regular card when cast on the caster.
+        // Put it in the caster's discard pile before the target's pile is restored. The later cast
+        // consequence is idempotent; fizzles never enter this successful-action path.
+        if (ClassicRuntime.IsActive && !action.Spell.m_treasureCard
+            && allEffects.Any(effect => effect.m_effectType == kSpellEffects.kReshuffle)) {
+            action.SpellCaster.DiscardCard(action.Spell);
+        }
         combatAction.m_xPipCost = GetXPipCost(action.Spell, action.SpellCaster);
 
         // One combined roll per cast: the target's block is part of the crit chance

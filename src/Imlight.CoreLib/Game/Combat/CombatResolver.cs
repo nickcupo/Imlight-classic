@@ -337,12 +337,18 @@ public class CombatResolver(Duel duel, CombatDuelSubCircle[] actorSubCircles) {
         foreach (var effect in dotEffects) {
             var initialDamage = effect.m_paramPerRound;
             var wards = CombatWards.FindAppliedWards(caster, effect).ToList();
+            if (ClassicRuntime.IsActive) {
+                wards = CombatWards.GetWardsBySchool([.. wards], effect.m_sDamageType, out _);
+            }
             var damage = CombatWards.GetIncomingDamageFromWards(wards, initialDamage);
 
             // We don't need to calculate stats from gear because the initial application already did that.
 
             cinematicTime += HANGING_EFFECT_CONSUME_TIME * wards.Count;
             caster.DamageParticipant(damage);
+            if (ClassicRuntime.IsActive) {
+                foreach (var ward in wards.Where(w => w.m_paramPerRound <= 0)) caster._hangingEffects.Remove(ward);
+            }
             effect.m_numRounds--;
 
             // Remove the effect if it's out of rounds.
@@ -354,7 +360,7 @@ public class CombatResolver(Duel duel, CombatDuelSubCircle[] actorSubCircles) {
         foreach (var effect in hotEffects) {
             // Todo: are there wards that increase incoming healing?
             // We don't need to calculate stats from gear because the initial application already did that.
-            caster.HealParticipant(effect.m_paramPerRound);
+            CombatEffectApplicator.HealParticipantBounded(caster, effect.m_paramPerRound);
             effect.m_numRounds--;
 
             // Remove the effect if it's out of rounds.
