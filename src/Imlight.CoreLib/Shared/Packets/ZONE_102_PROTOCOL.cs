@@ -14,6 +14,25 @@
  *
  * You should have received a copy of the GNU Affero General Public License
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
+ *
+ * ========================================================================
+ * INTERNAL ZONE MESSAGES
+ * ========================================================================
+ *
+ * PURPOSE:
+ * Carries messages between server zone actors and services.
+ *
+ * USAGE EXAMPLE:
+ * Zone broadcasts route object state changes to entity actors.
+ *
+ * NOTE:
+ * These actor messages are not client wire messages.
+ *
+ * TODO:
+ *
+ * Created by: Jay with Codex (GPT-6)
+ * Version: KALI 1.0
+ * Last Updated: 09/28/2026
  */
 
 using System.Collections.Generic;
@@ -723,6 +742,13 @@ public class ZONE_102_PROTOCOL : IServerProtocol {
         public byte ServiceID { get; } = 102;
 
         public uint SpawnObjectID;
+    }
+
+    public sealed class MSG_MODIFYTRIGGEROBJECT : IServerMessage {
+        public byte MessageOrder { get; } = 72;
+        public byte ServiceID { get; } = 102;
+        public string ObjectName;
+        public string StateName;
     }
 
     public sealed class MSG_ENTERSTATE : IServerMessage {

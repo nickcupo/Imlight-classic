@@ -33,9 +33,9 @@
  * 
  * TODO:
  * 
- * Created by: Jooty
+ * Created by: Jooty with Codex (GPT-6)
  * Version: KALI 1.0
- * Last Updated: 09/26/2026
+ * Last Updated: 09/28/2026
  */
 
 using System.Collections.Generic;
@@ -322,6 +322,9 @@ internal sealed class RenderComponent(ZoneEntity entity) : ZoneEntityComponent(e
             Data = serializedData
         };
         player.Tell(newObjectMsg);
+        if (Entity.TriggerObjectState is { } triggerState) {
+            Entity.ChangeStateExclusiveSender(triggerState, player);
+        }
     }
 
     private void CreateObjectForAllPlayers() {

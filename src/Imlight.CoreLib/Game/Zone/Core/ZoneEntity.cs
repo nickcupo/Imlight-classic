@@ -36,9 +36,9 @@
  *
  * TODO:
  * 
- * Created by: Jooty
+ * Created by: Jooty with Codex (GPT-6)
  * Version: KALI 1.0
- * Last Updated: 09/26/2026
+ * Last Updated: 09/28/2026
  */
 
 using System;
@@ -53,6 +53,7 @@ using Imcodec.ObjectProperty.TypeCache;
 using Imcodec.Types;
 using Imlight.Common;
 using Imlight.CoreLib.Game.Zone.Components;
+using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.Shared.Behaviors;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;
@@ -80,6 +81,7 @@ public class ZoneEntity(
     public CoreObject ActiveGameObject { get; protected set; } = activeGameObject;
     public CoreTemplate Template { get; protected set; } = template;
     public CoreObjectInfo Info { get; protected set; } = info;
+    internal string TriggerObjectState { get; private set; }
     public Zone Zone { get; protected set; } = zone;
     public IActorRef SupervisorRef { get; protected set; } = Context.Parent;
 
@@ -237,6 +239,17 @@ public class ZoneEntity(
         };
 
         sender.Tell(stateMsg);
+    }
+
+    [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_MODIFYTRIGGEROBJECT))]
+    protected void ReceiveModifyTriggerObject(ZONE_102_PROTOCOL.MSG_MODIFYTRIGGEROBJECT message) {
+        if (!ClassicQuestEngine.IsActive || string.IsNullOrEmpty(message.ObjectName)
+            || string.IsNullOrEmpty(message.StateName)
+            || !string.Equals(Info?.m_zoneTag, message.ObjectName, StringComparison.Ordinal)) {
+            return;
+        }
+        TriggerObjectState = message.StateName;
+        ChangeState(message.StateName);
     }
 
     #region Message Handlers
