@@ -118,7 +118,7 @@ internal static class CombatActionResolver {
             // If that's the case, we need to choose an effect and push the index of the chosen effect
             // to the effect stack.
             chosenEffect = spellEffect switch {
-                RandomSpellEffect randomSpellEffect => ChooseRandomEffect(randomSpellEffect, effectStack),
+                RandomSpellEffect randomSpellEffect => ChooseRandomEffect(randomSpellEffect, effectStack, action.SpellCaster._duelActor.Rng),
                 VariableSpellEffect variableSpellEffect => ChooseVariableEffect(variableSpellEffect, combatAction.m_xPipCost, effectStack),
                 EffectListSpellEffect effectListSpellEffect => ChooseFromEffectList(effectListSpellEffect, combatAction.m_xPipCost, effectStack),
                 _ => spellEffect,
@@ -195,9 +195,9 @@ internal static class CombatActionResolver {
         return spellWorthCasting;
     }
 
-    private static SpellEffect ChooseRandomEffect(RandomSpellEffect randomSpellEffect, CombatEffectStack effectStack) {
+    private static SpellEffect ChooseRandomEffect(RandomSpellEffect randomSpellEffect, CombatEffectStack effectStack, Random rng) {
         var count = randomSpellEffect.m_effectList.Count;
-        var randomEffectIndex = Random.Shared.Next(0, count);
+        var randomEffectIndex = rng.Next(0, count);
         var chosenEffect = randomSpellEffect.m_effectList[randomEffectIndex];
 
         effectStack.PushRandomEffectChoice(randomEffectIndex);

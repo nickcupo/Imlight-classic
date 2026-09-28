@@ -596,6 +596,11 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
         SubCircles = CreateDuelActorSubCircles(_sigilTemplate);
         CombatResolver = new Combat.CombatResolver(Duel, SubCircles);
 
+        // Every roll of this duel comes from its seed, so the duel can be replayed.
+        DuelSeed = CombatRng.NewDuelSeed();
+        _rng = CombatRng.Stream(DuelSeed, CombatRng.DuelStream);
+        Logger.Information("[COMBAT-SEED] Duel {0} | seed {1}", Logger.Args(Duel.m_duelID.Full, DuelSeed));
+
         // Determine which team goes up first. Tutorial duels override this with the golems first.
         Duel.m_firstTeamToAct = (int) DetermineFirstTeam();
         _tutorialDirector.OnDuelCreated(Duel);
@@ -1227,8 +1232,19 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
         }
     }
 
-    private static CombatTeam DetermineFirstTeam()
-        => (CombatTeam) new Random().Next(0, 2);
+    private CombatTeam DetermineFirstTeam()
+        => (CombatTeam) Rng.Next(0, 2);
+
+    private Random _rng;
+
+    /// <summary>The seed every roll of the current duel derives from (logged as [COMBAT-SEED]).</summary>
+    internal ulong DuelSeed { get; private set; }
+
+    /// <summary>The duel's own rolls: first team, accuracy, random effects, criticals, power pips.</summary>
+    internal Random Rng => _rng ??= CombatRng.Stream(DuelSeed, CombatRng.DuelStream);
+
+    /// <summary>A separate stream of this duel's seed, for one slot's deck or AI.</summary>
+    internal Random StreamFor(int stream) => CombatRng.Stream(DuelSeed, stream);
 
     internal bool IsScriptedDuel()
         => _tutorialDirector.IsActive;

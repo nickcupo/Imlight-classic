@@ -566,7 +566,7 @@ public class CombatDuelSubCircle {
             }
         }
         allSpells.AddRange(temporarySpells);
-        _combatDeck = new CombatDeck(allSpells, vaultSpells, PLAYER_HAND_SIZE);
+        _combatDeck = new CombatDeck(allSpells, vaultSpells, PLAYER_HAND_SIZE, _duelActor?.StreamFor(CombatRng.DeckStream(SlotIndex)));
 
         CombatParticipant = new CombatParticipant {
             m_ownerID = ParticipantObject.m_globalID,
@@ -620,7 +620,7 @@ public class CombatDuelSubCircle {
             });
         }
 
-        _combatDeck = new CombatDeck(spellData, [], PLAYER_HAND_SIZE);
+        _combatDeck = new CombatDeck(spellData, [], PLAYER_HAND_SIZE, _duelActor?.StreamFor(CombatRng.DeckStream(SlotIndex)));
 
         ParticipantGameStats = creatureStats.GameStats;
         CombatParticipant = new CombatParticipant {
@@ -717,7 +717,7 @@ public class CombatDuelSubCircle {
     }
 
     private bool DeterminePowerPipGain(CombatParticipant participant)
-        => DeterminePowerPipGain(participant, _duelActor.Duel, Random.Shared.NextDouble());
+        => DeterminePowerPipGain(participant, _duelActor.Duel, _duelActor.Rng.NextDouble());
 
     // The production decision with an explicit roll makes probability boundaries testable without random tests.
     // Base chance already comes from the participant's school/level stats. Pip capacity, starting pips and

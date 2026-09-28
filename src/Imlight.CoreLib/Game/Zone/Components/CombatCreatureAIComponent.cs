@@ -70,7 +70,8 @@ internal sealed class CombatCreatureAIComponent(ZoneEntity entity) : ZoneEntityC
     private readonly int _provokeAggroIncrease   = ConfigurationManager.Settings["Combat.ProvokeAggroIncrease"].AsInt();
     private readonly int _pacifyAggroDecrease    = ConfigurationManager.Settings["Combat.PacifyAggroDecrease"].AsInt();
     private readonly Dictionary<int, int> _hateTable = [];
-    private readonly Random _random = new();
+    // Replaced by a stream of the duel's seed (CombatRng.AiStream) when the creature joins a duel.
+    private Random _random = new();
 
     private PathMovementComponent _pathMovementComponent;
     private NpcComponent _npcComponent;
@@ -159,6 +160,7 @@ internal sealed class CombatCreatureAIComponent(ZoneEntity entity) : ZoneEntityC
         _isInDuel = true;
         _currentDuelComponent = message.Duel;
         _currentSubCircle = message.SubCircle;
+        _random = message.Duel.StreamFor(CombatRng.AiStream(message.SubCircle.SlotIndex));
         _pathMovementComponent?.Stop(); // null for a summoned minion, which has no world movement
         InitializeHateTable();
     }

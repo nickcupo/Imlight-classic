@@ -498,7 +498,7 @@ public class CombatResolver(Duel duel, CombatDuelSubCircle[] actorSubCircles) {
             ? ConsumeAccuracyCharms(spellAccuracy, caster, spell.m_magicSchoolID)
             : ConsumeHangingAccuracyEffects(spellAccuracy, caster, spell.m_magicSchoolID);
 
-        var hitChance = Random.Shared.Next(0, 100);
+        var hitChance = caster._duelActor.Rng.Next(0, 100);
         if (ClassicRuntime.IsActive) {
             Logger.Information("[CLASSIC-ACC] template {0}: card {1}%, gear +{2}/-{3}, final {4}%, roll {5} -> {6}",
                 Logger.Args(spell.m_templateID, (int) spell.m_accuracy, totalIncrease, totalDecrease, spellAccuracy,

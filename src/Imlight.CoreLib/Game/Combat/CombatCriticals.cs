@@ -96,7 +96,7 @@ internal static class CombatCriticals {
 
         chance = Math.Clamp(chance, 0f, MAX_CHANCE);
 
-        return Rolls(chance);
+        return Rolls(chance, caster._duelActor.Rng);
     }
 
     internal static float GetCritMultiplier(CombatDuelSubCircle caster, CombatDuelSubCircle target, string school, bool isHeal) {
@@ -169,12 +169,12 @@ internal static class CombatCriticals {
         return Math.Clamp(divisor, RATING_K_MIN, RATING_K_MAX);
     }
 
-    private static bool Rolls(float chance) {
+    private static bool Rolls(float chance, Random rng) {
         if (chance <= 0f) {
             return false;
         }
 
-        return Random.Shared.Next(0, 10000) < (int) (chance * 10000f);
+        return rng.Next(0, 10000) < (int) (chance * 10000f);
     }
 
 }

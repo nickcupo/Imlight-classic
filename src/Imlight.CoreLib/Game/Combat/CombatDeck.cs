@@ -49,6 +49,9 @@ namespace Imlight.CoreLib.Game.Combat;
 /// </summary>
 internal class CombatDeck {
 
+    // Card draws: a stream of the duel's seed (CombatRng.DeckStream).
+    private readonly Random _rng;
+
     internal List<Spell> LastGivenHand { get; private set; }
     internal int TotalCardCount => (int) _spellData.Sum(s => s.Quantity);
     internal int RemainingCardCount => (int) _usedUpSpellData.Sum(s => s.Quantity);
@@ -84,7 +87,8 @@ internal class CombatDeck {
     }
 
     // ctor
-    internal CombatDeck(List<CombatDeckSpellData> spellDatas, List<CombatDeckSpellData> treasureVault, byte handSize) {
+    internal CombatDeck(List<CombatDeckSpellData> spellDatas, List<CombatDeckSpellData> treasureVault, byte handSize, Random rng = null) {
+        this._rng = rng ?? new Random();
         this._spellData = spellDatas;
         this._treasureVault = treasureVault ?? [];
         this._handSize = handSize;
@@ -151,7 +155,7 @@ internal class CombatDeck {
                 break; // No more spells available.
             }
 
-            var randomIndex = Random.Shared.Next(0, _usedUpSpellData.Count);
+            var randomIndex = _rng.Next(0, _usedUpSpellData.Count);
             var spellData = _usedUpSpellData[randomIndex];
             var spellTemplateId = spellData.TemplateId;
 
@@ -242,7 +246,7 @@ internal class CombatDeck {
             return null;
         }
 
-        var randomIndex = Random.Shared.Next(0, _treasureVaultUsed.Count);
+        var randomIndex = _rng.Next(0, _treasureVaultUsed.Count);
         var vaultData = _treasureVaultUsed[randomIndex];
 
         var spell = SpellFactory.GetSpell(vaultData.TemplateId);
