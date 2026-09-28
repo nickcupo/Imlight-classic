@@ -81,6 +81,27 @@ public sealed class ClassicUtilityCombatTests : IDisposable {
     }
 
     [Fact]
+    public void EachTargetOfAnAbsorbShieldHasItsOwnPoolAndTheCardIsUnchanged() {
+        var a = Circle(); var b = Circle();
+        var absorb = new SpellEffect { m_effectType = kSpellEffects.kAbsorbDamage, m_effectParam = 100, m_sDamageType = "Fire" };
+        CombatEffectApplicator.ApplyEffect(absorb, [], a, [a, b]);
+
+        Assert.NotSame(Assert.Single(a._hangingEffects), Assert.Single(b._hangingEffects));
+        Assert.NotSame(absorb, a._hangingEffects[0]);
+        a._hangingEffects[0].m_paramPerRound = 0;
+        Assert.Equal(100, b._hangingEffects[0].m_paramPerRound);
+        Assert.Equal(0, absorb.m_paramPerRound);
+    }
+
+    [Fact]
+    public void RemoveAllCharmsDoesNotRewriteTheCard() {
+        var target = Circle();
+        var removeAll = new SpellEffect { m_effectType = kSpellEffects.kRemoveCharm, m_effectParam = -1 };
+        Apply(removeAll, target);
+        Assert.Equal(-1, removeAll.m_effectParam);
+    }
+
+    [Fact]
     public void BeforeJuly2009AStunLeavesNoStunBlock() {
         ClassicRuntime.ResetForTests();
         ClassicRuntime.Initialize(ClassicDataFixture.RealRules("arc1-2009h1"));
@@ -136,7 +157,9 @@ public sealed class ClassicUtilityCombatTests : IDisposable {
         Assert.Equal(school, finalSchool);
         Damage(target, school, 100);
         Assert.Equal(900, target.ParticipantGameStats.m_currentHitpoints);
-        Assert.Same(prism, Assert.Single(target._hangingEffects));
+        var hanging = Assert.Single(target._hangingEffects);
+        Assert.Equal(prism.m_effectType, hanging.m_effectType);
+        Assert.Equal(prism.m_spellTemplateID, hanging.m_spellTemplateID);
         Damage(target, "Fire", 100);
         Assert.Empty(target._hangingEffects);
     }

@@ -41,6 +41,7 @@ using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Classic;
 using Imlight.Common;
 using System;
+using System.Reflection;
 using System.Linq;
 
 namespace Imlight.CoreLib.Game.Combat;
@@ -359,7 +360,7 @@ internal static class CombatEffectApplicator {
         var cinematicTime = 0.0f;
 
         // -1 is a special value that means remove all charms.
-        var charmRemoveCount = effect.m_effectParam == -1 ? effect.m_effectParam = int.MaxValue : effect.m_effectParam;
+        var charmRemoveCount = effect.m_effectParam == -1 ? int.MaxValue : effect.m_effectParam;
 
         foreach (var target in targets) {
             var hangingEffects = target._hangingEffects.ToArray();
@@ -382,7 +383,7 @@ internal static class CombatEffectApplicator {
         var cinematicTime = 0.0f;
 
         // -1 is a special value that means remove all wards.
-        var wardRemoveCount = effect.m_effectParam == -1 ? effect.m_effectParam = int.MaxValue : effect.m_effectParam;
+        var wardRemoveCount = effect.m_effectParam == -1 ? int.MaxValue : effect.m_effectParam;
 
         foreach (var target in targets) {
             // Remove all wards except for stun blocks.
@@ -406,7 +407,7 @@ internal static class CombatEffectApplicator {
         var cinematicTime = 0.0f;
 
         // -1 is a special value that means remove all charms.
-        var charmRemoveCount = effect.m_effectParam == -1 ? effect.m_effectParam = int.MaxValue : effect.m_effectParam;
+        var charmRemoveCount = effect.m_effectParam == -1 ? int.MaxValue : effect.m_effectParam;
 
         // This is the same as the remove charm function, but we're moving the charms from the target to the caster.
 
@@ -432,7 +433,7 @@ internal static class CombatEffectApplicator {
         var cinematicTime = 0.0f;
 
         // -1 is a special value that means remove all wards.
-        var wardRemoveCount = effect.m_effectParam == -1 ? effect.m_effectParam = int.MaxValue : effect.m_effectParam;
+        var wardRemoveCount = effect.m_effectParam == -1 ? int.MaxValue : effect.m_effectParam;
 
         // This is the same as the remove ward function, but we're moving the wards from the target to the caster.
 
@@ -455,14 +456,25 @@ internal static class CombatEffectApplicator {
 
     private static void ApplyHangingEffect(SpellEffect effect, CombatDuelSubCircle[] targets) {
         foreach (var target in targets) {
+            // Each target gets its own copy: the effect belongs to the spell template, which every cast of the
+            // card in every duel shares. An absorb shield's remaining pool lives on the copy.
+            var hanging = CopyOf(effect);
+
             // If this is an absorb ward, set the initial value.
-            if (effect.m_effectType == kSpellEffects.kAbsorbDamage) {
-                effect.m_paramPerRound = effect.m_effectParam;
+            if (hanging.m_effectType == kSpellEffects.kAbsorbDamage) {
+                hanging.m_paramPerRound = hanging.m_effectParam;
             }
 
-            target._hangingEffects.Add(effect);
+            target._hangingEffects.Add(hanging);
         }
     }
+
+    private static readonly Func<object, object> s_memberwiseClone = (Func<object, object>) Delegate.CreateDelegate(
+        typeof(Func<object, object>),
+        typeof(object).GetMethod("MemberwiseClone", BindingFlags.Instance | BindingFlags.NonPublic)!);
+
+    /// <summary>A shallow copy of <paramref name="effect"/> that keeps its runtime type.</summary>
+    internal static SpellEffect CopyOf(SpellEffect effect) => (SpellEffect) s_memberwiseClone(effect);
 
     // Deals a percentage of the target's maximum health; m_effectParam is the percent.
     private static float ApplyMaxHealthDamageEffect(SpellEffect effect, CombatDuelSubCircle[] targets) {
