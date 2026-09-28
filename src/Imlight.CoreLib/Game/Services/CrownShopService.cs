@@ -253,6 +253,12 @@ internal class CrownShopService(SessionActor sessionActor) : MessageService(sess
         var offered = ClassicProgression.CrownShop?.Offered(ClassicRuntime.Rules.IsFeatureEnabled)
             ?? FrozenDictionary<ulong, CrownShopEntry>.Empty;
 
+        return (offered, SerializeCatalog(offered.Values));
+    }
+
+    // The client's CrownShopData for these items.
+    internal static ByteString SerializeCatalog(IEnumerable<CrownShopEntry> offered) {
+
         static int CategoryOf(string category) => category switch {
             CrownShopCategories.PermanentMounts => PermanentMountsCategory,
             CrownShopCategories.RentalMounts => RentalMountsCategory,
@@ -261,7 +267,7 @@ internal class CrownShopService(SessionActor sessionActor) : MessageService(sess
         };
 
         var position = 0;
-        var items = offered.Values
+        var items = offered
             .OrderBy(item => CategoryOf(item.Category)).ThenBy(item => item.Name, StringComparer.Ordinal)
             .Select(item => {
                 position++;
@@ -331,7 +337,7 @@ internal class CrownShopService(SessionActor sessionActor) : MessageService(sess
 
         Logger.Information("Crown Shop: {0} items offered.", Logger.Args(items.Count));
 
-        return (offered, serialized);
+        return serialized;
     }
 
 }

@@ -5,7 +5,18 @@ using Xunit;
 
 namespace Imlight.Classic.Tests;
 
+[Collection(nameof(ClassicRuntimeCollection))]
 public sealed class CrownShopCatalogTests {
+
+    public CrownShopCatalogTests() {
+        var config = Path.GetTempFileName();
+        try {
+            File.WriteAllText(config, $"[Logging]\nLogLevel=FATAL\nLogPath={Path.Combine(Path.GetTempPath(), "imlight-crownshop-tests.log")}\n");
+            Imlight.Common.ConfigurationManager.Initialize(config);
+        } finally {
+            File.Delete(config);
+        }
+    }
 
     private static CrownShopCatalog Real() => CrownShopCatalogLoader.Load(Path.Combine(ClassicDataFixture.Root, "rules", "crown-shop-2009.yaml"));
 
@@ -24,6 +35,20 @@ public sealed class CrownShopCatalogTests {
     [Fact]
     public void Arc1HasNoMountsOrHenchmen()
         => Assert.Empty(Real().Offered(ClassicDataFixture.RealRules("arc1-2009h1").IsFeatureEnabled));
+
+    [Fact]
+    public void TheCatalogSerializesForTheClientAndReadsBack() {
+        var offered = Real().Offered(ClassicDataFixture.RealRules("late-2009").IsFeatureEnabled);
+        var data = Imlight.CoreLib.Game.Services.CrownShopService.SerializeCatalog(offered.Values);
+        Assert.True(data.Length > 0);
+
+        var serializer = new Imcodec.ObjectProperty.ObjectSerializer(Versionable: false,
+            Behaviors: Imcodec.ObjectProperty.SerializerFlags.SerializeFlags | Imcodec.ObjectProperty.SerializerFlags.Compress);
+        Assert.True(serializer.Deserialize<Imcodec.ObjectProperty.TypeCache.CrownShopData>(data,
+            Imcodec.ObjectProperty.PropertyFlags.Prop_Save | Imcodec.ObjectProperty.PropertyFlags.Prop_Public, out var shop));
+        Assert.Equal(offered.Count, shop.m_items.Count);
+        Assert.Contains(shop.m_items, item => (ulong) item.m_itemTemplateId == 191237 && item.m_crownsCost == 5000);
+    }
 
     [Fact]
     public void TheCanonicalProfileNamesTheCrownShop()
