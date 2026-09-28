@@ -12,6 +12,7 @@ using Imlight.CoreLib.Game.Combat;
 using Imlight.CoreLib.Game.Spells;
 using Imlight.CoreLib.Shared.Behaviors;
 using Xunit;
+using CombatResolver = Imlight.CoreLib.Game.Combat.CombatResolver;
 
 namespace Imlight.Classic.Tests;
 
@@ -136,6 +137,142 @@ public sealed class ClassicUtilityCombatTests : IDisposable {
         Damage(target, "Fire", 100);
         Assert.Equal(950, target.ParticipantGameStats.m_currentHitpoints);
         Assert.Empty(target._hangingEffects);
+    }
+
+    [Theory]
+    [InlineData(true, kSpellEffects.kRemoveWard)]
+    [InlineData(true, kSpellEffects.kStealWard)]
+    [InlineData(false, kSpellEffects.kRemoveWard)]
+    [InlineData(false, kSpellEffects.kStealWard)]
+    public void UtilityDispositionSelectsShieldInClassicButPreservesStockTrapSelection(bool classic, kSpellEffects kind) {
+        Profile(classic);
+        var target = Circle(); var caster = Circle();
+        var trap = Ward(30, "Fire", 201); var shield = Ward(-50, "Fire", 202);
+        target._hangingEffects.AddRange([trap, shield]);
+        CombatEffectApplicator.ApplyEffect(new SpellEffect { m_effectType = kind, m_effectParam = 1,
+            m_disposition = kHangingDisposition.kBeneficial }, [], caster, [target]);
+        Assert.Same(classic ? trap : shield, Assert.Single(target._hangingEffects));
+        if (kind == kSpellEffects.kStealWard) Assert.Same(classic ? shield : trap, Assert.Single(caster._hangingEffects));
+    }
+
+    [Theory]
+    [InlineData(kHangingDisposition.kBeneficial, 2)]
+    [InlineData(kHangingDisposition.kHarmful, 2)]
+    [InlineData(kHangingDisposition.kBoth, 4)]
+    public void RemoveAllHonorsDispositionAndKeepsStunBlocks(kHangingDisposition disposition, int removed) {
+        var target = Circle();
+        var shield = Ward(-50, "Fire", 201); var absorb = new SpellEffect { m_effectType = kSpellEffects.kAbsorbDamage };
+        var trap = Ward(30, "Fire", 202); var prism = Prism(); var block = Block();
+        target._hangingEffects.AddRange([shield, absorb, trap, prism, block]);
+        Apply(new SpellEffect { m_effectType = kSpellEffects.kRemoveWard, m_effectParam = -1, m_disposition = disposition }, target);
+        Assert.Equal(5 - removed, target._hangingEffects.Count);
+        Assert.Contains(block, target._hangingEffects);
+        if (disposition == kHangingDisposition.kBeneficial) Assert.Contains(trap, target._hangingEffects);
+        if (disposition == kHangingDisposition.kHarmful) Assert.Contains(shield, target._hangingEffects);
+    }
+
+    [Fact]
+    public void OneWardMeansOneEvenForIdenticalDuplicatesAndSelectionIsNewestFirst() {
+        var target = Circle();
+        target._hangingEffects.AddRange([Ward(-50, "Fire", 201), Ward(-50, "Fire", 201)]);
+        Apply(new SpellEffect { m_effectType = kSpellEffects.kRemoveWard, m_effectParam = 1, m_disposition = kHangingDisposition.kBeneficial }, target);
+        Assert.Single(target._hangingEffects);
+        var latest = Ward(-80, "Ice", 202); target._hangingEffects.Add(latest);
+        Assert.Same(latest, CombatWards.FindRemovableWards(target, kHangingDisposition.kBeneficial)[0]);
+        Assert.All(CombatWards.FindAppliedWards(target, new SpellEffect(), kHangingDisposition.kBeneficial), w => Assert.True(w.m_effectParam < 0));
+    }
+
+    [Theory]
+    [InlineData(true, "Ice", -50, 800)]
+    [InlineData(false, "Ice", -50, 900)]
+    [InlineData(true, "Fire", 30, 770)]
+    [InlineData(false, "Fire", 30, 740)]
+    public void ProductionDotTickFiltersAndConsumesOnlyInClassic(bool classic, string school, int modifier, int expected) {
+        Profile(classic);
+        var target = Circle(); var ward = Ward(modifier, school, 201);
+        target._hangingEffects.AddRange([ward, Dot(100, 2)]);
+        Tick(target); Tick(target);
+        Assert.Equal(expected, target.ParticipantGameStats.m_currentHitpoints);
+        Assert.Equal(!classic || school != "Fire", target._hangingEffects.Contains(ward));
+    }
+
+    [Fact]
+    public void DotPartialAbsorbSurvivesUntilExhaustedAndMatchingPrismIsConsumed() {
+        var target = Circle();
+        var absorb = new SpellEffect { m_effectType = kSpellEffects.kAbsorbDamage, m_sDamageType = "All",
+            m_effectParam = 150, m_paramPerRound = 150, m_spellTemplateID = 202 };
+        target._hangingEffects.AddRange([absorb, Prism(), Dot(100, 2)]);
+        Tick(target);
+        Assert.Equal(1000, target.ParticipantGameStats.m_currentHitpoints);
+        Assert.Equal(50, absorb.m_paramPerRound);
+        Assert.DoesNotContain(target._hangingEffects, w => w.m_effectType == kSpellEffects.kModifyIncomingDamageType);
+        Tick(target);
+        Assert.Equal(950, target.ParticipantGameStats.m_currentHitpoints);
+        Assert.Empty(target._hangingEffects);
+    }
+
+    [Theory]
+    [InlineData(true, -100, 0)]
+    [InlineData(false, -100, -90)]
+    [InlineData(true, 100, 50)]
+    public void ProductionHotUsesClassicHealingBounds(bool classic, int heal, int expected) {
+        Profile(classic); var target = Circle();
+        target.ParticipantGameStats.m_currentHitpoints = 10; target.ParticipantGameStats.m_baseHitpoints = 50;
+        target._hangingEffects.Add(new SpellEffect { m_effectType = kSpellEffects.kHealOverTime, m_paramPerRound = heal, m_numRounds = 1 });
+        Tick(target); Assert.Equal(expected, target.ParticipantGameStats.m_currentHitpoints);
+    }
+
+    [Fact]
+    public void DirectCombatHealingCannotOverflowHealthAddition() {
+        var target = Circle(); target.ParticipantGameStats.m_currentHitpoints = int.MaxValue - 10;
+        target.ParticipantGameStats.m_baseHitpoints = int.MaxValue;
+        Apply(new SpellEffect { m_effectType = kSpellEffects.kHeal, m_effectParam = 100 }, target);
+        Assert.Equal(int.MaxValue, target.ParticipantGameStats.m_currentHitpoints);
+        target.ParticipantGameStats.m_currentHitpoints = 10;
+        Apply(new SpellEffect { m_effectType = kSpellEffects.kHeal, m_effectParam = -100 }, target);
+        Assert.Equal(0, target.ParticipantGameStats.m_currentHitpoints);
+    }
+
+    [Fact]
+    public void DotConsumesOnlyOneOfIdenticalDuplicateShieldsPerTick() {
+        var target = Circle(); var shield = Ward(-50, "Fire", 201);
+        target._hangingEffects.AddRange([shield, shield with { }, Dot(100, 2)]);
+        Tick(target);
+        Assert.Equal(950, target.ParticipantGameStats.m_currentHitpoints);
+        Assert.Single(target._hangingEffects, w => w.m_effectType == kSpellEffects.kModifyIncomingDamage);
+        Tick(target);
+        Assert.Equal(900, target.ParticipantGameStats.m_currentHitpoints);
+        Assert.Empty(target._hangingEffects);
+    }
+
+    [Fact]
+    public void DrainAndHotCannotOverflowHealthAddition() {
+        var caster = Circle(); var victim = Circle();
+        caster.ParticipantGameStats.m_baseHitpoints = int.MaxValue;
+        caster.ParticipantGameStats.m_currentHitpoints = int.MaxValue - 10;
+        CombatEffectApplicator.ApplyEffect(new SpellEffect { m_effectType = kSpellEffects.kStealHealth,
+            m_effectParam = 100, m_sDamageType = "Fire", m_healModifier = 1 }, [], caster, [victim]);
+        Assert.Equal(int.MaxValue, caster.ParticipantGameStats.m_currentHitpoints);
+        Assert.Equal(900, victim.ParticipantGameStats.m_currentHitpoints);
+        caster.ParticipantGameStats.m_currentHitpoints = int.MaxValue - 10;
+        caster._hangingEffects.Add(new SpellEffect { m_effectType = kSpellEffects.kHealOverTime, m_paramPerRound = 100, m_numRounds = 1 });
+        Tick(caster);
+        Assert.Equal(int.MaxValue, caster.ParticipantGameStats.m_currentHitpoints);
+    }
+
+    private static void Profile(bool classic) {
+        ClassicRuntime.ResetForTests();
+        ClassicRuntime.Initialize(ClassicDataFixture.RealRules(classic ? "late-2009" : "dev-unrestricted"));
+    }
+    private static SpellEffect Ward(int amount, string school, uint id) => new() {
+        m_effectType = kSpellEffects.kModifyIncomingDamage, m_effectParam = amount, m_sDamageType = school, m_spellTemplateID = id,
+    };
+    private static SpellEffect Dot(int amount, int rounds) => new() {
+        m_effectType = kSpellEffects.kDamageOverTime, m_paramPerRound = amount, m_numRounds = rounds, m_sDamageType = "Fire",
+    };
+    private static void Tick(CombatDuelSubCircle target) {
+        var resolver = new CombatResolver(target._duelActor.Duel, [target]);
+        typeof(CombatResolver).GetMethod("InvokeOverTimeEffects", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(resolver, [target]);
     }
 
     private static SpellEffect Block() => new() {

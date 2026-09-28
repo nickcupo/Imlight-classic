@@ -386,13 +386,17 @@ internal static class CombatEffectApplicator {
 
         foreach (var target in targets) {
             // Remove all wards except for stun blocks.
-            var wards = CombatWards.FindAppliedWards(target, effect)
-                                   .Where(x => x.m_effectType != kSpellEffects.kStunBlock)
-                                   .Take(wardRemoveCount);
+            var wards = (ClassicRuntime.IsActive
+                    ? CombatWards.FindRemovableWards(target, effect.m_disposition)
+                    : CombatWards.FindAppliedWards(target, effect))
+                .Where(x => x.m_effectType != kSpellEffects.kStunBlock).Take(wardRemoveCount).ToList();
 
             cinematicTime += wards.Count() * HANGING_EFFECT_CONSUME_TIME;
 
-            target._hangingEffects.RemoveAll(x => wards.Contains(x));
+            if (ClassicRuntime.IsActive) {
+                foreach (var ward in wards) target._hangingEffects.Remove(ward);
+            }
+            else target._hangingEffects.RemoveAll(x => wards.Contains(x));
         }
 
         return cinematicTime;
@@ -433,12 +437,16 @@ internal static class CombatEffectApplicator {
         // This is the same as the remove ward function, but we're moving the wards from the target to the caster.
 
         foreach (var target in targets) {
-            var wards = CombatWards.FindAppliedWards(target, effect)
-                                   .Take(wardRemoveCount);
+            var wards = (ClassicRuntime.IsActive
+                    ? CombatWards.FindRemovableWards(target, effect.m_disposition)
+                    : CombatWards.FindAppliedWards(target, effect)).Take(wardRemoveCount).ToList();
 
             cinematicTime += wards.Count() * HANGING_EFFECT_CONSUME_TIME;
 
-            target._hangingEffects.RemoveAll(x => wards.Contains(x));
+            if (ClassicRuntime.IsActive) {
+                foreach (var ward in wards) target._hangingEffects.Remove(ward);
+            }
+            else target._hangingEffects.RemoveAll(x => wards.Contains(x));
             caster._hangingEffects.AddRange(wards);
         }
 
@@ -588,9 +596,22 @@ internal static class CombatEffectApplicator {
     private static int DoHealToTarget(CombatDuelSubCircle target, int heal) {
         var percentIncomingHealIncrease = GetPercentIncomingHealIncrease(target);
         heal = (int) Math.Ceiling(heal * (1 + percentIncomingHealIncrease));
-        target.HealParticipant(heal);
+        HealParticipantBounded(target, heal);
 
         return heal;
+    }
+
+    // All combat healing (direct, drain and HoT ticks) reaches this profile-gated boundary.
+    internal static void HealParticipantBounded(CombatDuelSubCircle target, int heal) {
+        if (!ClassicRuntime.IsActive) {
+            target.HealParticipant(heal);
+            return;
+        }
+        int current = target.ParticipantGameStats.m_currentHitpoints;
+        int max = target.ParticipantGameStats.m_baseHitpoints;
+        long next = Math.Clamp((long) current + heal, 0L, max > 0 ? max : int.MaxValue);
+        // Valid participant health is nonnegative, so this delta fits and HealParticipant's sum cannot overflow.
+        target.HealParticipant((int) (next - current));
     }
 
     private static float GetFlatDamageIncrease(CombatDuelSubCircle caster, string damageType) {
