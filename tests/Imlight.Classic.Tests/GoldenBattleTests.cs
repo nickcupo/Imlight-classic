@@ -65,6 +65,61 @@ public sealed class GoldenBattleTests : IDisposable {
     }
 
     [Fact]
+    public void ABeguiledMonsterAttacksItsOwnTeamOnceThenActsNormally() {
+        var duel = CombatRegressionTests.MakeDuel();
+        CombatRegressionTests.SetProperty(duel, "Duel", new Duel { m_duelModifier = new DuelModifier { m_battlefieldEffects = [] } });
+        var wizard = Occupy(duel, 4, true);
+        var beguiled = Occupy(duel, 0, false);
+        var teammate = Occupy(duel, 1, false);
+        var template = new SpellTemplate {
+            m_name = "Golden Bolt", m_accuracy = 100, m_spellRank = new SpellRank { m_spellRank = 0 }, m_effects = [Damage(100)],
+        };
+        Cache[CardBase] = template;
+        var spell = new Spell { m_templateID = CardBase, m_accuracy = 100, m_magicSchoolID = StringHash.Compute("Fire"), m_pipCost = new SpellRank { m_spellRank = 0 } };
+        foreach (var circle in new[] { wizard, beguiled, teammate }) {
+            circle._combatDeck = new CombatDeck([new CombatDeckSpellData { TemplateId = CardBase, Quantity = 5 }], [], 7);
+        }
+
+        CombatEffectApplicator.ApplyEffect(new SpellEffect { m_effectType = kSpellEffects.kMindControl, m_numRounds = 1 }, [], wizard, [beguiled]);
+        Assert.Equal(CombatTeam.Player, beguiled.ActingTeam);
+
+        // Through the resolver: the monster planned a card at the wizard; beguiled, it goes at its teammate. A 0% card
+        // fizzles, and the fizzle names the target (a cast would also need the client's cinematics).
+        var fizzling = new Spell { m_templateID = CardBase, m_accuracy = 0, m_magicSchoolID = spell.m_magicSchoolID, m_pipCost = spell.m_pipCost };
+        var actions = Resolve(duel, new QueuedCombatAction { SpellCaster = beguiled, SelectedTarget = wizard, Spell = fizzling, SpellTemplate = template });
+        Assert.Equal(new[] { teammate.SlotIndex }, Assert.Single(actions).m_targetSubcircleList);
+        Assert.Equal(0, beguiled.BeguiledActions);
+        Assert.Equal(CombatTeam.Monster, beguiled.ActingTeam);
+
+        // The effect side: while beguiled, its all-enemy and single-target damage lands on its own team.
+        beguiled.BeguiledActions = 1;
+        var bolt = new QueuedCombatAction { SpellCaster = beguiled, SelectedTarget = teammate, Spell = spell, SpellTemplate = template };
+        var combatAction = new CombatAction { m_spellCaster = beguiled.SlotIndex, m_targetSubcircleList = [] };
+        var time = 0f;
+        CombatActionResolver.ProcessedQueuedCombatAction(bolt, ref combatAction, ref time);
+        Assert.Equal(400, teammate.ParticipantGameStats.m_currentHitpoints);
+        Assert.Equal(500, wizard.ParticipantGameStats.m_currentHitpoints);
+        var wave = new SpellTemplate { m_name = "Golden Wave", m_effects = [new SpellEffect {
+            m_effectType = kSpellEffects.kDamage, m_effectParam = 50, m_sDamageType = "Fire", m_effectTarget = kEffectTarget.kEnemyTeamAllAtOnce }] };
+        CombatActionResolver.ProcessedQueuedCombatAction(new QueuedCombatAction { SpellCaster = beguiled, SelectedTarget = teammate, Spell = spell, SpellTemplate = wave },
+            ref combatAction, ref time);
+        Assert.Equal(350, teammate.ParticipantGameStats.m_currentHitpoints);
+        Assert.Equal(450, beguiled.ParticipantGameStats.m_currentHitpoints);
+        Assert.Equal(500, wizard.ParticipantGameStats.m_currentHitpoints);
+    }
+
+    private static List<CombatAction> Resolve(CombatDuelComponent duel, QueuedCombatAction action) {
+        var resolver = new CombatResolver(duel.Duel, duel.SubCircles);
+        resolver.Reset();
+        var queue = (List<QueuedCombatAction>) typeof(CombatResolver)
+            .GetField("_queuedCombatActions", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(resolver)!;
+        queue.Add(action);
+        var list = new CombatActionListObj { m_actionList = [] };
+        typeof(CombatResolver).GetMethod("ProcessQueuedActions", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(resolver, [list]);
+        return list.m_actionList;
+    }
+
+    [Fact]
     public void SeededStreamsAreIndependentAndStable() {
         var a = CombatRng.Stream(42, CombatRng.DuelStream).Next();
         var b = CombatRng.Stream(42, CombatRng.DeckStream(0)).Next();

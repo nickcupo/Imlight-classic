@@ -240,59 +240,97 @@ public class CombatResolver(Duel duel, CombatDuelSubCircle[] actorSubCircles) {
             // This is because the overtime effects can kill a participant, and we want to see the animation.
             cinematicTime += InvokeOverTimeEffects(action.SpellCaster);
 
-            // A stun is used up at the stunned wizard's next action: this round's if it landed before they
-            // acted (owner ruling 2026-09-28: it applies immediately), else next round's, when a stunned
-            // wizard can only pass. This is the only place a stun is used up.
-            if (action.SpellCaster.CombatParticipant.m_stunned > 0) {
-                action.SpellCaster.CombatParticipant.m_stunned--;
+            // Beguile: a combatant beguiled before this action takes it for the other side (like a stun, it applies
+            // at the next action, this round's if the combatant has not acted yet), and the action uses it up.
+            var beguiled = action.SpellCaster.BeguiledActions > 0;
+            try {
+                if (beguiled && action.Spell is not null) {
+                    action.SelectedTarget = BeguiledTarget(action);
+                }
 
-                cinematicTime += HandlePassAction(action, combatActionList);
+                // A stun is used up at the stunned wizard's next action: this round's if it landed before they
+                // acted (owner ruling 2026-09-28: it applies immediately), else next round's, when a stunned
+                // wizard can only pass. This is the only place a stun is used up.
+                if (action.SpellCaster.CombatParticipant.m_stunned > 0) {
+                    action.SpellCaster.CombatParticipant.m_stunned--;
 
-                Logger.Debug("Duel {0} | Slot {1} | Caster is stunned. Passing.",
-                    Logger.Args(_duel.m_duelID.Full, action.SpellCaster.SlotIndex));
+                    cinematicTime += HandlePassAction(action, combatActionList);
 
-                continue;
+                    Logger.Debug("Duel {0} | Slot {1} | Caster is stunned. Passing.",
+                        Logger.Args(_duel.m_duelID.Full, action.SpellCaster.SlotIndex));
+
+                    continue;
+                }
+
+                // A null spell indicates the caster is passing their turn.
+                if (action.Spell is null || action.SelectedTarget is null) {
+                    Logger.Debug("Duel {0} | Slot {1} | Caster is passing their turn.",
+                        Logger.Args(_duel.m_duelID.Full, action.SpellCaster.SlotIndex));
+
+                    cinematicTime += HandlePassAction(action, combatActionList);
+
+                    continue;
+                }
+
+                // If our target is gone, pass the turn.
+                if (!action.SelectedTarget.IsAlive || !action.SelectedTarget.AddedToDuel) {
+                    cinematicTime += HandlePassAction(action, combatActionList);
+
+                    Logger.Debug("Duel {0} | Slot {1} | Spell cannot occur because target is dead.",
+                        Logger.Args(_duel.m_duelID.Full, action.SpellCaster.SlotIndex));
+
+                    continue;
+                }
+
+                // Determine if this spell hits or fizzles.
+                var spellHits = SpellHits(action.SpellCaster, action.Spell);
+                if (!spellHits) {
+                    cinematicTime += HandleFizzleAction(action, combatActionList);
+
+                    // Increase pips used counter by 1, even if the spell fizzled.
+                    // CLASSIC: under the profile's mob reward rules a fizzled card counts as the rules say.
+                    action.SpellCaster._usedPipsForExperienceGain += ClassicProgression.MobRewards is { } rewards
+                        ? rewards.CombatXp.PipsForFizzle(action.Spell.m_pipCost.m_spellRank, CombatActionResolver.IsXPipSpell(action.Spell))
+                        : 1;
+                }
+                else {
+                    // Record when this caster's cinematic begins so a summoned minion appears with its cast.
+                    action.SpellCaster._duelActor.CurrentActionCinematicOffsetSeconds = cinematicTime;
+                    cinematicTime += HandleSuccessfulAction(action, combatActionList);
+                }
             }
-
-            // A null spell indicates the caster is passing their turn.
-            if (action.Spell is null || action.SelectedTarget is null) {
-                Logger.Debug("Duel {0} | Slot {1} | Caster is passing their turn.",
-                    Logger.Args(_duel.m_duelID.Full, action.SpellCaster.SlotIndex));
-
-                cinematicTime += HandlePassAction(action, combatActionList);
-
-                continue;
-            }
-
-            // If our target is gone, pass the turn.
-            if (!action.SelectedTarget.IsAlive || !action.SelectedTarget.AddedToDuel) {
-                cinematicTime += HandlePassAction(action, combatActionList);
-
-                Logger.Debug("Duel {0} | Slot {1} | Spell cannot occur because target is dead.",
-                    Logger.Args(_duel.m_duelID.Full, action.SpellCaster.SlotIndex));
-
-                continue;
-            }
-
-            // Determine if this spell hits or fizzles.
-            var spellHits = SpellHits(action.SpellCaster, action.Spell);
-            if (!spellHits) {
-                cinematicTime += HandleFizzleAction(action, combatActionList);
-
-                // Increase pips used counter by 1, even if the spell fizzled.
-                // CLASSIC: under the profile's mob reward rules a fizzled card counts as the rules say.
-                action.SpellCaster._usedPipsForExperienceGain += ClassicProgression.MobRewards is { } rewards
-                    ? rewards.CombatXp.PipsForFizzle(action.Spell.m_pipCost.m_spellRank, CombatActionResolver.IsXPipSpell(action.Spell))
-                    : 1;
-            }
-            else {
-                // Record when this caster's cinematic begins so a summoned minion appears with its cast.
-                action.SpellCaster._duelActor.CurrentActionCinematicOffsetSeconds = cinematicTime;
-                cinematicTime += HandleSuccessfulAction(action, combatActionList);
+            finally {
+                if (beguiled) {
+                    action.SpellCaster.BeguiledActions--;
+                }
             }
         }
 
         return instantCinematics ? 0 : cinematicTime;
+    }
+
+    // A beguiled caster's single target: a random living combatant on the side it now acts against (its own
+    // teammates, itself only when alone) for a harmful card, or on the side it now acts for for a friendly card.
+    private CombatDuelSubCircle BeguiledTarget(QueuedCombatAction action) {
+        var caster = action.SpellCaster;
+        var side = CombatActionResolver.CardSide(action.SpellTemplate);
+        if (side == Imlight.Classic.Spells.CastTargetSide.None) {
+            return action.SelectedTarget;
+        }
+
+        var living = ActiveSubCircles.Where(circle => circle.IsAlive && circle.AddedToDuel).ToList();
+        var candidates = side == Imlight.Classic.Spells.CastTargetSide.Enemy
+            ? living.Where(circle => circle.OccupiedTeam != caster.ActingTeam && circle != caster).ToList()
+            : living.Where(circle => circle.OccupiedTeam == caster.ActingTeam).ToList();
+        if (candidates.Count == 0) {
+            return side == Imlight.Classic.Spells.CastTargetSide.Enemy ? caster : action.SelectedTarget;
+        }
+
+        var chosen = candidates[caster._duelActor.Rng.Next(candidates.Count)];
+        Logger.Debug("Duel {0} | Slot {1} | Beguiled: casts at slot {2}.",
+            Logger.Args(_duel.m_duelID.Full, caster.SlotIndex, chosen.SlotIndex));
+
+        return chosen;
     }
 
     private float HandleFizzleAction(QueuedCombatAction action, CombatActionListObj combatActionList) {

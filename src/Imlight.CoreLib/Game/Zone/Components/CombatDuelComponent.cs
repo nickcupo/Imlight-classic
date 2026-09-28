@@ -1163,12 +1163,7 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
             return target;
         }
 
-        // A roll's or per-pip list's own target is not the card's; its children's are.
-        var targets = template.m_effects.SelectMany(effect => SpellTemplateEditor.ChildrenOf(effect) is { Count: > 0 } children
-                && effect is RandomSpellEffect or VariableSpellEffect
-            ? children.Where(child => child is not null).Select(child => child!.m_effectTarget.ToString())
-            : [effect.m_effectTarget.ToString()]);
-        var side = CastTargeting.SideOf(targets, !ClassicRuntime.Rules.UntargetedAreaSpells);
+        var side = CombatActionResolver.CardSide(template);
         if (side == CastTargetSide.None) {
             return target;
         }

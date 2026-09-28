@@ -122,6 +122,12 @@ internal static class CombatEffectApplicator {
             case kSpellEffects.kStunBlock:
                 ApplyHangingEffect(effect, targets);
                 break;
+            case kSpellEffects.kMindControl:
+                // Beguile: the target's next action is taken for the caster's side (one action per round of the card).
+                foreach (var target in targets.Where(target => target.IsAlive)) {
+                    target.BeguiledActions = Math.Max(effect.m_numRounds, 1);
+                }
+                break;
             case kSpellEffects.kStun:
                 cinematicTime += ApplyStunEffect(effect, targets);
                 break;

@@ -38,6 +38,8 @@
 
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Classic;
+using Imlight.CoreLib.Classic;
+using Imlight.Classic.Spells;
 using Imlight.Common;
 using Imlight.CoreLib.Game.Spells;
 using Imlight.CoreLib.Shared.Packets;
@@ -94,7 +96,7 @@ internal static class CombatActionResolver {
             if (spellSchool is not null) {
                 var isHealCast = action.SpellTemplate.m_effects
                     .Any(x => x.m_effectType == kSpellEffects.kHeal);
-                var isOffensiveCast = critPrimaryTarget.OccupiedTeam != action.SpellCaster.OccupiedTeam;
+                var isOffensiveCast = critPrimaryTarget.OccupiedTeam != action.SpellCaster.ActingTeam;
                 if (isHealCast || isOffensiveCast) {
                     landedCrit = CombatCriticals.RollsCritical(action.SpellCaster, critPrimaryTarget, spellSchool, isHealCast);
                     if (landedCrit) {
@@ -145,7 +147,7 @@ internal static class CombatActionResolver {
             // If the spell has any targets that are alive or on the same team as the caster, it's worth casting.
             // If the spell has a global target, it's worth casting.
             if (!spellWorthCasting && (targets.Any(x => x.IsAlive)
-                                    || targets.Any(x => x.OccupiedTeam == action.SpellCaster.OccupiedTeam))
+                                    || targets.Any(x => x.OccupiedTeam == action.SpellCaster.ActingTeam))
                                     || chosenEffect.m_effectTarget == kEffectTarget.kGlobal) {
                 spellWorthCasting = true;
             }
@@ -309,6 +311,22 @@ internal static class CombatActionResolver {
         }
     }
 
+    /// <summary>
+    /// The side a card's single target must be on (a roll's or per-pip list's children decide, not the list itself).
+    /// </summary>
+    internal static CastTargetSide CardSide(SpellTemplate template) {
+        if (template?.m_effects is null) {
+            return CastTargetSide.None;
+        }
+
+        var targets = template.m_effects.SelectMany(effect => SpellTemplateEditor.ChildrenOf(effect) is { Count: > 0 } children
+                && effect is RandomSpellEffect or VariableSpellEffect
+            ? children.Where(child => child is not null).Select(child => child!.m_effectTarget.ToString())
+            : [effect.m_effectTarget.ToString()]);
+
+        return CastTargeting.SideOf(targets, !ClassicRuntime.Rules.UntargetedAreaSpells);
+    }
+
     private static bool RequiresOwnedMinion(IEnumerable<SpellEffect> effects)
         => effects.Any(effect => effect.m_effectTarget is kEffectTarget.kMinion or kEffectTarget.kCasterMinion
             || effect switch {
@@ -356,11 +374,11 @@ internal static class CombatActionResolver {
                 break;
             case kEffectTarget.kFriendlyTeam:
             case kEffectTarget.kFriendlyTeamAllAtOnce:
-                targets = [.. _activeSubCircles.Where(x => x.OccupiedTeam == caster.OccupiedTeam)];
+                targets = [.. _activeSubCircles.Where(x => x.OccupiedTeam == caster.ActingTeam)];
                 break;
             case kEffectTarget.kEnemyTeam:
             case kEffectTarget.kEnemyTeamAllAtOnce:
-                targets = [.. _activeSubCircles.Where(x => x.OccupiedTeam != caster.OccupiedTeam)];
+                targets = [.. _activeSubCircles.Where(x => x.OccupiedTeam != caster.ActingTeam)];
                 break;
             case kEffectTarget.kGlobal:
                 return [];

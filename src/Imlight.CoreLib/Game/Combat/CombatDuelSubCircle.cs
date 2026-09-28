@@ -154,6 +154,18 @@ public class CombatDuelSubCircle {
         }
     }
     internal bool IsAlive => ParticipantGameStats?.m_currentHitpoints > 0;
+
+    /// <summary>
+    /// Beguile (kMindControl): the number of this combatant's next actions taken for the other side.
+    /// </summary>
+    internal int BeguiledActions;
+
+    /// <summary>
+    /// The side this combatant acts for: its own, or the other one while beguiled.
+    /// </summary>
+    internal CombatTeam ActingTeam => BeguiledActions > 0
+        ? OccupiedTeam == CombatTeam.Player ? CombatTeam.Monster : CombatTeam.Player
+        : OccupiedTeam;
     internal bool CheatNoFizzle;
     internal CombatDeck _combatDeck;
     internal readonly CombatDuelComponent _duelActor;
