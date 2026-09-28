@@ -16,6 +16,7 @@
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
 */
 
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using Raven.Client.Documents;
@@ -256,6 +257,30 @@ public static class WizardItemCollection {
     /// <param name="item">The pet item to rename.</param>
     /// <param name="nameKeys">The packed name keys.</param>
     /// <returns>True if the pet was found and saved, false otherwise.</returns>
+    // CLASSIC: the time (Unix seconds) a rental item (ClientTimedItemBehavior) expires, on the item and its saved copy.
+    public static bool SetExpireTime(WizClientObjectItem item, uint expireTime) {
+        if (CoreObjectFactory.FindBehaviorInstance<ClientTimedItemBehavior>(item, out var timed)) {
+            timed.m_expireTime = expireTime;
+        }
+
+        using var session = s_store.OpenSession();
+        var associatedItem = session.Query<WizClientObjectItem>(collectionName: CollectionName)
+            .FirstOrDefault(x => x.m_globalID == item.m_globalID && x.m_characterId == item.m_characterId);
+        if (associatedItem is null || !CoreObjectFactory.FindBehaviorInstance<ClientTimedItemBehavior>(associatedItem, out var saved)) {
+            return false;
+        }
+
+        saved.m_expireTime = expireTime;
+        session.SaveChanges();
+
+        return true;
+    }
+
+    // CLASSIC: true when a rental item's time has run out.
+    public static bool IsExpired(WizClientObjectItem item, DateTimeOffset now)
+        => CoreObjectFactory.FindBehaviorInstance<ClientTimedItemBehavior>(item, out var timed)
+            && timed.m_expireTime != 0 && timed.m_expireTime <= now.ToUnixTimeSeconds();
+
     public static bool ApplyPetName(WizClientObjectItem item, uint nameKeys) {
         using var session = s_store.OpenSession();
 

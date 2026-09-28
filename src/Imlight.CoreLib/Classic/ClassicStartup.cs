@@ -244,6 +244,7 @@ public static class ClassicStartup {
             ("rules.quest_cards", rules.Profile.Rules.QuestCards), // CLASSIC
             ("rules.treasure_prices", rules.Profile.Rules.TreasurePrices), // CLASSIC
             ("rules.mob_stats", rules.Profile.Rules.MobStats), // CLASSIC
+            ("rules.crown_shop", rules.Profile.Rules.CrownShop), // CLASSIC
         };
         foreach (var (key, relativePath) in tables) {
             if (relativePath is null || File.Exists(Path.Combine(s_classicDataRoot, relativePath))) {

@@ -62,6 +62,7 @@ public static class ClassicProgression {
     private static volatile QuestCardRewards? s_questCards;
     private static volatile TreasurePrices? s_treasurePrices; // CLASSIC
     private static volatile MobStats? s_mobStats; // CLASSIC
+    private static volatile CrownShopCatalog? s_crownShop; // CLASSIC
 
     /// <summary>
     /// The profile's XP table, or null for the client's curve.
@@ -92,6 +93,11 @@ public static class ClassicProgression {
     /// The profile's creature health at the cutoff, or null for template health.
     /// </summary>
     public static MobStats? MobStats => s_mobStats;
+
+    /// <summary>
+    /// The profile's Crown Shop catalog, or null for no Crown Shop.
+    /// </summary>
+    public static CrownShopCatalog? CrownShop => s_crownShop;
 
     /// <summary>
     /// Loads the tables a restricted profile names.
@@ -135,6 +141,11 @@ public static class ClassicProgression {
             s_mobStats = MobStatsLoader.Load(Path.Combine(classicDataRoot, mobStats));
             Logger.Information("Classic mob stats {Table}: dated health for {Count} creature templates; others keep template health.",
                 Logger.Args(s_mobStats.Id, s_mobStats.HealthByTemplate.Count));
+        }
+
+        if (profile.Rules.CrownShop is { } crownShop && File.Exists(Path.Combine(classicDataRoot, crownShop))) {
+            s_crownShop = CrownShopCatalogLoader.Load(Path.Combine(classicDataRoot, crownShop));
+            Logger.Information("Classic Crown Shop {Table}: {Count} items.", Logger.Args(s_crownShop.Id, s_crownShop.Items.Length));
         }
     }
 

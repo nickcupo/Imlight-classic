@@ -164,6 +164,11 @@ public sealed class ProfileRules {
     public string? MobStats { get; init; }
 
     /// <summary>
+    /// Path under classic-data of the Crown Shop catalog at the cutoff, if any.
+    /// </summary>
+    public string? CrownShop { get; init; }
+
+    /// <summary>
     /// The rank from which power pips appear; null when unset or set to null.
     /// </summary>
     public string? PowerPipsFromRank { get; init; }

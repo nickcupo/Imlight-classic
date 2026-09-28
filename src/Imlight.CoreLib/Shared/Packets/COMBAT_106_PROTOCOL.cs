@@ -249,4 +249,30 @@ public sealed class COMBAT_106_PROTOCOL : IServerProtocol {
 
     }
 
+    /// <summary>
+    /// Server-internal (CLASSIC): the Crown Shop asks the player's duel to bring in a hired henchman for them.
+    /// </summary>
+    internal sealed class MSG_HIREHENCHMAN : IServerMessage {
+
+        public byte MessageOrder => 26;
+        public byte ServiceID => 106;
+
+        public uint CreatureTid;
+        public IActorRef Actor;
+
+    }
+
+    /// <summary>
+    /// Server-internal (CLASSIC): the duel's answer to <see cref="MSG_HIREHENCHMAN"/>.
+    /// </summary>
+    internal sealed class MSG_HENCHMANHIRED : IServerMessage {
+
+        public byte MessageOrder => 27;
+        public byte ServiceID => 106;
+
+        public uint CreatureTid;
+        public bool Success;
+
+    }
+
 }

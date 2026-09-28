@@ -1335,6 +1335,20 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
     private void ReceiveCheatInstantCinematics(COMBAT_106_PROTOCOL.MSG_CHEATINSTANTCINEMATICS message)
         => CheatInstantCinematics = message.Enabled;
 
+    // CLASSIC: a henchman hired from the Crown Shop during this duel joins the buyer's side (October 2009: henchmen
+    // "can only be purchased during a duel" and "behave similarly to your Minion"). The buyer is told whether it joined.
+    [MessageHandler(typeof(COMBAT_106_PROTOCOL.MSG_HIREHENCHMAN))]
+    private void ReceiveHireHenchman(COMBAT_106_PROTOCOL.MSG_HIREHENCHMAN message) {
+        var buyer = SubCircles.FirstOrDefault(x => x.ParticipantActor == message.Actor);
+        var joined = _isActive && buyer is { IsAlive: true } && GetAvailableSubCircleTeamPlayer() is not null
+            && CoreObjectFactory.GetCoreTemplate(message.CreatureTid) is not null;
+        if (joined) {
+            SpawnAndAssignMinion(message.CreatureTid, buyer);
+        }
+
+        message.Actor?.Tell(new COMBAT_106_PROTOCOL.MSG_HENCHMANHIRED { CreatureTid = message.CreatureTid, Success = joined });
+    }
+
     [MessageHandler(typeof(COMBAT_106_PROTOCOL.MSG_CHEATNOFIZZLE))]
     private void ReceiveCheatNoFizzle(COMBAT_106_PROTOCOL.MSG_CHEATNOFIZZLE message) {
         var subCircle = SubCircles.FirstOrDefault(x => x.ParticipantActor == message.Actor);

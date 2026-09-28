@@ -88,6 +88,19 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
         _currentDuelActor?.Tell(message, SessionActor.ActorRef);
     }
 
+    // CLASSIC: the Crown Shop's henchman hire goes to the duel this player is in; outside a duel it fails at once.
+    [MessageHandler(typeof(COMBAT_106_PROTOCOL.MSG_HIREHENCHMAN))]
+    private void ReceiveHireHenchman(COMBAT_106_PROTOCOL.MSG_HIREHENCHMAN message) {
+        if (_currentDuelActor is null) {
+            SessionActor.ActorRef.Tell(new COMBAT_106_PROTOCOL.MSG_HENCHMANHIRED { CreatureTid = message.CreatureTid, Success = false });
+
+            return;
+        }
+
+        message.Actor = SessionActor.ActorRef;
+        _currentDuelActor.Tell(message, SessionActor.ActorRef);
+    }
+
     [MessageHandler(typeof(COMBAT_106_PROTOCOL.MSG_ACTORADDEDTODUEL))]
     private void RecieveDuelAdd(COMBAT_106_PROTOCOL.MSG_ACTORADDEDTODUEL message) {
         _currentDuelActor = message.DuelActor;

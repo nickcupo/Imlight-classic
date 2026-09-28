@@ -469,6 +469,16 @@ public static class WizardCollection {
             .Where(x => x.m_characterId == wizard.CharId)
             .ToList();
 
+        // CLASSIC: a rental (a 1- or 7-day mount) whose time has run out is gone when the wizard next loads.
+        var now = DateTimeOffset.UtcNow;
+        var expired = items.Where(item => WizardItemCollection.IsExpired(item, now)).Select(item => item.m_globalID).ToHashSet();
+        if (expired.Count > 0) {
+            items = [.. items.Where(item => !expired.Contains(item.m_globalID))];
+            wizard.InventoryBehavior.InventoryItemIds = [.. wizard.InventoryBehavior.InventoryItemIds.Where(id => !expired.Contains(id))];
+            wizard.EquipmentBehavior.EquippedItemIds = [.. wizard.EquipmentBehavior.EquippedItemIds.Where(id => !expired.Contains(id))];
+            Logger.Information("Wizard {0}: {1} rental item(s) expired.", Logger.Args(wizard.CharId, expired.Count));
+        }
+
         wizard.InventoryBehavior.Items = [.. items
             .Where(i => wizard.InventoryBehavior.InventoryItemIds
             .Contains(i.m_globalID))
