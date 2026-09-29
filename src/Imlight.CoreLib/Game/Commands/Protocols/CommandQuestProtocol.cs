@@ -28,12 +28,40 @@ using Imlight.CoreLib.Shared.Packets;
 using Imlight.CoreLib.WizardData.Collections;
 using Imlight.CoreLib.WizardData.Models.Player;
 using Imlight.CoreLib.Classic;
+using System.Collections.Generic;
+using System;
 
 namespace Imlight.CoreLib.Game.Commands.Protocols;
 
 internal class CommandQuest : CommandProtocol {
 
     internal override string Group { get; set; } = "quest";
+
+    // CLASSIC: QA setup for playthrough tests: mark quests complete (comma-separated names), as if finished, without
+    // rewards. An active quest is closed; either way its registry entry becomes "Complete", which is what quest,
+    // door and world-unlock requirements read. Relog or change zone to see the effects on the client.
+    [Command("done")]
+    [AuthRequired(AuthLevel.QualityAssurance)]
+    private void QuestDoneCommand([Remainder] string questNames) {
+        var wizard = Context.Character;
+        var done = new List<string>();
+        foreach (var name in questNames.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)) {
+            if (QuestTemplateCollection.GetQuestByName(name) is null) {
+                InformSenderClient($"Quest '{name}' does not exist.");
+
+                continue;
+            }
+
+            if (!wizard.HasQuest(name) || !wizard.QuestBehavior.CompleteQuest(name)) {
+                wizard.QuestBehavior.AddToQuestRegistry(name, "Complete", 1);
+            }
+
+            done.Add(name);
+        }
+
+        WizardCollection.UpdateCharacterQuestBehavior(wizard);
+        InformSenderClient($"Marked complete: {string.Join(", ", done)}.");
+    }
 
     [Command("offer")]
     [AuthRequired(AuthLevel.QualityAssurance)]
