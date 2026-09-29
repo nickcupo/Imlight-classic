@@ -152,7 +152,9 @@ internal sealed class InteractQuestOfferComponent(ZoneEntity entity)
             }
         }
 
-        _givesQuests.Sort((a, b) => string.Compare(a.m_questTitle, b.m_questTitle, StringComparison.Ordinal));
+        // CLASSIC: main-story quests first (then by title key), so a side quest with a lower title key does not hide
+        // the story quest behind it (the service offers only the first available quest).
+        _givesQuests.Sort(Imlight.Classic.Quests.QuestOfferOrder.For<QuestTemplate>(q => q.m_mainline, q => q.m_questTitle));
     }
 
     public override void OnPlayerJoin(CoreObject playerObj, IActorRef playerActor, Wizard playerWizard) {
