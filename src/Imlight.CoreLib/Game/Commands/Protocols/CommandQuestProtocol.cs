@@ -37,7 +37,7 @@ internal class CommandQuest : CommandProtocol {
 
     internal override string Group { get; set; } = "quest";
 
-    // CLASSIC: QA setup for playthrough tests: mark quests complete (names separated by commas, '|' or ';'), as if finished, without
+    // CLASSIC: QA setup for playthrough tests: mark quests complete (names separated by spaces or commas; the chat filter drops '|'), as if finished, without
     // rewards. An active quest is closed; either way its registry entry becomes "Complete", which is what quest,
     // door and world-unlock requirements read. Relog or change zone to see the effects on the client.
     [Command("done")]
@@ -45,7 +45,7 @@ internal class CommandQuest : CommandProtocol {
     private void QuestDoneCommand([Remainder] string questNames) {
         var wizard = Context.Character;
         var done = new List<string>();
-        foreach (var name in questNames.Split([',', '|', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)) {
+        foreach (var name in questNames.Split([',', '|', ';', ' '], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)) {
             if (QuestTemplateCollection.GetQuestByName(name) is null) {
                 InformSenderClient($"Quest '{name}' does not exist.");
 
