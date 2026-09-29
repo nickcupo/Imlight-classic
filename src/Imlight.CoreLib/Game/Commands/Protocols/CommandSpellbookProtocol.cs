@@ -24,6 +24,7 @@ using Imlight.CoreLib.Shared.Resources;
 using Imlight.CoreLib.WizardData.Collections;
 using Imlight.CoreLib.WizardData.Models.Player;
 using System.Collections.Generic;
+using System.Linq;
 
 namespace Imlight.CoreLib.Game.Commands.Protocols;
 
@@ -72,6 +73,70 @@ internal class CommandSpellbookProtocol : CommandProtocol {
             SpellID = (int) spellTemplateIdUint
         };
         Context.SessionActor.Tell(clientMsg);
+    }
+
+    // CLASSIC: QA setup for playthrough tests: learn spells by template name (';' between names), e.g.
+    // ".sb learnname Sunbird;Heck Hound", so a test wizard set to a level can carry the spells a player of that level
+    // trained (the spell templates have no TemplateManifest id to pass to "learn").
+    [Command("learnname")]
+    [AuthRequired(AuthLevel.QualityAssurance)]
+    private void LearnSpellByNameCommand([Remainder] string spellNames) {
+        foreach (var entry in spellNames.Split(';', System.StringSplitOptions.RemoveEmptyEntries | System.StringSplitOptions.TrimEntries)) {
+            // "Name*N": N copies in the deck (default 4).
+            var star = entry.LastIndexOf('*');
+            var name = star > 0 ? entry[..star].Trim() : entry;
+            var wanted = star > 0 && int.TryParse(entry[(star + 1)..], out var n) ? n : 4;
+            var template = SpellFactory.GetTemplate(name);
+            var hash = Imcodec.Cryptography.StringHash.Compute(name);
+            var templateId = template is null ? 0 : SpellFactory.GetTemplateIdByHash(hash);
+            var spell = template is null ? null : SpellFactory.GetSpell(template, templateId);
+            if (spell is null) {
+                InformSenderClient($"No spell template named '{name}'.");
+
+                continue;
+            }
+
+            if (Context.Character.LearnSpell(spell)) {
+                Context.SessionActor.Tell(new WIZARD_12_PROTOCOL.MSG_ADDSPELLTOBOOK { SpellID = (int) templateId });
+            }
+
+            // Put copies in the equipped deck too (up to 4, or what the deck's limits allow), as a player would.
+            var deckId = Context.Character.EquipmentBehavior.SlotList
+                .FirstOrDefault(slot => slot.SlotType == EquipmentSlotType.Deck)?.ItemId;
+            var copies = 0;
+            while (deckId is not null && copies < wanted && Context.Character.AddSpellToDeck(templateId, deckId.Value)) {
+                copies++;
+            }
+
+            InformSenderClient($"You have learned the spell {name} ({copies} in the deck).");
+        }
+    }
+
+    // CLASSIC: QA setup for playthrough tests: empty the equipped deck (not the treasure cards) so ".sb learnname" can
+    // fill it with the spells a wizard of the test level would carry.
+    [Command("deckclear")]
+    [AuthRequired(AuthLevel.QualityAssurance)]
+    private void DeckClearCommand() {
+        var deckId = Context.Character.EquipmentBehavior.SlotList
+            .FirstOrDefault(slot => slot.SlotType == EquipmentSlotType.Deck)?.ItemId;
+        if (deckId is null) {
+            InformSenderClient("No deck equipped.");
+
+            return;
+        }
+
+        var removed = 0;
+        foreach (var spell in (Context.Character.SpellbookBehavior.SpellList ?? []).ToList()) {
+            if (!Context.Character.SpellbookBehavior.LearnedSpellTemplateIds.Contains(spell.m_templateID)) {
+                continue;
+            }
+
+            while (Context.Character.RemoveSpellFromDeck(spell.m_templateID, deckId.Value)) {
+                removed++;
+            }
+        }
+
+        InformSenderClient($"Removed {removed} card(s) from the deck.");
     }
 
     [Command("unlearn")]
