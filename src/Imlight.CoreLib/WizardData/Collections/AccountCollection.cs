@@ -90,10 +90,10 @@ public static class AccountCollection {
     }
 
     // CLASSIC: saves the Crowns balance (ClassicCrowns).
-    public static bool UpdateCrowns(ulong accountId, int crowns, bool startingCrownsGranted)
+    public static bool UpdateCrowns(ulong accountId, int crowns, int startingCrownsGiven)
         => UpdateAccount(accountId, account => {
             account.Crowns = crowns;
-            account.StartingCrownsGranted = startingCrownsGranted;
+            account.StartingCrownsGiven = startingCrownsGiven;
         });
 
     private static ulong? GetAccountId(string username) {

@@ -99,7 +99,8 @@ public class Account {
 
     // CLASSIC: the account's Crowns, and whether the server's starting Crowns were given (ClassicCrowns).
     public int Crowns { get; set; }
-    public bool StartingCrownsGranted { get; set; }
+    public bool StartingCrownsGranted { get; set; } // superseded by StartingCrownsGiven; kept so old records load
+    public int StartingCrownsGiven { get; set; }
 
     [JsonIgnore] public List<Wizard> Characters = new();
     [JsonIgnore] public InfractionHistory InfractionHistory { get; set; }

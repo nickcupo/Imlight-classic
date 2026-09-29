@@ -49,10 +49,16 @@ namespace Imlight.CoreLib.Classic;
 public static class ClassicCrowns {
 
     /// <summary>The Crowns every account is given once.</summary>
-    public static int StartingCrowns { get; } = Math.Max(0, ConfigurationManager.Settings["Classic.StartingCrowns"].AsInt(100_000));
+    public static int StartingCrowns { get; } = Math.Max(0, Setting("Classic.StartingCrowns") is { } crowns
+        && int.TryParse(crowns, out var value) ? value : 100_000);
 
     /// <summary>True when a defeated mob pays as many Crowns as gold.</summary>
-    public static bool CrownsFromMobs { get; } = ConfigurationManager.Settings["Classic.CrownsFromMobs"].AsBool(true);
+    public static bool CrownsFromMobs { get; } = Setting("Classic.CrownsFromMobs") is not { } fromMobs
+        || !bool.TryParse(fromMobs, out var on) || on;
+
+    // The setting's text, or null when the ini does not set it. (AsInt/AsBool with a default return 0/false for a
+    // missing key: the default only applies when parsing throws.)
+    private static string Setting(string key) => ConfigurationManager.Settings[key].AsString() is { Length: > 0 } text ? text : null;
 
     /// <summary>
     /// Gives <paramref name="account"/> its starting Crowns if it has never had them. Safe to call on every login.
@@ -63,18 +69,21 @@ public static class ClassicCrowns {
             return false;
         }
 
+        int owed;
         lock (account) {
-            if (account.StartingCrownsGranted) {
+            // Tops an account up to the starting amount, so raising the setting (or an earlier grant of 0) is made good.
+            owed = StartingCrowns - account.StartingCrownsGiven;
+            if (owed <= 0) {
                 return false;
             }
 
-            account.Crowns = Clamp((long) account.Crowns + StartingCrowns);
-            account.StartingCrownsGranted = true;
-            AccountCollection.UpdateCrowns(account.AccountId, account.Crowns, true);
+            account.Crowns = Clamp((long) account.Crowns + owed);
+            account.StartingCrownsGiven = StartingCrowns;
+            AccountCollection.UpdateCrowns(account.AccountId, account.Crowns, account.StartingCrownsGiven);
         }
 
-        Logger.Information("[CROWNS] Account {0}: starting Crowns {1}, balance {2}.",
-            Logger.Args(account.AccountId, StartingCrowns, account.Crowns));
+        Logger.Information("[CROWNS] Account {0}: starting Crowns +{1}, balance {2}.",
+            Logger.Args(account.AccountId, owed, account.Crowns));
 
         return true;
     }
@@ -90,7 +99,7 @@ public static class ClassicCrowns {
 
         lock (account) {
             account.Crowns = Clamp((long) account.Crowns + amount);
-            AccountCollection.UpdateCrowns(account.AccountId, account.Crowns, account.StartingCrownsGranted);
+            AccountCollection.UpdateCrowns(account.AccountId, account.Crowns, account.StartingCrownsGiven);
 
             return account.Crowns;
         }
