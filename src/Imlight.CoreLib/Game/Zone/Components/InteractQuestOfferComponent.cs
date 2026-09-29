@@ -55,6 +55,7 @@ using Imlight.CoreLib.Game.Zone.Core;
 using Imlight.CoreLib.Shared.Packets;
 using Imlight.CoreLib.WizardData.Collections;
 using Imlight.CoreLib.WizardData.Models.Player;
+using Imlight.CoreLib.Classic;
 
 namespace Imlight.CoreLib.Game.Zone.Components;
 
@@ -253,7 +254,7 @@ internal sealed class InteractQuestOfferComponent(ZoneEntity entity)
 
     private void SendActorDialog(IActorRef playerActor, ActorDialog dialogEntry, string completionType, ulong questId = 0, ulong goalId = 0) {
         var serializer = new ObjectSerializer(Versionable: false);
-        if (!serializer.Serialize(dialogEntry, 16, out var serializedData)) {
+        if (!serializer.Serialize(ClassicDialogCamera.ForClient(dialogEntry), 16, out var serializedData)) {
             Logger.Error("Failed to serialize '{0}' dialog.",
                 Logger.Args(completionType));
 

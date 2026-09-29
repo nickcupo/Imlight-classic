@@ -27,6 +27,7 @@ using Imlight.CoreLib.Game.Madlibs;
 using Imlight.CoreLib.Shared.Packets;
 using Imlight.CoreLib.WizardData.Collections;
 using Imlight.CoreLib.WizardData.Models.Player;
+using Imlight.CoreLib.Classic;
 
 namespace Imlight.CoreLib.Game.Commands.Protocols;
 
@@ -132,7 +133,7 @@ internal class CommandQuest : CommandProtocol {
 
     private void SendActorDialog(ActorDialog dialogEntry, string completionType, ulong questId = 0, ulong goalId = 0) {
         var serializer = new ObjectSerializer(Versionable: false);
-        if (!serializer.Serialize(dialogEntry, 16, out var serializedData)) {
+        if (!serializer.Serialize(ClassicDialogCamera.ForClient(dialogEntry), 16, out var serializedData)) {
             Logger.Error("Failed to serialize '{0}' dialog.", Logger.Args(completionType));
             return;
         }

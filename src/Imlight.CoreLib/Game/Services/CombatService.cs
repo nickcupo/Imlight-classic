@@ -453,8 +453,10 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
         // Serialize item and broadcast equip action to other players.
         var pubItem = ItemHelper.GetPublicItem(item);
 
-        if (_itemSerializer.Serialize(pubItem, PropertyFlags.Prop_Transmit, out var data)) {
-            Logger.Error("Failed to serialize item {0}", Logger.Args(item.m_globalID));
+        // As EquipmentService.SendEquipItem. (This check was inverted, so a mount re-equipped after combat was never
+        // shown on the wizard.)
+        if (!_itemSerializer.Serialize(pubItem, 1, out var data)) {
+            Logger.Error("Failed to serialize item {0} for equip broadcast.", Logger.Args(item.m_globalID));
 
             return;
         }
