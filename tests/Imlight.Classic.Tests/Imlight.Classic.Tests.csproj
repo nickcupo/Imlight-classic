@@ -30,6 +30,7 @@
     <ServerIntegrationTest Include="TcpListenerLifecycleTests.cs" />
     <ServerIntegrationTest Include="TriggerObjectResultTests.cs" />
     <ServerIntegrationTest Include="ZoneMarkerLifecycleTests.cs" />
+    <ServerIntegrationTest Include="ZoneTriggerLoadTests.cs" />
   </ItemGroup>
   <PropertyGroup>
     <_TypeInputPath>$(MSBuildThisFileDirectory)../../submodule/Imcodec/src/Imcodec.ObjectProperty/GeneratorInput</_TypeInputPath>
