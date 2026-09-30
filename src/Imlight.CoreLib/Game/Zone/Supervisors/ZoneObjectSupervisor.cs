@@ -22,6 +22,7 @@ using Akka.Actor;
 using Imcodec.ObjectProperty.TypeCache;
 using Imcodec.Types;
 using Imlight.Common;
+using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;
 using Imlight.CoreLib.Shared.Resources;
@@ -88,6 +89,11 @@ internal sealed class ZoneObjectSupervisor(Core.Zone zone) : ZoneEntitySuperviso
 
         // Dungeon-entry sigil pads spawn within ZoneSigilSupervisor.
         if (objectInfo is MinigameSigilInfo) {
+            return false;
+        }
+
+        // CLASSIC: objects from later versions of classic quests are not spawned.
+        if (ClassicLaterObjects.Skips(objectInfo)) {
             return false;
         }
 
