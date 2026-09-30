@@ -152,7 +152,16 @@ internal sealed class InteractQuestOfferComponent(ZoneEntity entity)
             }
         }
 
-        _givesQuests.Sort((a, b) => string.Compare(a.m_questTitle, b.m_questTitle, StringComparison.Ordinal));
+        _givesQuests.Sort(OfferOrder);
+    }
+
+    /// <summary>
+    /// The order an NPC offers its quests in: story (mainline) quests before side quests, then by title.
+    /// </summary>
+    internal static int OfferOrder(QuestTemplate a, QuestTemplate b) {
+        var mainline = b.m_mainline.CompareTo(a.m_mainline);
+
+        return mainline != 0 ? mainline : string.Compare(a.m_questTitle, b.m_questTitle, StringComparison.Ordinal);
     }
 
     public override void OnPlayerJoin(CoreObject playerObj, IActorRef playerActor, Wizard playerWizard) {
