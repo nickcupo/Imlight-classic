@@ -446,6 +446,20 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
             return;
         }
 
+        // CLASSIC: the stock client enchants by "casting" the enchantment card at a card in its hand (an Attack or
+        // Discard move whose card is an enchantment; the target names the hand card). Upstream Imlight's
+        // feat/enchantments branch reads it the same way. Run it through the hand-enchant transaction.
+        if (ClassicRuntime.IsActive && !caster.IsSummonedMinion
+            && message.MoveType is (byte) CombatMoveType.Attack or (byte) CombatMoveType.Discard
+            && IsEnchantmentCard(caster.GetSpellFromLastHand(message.SpellSelection))) {
+            var enchantTarget = StockEnchantTarget(caster, message);
+            Logger.Information("Duel {0} | Slot {1} | Stock enchant: card {2} onto hand card {3} (move {4}, raw target {5})",
+                Logger.Args(Duel.m_duelID.Full, caster.SlotIndex, message.SpellSelection, enchantTarget, message.MoveType, message.RawSpellTarget));
+            if (enchantTarget >= 0) HandleEnchantMove(caster, message.SpellSelection, (uint) enchantTarget);
+            else SendCurrentCombatHand(caster);
+            return;
+        }
+
         if (message.MoveType == ClassicHandEnchantment.MoveType) {
             if (ClassicRuntime.IsActive) {
                 HandleEnchantMove(caster, message.SpellSelection, message.SpellTarget);
@@ -1094,6 +1108,29 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
         PlayerBroadcast(msg);
     }
 
+    /// <summary>CLASSIC: a card that only changes another card (an enchantment, an Extract Animus card).</summary>
+    private static bool IsEnchantmentCard(Spell spell) {
+        if (spell is null || CoreObjectFactory.GetCoreTemplate(spell.m_templateID) is not SpellTemplate template
+            || template.m_effects is not { Count: > 0 }) return false;
+        return string.Equals(template.m_sTypeName, "Enchantment", StringComparison.OrdinalIgnoreCase)
+               || template.m_effects.All(e => e?.m_effectTarget is kEffectTarget.kSpell or kEffectTarget.kSpecificSpells);
+    }
+
+    /// <summary>CLASSIC: which hand card a stock enchant move names: the raw target, its decoded bit, or the bit index.</summary>
+    private static int StockEnchantTarget(CombatDuelSubCircle caster, COMBAT_106_PROTOCOL.MSG_ACTORCOMBATMOVE message) {
+        var hand = caster._combatDeck?.LastGivenHand;
+        var source = caster.GetSpellFromLastHand(message.SpellSelection);
+        if (hand is null || source is null) return -1;
+        var raw = message.RawSpellTarget;
+        var bit = raw > 0 && (raw & (raw - 1)) == 0 ? (int) Math.Log2(raw) : -1;
+        foreach (var candidate in new[] { (int) Math.Min(raw, int.MaxValue), (int) Math.Min(message.SpellTarget, int.MaxValue), bit }) {
+            if (candidate < 0 || candidate >= hand.Count || candidate == message.SpellSelection) continue;
+            if (ClassicHandEnchantment.TryPrepare(source, hand[candidate], out _, out _)) return candidate;
+        }
+
+        return -1;
+    }
+
     private void HandleEnchantMove(CombatDuelSubCircle caster, int sourceIndex, uint targetIndex) {
         RunMonstrologyEnchantment(caster, sourceIndex, targetIndex, () => {
             // A queued cast owns its selected card until ChangeMind. Do not invalidate its references.
@@ -1405,6 +1442,7 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
         var creaturesWin = AliveAndInDuelPlayerCount <= 0;
 
         FinishMonstrologyDuel(playersWin);
+        AwardMonstrologyExtractions(); // CLASSIC: Animus and Monstrology XP for the winners' extractions
 
         // A queued tutorial card grant must not leak into the next duel on this sigil.
         _tutorialDirector.OnDuelEnded();

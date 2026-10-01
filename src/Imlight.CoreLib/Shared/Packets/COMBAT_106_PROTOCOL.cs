@@ -118,6 +118,8 @@ public sealed class COMBAT_106_PROTOCOL : IServerProtocol {
         public byte SpellSelection;
         public uint SpellTarget;
         public int TimeLeft;
+        // CLASSIC: the client's SpellTarget before the bit-mask decoding (a stock enchant names a hand card).
+        public uint RawSpellTarget;
 
     }
 

@@ -38,6 +38,7 @@
     <ServerIntegrationTest Include="MonstrologyPendingExtractionTests.cs" />
     <ServerIntegrationTest Include="MonstrologySessionPolicyTests.cs" />
     <ServerIntegrationTest Include="MonstrologyCastGuardTests.cs" />
+    <ServerIntegrationTest Include="MonstrologyRewardsTests.cs" />
     <ServerIntegrationTest Include="ClassicMinionAITargetTests.cs" />
     <ServerIntegrationTest Include="CraftingProtocolEvidenceTests.cs" />
     <ServerIntegrationTest Include="ClassicUtilityCombatTests.cs" />

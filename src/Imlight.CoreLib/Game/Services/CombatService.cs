@@ -500,7 +500,8 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
             MoveType = message.MoveType,
             SpellSelection = message.SpellSelection,
             SpellTarget = target,
-            TimeLeft = message.TimeLeft
+            TimeLeft = message.TimeLeft,
+            RawSpellTarget = message.SpellTarget,
         };
     }
 
