@@ -85,7 +85,7 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
     private const double TickSeconds = 0.3;
     private const float Arrive = 30f;
     private const float Neighbourhood = 2600f;   // how far a wizard walks in one go
-    private const float HelpRange = 2200f;       // how far away a duel draws an offer
+    private const float HelpRange = 9000f;       // how far away a duel draws an offer (about 40 s at a run)
 
     private readonly string _zone;
     private readonly IActorRef _server;
@@ -289,6 +289,10 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
             foreach (var wizard in _wizards) {
                 wizard.Offers.Expire(now);
             }
+
+            foreach (var notice in _duels.Values.ToList()) {
+                TryOffer(notice);
+            }
         }
 
         if (now >= _nextOnline) {
@@ -306,14 +310,23 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
 
             if (wizard.Moving) {
                 Step(wizard, batch);
+                if (wizard.DuelSigil == ulong.MaxValue && now >= wizard.NextLook && _zoneActor is not null) {
+                    // Hunting: every few seconds, ask whether a street mob's aggro range covers this spot.
+                    wizard.NextLook = now.AddSeconds(3);
+                    _zoneActor.Tell(new ZONE_102_PROTOCOL.MSG_QUERYNEARESTDUELTARGET { PlayerGameObject = wizard.Wizard.GameObject },
+                        wizard.Endpoint);
+                }
             }
             else if (now >= wizard.Until) {
                 Decide(wizard, now);
             }
 
-            if (_realPlayers > 0 && now >= wizard.NextIdleLine && AmbientWizards.Settings.Chat) {
+            if (now >= wizard.NextIdleLine && _realPlayers == 0) {
+                wizard.NextIdleLine = now.AddSeconds(IdleGap(wizard)); // nobody to talk to; keep the lines spread out
+            }
+            else if (now >= wizard.NextIdleLine && AmbientWizards.Settings.Chat) {
                 wizard.NextIdleLine = now.AddSeconds(IdleGap(wizard));
-                if (wizard.Limiter.TryTake(now) && AmbientChatBrain.Idle(ChatFor(wizard, 0), wizard.Turn++) is { } line) {
+                if (wizard.Limiter.TryTake(now) && AmbientChatBrain.Idle(ChatFor(wizard, 0), wizard.Turn++ + wizard.Identity.Seed) is { } line) {
                     AmbientChat.Say(wizard, line);
                 }
             }
@@ -416,7 +429,7 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
         }
 
         var roll = _rng.NextDouble();
-        if (AmbientWizards.Settings.StreetFights && _mobNodes is { Count: > 0 } && roll < 0.22
+        if (AmbientWizards.Settings.StreetFights && _mobNodes is { Count: > 0 } && roll < 0.35
             && wizard.Wizard.GameStats.m_currentHitpoints >= wizard.Wizard.GameStats.m_baseHitpoints * 0.6) {
             var node = Nearby(_mobNodes, wizard.Position);
             if (node is { } at) {
@@ -504,11 +517,15 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
             }
         }
 
-        // Keep to the part of the zone around the start: a hub's far corners can be other floors or closed areas.
-        _spots = [.. spots.Where(s => Distance(s.At, _start) < 6000 && MathF.Abs(s.At.Z - _start.Z) < 400)];
-        _mobNodes = ZoneDataDirectory.TryGetNodes(_zoneActor, out var nodes) && !_zone.EndsWith("_Hub", StringComparison.OrdinalIgnoreCase)
-            ? [.. nodes.Where(n => MathF.Abs(n.Z - _start.Z) < 400)]
+        // A hub: keep to the part around the start (its far corners can be other floors or closed areas). A street: its
+        // creature path nodes are walkable ground along the whole street, so wizards roam (and hunt) along them too.
+        var hub = _zone.Contains("Hub", StringComparison.OrdinalIgnoreCase);
+        _mobNodes = !hub && ZoneDataDirectory.TryGetNodes(_zoneActor, out var nodes)
+            ? [.. nodes.Where(n => MathF.Abs(n.Z - _start.Z) < 800)]
             : [];
+        _spots = hub
+            ? [.. spots.Where(s => Distance(s.At, _start) < 6000 && MathF.Abs(s.At.Z - _start.Z) < 400)]
+            : [.. spots.Where(s => MathF.Abs(s.At.Z - _start.Z) < 800), .. _mobNodes.Select(n => new Spot(n, 0, false))];
         Logger.Information("Ambient wizards in {Zone}: {Spots} places to go ({Npcs} NPCs), {Nodes} mob path nodes.",
             Logger.Args(_zone, _spots.Count, _spots.Count(s => s.Npc), _mobNodes.Count));
     }
@@ -576,12 +593,16 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
     // ---- fights ---------------------------------------------------------------------------------
 
     private void StreetFight(AmbientWizard wizard, ZONE_102_PROTOCOL.MSG_QUERYNEARESTDUELTARGETRSP target) {
-        if (!AmbientWizards.Settings.StreetFights || wizard.DuelSigil != ulong.MaxValue || wizard.Moving
+        if (!AmbientWizards.Settings.StreetFights || wizard.DuelSigil != ulong.MaxValue
             || wizard.Activity != AmbientActivity.Walking || target.CreatureActor is null || target.CreatureObject is null) {
             return;
         }
 
         wizard.DuelSigil = 0;
+        if (wizard.Moving) {
+            wizard.Moving = false; // stop where the mob noticed it
+        }
+
         AmbientWizards.PermitJoin(wizard.Endpoint, 0); // its own fight with a creature
         wizard.Activity = AmbientActivity.Helping;     // waiting for the duel to take it
         wizard.Until = DateTime.UtcNow.AddSeconds(8);
@@ -669,6 +690,16 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
         }
 
         _duels[notice.SigilId] = notice;
+        Logger.Debug("Ambient wizards in {Zone}: duel {Sigil} with {Players} player(s), {Free} free slot(s).",
+            Logger.Args(_zone, notice.SigilId, notice.PlayerCharIds.Length, notice.FreePlayerSlots));
+        TryOffer(notice);
+    }
+
+    /// <summary>
+    /// One ambient wizard nearby (a friend of a player in it first) asks a player of this duel whether they want help.
+    /// Called when the duel is announced and every few seconds while it runs and nobody has asked yet.
+    /// </summary>
+    private void TryOffer(AmbientDuelNotice notice) {
         if (!AmbientWizards.Settings.Battles || notice.Pvp || notice.FreePlayerSlots <= 0 || notice.PlayerCharIds.Length == 0
             || _offeredDuels.Contains(notice.SigilId)) {
             return;
@@ -684,6 +715,11 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
                                                         && Distance(w.Position, notice.Location) < HelpRange)
             .OrderBy(w => Distance(w.Position, notice.Location)).FirstOrDefault();
         if (helper is null) {
+            {
+                Logger.Debug("Ambient wizards in {Zone}: none free near duel {Sigil}: {Who}", Logger.Args(_zone, notice.SigilId,
+                    string.Join("; ", _wizards.Select(w => $"{w.Name} {w.Activity} {(int) Distance(w.Position, notice.Location)}"))));
+            }
+
             return;
         }
 
@@ -696,6 +732,7 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
         }
 
         _offeredDuels.Add(notice.SigilId);
+        Logger.Debug("Ambient wizard {Name} offers help in duel {Sigil}.", Logger.Args(helper.Name, notice.SigilId));
         helper.Offers.Offered(player, notice.SigilId, now);
         var facts = AmbientKnowledge.Facts(player);
         var line = AmbientChatBrain.HelpOffer(ChatFor(helper, player, facts), helper.Turn++);
