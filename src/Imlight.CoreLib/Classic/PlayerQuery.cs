@@ -61,6 +61,13 @@ internal static class PlayerQuery {
 
     private static readonly ConcurrentDictionary<(string Where, string Player), bool> s_reported = new();
 
+    /// <summary>How long a session that did not answer is skipped without asking again.</summary>
+    internal static readonly TimeSpan Backoff = TimeSpan.FromSeconds(30);
+
+    // Sessions that timed out, until when they are skipped. A zone asks per trigger and per event, so one departed
+    // or stuck session otherwise blocked the whole zone for 5 s on every music and ambient trigger (2026-10-01).
+    private static readonly ConcurrentDictionary<IActorRef, DateTime> s_unresponsive = new();
+
     /// <summary>
     /// The player's active wizard, or null when the session does not answer within <see cref="Timeout"/>.
     /// </summary>
@@ -99,8 +106,16 @@ internal static class PlayerQuery {
     internal static bool TryActiveWizard(IActorRef player, TimeSpan timeout, out Wizard wizard, out Exception error) {
         wizard = null;
         error = null;
-        if (player is null || player.IsNobody()) {
-            return false;
+        if (player is null || player.IsNobody() || player is IInternalActorRef { IsTerminated: true }) {
+            return false; // A session that has shut down has no wizard; asking it only waits out the timeout.
+        }
+
+        if (s_unresponsive.TryGetValue(player, out var until)) {
+            if (DateTime.UtcNow < until) {
+                return false;
+            }
+
+            s_unresponsive.TryRemove(player, out _);
         }
 
         try {
@@ -111,6 +126,11 @@ internal static class PlayerQuery {
         }
         catch (Exception ex) {
             error = ex;
+            if (s_unresponsive.Count > 10_000) {
+                s_unresponsive.Clear();
+            }
+
+            s_unresponsive[player] = DateTime.UtcNow + Backoff;
 
             return false;
         }
