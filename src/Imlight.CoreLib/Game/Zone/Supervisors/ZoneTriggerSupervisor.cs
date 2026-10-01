@@ -51,10 +51,24 @@ internal sealed partial class ZoneTriggerSupervisor(Core.Zone zone) : ZoneEntity
         // Triggers are stored in the client data, except for zone transfers.
         // Our QA team has manually recreated this trigger data, and is available within the database.
         // Words cannot describe how thankful I am for QA. They are the unsung heroes of the development team.
-        var replacedTriggers = ReplaceTriggerDataWithDatabase(message.TriggerData);
-        ApplyStoneDiscovery(replacedTriggers); // CLASSIC
-        var spawners = message.SpawnData.m_spawners;
-        UpdateSpawnResultTriggers(ref replacedTriggers, spawners, message.PathData.m_pathList, message.NodeData.m_nodeList);
+        List<Trigger> replacedTriggers;
+        try { // CLASSIC: a zone whose trigger data cannot be prepared says so instead of never finishing its load.
+            replacedTriggers = ReplaceTriggerDataWithDatabase(message.TriggerData);
+            // CLASSIC: a trigger of a class the client's type list does not know deserializes as null (one in the 2014
+            // KT_EntranceHall); it has nothing to run, so it is dropped rather than failing the zone.
+            var unreadable = replacedTriggers.RemoveAll(x => x is null);
+            if (unreadable > 0) {
+                Logger.Warning("Zone {Zone}: {Count} trigger(s) could not be read and were skipped.", Logger.Args(Zone.ZoneName, unreadable));
+            }
+            ApplyStoneDiscovery(replacedTriggers); // CLASSIC
+            var spawners = message.SpawnData.m_spawners;
+            UpdateSpawnResultTriggers(ref replacedTriggers, spawners, message.PathData.m_pathList, message.NodeData.m_nodeList);
+        }
+        catch (Exception ex) {
+            Logger.Error("Zone {Zone} trigger data could not be prepared: {Error}", Logger.Args(Zone.ZoneName, ex.ToString()));
+
+            throw;
+        }
 
         _orderedTriggers.Clear();
         _activation.Clear(); // CLASSIC
@@ -137,11 +151,14 @@ internal sealed partial class ZoneTriggerSupervisor(Core.Zone zone) : ZoneEntity
             foreach (var result in trigger.m_results.m_results) {
                 if (result is ResSpawn resSpawn) {
                     var spawnObjectList = spawners.Find(x => x.m_id == resSpawn.m_spawnID);
-                    if (spawnObjectList != null) {
-                        var spawnObject = spawnObjectList.m_spawnList[0];
-                        var objectPath = paths.Find(x => x.m_id.Full == spawnObject.m_objectInfo.m_pathID.Full);
-                        resSpawn.nodes = nodes.FindAll(x => objectPath.m_nodeIDs.Contains(x.m_id));
-                        resSpawn.templateID = spawnObject.m_objectInfo.m_templateID;
+                    // CLASSIC: a spawner with no spawn entry, object info or path in the zone's path data (the 2014
+                    // KT_EntranceHall) spawns without a path instead of failing the whole zone's triggers.
+                    if (spawnObjectList?.m_spawnList is { Count: > 0 } spawnList && spawnList[0]?.m_objectInfo is { } objectInfo) {
+                        var objectPath = paths?.Find(x => objectInfo.m_pathID is { } pathId && x.m_id.Full == pathId.Full);
+                        resSpawn.nodes = objectPath?.m_nodeIDs is { } nodeIds && nodes is not null
+                            ? nodes.FindAll(x => nodeIds.Contains(x.m_id))
+                            : [];
+                        resSpawn.templateID = objectInfo.m_templateID;
                     }
                 }
                 else if (result is ResDespawn resDespawn) {

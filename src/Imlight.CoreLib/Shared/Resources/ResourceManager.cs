@@ -21,6 +21,7 @@ using System.IO;
 using Imcodec.ObjectProperty;
 using Imcodec.Wad;
 using Imlight.Common;
+using Imlight.CoreLib.Classic;
 
 namespace Imlight.CoreLib.Shared.Resources;
 
@@ -114,6 +115,11 @@ internal static class ResourceManager {
     }
 
     private static Archive ResourceWad(string wadName) {
+        // CLASSIC: an older zone package from [Classic] ZoneWadsPath replaces the patch server's.
+        if (ClassicZoneWads.TryLoad(wadName, out var classicWad)) {
+            return classicWad;
+        }
+
         // Check if the file is already cached. If it is, just return that.
         var cachedWad = LocalWadCache.GetCachedWad(wadName);
         if (cachedWad is not null) {
