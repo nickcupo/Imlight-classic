@@ -220,6 +220,10 @@ public static class AdminDashboard {
                         break;
                     }
 
+                    if (key.StartsWith("Holiday", StringComparison.OrdinalIgnoreCase)) {
+                        ClassicHolidays.Refresh(); // the events follow at once, not at the next minute
+                    }
+
                     Logger.Information("[ADMIN] {User} set {Key} = {Value} from the dashboard.",
                         Logger.Args(user, key, string.IsNullOrEmpty(value) ? "(ini/default)" : value));
                     Json(response, 200, new { ok = true, note = error });

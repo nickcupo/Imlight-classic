@@ -42,6 +42,8 @@
 
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
+using System.Linq;
 using Akka.Actor;
 using Imcodec.CoreObject;
 using Imcodec.IO;
@@ -213,6 +215,8 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
 
         var random = Random.Shared;
         foreach (var templateId in defeatedMobTemplateIds ?? []) {
+            AddHolidayDrops(rules, templateId, result, random); // CLASSIC: classic-data/holidays boss drops in season
+
             if (ClassicMobInfo.Of(templateId) is not { } mob) {
                 continue;
             }
@@ -247,6 +251,29 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
         LootGranter.GrantAndDisplay(SessionActor.ActorRef, GetActiveWizard(), result);
 
         return result.GoldAmount;
+    }
+
+    // CLASSIC: while a holiday event runs, its bosses also roll their 2009 drops (classic-data/holidays), each list at
+    // the 2009 boss rate for a list that long (MobRewardRules), times [Classic] DropRateMultiplier.
+    private static void AddHolidayDrops(MobRewardRules rules, ulong templateId, DropTableResult result, Random random) {
+        if (ClassicHolidays.DropsFor(templateId) is not { } drops) {
+            return;
+        }
+
+        var multiplier = ClassicSettings.DropRateMultiplier;
+        var gear = drops.Items.Select(item => new DropEntry(item, null)).ToImmutableArray();
+        foreach (var item in rules.ItemDrops.Roll(gear, MobKind.Boss, gear.Length, tallied: false, random, multiplier)) {
+            if (CoreObjectFactory.GetCoreTemplate(item) is not null) {
+                result.Items.Add(new DropItemResult { ItemId = item.ToString(), ItemName = string.Empty, Quantity = 1 });
+            }
+        }
+
+        var cards = drops.TreasureCards.Select(card => new DropEntry(card, null)).ToImmutableArray();
+        foreach (var card in rules.TreasureCardDrops.Roll(cards, MobKind.Boss, cards.Length, tallied: false, random, multiplier)) {
+            if (card <= uint.MaxValue && CoreObjectFactory.GetCoreTemplate(card) is SpellTemplate) {
+                result.TreasureCards.Add((uint) card);
+            }
+        }
     }
 
     // Returns the gold granted.

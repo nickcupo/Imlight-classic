@@ -69,6 +69,9 @@ public static class ClassicStartup {
 
     private static string? s_classicDataRoot;
 
+    /// <summary>The classic-data directory the profile came from, or null without a profile.</summary>
+    public static string? ClassicDataRoot => s_classicDataRoot;
+
     /// <summary>
     /// Loads the configured profile and zone map into <see cref="ClassicRuntime"/>.
     /// </summary>
