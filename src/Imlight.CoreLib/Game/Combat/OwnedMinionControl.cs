@@ -18,7 +18,7 @@
  * ========================================================================
  * OWNED MINION CONTROL
  * ========================================================================
- * 
+ *
  * PURPOSE:
  * Validates optional owner orders independently of creature AI and combat resolution.
  *
