@@ -54,6 +54,7 @@ using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.Game.DropTables;
 using Imlight.CoreLib.Game.Combat;
 using Imlight.CoreLib.Shared.Items;
+using Imlight.CoreLib.Shared.Behaviors;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;
 using Imlight.CoreLib.Shared.Resources;
@@ -315,6 +316,67 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
         InformGameClient(_cheatNoFizzle
             ? "Spell fizzling disabled for your duels."
             : "Spell fizzling enabled for your duels.");
+    }
+
+    private bool _minionControlNegotiated;
+
+    [MessageHandler(typeof(EnhancedClassicProtocol.Hello))]
+    private void ReceiveEnhancementHello(EnhancedClassicProtocol.Hello message) {
+        // Monstrology is stock by default; strict/unsupported Hello withdraws its session permission.
+        Imlight.CoreLib.Game.Monstrology.MonstrologySessionPolicy.Bind(GetActiveWizard(), SessionActor.MonstrologySession);
+        // Extensions are silent until the client opts in. Unsupported versions never unlock control.
+        _minionControlNegotiated = message.ProtocolVersion == EnhancedClassicProtocol.Version
+            && !message.StrictClassic && EnhancedGameplaySettings.Enabled;
+        if (!_minionControlNegotiated) _currentDuelActor?.Tell(new COMBAT_106_PROTOCOL.MSG_OWNEDMINIONDISABLE {
+            OwnerActor = SessionActor.ActorRef
+        }, Self);
+        var wizard = GetActiveWizard();
+        var myth = wizard?.MagicSchoolBehavior?.MagicSchool == MagicSchool.Myth;
+        SendToSocket(new EnhancedClassicProtocol.Capabilities {
+            Flags = (_minionControlNegotiated && myth ? 1u : 0u)
+                | SessionActor.MonstrologySession.Advertise(Imlight.CoreLib.Game.Monstrology.MonstrologyService.Enabled)
+        });
+    }
+
+    [MessageHandler(typeof(EnhancedClassicProtocol.MinionRequest))]
+    private void ReceiveOwnedMinionRequest(EnhancedClassicProtocol.MinionRequest message) {
+        if (!_minionControlNegotiated || !EnhancedGameplaySettings.Enabled || _currentDuelActor == null) {
+            if (_minionControlNegotiated) SendToSocket(new EnhancedClassicProtocol.MinionState {
+                Payload = System.Text.Json.JsonSerializer.Serialize(new {
+                    message.DuelID, message.Round, message.MinionID, message.RequestID,
+                    Accepted = false, Status = "Unavailable", Snapshots = Array.Empty<object>()
+                })
+            });
+            return;
+        }
+        _currentDuelActor.Tell(new COMBAT_106_PROTOCOL.MSG_OWNEDMINIONREQUEST {
+            OwnerActor = SessionActor.ActorRef,
+            DuelID = message.DuelID, Round = message.Round, MinionID = message.MinionID,
+            RequestID = message.RequestID, Query = message.Query, MoveType = message.MoveType,
+            SpellSelection = message.SpellSelection, SpellTarget = message.SpellTarget
+        }, Self);
+    }
+
+    [MessageHandler(typeof(COMBAT_106_PROTOCOL.MSG_OWNEDMINIONRESPONSE))]
+    private void ReceiveOwnedMinionResponse(COMBAT_106_PROTOCOL.MSG_OWNEDMINIONRESPONSE message) {
+        if (!_minionControlNegotiated || !EnhancedGameplaySettings.Enabled
+            || message.OwnerActor != SessionActor.ActorRef) return;
+        var payload = System.Text.Json.JsonSerializer.Serialize(new {
+                message.DuelID, message.Round, message.MinionID, message.RequestID,
+                message.Accepted, Status = message.Status.ToString(),
+                Snapshots = System.Linq.Enumerable.Select(message.Snapshots, snapshot => new {
+                    snapshot.OwnerID, snapshot.MinionID, snapshot.Slot, snapshot.Team, snapshot.Health,
+                    snapshot.GenericPips, snapshot.PowerPips, snapshot.HandData, snapshot.ParticipantData,
+                    snapshot.HasOrder, snapshot.MoveType, snapshot.SpellSelection, snapshot.SpellTarget
+                })
+            });
+        if (System.Text.Encoding.UTF8.GetByteCount(payload) > EnhancedClassicProtocol.MaximumPayloadBytes) {
+            payload = System.Text.Json.JsonSerializer.Serialize(new {
+                message.DuelID, message.Round, message.MinionID, message.RequestID,
+                Accepted = false, Status = "SnapshotUnavailable", Snapshots = Array.Empty<object>()
+            });
+        }
+        SendToSocket(new EnhancedClassicProtocol.MinionState { Payload = payload });
     }
 
     [MessageHandler(typeof(DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_COMBATMOVE))]

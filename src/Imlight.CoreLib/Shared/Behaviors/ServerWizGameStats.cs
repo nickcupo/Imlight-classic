@@ -34,6 +34,12 @@ namespace Imlight.CoreLib.Shared.Behaviors;
 [Serializable]
 public class ServerWizGameStats : IClientTypeProvider<WizGameStats> {
 
+    internal ServerWizGameStats CloneSnapshotWithGold(int persistedGold) {
+        var snapshot = (ServerWizGameStats) MemberwiseClone();
+        snapshot.m_currentGold = persistedGold;
+        return snapshot;
+    }
+
     // These are stats relevant to the player's character, and not ones we can calculate from any other data.
     public int m_currentHitpoints;
     public int m_currentGold;

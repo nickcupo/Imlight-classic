@@ -69,6 +69,7 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
     private const string ENTER_ZONE_EVENT_NAME = "EnterZone";
 
     public IActorRef ZoneActor;
+    private long _attachGeneration;
 
     private readonly TimeSpan _zoneRemovalWaitTime = TimeSpan.FromSeconds(ZONE_REMOVAL_WAIT_TIME_IN_SECONDS);
     private readonly bool _randomBackflips
@@ -94,6 +95,7 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
         => Akka.Actor.Props.Create(() => new ZoneService(parentActor));
 
     protected override void OnPreDispose() {
+        SessionActor.PublishDoorAttach(null);
         var gameObj = GetActiveGameObject();
         if (gameObj is null) {
             base.OnPreDispose();
@@ -112,7 +114,9 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
         }
 
         // If the zone reference is not null, we'll tell the zone to remove the player.
+        SessionActor.PublishDoorAttach(null);
         ZoneActor?.Tell(new ZONE_102_PROTOCOL.MSG_REMOVEPLAYER() {
+            AttachGeneration = _attachGeneration,
             PlayerActor = SessionActor.ActorRef,
             GlobalId = globalId,
             MobileId = gameObj.m_nMobileID,
@@ -127,6 +131,7 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
 
     [MessageHandler(typeof(SERVICE_101_PROTOCOL.MSG_ATTACHCOMPLETE))]
     private void ReceivePostAttach(SERVICE_101_PROTOCOL.MSG_ATTACHCOMPLETE message) {
+        DoorAttachReady(message.ZoneActorRef, message.AttachGeneration);
         // Send immediate effects.
         var wizard = GetActiveWizard();
         var timeHomeLastClicked = DateTimeOffset.FromUnixTimeSeconds(wizard.TimeHomeLastClicked);
@@ -200,6 +205,7 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
             // If we're not sending this message to the client, it means the zone is being loaded
             // for MSG_ATTACH. In which case, the client is already prepared for the zone transfer.
             SetZone(zoneDetails.ZoneActorRef);
+            SessionActor.PublishDoorAttach(null);
             _currentDynamicZoneId = zoneDetails.DynamicZoneId;
         }
 
@@ -468,6 +474,8 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
             throw new NullReferenceException(nameof(ZoneActor));
         }
 
+        message.AttachGeneration = ++_attachGeneration;
+        SessionActor.PublishDoorAttach(new(GetActiveWizard().Zone, ZoneActor, _attachGeneration));
         ZoneActor.Forward(message);
     }
 
@@ -475,6 +483,8 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
     private void ReceiveAddPlayerRsp(ZONE_102_PROTOCOL.MSG_ADDPLAYERRSP message) {
         // I've just been added to a zone. I need to spawn myself for all the other players.
         SpawnMyself();
+        // Legacy door updates must follow the outgoing player object and its DynaMod behavior.
+        DoorAttachReady(message.ZoneActorRef, message.AttachGeneration);
 
         // Dismount in no-mount zones, re-equip on leaving (EquipmentService owns the reconcile).
         SessionActor.ActorRef.Tell(new ZONE_102_PROTOCOL.MSG_ENFORCEINTERIORMOUNT());
@@ -780,6 +790,12 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
         SendToSocket(rsp);
     }
 
+    private void DoorAttachReady(IActorRef actor, long generation) {
+        var current = SessionActor.DoorAttach;
+        if (current is null || current.Actor != actor || current.Generation != generation) return;
+        TellOtherServices(new LegacyDoorPlayerReady { Zone = current.Zone, ZoneActor = actor, AttachGeneration = generation });
+    }
+
     private void SetZone(IActorRef actorRef) {
         ZoneActor = actorRef;
         _removedForTransfer = false; // CLASSIC
@@ -804,7 +820,9 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
         // Remove the player from their current zone. We're awaiting a reply so the zone can properly clean up
         // before we continue on potentially a different thread.
         try {
+            SessionActor.PublishDoorAttach(null);
             var removePlayerMsg = new ZONE_102_PROTOCOL.MSG_REMOVEPLAYER() {
+                AttachGeneration = _attachGeneration,
                 PlayerActor = SessionActor.ActorRef,
                 GlobalId = GetActiveGameObject().m_globalID,
                 IsPlayerStillConnected = true,

@@ -1,3 +1,4 @@
+using Akka.Actor;
 /*
  * Imlight
  * Copyright (C) 2025 Revive101
@@ -103,6 +104,8 @@ internal sealed class SERVICE_101_PROTOCOL : IServerProtocol {
     }
 
     public class MSG_ATTACHCOMPLETE : IServerMessage {
+        public long AttachGeneration;
+        public IActorRef ZoneActorRef;
 
         public byte MessageOrder { get; } = 11;
         public byte ServiceID { get; } = 101;

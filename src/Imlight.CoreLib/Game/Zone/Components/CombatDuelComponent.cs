@@ -42,7 +42,7 @@
  * 
  * Created by: Jooty
  * Version: KALI 1.0
- * Last Updated: 09/27/2026
+ * Last Updated: 10/01/2026
  */
 
 using System;
@@ -86,7 +86,7 @@ namespace Imlight.CoreLib.Game.Zone.Components;
 /// positions subcircles according to sigil templates and maintains combat state
 /// including team assignments, turn order, and participant status.
 /// </remarks>
-internal sealed class CombatDuelComponent(ZoneEntity entity)
+internal sealed partial class CombatDuelComponent(ZoneEntity entity)
     : ZoneEntityComponent(entity), IComponentFactory, IWithTimers, IClientBehaviorProvider<WizardClientDuelBehavior> {
 
     private const byte PLANNING_TIME = 30;
@@ -220,12 +220,7 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
             var npcComponent = entity.GetComponentOfType<NpcComponent>();
             var isMonster = npcComponent == null || npcComponent.IsMonster;
 
-            // CLASSIC: a monster kept out only by the enemies-per-player cap is not recorded or removed; it keeps
-            // walking and is checked again on its next move, so it can join once another wizard joins.
-            if (isMonster && ClassicRuntime.IsActive && CreatureCount < 4 && !IsSlotAvailable(CombatTeam.Monster)) {
-                return;
-            }
-
+            // A roaming enemy reaching a full or cap-limited circle despawns through the existing creature lifecycle.
             _entitiesInRange.Add(creature, suspect);
 
             if (!isMonster) {
@@ -236,9 +231,9 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
                 AddParticipant(creature, suspect);
             }
             else {
-                // Delete the creature.
-                var deleteMsg = new COMBAT_106_PROTOCOL.MSG_COMBATDEATH();
-                suspect.Tell(deleteMsg);
+                suspect.Tell(new COMBAT_106_PROTOCOL.MSG_REJECTEDROAMINGCREATURE {
+                    ExpectedCreature = creature
+                });
             }
         }
         else if (!IsInRadius(creature, _combatSigilObjectInfo.m_radius) && _entitiesInRange.ContainsKey(creature)) {
@@ -320,6 +315,9 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
         // Add the circles to combat if they are not already.
         AddWaitingCombatParticipants();
         CombatResolver.Reset();
+        _ownedMinionControl.NewRound();
+        _ownedMinionFallbacks.Clear();
+        _ownedMinionEarlyFinishScheduled = false;
         _awaitingCombatMoves = true;
 
         // Determine the power pip gain for each participant.
@@ -345,6 +343,7 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
     private void ReceivePlanningPhaseBegin() {
         // Planning phase is when each participant notices their new stats and "plans" accordingly.
         Duel.m_duelPhase = kDuelPhase.kPhase_Planning;
+        _ownedMinionPlanningDeadline = DateTime.UtcNow.AddSeconds(PLANNING_TIME);
         SendCombatPhase((byte) Duel.m_duelPhase);
 
         SendCombatStats();
@@ -358,6 +357,7 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
 
         // Tutorial duels flush queued card grants and re-script the golems before planning.
         _tutorialDirector.OnPlanningPhaseBegin();
+        PublishOwnedMinionSnapshots();
 
         // Tutorial fights have no planning countdown (m_disableTimer): the client drives pacing. Planning still
         // ends normally once every participant has enqueued a move (ReceiveCombatMove).
@@ -365,6 +365,7 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
             var delay = TimeSpan.FromSeconds(PLANNING_TIME);
             Timers.StartSingleTimer(PLANNING_TIME_KEY, new COMBAT_106_PROTOCOL.MSG_PLANNINGPHASEOVER(), delay);
         }
+        ReevaluateOwnedMinionPlanning();
     }
 
     [MessageHandler(typeof(COMBAT_106_PROTOCOL.MSG_ACTORCOMBATDRAW))]
@@ -419,7 +420,10 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
             return;
         }
 
-        if (!_awaitingCombatMoves) {
+        if (!EnhancedGameplaySettings.Enabled) DisableAllOwnedMinionControl();
+        if (caster.IsSummonedMinion && _ownedMinionControl.HasOrder(caster.ParticipantObject)) return;
+        if (!_awaitingCombatMoves && !(_ownedMinionEarlyFinishScheduled
+            && !caster.IsSummonedMinion && _ownedMinionControl.IsOptedIn(caster.ParticipantObject))) {
             Logger.Warning("Duel {0} | Slot {1} | Received combat move while not expecting it.",
                 Logger.Args(Duel.m_duelID.Full, caster.SlotIndex));
 
@@ -459,15 +463,10 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
 
         _tutorialDirector.OnCombatMoveQueued();
 
-        // If by this point all participants have inputted their moves, we can start the next phase.
-        var participantCount = AlivePlayerCount + AliveCreatureCount;
-        if (CombatResolver.HaveAllParticipantsEnqueuedActions()) {
-            _awaitingCombatMoves = false;
-
-            // Adding a new timer will cancel the old one.
-            var delay = TimeSpan.FromSeconds(1);
-            Timers.StartSingleTimer(PLANNING_TIME_KEY, new COMBAT_106_PROTOCOL.MSG_PLANNINGPHASEOVER(), delay);
+        if (caster.IsSummonedMinion && CombatResolver.GetQueuedAction(caster) is { } fallback) {
+            _ownedMinionFallbacks[caster.ParticipantObject] = fallback;
         }
+        ReevaluateOwnedMinionPlanning();
     }
 
     [MessageHandler(typeof(COMBAT_106_PROTOCOL.MSG_PLANNINGPHASEOVER))]
@@ -481,6 +480,8 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
 
         // The execution phase begins. This is where combat actions take place and we actually see spell cinematics.
         _awaitingCombatMoves = false;
+        _ownedMinionEarlyFinishScheduled = false;
+        PrepareOwnedMinionExecution();
         Duel.m_duelPhase = kDuelPhase.kPhase_Execution;
         SendCombatPhase((byte) Duel.m_duelPhase);
 
@@ -524,6 +525,8 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
 
         // All spells have been called. Inform the client whether this duel continues or ends.
         Duel.m_duelPhase = kDuelPhase.kPhase_Resolution;
+        _ownedMinionControl.FinishRound();
+        PublishOwnedMinionSnapshots();
         SendCombatPhase((byte) Duel.m_duelPhase);
 
         var playersWin = AliveCreatureCount <= 0;
@@ -541,6 +544,9 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
     [MessageHandler(typeof(DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_ENDDUEL))]
     private void DespawnDuel() {
         _isActive = false;
+        _ownedMinionControl.Clear();
+        _ownedMinionFallbacks.Clear();
+        _ownedControllableSummons.Clear();
 
         // Minions are children of this sigil entity, which persists between fights; MSG_COMBATDEATH
         // deletes them outright.
@@ -589,7 +595,7 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
             return;
         }
 
-        SpawnAndAssignMinion(message.CreatureTid, message.Caster);
+        SpawnAndAssignMinion(message.CreatureTid, message.Caster, controllableSummon: true);
     }
 
     private void InitializeDuel(Dictionary<IActorRef, CoreObject> startingParticipants) {
@@ -757,10 +763,13 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
             TimeSpan.FromSeconds(spawnDelay));
     }
 
-    internal static void OnMinionRemoved(CombatDuelSubCircle circle)
-        => circle.RemoveParticipant();
+    internal static void OnMinionRemoved(CombatDuelSubCircle circle) {
+        var identity = circle.ParticipantObject;
+        circle.RemoveParticipant();
+        circle._duelActor.ForgetOwnedMinion(circle, identity);
+    }
 
-    private void SpawnAndAssignMinion(uint creatureTid, CombatDuelSubCircle caster) {
+    private void SpawnAndAssignMinion(uint creatureTid, CombatDuelSubCircle caster, bool controllableSummon = false) {
         var slot = GetAvailableSubCircleTeamPlayer();
         if (slot is null) {
             Logger.Information("Duel {0} | minion summon (tid {1}) skipped, no free player-team slot.",
@@ -794,6 +803,7 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
         try {
             AssignParticipantToSubCircle(slot, minionActor, minionObj, isSummonedMinion: true,
                                          minionOwnerSubCircle: caster.SlotIndex);
+            if (controllableSummon) RegisterOwnedMinionForControl(slot, caster);
         }
         catch (Exception ex) {
             Logger.Error("Duel {0} | minion summon: failed to assign tid {1} to slot {2}: {3}",
@@ -1063,24 +1073,26 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
     }
 
     private void HandleEnchantMove(CombatDuelSubCircle caster, int sourceIndex, uint targetIndex) {
-        // A queued cast owns its selected card until ChangeMind. Do not invalidate its references.
-        if (!Duel.m_bPVP && caster.AddedToDuel && caster.IsAlive && !caster.IsSummonedMinion && caster.OccupiedTeam == CombatTeam.Player
-            && CombatResolver.GetQueuedAction(caster) is null
-            && caster._combatDeck.TryEnchant(sourceIndex, targetIndex, out var consumedId)
-            && consumedId != 0 && caster._wizard is { } wizard) {
-            wizard.SpellbookBehavior.RemoveTreasureCard(consumedId);
-            WizardCollection.RemoveTreasureCard(wizard, consumedId);
-            var deckSlot = wizard.EquipmentBehavior.SlotList.FirstOrDefault(s => s.SlotType == EquipmentSlotType.Deck);
-            if (deckSlot?.ItemId is { } deckId) {
-                wizard.RemoveSpellFromDeck(consumedId, deckId);
-                if (CoreObjectFactory.GetCoreTemplate(consumedId) is SpellTemplate template) {
-                    caster.ParticipantActor.Tell(new WIZARD_12_PROTOCOL.MSG_REMOVETREASURESPELLFROMDECK {
-                        SpellID = (int) StringHash.Compute(template.m_name), EnchantmentID = 0,
-                        DeckID = deckId, Success = 1, Destroy = 0,
-                    });
+        RunMonstrologyEnchantment(caster, sourceIndex, targetIndex, () => {
+            // A queued cast owns its selected card until ChangeMind. Do not invalidate its references.
+            if (!Duel.m_bPVP && caster.AddedToDuel && caster.IsAlive && !caster.IsSummonedMinion && caster.OccupiedTeam == CombatTeam.Player
+                && CombatResolver.GetQueuedAction(caster) is null
+                && caster._combatDeck.TryEnchant(sourceIndex, targetIndex, out var consumedId)
+                && consumedId != 0 && caster._wizard is { } wizard) {
+                wizard.SpellbookBehavior.RemoveTreasureCard(consumedId);
+                WizardCollection.RemoveTreasureCard(wizard, consumedId);
+                var deckSlot = wizard.EquipmentBehavior.SlotList.FirstOrDefault(s => s.SlotType == EquipmentSlotType.Deck);
+                if (deckSlot?.ItemId is { } deckId) {
+                    wizard.RemoveSpellFromDeck(consumedId, deckId);
+                    if (CoreObjectFactory.GetCoreTemplate(consumedId) is SpellTemplate template) {
+                        caster.ParticipantActor.Tell(new WIZARD_12_PROTOCOL.MSG_REMOVETREASURESPELLFROMDECK {
+                            SpellID = (int) StringHash.Compute(template.m_name), EnchantmentID = 0,
+                            DeckID = deckId, Success = 1, Destroy = 0,
+                        });
+                    }
                 }
             }
-        }
+        });
         SendCurrentCombatHand(caster); // authoritative response on success or rejection; never refill
     }
 
@@ -1119,6 +1131,11 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
 
             CombatResolver.AddCombatMove(CombatMoveType.Pass, caster, null, null);
 
+            return;
+        }
+
+        if (!AllowsMonstrologyCast(caster, spell)) {
+            CombatResolver.AddCombatMove(CombatMoveType.Pass, caster, null, null);
             return;
         }
 
@@ -1196,6 +1213,7 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
     }
 
     private void HandleFleeAction(CombatDuelSubCircle caster) {
+        DisableOwnedMinionControl(caster.ParticipantObject);
         var actor = caster.ParticipantActor;
         var participantObjId = caster.ParticipantObject.m_globalID;
 
@@ -1363,6 +1381,8 @@ internal sealed class CombatDuelComponent(ZoneEntity entity)
         // The duel has ended. Inform the clients of the result.
         var playersWin = AliveAndInDuelCreatureCount <= 0;
         var creaturesWin = AliveAndInDuelPlayerCount <= 0;
+
+        FinishMonstrologyDuel(playersWin);
 
         // A queued tutorial card grant must not leak into the next duel on this sigil.
         _tutorialDirector.OnDuelEnded();

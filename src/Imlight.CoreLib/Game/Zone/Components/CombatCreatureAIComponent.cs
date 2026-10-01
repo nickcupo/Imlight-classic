@@ -236,6 +236,15 @@ internal sealed class CombatCreatureAIComponent(ZoneEntity entity) : ZoneEntityC
         }
     }
 
+    [MessageHandler(typeof(COMBAT_106_PROTOCOL.MSG_REJECTEDROAMINGCREATURE))]
+    private void ReceiveRoamingRejection(COMBAT_106_PROTOCOL.MSG_REJECTEDROAMINGCREATURE message) {
+        // Admission by another sigil wins over a delayed rejection from this movement broadcast.
+        if (_isInDuel || _sentFinalKill || message.ExpectedCreature is null
+            || !ReferenceEquals(message.ExpectedCreature, Entity.ActiveGameObject)) return;
+        _sentFinalKill = true;
+        Entity.DeleteObject();
+    }
+
     [MessageHandler(typeof(COMBAT_106_PROTOCOL.MSG_COMBATDEATH))]
     private void ReceiveCombatDeath(COMBAT_106_PROTOCOL.MSG_COMBATDEATH message) {
         if (_sentFinalKill || !_isInDuel) {

@@ -38,6 +38,7 @@
  */
 
 using Akka.Actor;
+using Imlight.Classic.Quests;
 using Imcodec.Cryptography;
 using Imcodec.MessageLayer.Generated;
 using Imlight.Common;
@@ -94,6 +95,7 @@ internal class DynaModService(SessionActor sessionActor) : MessageService(sessio
         var dynaModClientTag = message.DynaMod.m_dynaModClientTag;
         var dynaModState = message.DynaMod.m_dynaModState;
 
+        if (ClassicQuestEngine.IsActive && LegacyDoorBindings.IsAuthoritativeAlias(dynaModClientTag)) return;
         wizard.AddDynamod(zoneName, dynaModClientTag, dynaModState);
 
         // Broadcast the state change to the zone.
@@ -120,7 +122,9 @@ internal class DynaModService(SessionActor sessionActor) : MessageService(sessio
     [MessageHandler(typeof(CHARACTER_103_PROTOCOL.MSG_REMOVEDYNAMOD))]
     private void ReceiveRemoveDynaMod(CHARACTER_103_PROTOCOL.MSG_REMOVEDYNAMOD message) {
         var wizard = GetActiveWizard();
+        if (message.DynaMod is null) return;
         var dynaModClientTag = message.DynaMod.m_dynaModClientTag;
+        if (ClassicQuestEngine.IsActive && LegacyDoorBindings.IsAuthoritativeAlias(dynaModClientTag)) return;
 
         wizard.RemoveDynamod(dynaModClientTag);
     }

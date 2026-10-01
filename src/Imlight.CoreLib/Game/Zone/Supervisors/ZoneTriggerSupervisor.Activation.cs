@@ -89,6 +89,12 @@ internal sealed partial class ZoneTriggerSupervisor {
             stateChanged: (name, armed) => Logger.Debug("Zone {Zone} trigger {Trigger} is {State} for {Player} by {Event}.",
                 Logger.Args(Zone.ZonePath, name, armed ? "armed" : "disarmed", message.PlayerActor?.Path.Name, message.EventName)));
 
+        QueueLegacyDoors(message.PlayerActor);
+        ZoneRef.Tell(new ZONE_102_PROTOCOL.MSG_ZONEBROADCAST {
+            Sender = message.PlayerActor, Targets = ZoneBroadcastTarget.Objects,
+            Messages = [new Imlight.CoreLib.Game.Zone.Components.DoorLightRefresh { Player = message.PlayerActor }],
+        });
+
         foreach (var fire in fires) {
             fire.Trigger.Actor.Forward(new ZONE_102_PROTOCOL.MSG_POSTEVENT {
                 EventName = message.EventName,

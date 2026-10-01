@@ -214,7 +214,7 @@ public class Zone : ReceiveProtocolDispatcher, IWithTimers {
         
         // Send response to confirm player was added
         var response = new ZONE_102_PROTOCOL.MSG_ADDPLAYERRSP {
-            WizardGameObject = message.PlayerObject
+            WizardGameObject = message.PlayerObject, AttachGeneration = message.AttachGeneration, ZoneActorRef = Self
         };
         Sender.Tell(response);
     }
@@ -499,7 +499,7 @@ public class Zone : ReceiveProtocolDispatcher, IWithTimers {
                 
                 // Send response to confirm player was added
                 var response = new ZONE_102_PROTOCOL.MSG_ADDPLAYERRSP {
-                    WizardGameObject = addPlayer.PlayerObject
+                    WizardGameObject = addPlayer.PlayerObject, AttachGeneration = addPlayer.AttachGeneration, ZoneActorRef = Self
                 };
                 playerActor.Tell(response);
             }
