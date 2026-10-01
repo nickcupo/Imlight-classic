@@ -333,24 +333,11 @@ public class Wizard {
         WizardCollection.UpdateCharacterGameStats(this);
     }
 
-    public void AddGold(int gold) {
-        if (GameStats.m_currentGold + gold > GameStats.m_baseGoldPouch) {
-            GameStats.m_currentGold = GameStats.m_baseGoldPouch; // Do not exceed gold pouch.
-        }
-        else {
-            GameStats.m_currentGold += gold;
-        }
+    public void AddGold(int gold)
+        => WizardCollection.ChangeGold(this, gold, capToPouch: true);
 
-        // Persistent save.
-        WizardCollection.UpdateCharacterGameStats(this);
-    }
-
-    public void RemoveGold(int gold) {
-        GameStats.m_currentGold -= gold;
-
-        // Persistent save.
-        WizardCollection.UpdateCharacterGameStats(this);
-    }
+    public void RemoveGold(int gold)
+        => WizardCollection.ChangeGold(this, -(long) gold, capToPouch: false);
 
     public void UpdateHealth(int newHealth) {
         GameStats.m_currentHitpoints = newHealth;
@@ -901,7 +888,6 @@ public class Wizard {
         }
 
         // Consume one copy from the treasure card book.
-        SpellbookBehavior.RemoveTreasureCard(spellTemplateId);
         WizardCollection.RemoveTreasureCard(this, spellTemplateId);
 
         return true;
@@ -924,7 +910,6 @@ public class Wizard {
 
         if (!destroy) {
             // Return the card to the treasure book.
-            SpellbookBehavior.AddTreasureCard(spellTemplateId);
             WizardCollection.AddTreasureCard(this, spellTemplateId);
         }
 

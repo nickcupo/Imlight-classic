@@ -100,7 +100,7 @@ internal sealed class ZonePlayerSupervisor(Core.Zone zone) : ZoneEntitySuperviso
 
         // Inform the player that they have been added to the zone.
         var rsp = new ZONE_102_PROTOCOL.MSG_ADDPLAYERRSP {
-            WizardGameObject = message.PlayerObject
+            WizardGameObject = message.PlayerObject, AttachGeneration = message.AttachGeneration, ZoneActorRef = ZoneRef
         };
         message.PlayerActor.Tell(rsp);
 

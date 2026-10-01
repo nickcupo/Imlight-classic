@@ -24,12 +24,21 @@ internal static class ClassicHandEnchantment {
             || target.m_treasureCard || target.m_itemCard || target.m_battleCard
             || CoreObjectFactory.GetCoreTemplate(source.m_templateID) is not SpellTemplate enchantment
             || CoreObjectFactory.GetCoreTemplate(target.m_templateID) is not SpellTemplate original
-            || enchantment.m_spellRank?.m_spellRank != 0 || enchantment.m_effects?.Count != 1
+            || enchantment.m_spellRank?.m_spellRank != 0 || enchantment.m_effects is not { Count: > 0 }
             // The owning duel accepts this transaction only for PvE.
             || original.m_noPvEEnchant) {
             return false;
         }
-        var effect = enchantment.m_effects[0];
+        var collection = enchantment.m_effects.Where(e => e?.m_effectType == kSpellEffects.kCollectEssence).ToArray();
+        var modifiers = enchantment.m_effects.Where(e => e?.m_effectType != kSpellEffects.kCollectEssence).ToArray();
+        if (collection.Length > 0) {
+            if (!Imlight.CoreLib.Game.Monstrology.MonstrologyService.Enabled || collection.Length != 1
+                || collection[0].m_effectParam != 100 || collection[0].m_effectTarget != kEffectTarget.kSpell
+                || !Imlight.CoreLib.Game.Monstrology.MonstrologyPendingExtraction.TryFamily(enchantment, out _)
+                || modifiers.Length > 1 || modifiers.Any(e => e == null || e.m_effectType != kSpellEffects.kModifyCardDamage)
+                || original.m_effects?.Any(IsDamageBearing) != true) return false;
+        } else if (modifiers.Length != 1) return false;
+        var effect = modifiers.Length == 0 ? collection[0] : modifiers[0];
         if (effect is null || effect.m_effectTarget is not (kEffectTarget.kSpell or kEffectTarget.kSpecificSpells)
             || (enchantment.m_validTargetSpells is { Count: > 0 } valid && !valid.Contains(target.m_templateID))
             || (effect.m_effectTarget == kEffectTarget.kSpecificSpells && enchantment.m_validTargetSpells is not { Count: > 0 })
@@ -41,6 +50,8 @@ internal static class ClassicHandEnchantment {
         enchanted = target with { };
         castTemplate = original;
         switch (effect.m_effectType) {
+            case kSpellEffects.kCollectEssence when collection.Length == 1:
+                break; // Collection stays identified by the authoritative enchantment template; never a client award.
             case kSpellEffects.kModifyCardAccuracy when effect.m_effectParam > 0:
                 enchanted.m_accuracy = (byte) Math.Clamp((long) target.m_accuracy + effect.m_effectParam, 0, byte.MaxValue);
                 break;

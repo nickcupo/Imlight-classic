@@ -60,9 +60,14 @@ namespace Imlight.CoreLib.Shared.Networking;
 /// Represents a connected socket as a ReceiveActor.
 /// </summary>
 public sealed class SessionActor : ReceiveActor, IDisposable {
+    private ZoneAttachContext _doorAttach;
+    internal ZoneAttachContext DoorAttach => Volatile.Read(ref _doorAttach);
+    internal void PublishDoorAttach(ZoneAttachContext context) => Volatile.Write(ref _doorAttach, context);
 
     private readonly byte _serviceRetryCount                 = ConfigurationManager.Settings["Advanced.SessionActorServiceRetryCount"].AsByte();
     private readonly byte _serviceTimeRangeRetryInSeconds    = ConfigurationManager.Settings["Advanced.SessionActorServiceRangeRetry"].AsByte();
+
+    internal Imlight.CoreLib.Game.Monstrology.MonstrologySessionPolicy MonstrologySession { get; } = new();
 
     public ushort SessionID                                  { get; }
     public uint OfferTime                                    { get; set; }
@@ -430,6 +435,10 @@ public sealed class SessionActor : ReceiveActor, IDisposable {
                 
             return;
         }
+
+        // Apply session policy in packet order before forwarding to independently scheduled child services.
+        if (packet is EnhancedClassicProtocol.Hello enhancementHello)
+            MonstrologySession.Negotiate(enhancementHello.ProtocolVersion, enhancementHello.StrictClassic);
 
         if (_dispatchTable.TryGetValue(packet.GetType(), out var handlers)) {
             foreach (var handler in handlers) {

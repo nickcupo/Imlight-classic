@@ -748,6 +748,7 @@ internal partial class QuestService(SessionActor sessionActor) : MessageService(
     }
 
     private void SendGoalMessage(GoalTemplate gTemplate, QuestInstance qInstance, byte sendType = 0, bool forceSendDestZone = true) {
+        RefreshDoorLights();
         var gInstance = qInstance.GoalProgress
             .FirstOrDefault(g => g.GoalName == gTemplate.m_goalName);
         if (gInstance == null) {
@@ -820,7 +821,14 @@ internal partial class QuestService(SessionActor sessionActor) : MessageService(
         SendToSocket(packet);
     }
 
+    private void RefreshDoorLights() {
+        ZoneBroadcastNoPlayers(new Imlight.CoreLib.Game.Zone.Components.DoorLightRefresh {
+            Player = SessionActor.ActorRef, Wizard = GetActiveWizard(),
+        });
+    }
+
     private void SendCompleteGoal(ulong questId, ulong goalId) {
+        RefreshDoorLights();
         var gCompleteMsg = new QUEST_MESSAGES_52_PROTOCOL.MSG_COMPLETEGOAL {
             QuestID = questId,
             GoalID = goalId,
@@ -830,6 +838,7 @@ internal partial class QuestService(SessionActor sessionActor) : MessageService(
     }
 
     private void SendCompleteQuest(ulong questId) {
+        RefreshDoorLights();
         var qCompleteMsg = new QUEST_MESSAGES_52_PROTOCOL.MSG_COMPLETEQUEST {
             QuestID = questId,
         };

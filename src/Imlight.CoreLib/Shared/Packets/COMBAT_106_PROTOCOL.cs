@@ -275,4 +275,82 @@ public sealed class COMBAT_106_PROTOCOL : IServerProtocol {
 
     }
 
+    internal enum OwnedMinionStatus : byte {
+        Accepted = 0,
+        InvalidDuel = 1,
+        InvalidRound = 2,
+        NotPlanning = 3,
+        InvalidOwner = 4,
+        NotMyth = 5,
+        NotOwnedMinion = 6,
+        NotOptedIn = 7,
+        InvalidMove = 8,
+        InvalidCard = 9,
+        InsufficientPips = 10,
+        InvalidTarget = 11,
+        RequestReplay = 12,
+        SnapshotUnavailable = 13,
+        UnsupportedSummon = 14,
+        Disabled = 15,
+    }
+
+    internal sealed class OwnedMinionSnapshot {
+        public ulong OwnerID;
+        public ulong MinionID;
+        public byte Slot;
+        public byte Team;
+        public int Health;
+        public byte GenericPips;
+        public byte PowerPips;
+        public byte[] HandData = [];
+        public byte[] ParticipantData = [];
+        public bool HasOrder;
+        public byte MoveType;
+        public byte SpellSelection;
+        public uint SpellTarget;
+    }
+
+    internal sealed class MSG_OWNEDMINIONREQUEST : IServerMessage {
+        public byte MessageOrder => 28;
+        public byte ServiceID => 106;
+
+        // Only the authenticated service supplies OwnerActor; it is never a wire field.
+        public IActorRef OwnerActor;
+        public ulong DuelID;
+        public int Round;
+        public ulong MinionID;
+        public uint RequestID;
+        public byte MoveType;
+        public byte SpellSelection;
+        public uint SpellTarget;
+        public bool Query;
+    }
+
+    internal sealed class MSG_OWNEDMINIONRESPONSE : IServerMessage {
+        public byte MessageOrder => 29;
+        public byte ServiceID => 106;
+
+        public IActorRef OwnerActor;
+        public ulong DuelID;
+        public int Round;
+        public ulong MinionID;
+        public uint RequestID;
+        public bool Accepted;
+        public OwnedMinionStatus Status;
+        public OwnedMinionSnapshot[] Snapshots = [];
+    }
+
+    internal sealed class MSG_OWNEDMINIONDISABLE : IServerMessage {
+        public byte MessageOrder => 30;
+        public byte ServiceID => 106;
+        public IActorRef OwnerActor;
+    }
+
+    // Internal roaming rejection, never a combat death or a wire message.
+    internal sealed class MSG_REJECTEDROAMINGCREATURE : IServerMessage {
+        public byte MessageOrder => 31;
+        public byte ServiceID => 106;
+        public CoreObject ExpectedCreature;
+    }
+
 }

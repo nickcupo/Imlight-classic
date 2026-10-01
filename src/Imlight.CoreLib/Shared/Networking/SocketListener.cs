@@ -264,7 +264,7 @@ internal sealed class SocketListener : ReceiveActor, IDisposable {
 
     private bool TryDeserializePacket(byte[] buffer, out IReadOnlyCollection<IMessage> messages) {
         try {
-            messages = MessageEncoder.Decode(buffer);
+            messages = EnhancedMessageDecoder.Decode(buffer);
             
             return true;
         }

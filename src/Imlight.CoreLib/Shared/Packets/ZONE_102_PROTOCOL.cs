@@ -312,6 +312,7 @@ public class ZONE_102_PROTOCOL : IServerProtocol {
     /// added to the zone.
     /// </summary>
     public class MSG_ADDPLAYER : IServerMessage {
+        public long AttachGeneration;
 
         public byte MessageOrder { get; } = 14;
         public byte ServiceID { get; } = 102;
@@ -327,11 +328,13 @@ public class ZONE_102_PROTOCOL : IServerProtocol {
     /// Called by a <see cref="Zone"/> to a <see cref="ZoneService"/> to indicate that the player has been added to the zone.
     /// </summary>
     public class MSG_ADDPLAYERRSP : IServerMessage {
+        public long AttachGeneration;
 
         public byte MessageOrder { get; } = 15;
         public byte ServiceID { get; } = 102;
 
         public CoreObject WizardGameObject;
+        public IActorRef ZoneActorRef;
 
     }
 
@@ -339,6 +342,7 @@ public class ZONE_102_PROTOCOL : IServerProtocol {
     /// Called by a <see cref="ZoneService"/> to a <see cref="Zone"/> to indicate that the player needs to be removed from the zone.
     /// </summary>
     public class MSG_REMOVEPLAYER : IServerMessage {
+        public long AttachGeneration;
 
         public byte MessageOrder { get; } = 16;
         public byte ServiceID { get; } = 102;

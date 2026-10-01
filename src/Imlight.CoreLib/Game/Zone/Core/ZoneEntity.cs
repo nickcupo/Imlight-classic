@@ -97,6 +97,7 @@ public class ZoneEntity(
     private readonly List<ZoneEntityComponent> _componentOrder = [];
 
     internal IActorRef CurrentSender => Sender;
+    internal ActorSelection SelectZoneChild(string name) => Context.ActorSelection(ZoneRef.Path.Child(name));
 
     /// <summary>
     /// Gets a list of components of the specified type.

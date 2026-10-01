@@ -223,6 +223,7 @@ internal static class CombatEffectApplicator {
                 m_effectType = effect.m_effectType,
             };
             target._hangingEffects.Add(effectClone);
+            caster._duelActor.RegisterMonstrologyDot(target, effectClone);
         }
 
         return cinematicTime;

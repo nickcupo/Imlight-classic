@@ -155,6 +155,10 @@ public class CombatResolver(Duel duel, CombatDuelSubCircle[] actorSubCircles) {
             }
         }
 
+        if (spell != null && !caster._duelActor.AllowsMonstrologyCast(caster, spell, spellTemplate)) {
+            type = CombatMoveType.Pass; spell = null; spellTemplate = null; target = null;
+        }
+
         var queuedAction = new QueuedCombatAction {
             SpellCaster = caster,
             Spell = type == CombatMoveType.Attack ? spell : null,
@@ -282,22 +286,25 @@ public class CombatResolver(Duel duel, CombatDuelSubCircle[] actorSubCircles) {
                     continue;
                 }
 
-                // Determine if this spell hits or fizzles.
-                var spellHits = SpellHits(action.SpellCaster, action.Spell);
-                if (!spellHits) {
-                    cinematicTime += HandleFizzleAction(action, combatActionList);
+                // Recheck under the session lock through effects AND costs. Strict Hello may have arrived after queuing.
+                if (!action.SpellCaster._duelActor.RunMonstrologyCast(action.SpellCaster, action.Spell, action.SpellTemplate, () => {
+                    // Determine if this spell hits or fizzles.
+                    var spellHits = SpellHits(action.SpellCaster, action.Spell);
+                    if (!spellHits) {
+                        cinematicTime += HandleFizzleAction(action, combatActionList);
 
-                    // Increase pips used counter by 1, even if the spell fizzled.
-                    // CLASSIC: under the profile's mob reward rules a fizzled card counts as the rules say.
-                    action.SpellCaster._usedPipsForExperienceGain += ClassicProgression.MobRewards is { } rewards
-                        ? rewards.CombatXp.PipsForFizzle(action.Spell.m_pipCost.m_spellRank, CombatActionResolver.IsXPipSpell(action.Spell))
-                        : 1;
-                }
-                else {
-                    // Record when this caster's cinematic begins so a summoned minion appears with its cast.
-                    action.SpellCaster._duelActor.CurrentActionCinematicOffsetSeconds = cinematicTime;
-                    cinematicTime += HandleSuccessfulAction(action, combatActionList);
-                }
+                        // Increase pips used counter by 1, even if the spell fizzled.
+                        // CLASSIC: under the profile's mob reward rules a fizzled card counts as the rules say.
+                        action.SpellCaster._usedPipsForExperienceGain += ClassicProgression.MobRewards is { } rewards
+                            ? rewards.CombatXp.PipsForFizzle(action.Spell.m_pipCost.m_spellRank, CombatActionResolver.IsXPipSpell(action.Spell))
+                            : 1;
+                    }
+                    else {
+                        // Record when this caster's cinematic begins so a summoned minion appears with its cast.
+                        action.SpellCaster._duelActor.CurrentActionCinematicOffsetSeconds = cinematicTime;
+                        cinematicTime += HandleSuccessfulAction(action, combatActionList);
+                    }
+                })) cinematicTime += HandlePassAction(action, combatActionList);
             }
             finally {
                 if (beguiled) {
@@ -348,7 +355,9 @@ public class CombatResolver(Duel duel, CombatDuelSubCircle[] actorSubCircles) {
     private float HandleSuccessfulAction(QueuedCombatAction action, CombatActionListObj combatActionList) {
         var cinematicTime = 0.0f;
         var combatAction = InitializeCombatAction(action);
+        var extractionBefore = action.SpellCaster._duelActor.BeginMonstrologyCast(action);
         var spellWorthCasting = CombatActionResolver.ProcessedQueuedCombatAction(action, ref combatAction, ref cinematicTime);
+        action.SpellCaster._duelActor.ObserveMonstrologyCast(action, extractionBefore);
 
         LogCombatAction(action, combatAction, spellWorthCasting);
 
@@ -393,7 +402,9 @@ public class CombatResolver(Duel duel, CombatDuelSubCircle[] actorSubCircles) {
             // We don't need to calculate stats from gear because the initial application already did that.
 
             cinematicTime += HANGING_EFFECT_CONSUME_TIME * wards.Count;
+            var healthBeforeTick = caster.ParticipantGameStats.m_currentHitpoints;
             caster.DamageParticipant(damage);
+            caster._duelActor.ObserveMonstrologyDot(caster, effect, healthBeforeTick);
             if (ClassicRuntime.IsActive) {
                 foreach (var ward in wards.Where(w => w.m_paramPerRound <= 0)) caster._hangingEffects.Remove(ward);
             }

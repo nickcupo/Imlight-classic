@@ -114,13 +114,13 @@ internal sealed class RenderComponent(ZoneEntity entity) : ZoneEntityComponent(e
         string persistedState = null;
         foreach (var mod in relevantDynaMods) {
             // If the player has a dynamod that disables this object, do not spawn it for them.
-            if (mod.ModState.Equals(DESPAWN_STATE_NAME, System.StringComparison.OrdinalIgnoreCase)) {
+            if (!QuestDoorLightComponent.IsLight(Entity.Template) && mod.ModState.Equals(DESPAWN_STATE_NAME, System.StringComparison.OrdinalIgnoreCase)) {
                 _playerIgnoreBecauseDynamod[suspect] = wizard;
 
                 return;
             }
 
-            if (!mod.ModState.Equals(SPAWN_STATE_NAME, System.StringComparison.OrdinalIgnoreCase)) {
+            if (QuestDoorLightComponent.IsLight(Entity.Template) || !mod.ModState.Equals(SPAWN_STATE_NAME, System.StringComparison.OrdinalIgnoreCase)) {
                 persistedState = mod.ModState;
             }
         }
@@ -237,7 +237,7 @@ internal sealed class RenderComponent(ZoneEntity entity) : ZoneEntityComponent(e
 
             // Any other state names an object state such as "IdleOpen". Only the client can act
             // on it, and it never affects whether the object is spawned.
-            if (!isDespawn && !isSpawn) {
+            if (QuestDoorLightComponent.IsLight(Entity.Template) || (!isDespawn && !isSpawn)) {
                 Entity.ChangeStateExclusiveSender(msg.StateName, player);
 
                 return;
@@ -322,6 +322,7 @@ internal sealed class RenderComponent(ZoneEntity entity) : ZoneEntityComponent(e
             Data = serializedData
         };
         player.Tell(newObjectMsg);
+        Entity.GetComponentOfType<QuestDoorLightComponent>()?.ReplayFor(player);
         if (Entity.TriggerObjectState is { } triggerState) {
             Entity.ChangeStateExclusiveSender(triggerState, player);
         }

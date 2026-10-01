@@ -18,6 +18,8 @@
 
 using System;
 using System.Linq;
+using System.Collections.Generic;
+using Imlight.CoreLib.Shared.Behaviors;
 using Raven.Client.Documents;
 using Raven.Client.Documents.Linq;
 using Raven.Client.Documents.Session;
@@ -32,7 +34,8 @@ namespace Imlight.CoreLib.WizardData.Collections;
 public static class WizardCollection {
 
     public const string CollectionName = "Wizards";
-    private static readonly IDocumentStore s_store;
+    private static readonly Lazy<IDocumentStore> s_storeSource = new(() => PlayerDatabase.Instance.Store);
+    private static IDocumentStore s_store => s_storeSource.Value;
 
     private const int WriteLaneCount = 1 << 8; // 256 lanes
     private const ulong WriteLaneMask = WriteLaneCount - 1;
@@ -49,9 +52,6 @@ public static class WizardCollection {
 
     private static readonly TimeSpan s_nonStaleWaitTimeout
         = TimeSpan.FromSeconds(ConfigurationManager.Settings["Database.DatabaseWaitForNonStaleResultsTimeout"].AsByte(5));
-
-    static WizardCollection()
-        => s_store = PlayerDatabase.Instance.Store;
 
     private static T WithWriteLane<T>(ulong charId, Func<T> write) {
         var laneIndex = (int) (charId & WriteLaneMask);
@@ -71,6 +71,56 @@ public static class WizardCollection {
                 s_heldWriteLane = previousLane;
             }
         }
+    }
+
+    /// <summary>
+    /// Commits Monstrology's ledger and wizard state under the shared player write lane.
+    /// </summary>
+    internal static bool TransactMonstrology(ulong charId, Func<IDocumentSession, Wizard, bool> operation)
+        => TransactMonstrology(charId, operation, null);
+
+    internal static bool TransactMonstrology(ulong charId, Func<IDocumentSession, Wizard, bool> operation,
+                                            Action<Wizard> afterCommit)
+        => CommitCharacterMutation(charId, operation, afterCommit);
+
+    internal static bool CommitCharacterMutation(ulong charId, Func<IDocumentSession, Wizard, bool> operation,
+        Action<Wizard> afterCommit, Func<IDocumentSession> openSession = null,
+        Func<IDocumentSession, ulong, Wizard> loadWizard = null) {
+        return WithWriteLane(charId, () => {
+            using var session = openSession is null ? s_store.OpenSession() : openSession();
+            session.Advanced.OptimisticConcurrencyMode = OptimisticConcurrencyMode.Writes;
+            var wizard = loadWizard is null ? GetCharacterByCharId(session, charId) : loadWizard(session, charId);
+            if (wizard is null || !operation(session, wizard)) return false;
+            session.SaveChanges();
+            afterCommit?.Invoke(wizard);
+            return true;
+        });
+    }
+
+    internal static bool TryPurchaseTreasureCards(Wizard liveWizard, uint templateId, int quantity, int unitPrice,
+        Func<IDocumentSession> openSession = null, Func<IDocumentSession, ulong, Wizard> loadWizard = null) {
+        var total = (long) quantity * unitPrice;
+        if (liveWizard is null || templateId == 0 || quantity <= 0 || unitPrice < 0 || total > int.MaxValue) return false;
+        return CommitCharacterMutation(liveWizard.CharId, (_, persisted) => {
+            if (persisted.GameStats.m_currentGold < total) return false;
+            persisted.GameStats.m_currentGold -= (int) total;
+            for (var i = 0; i < quantity; i++) persisted.SpellbookBehavior.AddTreasureCard(templateId);
+            return true;
+        }, persisted => {
+            liveWizard.GameStats.m_currentGold = persisted.GameStats.m_currentGold;
+            PublishTreasureCards(liveWizard, persisted);
+        }, openSession, loadWizard);
+    }
+
+    internal static bool ChangeGold(Wizard liveWizard, long delta, bool capToPouch,
+        Func<IDocumentSession> openSession = null, Func<IDocumentSession, ulong, Wizard> loadWizard = null) {
+        return CommitCharacterMutation(liveWizard.CharId, (_, persisted) => {
+            var gold = persisted.GameStats.m_currentGold + delta;
+            if (capToPouch && gold > persisted.GameStats.m_baseGoldPouch) gold = persisted.GameStats.m_baseGoldPouch;
+            persisted.GameStats.m_currentGold = checked((int) gold);
+            return true;
+        }, persisted => liveWizard.GameStats.m_currentGold = persisted.GameStats.m_currentGold,
+            openSession, loadWizard);
     }
 
     private static bool UpdateCharacter(ulong charId, Action<Wizard> update) {
@@ -324,18 +374,34 @@ public static class WizardCollection {
     /// excluded item spell list and other spellbook state to the database.
     /// </summary>
     /// <param name="wizard">The wizard whose spellbook behavior should be persisted.</param>
-    public static void UpdateCharacterSpellbookBehavior(Wizard wizard) {
-        UpdateCharacter(wizard.CharId, existingCharacter =>
-            existingCharacter.SpellbookBehavior = wizard.SpellbookBehavior);
+    public static void UpdateCharacterSpellbookBehavior(Wizard wizard)
+        => UpdateCharacterSpellbookBehavior(wizard, null, null);
+
+    internal static bool UpdateCharacterSpellbookBehavior(Wizard wizard, Func<IDocumentSession> openSession,
+        Func<IDocumentSession, ulong, Wizard> loadWizard) {
+        return CommitCharacterMutation(wizard.CharId, (_, persisted) => {
+            // Treasure-card quantities belong to the persisted add/remove operations.
+            persisted.SpellbookBehavior.LearnedSpellTemplateIds = wizard.SpellbookBehavior.LearnedSpellTemplateIds?.ToList() ?? [];
+            persisted.SpellbookBehavior.ExcludedItemSpellIds = wizard.SpellbookBehavior.ExcludedItemSpellIds?
+                .ToDictionary(pair => pair.Key, pair => new HashSet<uint>(pair.Value)) ?? [];
+            return true;
+        }, persisted => PublishTreasureCards(wizard, persisted), openSession, loadWizard);
     }
 
     /// <summary>
     /// Updates the character game stats for a wizard.
     /// </summary>
     /// <param name="wizard">The wizard object containing the updated game stats</param>
-    public static void UpdateCharacterGameStats(Wizard wizard) {
-        UpdateCharacter(wizard.CharId, existingCharacter =>
-            existingCharacter.GameStats = wizard.GameStats);
+    public static void UpdateCharacterGameStats(Wizard wizard)
+        => UpdateCharacterGameStats(wizard, null, null);
+
+    internal static bool UpdateCharacterGameStats(Wizard wizard, Func<IDocumentSession> openSession,
+        Func<IDocumentSession, ulong, Wizard> loadWizard) {
+        return CommitCharacterMutation(wizard.CharId, (_, persisted) => {
+            persisted.GameStats = wizard.GameStats.CloneSnapshotWithGold(persisted.GameStats.m_currentGold);
+            return true;
+        }, persisted => wizard.GameStats.m_currentGold = persisted.GameStats.m_currentGold,
+            openSession, loadWizard);
     }
 
     /// <summary>
@@ -408,20 +474,28 @@ public static class WizardCollection {
     /// </summary>
     /// <param name="wizard">The wizard to add the treasure card to.</param>
     /// <param name="spellTemplateId">The template ID of the spell to add as a treasure card.</param>
-    public static void AddTreasureCard(Wizard wizard, uint spellTemplateId) {
-        UpdateCharacter(wizard.CharId, existingCharacter =>
-            existingCharacter.SpellbookBehavior.AddTreasureCard(spellTemplateId));
+    public static void AddTreasureCard(Wizard wizard, uint spellTemplateId)
+        => ChangeTreasureCard(wizard, spellTemplateId, add: true);
+
+    internal static bool ChangeTreasureCard(Wizard wizard, uint spellTemplateId, bool add,
+        Func<IDocumentSession> openSession = null, Func<IDocumentSession, ulong, Wizard> loadWizard = null) {
+        return CommitCharacterMutation(wizard.CharId, (_, persisted) => {
+            if (add) persisted.SpellbookBehavior.AddTreasureCard(spellTemplateId);
+            else persisted.SpellbookBehavior.RemoveTreasureCard(spellTemplateId);
+            return true;
+        }, persisted => PublishTreasureCards(wizard, persisted), openSession, loadWizard);
     }
+
+    private static void PublishTreasureCards(Wizard liveWizard, Wizard persisted)
+        => liveWizard.SpellbookBehavior.TreasureCardTemplateIds = persisted.SpellbookBehavior.TreasureCardTemplateIds?.ToList() ?? [];
 
     /// <summary>
     /// Removes a treasure card from the spellbook of a wizard.
     /// </summary>
     /// <param name="wizard">The wizard whose spellbook will be modified.</param>
     /// <param name="spellTemplateId">The template ID of the treasure card to remove.</param>
-    public static void RemoveTreasureCard(Wizard wizard, uint spellTemplateId) {
-        UpdateCharacter(wizard.CharId, existingCharacter =>
-            existingCharacter.SpellbookBehavior.RemoveTreasureCard(spellTemplateId));
-    }
+    public static void RemoveTreasureCard(Wizard wizard, uint spellTemplateId)
+        => ChangeTreasureCard(wizard, spellTemplateId, add: false);
 
     /// <summary>
     /// Adds a new relationship to the friends behavior of a wizard.
