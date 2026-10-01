@@ -59,7 +59,7 @@ namespace Imlight.CoreLib.Shared.Networking;
 /// <summary>
 /// Represents a connected socket as a ReceiveActor.
 /// </summary>
-public sealed class SessionActor : ReceiveActor, IDisposable {
+public sealed partial class SessionActor : ReceiveActor, IDisposable {
     private ZoneAttachContext _doorAttach;
     internal ZoneAttachContext DoorAttach => Volatile.Read(ref _doorAttach);
     internal void PublishDoorAttach(ZoneAttachContext context) => Volatile.Write(ref _doorAttach, context);
@@ -333,7 +333,7 @@ public sealed class SessionActor : ReceiveActor, IDisposable {
     protected override void PreStart() {
         // Ask the ActorFactory for this actor's message services.
         var msg = new SERVICE_101_PROTOCOL.MSG_QUERYUNLOADEDSERVICES();
-        var services = _actorFactoryRef
+        var services = _inProcessServices?.ToList() ?? _actorFactoryRef
             .Ask<SERVICE_101_PROTOCOL.MSG_SERVICESLIST>(msg)
             .Result
             .Services;
@@ -357,6 +357,9 @@ public sealed class SessionActor : ReceiveActor, IDisposable {
         Receive<SERVER_100_PROTOCOL.MSG_PING>(x => this.Ping = x.Ping);
         Receive<Exception>(ReceiveException);
         Receive<SERVER_100_PROTOCOL.MSG_RECEIVEDPACKET>(x => HandlePacket(x.Packet));
+
+        Receive<LegacyDoorOwnerObject>(ReceiveLegacyDoorOwnerObject);
+        Receive<LegacyDoorSocketBatch>(ReceiveLegacyDoorSocketBatch);
 
         // Generic message handlers.
         Receive<IServerMessage>(HandleInternalTell);

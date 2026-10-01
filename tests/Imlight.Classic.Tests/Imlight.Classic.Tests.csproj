@@ -49,6 +49,7 @@
     <ServerIntegrationTest Include="TriggerObjectResultTests.cs" />
     <ServerIntegrationTest Include="DoorLightRuntimeTests.cs" />
     <ServerIntegrationTest Include="LegacyDoorRuntimeTests.cs" />
+    <ServerIntegrationTest Include="LegacyDoorOrderingTests.cs" />
     <ServerIntegrationTest Include="ZoneMarkerLifecycleTests.cs" />
   </ItemGroup>
   <PropertyGroup>

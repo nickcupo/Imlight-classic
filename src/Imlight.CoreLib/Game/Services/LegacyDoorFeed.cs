@@ -18,8 +18,11 @@ internal sealed class LegacyDoorFeed {
         _current = context; _readyZone = null; _readyActor = null; _readyGeneration = 0;
     }
     private readonly Dictionary<string, (LegacyDoorBindings.Binding Binding, string State)> _states = new(StringComparer.Ordinal);
-    internal bool Ready(string zone, IActorRef actor, long generation) {
-        if (_current is null || _current.Actor != actor || _current.Generation != generation || !string.Equals(_current.Zone, zone, StringComparison.OrdinalIgnoreCase)) return false;
+    internal bool Ready(string zone, IActorRef actor, long generation, bool replay = false, ulong owner = 0) {
+        if (_current is null || _current.Actor != actor || _current.Generation != generation || _current.Owner != owner || !string.Equals(_current.Zone, zone, StringComparison.OrdinalIgnoreCase)) return false;
+        // A newly emitted owner object has no sent door state. Clear only after
+        // validating its current attachment; stale ready messages cannot reset it.
+        if (replay) { _states.Clear(); _zone = null; _actor = null; }
         _readyZone = zone; _readyActor = actor; _readyGeneration = generation; return true;
     }
     internal List<GAME_5_PROTOCOL.MSG_DYNAMODBEHAVIOR_UPDATEMODS> Leave(string zone, IActorRef actor, long generation) {
@@ -32,7 +35,7 @@ internal sealed class LegacyDoorFeed {
     }
     internal List<GAME_5_PROTOCOL.MSG_DYNAMODBEHAVIOR_UPDATEMODS> Apply(LegacyDoorSnapshot snapshot, string actualZone, ulong owner, bool attached) {
         List<GAME_5_PROTOCOL.MSG_DYNAMODBEHAVIOR_UPDATEMODS> packets = [];
-        if (_current is null || _current.Actor != snapshot.ZoneActor || _current.Generation != snapshot.AttachGeneration || _readyGeneration != snapshot.AttachGeneration || !attached || !string.Equals(actualZone, snapshot.Zone, StringComparison.OrdinalIgnoreCase)
+        if (_current is null || (_current.Owner != 0 && _current.Owner != owner) || _current.Actor != snapshot.ZoneActor || _current.Generation != snapshot.AttachGeneration || _readyGeneration != snapshot.AttachGeneration || !attached || !string.Equals(actualZone, snapshot.Zone, StringComparison.OrdinalIgnoreCase)
             || !string.Equals(_readyZone, snapshot.Zone, StringComparison.OrdinalIgnoreCase) || _readyActor != snapshot.ZoneActor) return packets;
         if (_owner != owner) { _states.Clear(); _zone = null; _actor = null; _owner = owner; }
         if (_zone != snapshot.Zone || _actor != snapshot.ZoneActor || _generation != snapshot.AttachGeneration || snapshot.Replay) {
