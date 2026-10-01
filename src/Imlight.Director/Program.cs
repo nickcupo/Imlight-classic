@@ -112,6 +112,9 @@ internal static class Program {
         );
         Logger.Information("Imlight configuration loaded.");
 
+        // CLASSIC: thread pool headroom for handlers that still block (see ClassicStartup.ConfigureThreadPool).
+        ClassicStartup.ConfigureThreadPool();
+
         // CLASSIC: the rules profile loads before any resource or server reads it; a broken profile stops the boot.
         if (!ClassicStartup.Initialize()) {
             Environment.ExitCode = 1;
@@ -131,6 +134,8 @@ internal static class Program {
         }
         Logger.Information("Akka.NET system created.");
         s_imlightSystem = system;
+        // CLASSIC: optional PERF log lines (handler times, mailbox waits, starvation, GC).
+        ClassicStartup.StartPerfMonitor(system);
 
         // =============================================================
         // RESOURCES

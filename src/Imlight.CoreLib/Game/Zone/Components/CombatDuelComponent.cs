@@ -90,6 +90,9 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
     : ZoneEntityComponent(entity), IComponentFactory, IWithTimers, IClientBehaviorProvider<WizardClientDuelBehavior> {
 
     private const byte PLANNING_TIME = 30;
+    // CLASSIC: PERF combat turnaround (see PerfMonitor): when the round's last move came, and whether planning ended early.
+    private long _perfAllMovesTicks;
+    private bool _ownedMinionEarlyFinishScheduledWas;
     private const float DUEL_GRACE_PERIOD_IN_SECONDS = 3.75f;
     private const float DUEL_NEW_ROUND_DELAY = 2.5f;
     private const float YAW_ERROR_COMPENSATION = 1.58f;
@@ -480,6 +483,7 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
 
         // The execution phase begins. This is where combat actions take place and we actually see spell cinematics.
         _awaitingCombatMoves = false;
+        _ownedMinionEarlyFinishScheduledWas = _ownedMinionEarlyFinishScheduled;
         _ownedMinionEarlyFinishScheduled = false;
         PrepareOwnedMinionExecution();
         Duel.m_duelPhase = kDuelPhase.kPhase_Execution;
@@ -503,6 +507,12 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
             ActionData = buffer,
         };
         ZoneBroadcast(msg);
+        if (_perfAllMovesTicks != 0 && _ownedMinionEarlyFinishScheduledWas) {
+            // CLASSIC: PERF combat turnaround: the last move to the actions going out, less the 1 s early-finish delay.
+            Classic.PerfMonitor.CombatTurnaround(Classic.PerfMonitor.Ms(_perfAllMovesTicks, System.Diagnostics.Stopwatch.GetTimestamp()) - 1000);
+        }
+
+        _perfAllMovesTicks = 0;
 
         Timers.StartSingleTimer(RESOUTION_TIME_KEY, new COMBAT_106_PROTOCOL.MSG_ROUNDRESOLUTION(), actionExecutionTime);
     }

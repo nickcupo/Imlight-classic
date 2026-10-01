@@ -313,6 +313,7 @@ internal sealed partial class CombatDuelComponent {
         if (complete && !_ownedMinionEarlyFinishScheduled) {
             _ownedMinionEarlyFinishScheduled = true;
             _awaitingCombatMoves = false;
+            _perfAllMovesTicks = System.Diagnostics.Stopwatch.GetTimestamp(); // CLASSIC: PERF combat turnaround.
             Timers.StartSingleTimer(PLANNING_TIME_KEY, new MSG_PLANNINGPHASEOVER(), TimeSpan.FromSeconds(1));
         } else if (!complete && _ownedMinionEarlyFinishScheduled) {
             _ownedMinionEarlyFinishScheduled = false;

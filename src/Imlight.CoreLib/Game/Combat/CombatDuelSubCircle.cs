@@ -504,11 +504,14 @@ public class CombatDuelSubCircle {
 
     private void InitializePlayerSubCircle() {
         // todo: this method is a mess.
-        var queryCharacterMsg = new CHARACTER_103_PROTOCOL.MSG_QUERYACTIVEWIZARD();
-        _wizard = ParticipantActor
-            .Ask<CHARACTER_103_PROTOCOL.MSG_CHARACTER>(queryCharacterMsg, PlayerQuery.Timeout) // CLASSIC: timeout
-            .Result
-            .Wizard;
+        // CLASSIC: the session's pushed wizard when it has one; else the (blocking) question as before.
+        if (!ActiveWizardDirectory.TryGet(ParticipantActor, out _wizard, out _)) {
+            var queryCharacterMsg = new CHARACTER_103_PROTOCOL.MSG_QUERYACTIVEWIZARD();
+            _wizard = ParticipantActor
+                .Ask<CHARACTER_103_PROTOCOL.MSG_CHARACTER>(queryCharacterMsg, PlayerQuery.Timeout) // CLASSIC: timeout
+                .Result
+                .Wizard;
+        }
 
         // Dyanmic symbols start at 9 for players.
         var dynamicSymbol = (DynamicSigilSymbol) (SlotIndex + 9);

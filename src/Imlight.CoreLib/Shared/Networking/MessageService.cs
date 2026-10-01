@@ -223,6 +223,12 @@ internal abstract class MessageService(SessionActor sessionActor) : ReceiveProto
             return;
         }
 
+        // CLASSIC: the WizardService pushes both to the directory; ask it (blocking) only before it has.
+        if (Classic.ActiveWizardDirectory.TryGet(SessionActor?.ActorRef, out var wizard, out var gameObject) && gameObject is not null) {
+            (_cachedWizard, _cachedWizardGameObject) = (wizard, gameObject);
+            return;
+        }
+
         var msg = new CHARACTER_103_PROTOCOL.MSG_QUERYACTIVEWIZARD();
         var response = AskOtherService<CHARACTER_103_PROTOCOL.MSG_CHARACTER>(msg);
         _cachedWizard = response.Wizard;

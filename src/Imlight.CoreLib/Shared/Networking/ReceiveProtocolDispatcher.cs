@@ -76,7 +76,14 @@ public class ReceiveProtocolDispatcher : ReceiveActor {
             return;
         }
 
-        handler(this, message);
+        // CLASSIC: handler times for the PERF log ([Classic] PerfLogSeconds); free when it is off.
+        var started = Classic.PerfMonitor.Begin();
+        try {
+            handler(this, message);
+        }
+        finally {
+            Classic.PerfMonitor.EndHandler(GetType(), message.GetType(), started);
+        }
     });
 
 }

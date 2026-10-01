@@ -27,6 +27,7 @@ using Imlight.CoreLib.Game.Requirements;
 using Imlight.CoreLib.Game.Requirements.Contexts;
 using Imlight.CoreLib.Game.Results.Contexts;
 using Imlight.CoreLib.Shared.Packets;
+using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.WizardData.Models.Player;
 using Type = System.Type;
 
@@ -90,10 +91,7 @@ public static class ResultDispatcher {
         Wizard wizard = null;
         if (playerRef is not null) {
             try {
-                wizard = playerRef
-                    .Ask<CHARACTER_103_PROTOCOL.MSG_CHARACTER>(
-                        new CHARACTER_103_PROTOCOL.MSG_QUERYACTIVEWIZARD(),
-                        TimeSpan.FromSeconds(QUERY_WIZARD_TIMEOUT_SECONDS)).Result?.Wizard;
+                wizard = PlayerQuery.Character(playerRef, TimeSpan.FromSeconds(QUERY_WIZARD_TIMEOUT_SECONDS))?.Wizard; // CLASSIC
             }
             catch (Exception ex) {
                 Logger.Error("Failed to query wizard for result requirements: {0}", Logger.Args(ex.Message));

@@ -198,6 +198,11 @@ internal sealed class InteractServiceMementoComponent(ZoneEntity entity)
         // blocking on each one sequentially.
         var playerActors = _playersInRenderRange.Actors;
         var queryTasks = playerActors.Select(async playerActor => {
+            // CLASSIC: read the session's pushed wizard; only a session not in the directory is asked.
+            if (ActiveWizardDirectory.TryGet(playerActor, out var known, out _)) {
+                return known;
+            }
+
             try {
                 var msg = new CHARACTER_103_PROTOCOL.MSG_QUERYACTIVEWIZARD();
                 var rsp = await playerActor.Ask<CHARACTER_103_PROTOCOL.MSG_CHARACTER>(msg, PlayerQuery.Timeout); // CLASSIC: timeout
