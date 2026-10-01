@@ -252,9 +252,10 @@ internal sealed partial class CombatDuelComponent {
             return;
         }
 
+        // The deck counter keeps the wizard's own numbers (a creature's deck is not a player deck: tens of thousands).
         owner.ParticipantActor.Tell(new DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_COMBATHAND {
-            DeckCount = (byte) minion.AvailableSpells,
-            TotalDeckCount = (ushort) minion.TotalSpells,
+            DeckCount = (byte) owner.AvailableSpells,
+            TotalDeckCount = (ushort) owner.TotalSpells,
             TreasureCardCount = 0,
             ParticipantID = owner.ParticipantObject.m_globalID,
             HandData = hand,
