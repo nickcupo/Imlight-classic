@@ -318,6 +318,7 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
         _ownedMinionControl.NewRound();
         _ownedMinionFallbacks.Clear();
         _ownedMinionHeldAiMoves.Clear();
+        ResetMinionHand(sendTruePips: false);
         _ownedMinionEarlyFinishScheduled = false;
         _awaitingCombatMoves = true;
 
@@ -380,6 +381,11 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
             return;
         }
 
+        // CLASSIC: a treasure-card draw while a minion's hand is showing would draw into the wrong hand.
+        if (BlockMinionHandDraw(caster)) {
+            return;
+        }
+
         // Draw a random treasure card from the vault.
         var drawnSpell = caster.DrawFromVault();
         if (drawnSpell != null) {
@@ -422,6 +428,11 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
         }
 
         if (!EnhancedGameplaySettings.Enabled) DisableAllOwnedMinionControl();
+        // CLASSIC: while a Myth wizard's card window shows their minion's hand, their moves are the minion's.
+        if (!caster.IsSummonedMinion && TryHandleMinionHandMove(caster, message)) {
+            ReevaluateOwnedMinionPlanning();
+            return;
+        }
         if (caster.IsSummonedMinion && IsOwnerChosenMinionMove(caster)) {
             // CLASSIC: the owner's order stands; keep the AI's move in case the owner hands the round back to it.
             _ownedMinionHeldAiMoves[caster.ParticipantObject] = message;
@@ -471,6 +482,8 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
         if (caster.IsSummonedMinion && CombatResolver.GetQueuedAction(caster) is { } fallback) {
             _ownedMinionFallbacks[caster.ParticipantObject] = fallback;
         }
+        // CLASSIC: a Myth wizard who has picked their own move now picks for their minions, one at a time.
+        if (!caster.IsSummonedMinion) MaybeBeginMinionHand(caster, message.MoveType);
         ReevaluateOwnedMinionPlanning();
     }
 
@@ -486,6 +499,7 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
         // The execution phase begins. This is where combat actions take place and we actually see spell cinematics.
         _awaitingCombatMoves = false;
         _ownedMinionEarlyFinishScheduled = false;
+        ResetMinionHand(sendTruePips: true);
         PrepareOwnedMinionExecution();
         Duel.m_duelPhase = kDuelPhase.kPhase_Execution;
         SendCombatPhase((byte) Duel.m_duelPhase);
@@ -553,6 +567,8 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
         _ownedMinionFallbacks.Clear();
         _ownedMinionHeldAiMoves.Clear();
         _ownedControllableSummons.Clear();
+        _minionHandStages.Clear();
+        _summonOrder.Clear();
 
         // Minions are children of this sigil entity, which persists between fights; MSG_COMBATDEATH
         // deletes them outright.

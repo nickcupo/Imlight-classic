@@ -64,6 +64,7 @@ internal sealed partial class CombatDuelComponent {
     internal void RegisterOwnedMinionForControl(CombatDuelSubCircle minion, CombatDuelSubCircle owner) {
         if (minion.IsOwnedMinionOf(owner)) {
             _ownedControllableSummons[minion.ParticipantObject] = owner.ParticipantObject;
+            OptInForMinionHand(owner, minion); // CLASSIC: Myth wizards pick their minions' moves in the card window.
         }
     }
 
@@ -383,6 +384,7 @@ internal sealed partial class CombatDuelComponent {
         if (Duel?.m_duelPhase == kDuelPhase.kPhase_Planning)
             CombatResolver.AddCombatMove(CombatMoveType.ChangeMind, minion, null, null);
         if (identity is not null) {
+            MinionLeftMinionHand(identity);
             _ownedMinionControl.Withdraw(identity);
             _ownedMinionFallbacks.Remove(identity);
             _ownedMinionHeldAiMoves.Remove(identity);
