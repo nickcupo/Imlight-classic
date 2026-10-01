@@ -173,6 +173,11 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
             return;
         }
 
+        // CLASSIC: a wizard who dropped mid-fight and logged back in takes their held seat again.
+        if (TryRejoin(playerObj, playerActor, playerWizard)) {
+            return;
+        }
+
         // Check if this player is in the duel. If they are, remove them from the duel.
         var subCircle = SubCircles.FirstOrDefault(x => x is not null && x.ParticipantActor == playerActor);
         if (subCircle is null) {
@@ -309,6 +314,16 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
             return;
         }
 
+        // CLASSIC: every wizard in the fight dropped; it waits for one to log back in (or for the holds to run out).
+        if (ShouldWaitForRejoin()) {
+            _waitingForRejoin = true;
+            Logger.Information("Duel {0} | every wizard has dropped; waiting for one to rejoin.",
+                Logger.Args(Duel.m_duelID.Full));
+            PublishActiveDuel();
+
+            return;
+        }
+
         Logger.Debug("Duel {0} | New round {1} at {2}",
             Logger.Args(Duel.m_duelID.Full, Duel.m_roundNum, DateTime.Now.ToString("HH:mm:ss")));
 
@@ -354,6 +369,9 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
 
         // Re-telegraph minion AI moves now that the planning HUD exists.
         ResendMinionMoveSelections();
+
+        // CLASSIC: a seat held for a dropped wizard passes.
+        PassHeldSeats();
 
         // Tutorial duels flush queued card grants and re-script the golems before planning.
         _tutorialDirector.OnPlanningPhaseBegin();
@@ -487,6 +505,8 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
 
         // Determine how long the cinematics will take.
         var cinematicTimeInSeconds = CombatResolver.ApplyQueuedCombatActions(out var actions);
+        // CLASSIC: [Classic] SpellAnimationSpeed shortens the server's wait for the spell animations.
+        cinematicTimeInSeconds /= (float) ClassicSettings.SpellAnimationSpeed;
         var actionExecutionTime = TimeSpan.FromSeconds(cinematicTimeInSeconds);
         Duel.m_executionPhaseTimer = (float) actionExecutionTime.TotalSeconds;
 
@@ -543,6 +563,16 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
 
     [MessageHandler(typeof(DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_ENDDUEL))]
     private void DespawnDuel() {
+        // CLASSIC: the duel leaves the server-wide view; seats still held are let go.
+        if (SubCircles is not null) {
+            foreach (var held in SubCircles.Where(circle => circle is { Occupied: true, Disconnected: true })) {
+                Timers.Cancel(REJOIN_TIMER_PREFIX + held.HeldCharacterId);
+                ActiveDuels.Release(held.HeldCharacterId);
+            }
+        }
+
+        ActiveDuels.Remove(SigilId);
+        _waitingForRejoin = false;
         _isActive = false;
         _ownedMinionControl.Clear();
         _ownedMinionFallbacks.Clear();
@@ -564,8 +594,13 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
     [MessageHandler(typeof(GAME_5_PROTOCOL.MSG_CLIENT_DISCONNECT))]
     private void ReceiveClientDisconnect(GAME_5_PROTOCOL.MSG_CLIENT_DISCONNECT message) {
         // Find the sub circle that the client was in and remove them from the duel.
-        var subCircle = SubCircles.FirstOrDefault(x => x.ParticipantActor == Sender);
+        var subCircle = SubCircles?.FirstOrDefault(x => x.ParticipantActor == Sender);
         if (subCircle is null) {
+            return;
+        }
+
+        // CLASSIC: a dropped client keeps its seat for a while, so the wizard can log back in to this fight.
+        if (TryHoldSeat(subCircle)) {
             return;
         }
 
@@ -634,6 +669,8 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
         AssignParticipantToSubCircle(availablePlayerSubCircle, startingPlayerActor.Key, startingPlayerObject);
 
         _isActive = true;
+        _startedUtc = DateTime.UtcNow; // CLASSIC
+        PublishActiveDuel();
 
         Logger.Debug("Duel {0} | Created. Grace period over in {1}",
             Logger.Args(Duel.m_duelID.Full, DUEL_GRACE_PERIOD_IN_SECONDS));
@@ -835,6 +872,7 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
         }
 
         AssignParticipantToSubCircle(subCircle, participantActor, participantObject);
+        PublishActiveDuel(); // CLASSIC
 
         Logger.Debug("Duel {0} | Slot {1} | Participant {2} joined",
             Logger.Args(Duel.m_duelID.Full, subCircle.SlotIndex, participantObject.m_debugName));
@@ -1245,6 +1283,9 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
         if (AliveAndInDuelPlayerCount <= 0) {
             EndDuel();
         }
+        else {
+            PublishActiveDuel(); // CLASSIC
+        }
     }
 
     private CombatTeam DetermineFirstTeam()
@@ -1387,6 +1428,11 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
         // A queued tutorial card grant must not leak into the next duel on this sigil.
         _tutorialDirector.OnDuelEnded();
 
+        // CLASSIC: wizards still away when the fight ends lose their seat (no rewards; a defeat sends them home).
+        foreach (var held in SubCircles.Where(circle => circle is { Occupied: true, Disconnected: true })) {
+            ReleaseHeldSeat(held);
+        }
+
         RemovePlayersFromDuel();
 
         if (playersWin) {
@@ -1461,9 +1507,17 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
     private void CreatureWin() {
         Logger.Debug("Duel {0} | Duel ended. Creatures win.", Logger.Args(Duel.m_duelID.Full));
 
-        // Send combat death to all creatures anyways. This will get rid of their game object.
-        var deathMsg = new COMBAT_106_PROTOCOL.MSG_COMBATDEATH();
-        EnactActionOnSubCircles(circle => circle.ParticipantActor.Tell(deathMsg));
+        // CLASSIC: the creatures that won stay in the world at full health (a dungeon keeps its guards and boss), and
+        // an instanced zone resets once the defeated party has left it. Stock Imlight deleted them.
+        if (ClassicRuntime.IsActive) {
+            ResetCreatures();
+            ReportPartyLost();
+        }
+        else {
+            // Send combat death to all creatures anyways. This will get rid of their game object.
+            var deathMsg = new COMBAT_106_PROTOCOL.MSG_COMBATDEATH();
+            EnactActionOnSubCircles(circle => circle.ParticipantActor.Tell(deathMsg));
+        }
 
         // Inform each player that they've been defeated.
         var defeatMsg = new COMBAT_106_PROTOCOL.MSG_COMBATDEFEAT();

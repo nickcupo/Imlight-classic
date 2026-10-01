@@ -285,7 +285,8 @@ internal class AttachService(SessionActor sessionActor) : MessageService(session
             DestinationZone = zoneName,
             DestinationLocation = location,
             SendToClient = false,
-            OwnerCharId = _wizard.CharId,
+            // CLASSIC: a wizard who dropped mid-fight logs back in to the instance that holds their seat.
+            OwnerCharId = Classic.ActiveDuels.InstanceOwnerForLogin(_wizard.CharId, zoneName, DateTime.UtcNow),
         };
 
         return AskOtherService<ZONE_102_PROTOCOL.MSG_ZONETRANSFERRSP>(zoneMsg);

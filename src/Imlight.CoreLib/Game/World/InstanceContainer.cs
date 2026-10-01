@@ -101,10 +101,27 @@ internal sealed class InstanceContainer(ulong instanceOwnerId) : ReceiveProtocol
         Context.Stop(zoneActor);
     }
 
+    // CLASSIC: a zone of this container asks to be dropped (a party lost there and it is now empty); the next
+    // transfer into it loads it fresh. A stale request from an older copy of the zone is ignored.
+    [MessageHandler(typeof(CLASSIC_FEATURES_PROTOCOL.MSG_DROPSELF))]
+    public void ReceiveDropSelf(CLASSIC_FEATURES_PROTOCOL.MSG_DROPSELF message) {
+        if (message.ZoneName is null || !_zones.TryGetValue(message.ZoneName, out var zoneActor)
+                || !zoneActor.Equals(Sender)) {
+            return;
+        }
+
+        _zones.Remove(message.ZoneName);
+        Logger.Information("Resetting instance zone {ZoneName} (owner {OwnerId}) after a party loss.",
+            Logger.Args(message.ZoneName, _instanceOwnerId));
+        Context.Stop(zoneActor);
+    }
+
     private IActorRef CreateZone(string zoneName) {
         var zoneActorName = SanitizeZoneName(zoneName);
         var zoneId = GetNextDynamicZoneId();
-        var zone = Context.ActorOf(Zone.Core.Zone.Props(zoneName, zoneId), zoneActorName);
+        // CLASSIC: the zone knows it is an instance, so a party loss can reset it (Zone.MSG_INSTANCEPARTYLOST).
+        var zone = Context.ActorOf(Zone.Core.Zone.Props(zoneName, zoneId, _instanceOwnerId),
+            $"{zoneActorName}_{zoneId}");
 
         // Log the new zone creation.
         Logger.Information("Game world created new zone: {ZoneName}",

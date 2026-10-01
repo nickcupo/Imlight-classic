@@ -222,7 +222,43 @@ public class CombatDuelSubCircle {
         return this.CombatParticipant;
     }
 
+    // CLASSIC: combat rejoin. A wizard whose client dropped keeps the seat for a while (ClassicSettings
+    // CombatRejoinSeconds): the seat has no actor, passes every round, and their next login takes it back.
+    internal bool Disconnected { get; private set; }
+    internal ulong HeldCharacterId { get; private set; }
+    internal DateTime DisconnectedAtUtc { get; private set; }
+
+    internal void HoldSeat(DateTime nowUtc) {
+        HeldCharacterId = _wizard?.CharId ?? 0;
+        Disconnected = true;
+        DisconnectedAtUtc = nowUtc;
+        ParticipantActor = ActorRefs.Nobody;
+    }
+
+    internal void RejoinSeat(IActorRef actor, CoreObject participantObject, Wizard wizard) {
+        var previous = ParticipantObject;
+        ParticipantActor = actor;
+        ParticipantObject = participantObject;
+        _wizard = wizard;
+        ParticipantGameStats = wizard.GameStats;
+        if (CombatParticipant is not null) {
+            CombatParticipant.m_playerHealth = wizard.GameStats.m_currentHitpoints;
+        }
+
+        Disconnected = false;
+        HeldCharacterId = 0;
+
+        // Minions summoned by this wizard name the old object as their owner.
+        foreach (var circle in _duelActor.SubCircles.Where(circle => circle is not null && circle != this)) {
+            if (ReferenceEquals(circle._minionOwnerObject, previous)) {
+                circle._minionOwnerObject = participantObject;
+            }
+        }
+    }
+
     internal void RemoveParticipant() {
+        Disconnected = false;
+        HeldCharacterId = 0;
         ParticipantActor = null;
         ParticipantObject = null;
         CombatParticipant = null;

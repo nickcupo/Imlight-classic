@@ -51,6 +51,7 @@
     <ServerIntegrationTest Include="LegacyDoorRuntimeTests.cs" />
     <ServerIntegrationTest Include="LegacyDoorOrderingTests.cs" />
     <ServerIntegrationTest Include="ZoneMarkerLifecycleTests.cs" />
+    <ServerIntegrationTest Include="CombatRejoinTests.cs" />
   </ItemGroup>
   <PropertyGroup>
     <_TypeInputPath>$(MSBuildThisFileDirectory)../../submodule/Imcodec/src/Imcodec.ObjectProperty/GeneratorInput</_TypeInputPath>
