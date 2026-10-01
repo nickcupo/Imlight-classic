@@ -321,7 +321,7 @@ public sealed class OwnedMinionDuelTests : IDisposable {
             Assert.True(root.GetProperty("myth").GetBoolean());
             Assert.True(root.GetProperty("controlling").GetBoolean());
             var minion = Assert.Single(root.GetProperty("minions").EnumerateArray());
-            Assert.Equal(50UL, minion.GetProperty("id").GetUInt64());
+            Assert.Equal("50", minion.GetProperty("id").GetString());
             var card = Assert.Single(minion.GetProperty("hand").EnumerateArray());
             Assert.True(card.GetProperty("castable").GetBoolean());
             Assert.Equal([0], card.GetProperty("targets").EnumerateArray().Select(t => t.GetInt32()));
