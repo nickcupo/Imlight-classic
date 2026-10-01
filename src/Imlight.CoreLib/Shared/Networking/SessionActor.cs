@@ -85,7 +85,10 @@ public sealed partial class SessionActor : ReceiveActor, IDisposable {
     public string RemoteIp;
 
     private readonly IActorRef _actorFactoryRef;
-    private readonly Dictionary<IActorRef, MessageService> _services;
+    // CLASSIC: filled by each service as it is constructed (RegisterService), on the service's thread.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<IActorRef, MessageService> _services;
+    // CLASSIC: the services in creation order, with their types, known at once.
+    private readonly List<(IActorRef Ref, Type Type)> _serviceOrder = [];
     private readonly Dictionary<Type, List<IActorRef>> _dispatchTable = [];
     private readonly Socket _socket;
     private readonly List<IMessage> _preInitMessages = new();
@@ -100,7 +103,7 @@ public sealed partial class SessionActor : ReceiveActor, IDisposable {
         this.Ip = socket.RemoteEndPoint.ToString();
         this.RemoteIp = socket.RemoteEndPoint.ToString().Split(':')[0];
         this.SessionID = sessionId;
-        this._services = new Dictionary<IActorRef, MessageService>();
+        this._services = new System.Collections.Concurrent.ConcurrentDictionary<IActorRef, MessageService>();
         this.ServerRef = server;
 
         if (actorFactoryRef != null) {
@@ -240,6 +243,15 @@ public sealed partial class SessionActor : ReceiveActor, IDisposable {
         }
 
         throw new SessionFatalException($"SessionActor [{SessionID}] contained a null server reference!");
+    }
+
+    /// <summary>
+    /// CLASSIC: a service of this session reports its instance when it is constructed (on its own thread).
+    /// </summary>
+    internal void RegisterService(IActorRef service, MessageService instance) {
+        if (service is not null && instance is not null && _services is not null) { // null only in a bare test double
+            _services[service] = instance;
+        }
     }
 
     /// <summary>
@@ -402,16 +414,13 @@ public sealed partial class SessionActor : ReceiveActor, IDisposable {
             Logger.Verbose("New actor created for session {Id}: {Name}",
                 Logger.Args(SessionID, serviceName));
 
-            // We've created the service as a child actor. Problem is, we need to know the actual class
-            // identity to use it later. To do that, we'll ask the actor to identify itself.
-            var msg = new SERVICE_101_PROTOCOL.MSG_QUERYMESSAGESERVICEIDENTITY();
-            var identity = childRef.Ask<SERVICE_101_PROTOCOL.MSG_MESSAGESERVICEIDENTITY>(msg)
-                .Result
-                .Service;
-            _services.Add(childRef, identity);
+            // CLASSIC: the dispatch table comes from the service's type (the same table its instance reports through
+            // MSG_QUERYMESSAGESERVICEIDENTITY); the instance registers itself (RegisterService) when it is constructed.
+            // A blocking identity Ask per service held a pool thread for every service of every new connection.
+            _serviceOrder.Add((childRef, service));
 
             // Populate the dispatch table.
-            foreach (var msgType in identity.MessageHandlers.Keys) {
+            foreach (var msgType in MessageHandlerTable.HandlersOf(service).Keys) {
                 if (!_dispatchTable.TryGetValue(msgType, out var list)) {
                     list = [];
                     _dispatchTable[msgType] = list;
@@ -456,9 +465,9 @@ public sealed partial class SessionActor : ReceiveActor, IDisposable {
     private void SendPreDisposeToServices() {
         // Iterate through each service and send them a pre-dispose message. This lets a service gracefully handle
         // the dispose in the case that it requires another service to still be active.
-        foreach (var (actorRef, type) in _services) {
+        foreach (var (actorRef, type) in _serviceOrder) {
             // If the service doesn't have a pre-dispose message handler, we'll just skip it.
-            if (!type.MessageHandlers.ContainsKey(typeof(SERVICE_101_PROTOCOL.MSG_PREDISPOSE))) {
+            if (!MessageHandlerTable.HandlersOf(type).ContainsKey(typeof(SERVICE_101_PROTOCOL.MSG_PREDISPOSE))) {
                 continue;
             }
 
@@ -474,7 +483,7 @@ public sealed partial class SessionActor : ReceiveActor, IDisposable {
 
     private void SendDisposeToServices() {
         // Iterate through our services and send them a dispose message.
-        foreach (var (actorRef, type) in _services) {
+        foreach (var (actorRef, _) in _serviceOrder) {
             actorRef.Tell(new SERVICE_101_PROTOCOL.MSG_DISPOSE());
         }
     }

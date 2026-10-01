@@ -67,7 +67,14 @@ public class ReceiveProtocolDispatcher : ReceiveActor {
     protected ReceiveProtocolDispatcher() {
         MessageHandlers = MessageHandlerTable.HandlersOf(GetType());
         ConfigureReceivers();
+        OnDispatcherConstructed();
     }
+
+    /// <summary>
+    /// CLASSIC: runs at the end of this constructor, inside the actor's context (Self is set). A derived class's field
+    /// and primary-constructor initializers have run by then; its constructor body has not.
+    /// </summary>
+    protected virtual void OnDispatcherConstructed() { }
 
     protected virtual void ConfigureReceivers() => Receive<object>(message => {
         var handler = MessageHandlerTable.DispatcherFor(GetType(), message.GetType());

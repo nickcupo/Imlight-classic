@@ -67,6 +67,10 @@ internal abstract class MessageService(SessionActor sessionActor) : ReceiveProto
     private Wizard _cachedWizard;
     private CoreObject _cachedWizardGameObject;
 
+    // CLASSIC: tell the session who we are as soon as we exist, instead of the session blocking on an identity Ask per
+    // service while it builds a connection (logins and every zone change).
+    protected override void OnDispatcherConstructed() => SessionActor?.RegisterService(Self, this);
+
     /// <summary>
     /// Sends a message directly to the socket.
     /// </summary>
