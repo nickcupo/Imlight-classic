@@ -45,7 +45,7 @@ internal sealed class ZoneObjectSupervisor(Core.Zone zone) : ZoneEntitySuperviso
 
         // Initialize any objects found within the zone data.
         foreach (var objectInfo in zoneData.m_objectList) {
-            if (!IsObjectEligibleForSpawn(objectInfo)) {
+            if (!IsObjectEligibleForSpawn(objectInfo, zone.ZoneName)) {
                 continue;
             }
 
@@ -77,7 +77,7 @@ internal sealed class ZoneObjectSupervisor(Core.Zone zone) : ZoneEntitySuperviso
         ReportLoadedWhenEntitiesLoad();
     }
 
-    private static bool IsObjectEligibleForSpawn(CoreObjectInfo objectInfo) {
+    private static bool IsObjectEligibleForSpawn(CoreObjectInfo objectInfo, string? zoneName) {
         if (objectInfo is null) {
             return false;
         }
@@ -93,7 +93,7 @@ internal sealed class ZoneObjectSupervisor(Core.Zone zone) : ZoneEntitySuperviso
         }
 
         // CLASSIC: objects from later versions of classic quests are not spawned.
-        if (ClassicLaterObjects.Skips(objectInfo)) {
+        if (ClassicLaterObjects.Skips(objectInfo, zoneName)) {
             return false;
         }
 

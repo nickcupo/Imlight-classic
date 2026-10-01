@@ -6,9 +6,9 @@ namespace Imlight.Classic.Tests;
 public sealed class ClassicLaterObjectsTests {
 
     [Fact]
-    public void The2019PrivateOryanIsLaterAndTheClassicOneIsNot() {
-        Assert.True(ClassicLaterObjects.IsLater(1451483));    // WC-ST01-NPC05-B, next to Private Connelly
-        Assert.False(ClassicLaterObjects.IsLater(38119));     // Private Connelly
+    public void NothingIsHiddenWithoutAList() {
+        Assert.False(ClassicLaterObjects.IsLater(1451483, "WizardCity/WC_Streets/WC_Unicorn"));
+        Assert.False(ClassicProgression.LaterObjects.Hides(1546036, "WizardCity/WC_Hub"));
     }
 
 }

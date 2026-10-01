@@ -169,6 +169,11 @@ public sealed class ProfileRules {
     public string? CrownShop { get; init; }
 
     /// <summary>
+    /// Path under classic-data of the zone objects the server does not spawn because they belong to later versions, if any.
+    /// </summary>
+    public string? LaterObjects { get; init; }
+
+    /// <summary>
     /// The rank from which power pips appear; null when unset or set to null.
     /// </summary>
     public string? PowerPipsFromRank { get; init; }
