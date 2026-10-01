@@ -63,6 +63,7 @@ public static class ClassicProgression {
     private static volatile TreasurePrices? s_treasurePrices; // CLASSIC
     private static volatile MobStats? s_mobStats; // CLASSIC
     private static volatile CrownShopCatalog? s_crownShop; // CLASSIC
+    private static volatile LaterObjects s_laterObjects = LaterObjects.Empty; // CLASSIC
 
     /// <summary>
     /// The profile's XP table, or null for the client's curve.
@@ -98,6 +99,11 @@ public static class ClassicProgression {
     /// The profile's Crown Shop catalog, or null for no Crown Shop.
     /// </summary>
     public static CrownShopCatalog? CrownShop => s_crownShop;
+
+    /// <summary>
+    /// The zone objects of later versions the server does not spawn; empty when the profile names no list.
+    /// </summary>
+    public static LaterObjects LaterObjects => s_laterObjects;
 
     /// <summary>
     /// Loads the tables a restricted profile names.
@@ -141,6 +147,12 @@ public static class ClassicProgression {
             s_mobStats = MobStatsLoader.Load(Path.Combine(classicDataRoot, mobStats));
             Logger.Information("Classic mob stats {Table}: dated health for {Count} creature templates; others keep template health.",
                 Logger.Args(s_mobStats.Id, s_mobStats.HealthByTemplate.Count));
+        }
+
+        if (profile.Rules.LaterObjects is { } laterObjects && File.Exists(Path.Combine(classicDataRoot, laterObjects))) {
+            s_laterObjects = LaterObjectsLoader.Load(Path.Combine(classicDataRoot, laterObjects));
+            Logger.Information("Classic later objects {Table}: {Count} entries hide {Templates} templates of later versions.",
+                Logger.Args(s_laterObjects.Id, s_laterObjects.Objects.Length, s_laterObjects.TemplateCount));
         }
 
         if (profile.Rules.CrownShop is { } crownShop && File.Exists(Path.Combine(classicDataRoot, crownShop))) {
