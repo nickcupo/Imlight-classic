@@ -75,6 +75,10 @@ public static class LootGranter {
     /// <param name="wizard">The player wizard data receiving the rewards.</param>
     /// <param name="results">The rolled drop table results to grant.</param>
     public static void GrantAndDisplay(IActorRef playerActor, Wizard wizard, DropTableResult results) {
+        // CLASSIC: [Classic] GoldMultiplier and XpMultiplier (dashboard switches; 2009: 1) scale the gold and XP of mob
+        // and quest rewards before they are granted and shown.
+        results.GoldAmount = Classic.ClassicSettings.Scale(results.GoldAmount, Classic.ClassicSettings.GoldMultiplier);
+        results.ExperienceAmount = Classic.ClassicSettings.Scale(results.ExperienceAmount, Classic.ClassicSettings.XpMultiplier);
         UpdateWizardGold(playerActor, wizard, results.GoldAmount);
         UpdateWizardXP(playerActor, results.ExperienceAmount);
         UpdateWizardTP(playerActor, wizard, results.TrainingPoints);

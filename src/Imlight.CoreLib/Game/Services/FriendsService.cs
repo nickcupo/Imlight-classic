@@ -109,7 +109,9 @@ using Imcodec.MessageLayer;
 using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty;
 using Imcodec.ObjectProperty.TypeCache;
+using Imlight.Classic;
 using Imlight.Common;
+using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.Shared.Character;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;
@@ -584,6 +586,15 @@ internal class FriendsService(SessionActor sessionActor) : MessageService(sessio
             .Result;
 
         if (queryResult is not null) {
+            // CLASSIC: [Classic] TeleportToFriendAnywhere (owner ruling 2026-10-01, on): unlocked worlds only decide the
+            // world list. Off, a friend in a world this wizard has not unlocked cannot be reached.
+            if (ClassicRuntime.IsActive && !Classic.ClassicSettings.TeleportToFriendAnywhere
+                    && ClassicRuntime.Rules.HubKeyFor(onlinePlayer.CurrentZone) is { } hubKey
+                    && !ClassicGate.AllowsWorldUnlock(hubKey, new WizardProgress(GetActiveWizard()), GetActiveWizard().CharId,
+                        InformGameClient)) {
+                return;
+            }
+
             var coordinates = Util.GetCompactStringFromVector((Vector4) queryResult.Wizard.Location);
 
             Teleport(

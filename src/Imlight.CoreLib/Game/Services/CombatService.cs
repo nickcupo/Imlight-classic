@@ -217,7 +217,7 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
                 continue;
             }
 
-            var loot = rules.Roll(mob, random);
+            var loot = rules.Roll(mob, random, ClassicSettings.DropRateMultiplier); // CLASSIC: dashboard switch
             result.GoldAmount += loot.Gold;
             foreach (var item in loot.Items) {
                 if (CoreObjectFactory.GetCoreTemplate(item) is not null) {
