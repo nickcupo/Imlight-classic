@@ -41,6 +41,7 @@ using System.Linq;
 using Akka.Actor;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Classic;
+using Imlight.Common;
 using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.Game.Combat;
 using Imlight.CoreLib.Shared.Behaviors;
@@ -56,6 +57,7 @@ internal sealed partial class CombatDuelComponent {
     private readonly OwnedMinionControl _ownedMinionControl = new();
     private readonly Dictionary<CoreObject, CoreObject> _ownedControllableSummons = new(ReferenceEqualityComparer.Instance);
     private readonly Dictionary<CoreObject, QueuedCombatAction> _ownedMinionFallbacks = new(ReferenceEqualityComparer.Instance);
+    private readonly Dictionary<CoreObject, MSG_ACTORCOMBATMOVE> _ownedMinionHeldAiMoves = new(ReferenceEqualityComparer.Instance);
     private DateTime _ownedMinionPlanningDeadline;
     private bool _ownedMinionEarlyFinishScheduled;
 
@@ -91,6 +93,10 @@ internal sealed partial class CombatDuelComponent {
     [MessageHandler(typeof(MSG_OWNEDMINIONREQUEST))]
     private void ReceiveOwnedMinionRequest(MSG_OWNEDMINIONREQUEST request) {
         var response = ProcessOwnedMinionRequest(request);
+        Logger.Debug("Duel {0} | Owned minion request {1} move {2} card {3} target {4} query {5}: {6}",
+            Logger.Args(Duel?.m_duelID.Full, request.RequestID, request.MoveType, request.SpellSelection, request.SpellTarget,
+                request.Query, response.Status.ToString()));
+        response.HelperView = BuildMinionHelperView(request.OwnerActor, response);
         request.OwnerActor?.Tell(response);
     }
 
@@ -140,7 +146,13 @@ internal sealed partial class CombatDuelComponent {
             if (request.MoveType == (byte) CombatMoveType.ChangeMind) {
                 _ownedMinionControl.Withdraw(minion.ParticipantObject);
                 RestoreOwnedMinionFallback(minion);
-                ResendMinionMoveSelections();
+                TelegraphMinionMoves();
+            } else if (request.MoveType == OwnedMinionAiMove) {
+                // CLASSIC: "let the minion choose" is the owner's order for this round: its AI move stands.
+                _ownedMinionControl.Withdraw(minion.ParticipantObject);
+                RestoreOwnedMinionFallback(minion);
+                _ownedMinionControl.SetOrder(minion.ParticipantObject, order);
+                TelegraphMinionMoves();
             } else {
                 _ownedMinionControl.SetOrder(minion.ParticipantObject, order with { TargetIdentity = target?.ParticipantObject });
                 QueueOwnedMinionOrder(minion, order, spell, target);
@@ -158,7 +170,7 @@ internal sealed partial class CombatDuelComponent {
                                                       out Spell spell, out CombatDuelSubCircle target) {
         spell = null;
         target = null;
-        if (order.MoveType is (byte) CombatMoveType.Pass or (byte) CombatMoveType.ChangeMind) return OwnedMinionStatus.Accepted;
+        if (order.MoveType is (byte) CombatMoveType.Pass or (byte) CombatMoveType.ChangeMind or OwnedMinionAiMove) return OwnedMinionStatus.Accepted;
         if (order.MoveType != (byte) CombatMoveType.Attack) return OwnedMinionStatus.InvalidMove;
         if (minion?._combatDeck is null) return OwnedMinionStatus.InvalidCard;
         spell = minion.GetSpellFromLastHand(order.SpellSelection);
@@ -232,6 +244,15 @@ internal sealed partial class CombatDuelComponent {
 
     private void RestoreOwnedMinionFallback(CombatDuelSubCircle minion) {
         CombatResolver.AddCombatMove(CombatMoveType.ChangeMind, minion, null, null);
+        if (!_ownedMinionFallbacks.ContainsKey(minion.ParticipantObject)
+            && _ownedMinionHeldAiMoves.Remove(minion.ParticipantObject, out var held)) {
+            // CLASSIC: the AI moved while the owner's order stood; replay that move now (planning may already be in
+            // its one-second completion grace, which ReceiveCombatMove would refuse).
+            if (held.MoveType == (byte) CombatMoveType.Attack) HandleAttackMove(minion, held.SpellSelection, held.SpellTarget);
+            else HandlePassMove(minion);
+            if (CombatResolver.GetQueuedAction(minion) is { } replayed) _ownedMinionFallbacks[minion.ParticipantObject] = replayed;
+            return;
+        }
         if (_ownedMinionFallbacks.TryGetValue(minion.ParticipantObject, out var fallback) && minion is { Occupied: true, AddedToDuel: true, IsAlive: true }) {
             CombatResolver.AddCombatMove(fallback.Spell is null ? CombatMoveType.Pass : CombatMoveType.Attack,
                 minion, fallback.SelectedTarget, fallback.Spell);
@@ -251,14 +272,16 @@ internal sealed partial class CombatDuelComponent {
                 return false;
             }
             budget += 1024 + ((hand.Length + 2) / 3) * 4 + ((participant.Length + 2) / 3) * 4;
-            if (budget > MinionSnapshotBudget) { snapshots = []; return false; }
+            // CLASSIC: an oversized participant used to switch control off for the rest of the duel. Only the opaque
+            // service-90 blobs are bounded; the Minion Helper reads HelperView instead.
+            var oversized = budget > MinionSnapshotBudget;
             var snapshot = new OwnedMinionSnapshot {
                 OwnerID = owner.ParticipantObject.m_globalID, MinionID = minion.ParticipantObject.m_globalID,
                 Slot = (byte) minion.SlotIndex, Team = (byte) minion.OccupiedTeam,
                 Health = minion.ParticipantGameStats.m_currentHitpoints,
                 GenericPips = minion.CombatParticipant.m_pipCount.m_genericPips,
                 PowerPips = minion.CombatParticipant.m_pipCount.m_powerPips,
-                HandData = hand, ParticipantData = participant,
+                HandData = oversized ? [] : hand, ParticipantData = oversized ? [] : participant,
             };
             SetOwnedMinionOrderSnapshot(snapshot);
             result.Add(snapshot);
@@ -286,8 +309,9 @@ internal sealed partial class CombatDuelComponent {
         var owner = SubCircles?.FirstOrDefault(circle => circle.Occupied && circle.ParticipantActor == message.OwnerActor);
         if (owner is null) return;
         DisableOwnedMinionControl(owner.ParticipantObject);
-        if (Duel?.m_duelPhase == kDuelPhase.kPhase_Planning) ResendMinionMoveSelections();
+        if (Duel?.m_duelPhase == kDuelPhase.kPhase_Planning) TelegraphMinionMoves();
         ReevaluateOwnedMinionPlanning();
+        PublishOwnedMinionSnapshots(owner);
     }
 
     private void DisableOwnedMinionControl(CoreObject ownerObject) {
@@ -336,16 +360,23 @@ internal sealed partial class CombatDuelComponent {
     }
 
     private void PublishOwnedMinionSnapshots() {
-        foreach (var owner in SubCircles.Where(circle => circle.Occupied && _ownedMinionControl.IsOptedIn(circle.ParticipantObject))) {
-            var available = TryOwnedMinionSnapshots(owner, out var snapshots) && EnhancedGameplaySettings.Enabled;
-            if (!available) DisableOwnedMinionControl(owner.ParticipantObject);
-            owner.ParticipantActor?.Tell(new MSG_OWNEDMINIONRESPONSE {
-                OwnerActor = owner.ParticipantActor, DuelID = Duel.m_duelID.Full, Round = Duel.m_roundNum,
-                MinionID = 0, RequestID = 0, Accepted = available,
-                Status = available ? OwnedMinionStatus.Accepted : OwnedMinionStatus.SnapshotUnavailable,
-                Snapshots = available ? snapshots : [],
-            });
+        foreach (var owner in SubCircles.Where(circle => circle.Occupied && _ownedMinionControl.IsOptedIn(circle.ParticipantObject)).ToArray()) {
+            PublishOwnedMinionSnapshots(owner);
         }
+    }
+
+    private void PublishOwnedMinionSnapshots(CombatDuelSubCircle owner) {
+        if (owner?.ParticipantActor is null || Duel is null) return;
+        var available = TryOwnedMinionSnapshots(owner, out var snapshots) && EnhancedGameplaySettings.Enabled;
+        if (!available) DisableOwnedMinionControl(owner.ParticipantObject);
+        var response = new MSG_OWNEDMINIONRESPONSE {
+            OwnerActor = owner.ParticipantActor, DuelID = Duel.m_duelID.Full, Round = Duel.m_roundNum,
+            MinionID = 0, RequestID = 0, Accepted = available,
+            Status = available ? OwnedMinionStatus.Accepted : OwnedMinionStatus.SnapshotUnavailable,
+            Snapshots = available ? snapshots : [],
+        };
+        response.HelperView = BuildMinionHelperView(owner.ParticipantActor, response);
+        owner.ParticipantActor.Tell(response);
     }
 
     private void ForgetOwnedMinion(CombatDuelSubCircle minion, CoreObject identity) {
@@ -354,6 +385,7 @@ internal sealed partial class CombatDuelComponent {
         if (identity is not null) {
             _ownedMinionControl.Withdraw(identity);
             _ownedMinionFallbacks.Remove(identity);
+            _ownedMinionHeldAiMoves.Remove(identity);
             _ownedControllableSummons.Remove(identity);
         }
         PublishOwnedMinionSnapshots();

@@ -23,6 +23,7 @@
     <ServerIntegrationTest Include="ClassicMinionOwnershipTests.cs" />
     <ServerIntegrationTest Include="OwnedMinionControlTests.cs" />
     <ServerIntegrationTest Include="OwnedMinionDuelTests.cs" />
+    <ServerIntegrationTest Include="MinionHelperTests.cs" />
     <ServerIntegrationTest Include="MonstrologyConcurrencyTests.cs" />
     <ServerIntegrationTest Include="ClassicDialogCameraTests.cs" />
     <ServerIntegrationTest Include="ClassicLaterObjectsTests.cs" />

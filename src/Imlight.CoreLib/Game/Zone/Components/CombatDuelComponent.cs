@@ -317,6 +317,7 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
         CombatResolver.Reset();
         _ownedMinionControl.NewRound();
         _ownedMinionFallbacks.Clear();
+        _ownedMinionHeldAiMoves.Clear();
         _ownedMinionEarlyFinishScheduled = false;
         _awaitingCombatMoves = true;
 
@@ -421,7 +422,11 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
         }
 
         if (!EnhancedGameplaySettings.Enabled) DisableAllOwnedMinionControl();
-        if (caster.IsSummonedMinion && _ownedMinionControl.HasOrder(caster.ParticipantObject)) return;
+        if (caster.IsSummonedMinion && IsOwnerChosenMinionMove(caster)) {
+            // CLASSIC: the owner's order stands; keep the AI's move in case the owner hands the round back to it.
+            _ownedMinionHeldAiMoves[caster.ParticipantObject] = message;
+            return;
+        }
         if (!_awaitingCombatMoves && !(_ownedMinionEarlyFinishScheduled
             && !caster.IsSummonedMinion && _ownedMinionControl.IsOptedIn(caster.ParticipantObject))) {
             Logger.Warning("Duel {0} | Slot {1} | Received combat move while not expecting it.",
@@ -546,6 +551,7 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
         _isActive = false;
         _ownedMinionControl.Clear();
         _ownedMinionFallbacks.Clear();
+        _ownedMinionHeldAiMoves.Clear();
         _ownedControllableSummons.Clear();
 
         // Minions are children of this sigil entity, which persists between fights; MSG_COMBATDEATH
@@ -1535,6 +1541,14 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
     }
 
     private void ResendMinionMoveSelections() {
+        TelegraphMinionMoves();
+        var delay = TimeSpan.FromSeconds(PLANNING_TIME);
+        Timers.StartSingleTimer(PLANNING_TIME_KEY, new COMBAT_106_PROTOCOL.MSG_PLANNINGPHASEOVER(), delay);
+    }
+
+    // CLASSIC: shows every minion's queued move again without touching the planning timer. An owner's mid-round
+    // change of a Myth minion's order used to restart the 30 s countdown (ResendMinionMoveSelections).
+    private void TelegraphMinionMoves() {
         EnactActionOnSubCircles(circle => {
             if (!circle.IsSummonedMinion || !circle.IsAlive || circle.ParticipantObject is null) {
                 return;
@@ -1549,8 +1563,6 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
             SendCombatMoveSelection(circle.ParticipantObject.m_globalID, (byte) CombatMoveType.Attack,
                 action.Spell, (byte) action.SelectedTarget.SlotIndex);
         });
-        var delay = TimeSpan.FromSeconds(PLANNING_TIME);
-        Timers.StartSingleTimer(PLANNING_TIME_KEY, new COMBAT_106_PROTOCOL.MSG_PLANNINGPHASEOVER(), delay);
     }
 
 }

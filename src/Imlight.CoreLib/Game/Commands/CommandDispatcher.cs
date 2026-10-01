@@ -72,7 +72,10 @@ internal class CommandDispatcher : ReceiveProtocolDispatcher {
 
     public CommandDispatcher() {
         Instance = Self;
-        s_protocols = [];
+        // CLASSIC: each game server builds a dispatcher, at the same time; filling the shared table in place let
+        // them corrupt it (a null protocol and "Command dispatcher threw exception" for every ungrouped command).
+        // Build a private table and publish it whole.
+        var protocols = new Dictionary<string, CommandProtocol>();
 
         // Get all types.
         var types = Assembly.GetExecutingAssembly().GetTypes();
@@ -89,10 +92,12 @@ internal class CommandDispatcher : ReceiveProtocolDispatcher {
                         keyIncrememnt++;
                     }
 
-                    s_protocols[groupName] = protocol;
+                    protocols[groupName] = protocol;
                 }
             }
         }
+
+        s_protocols = protocols;
     }
 
     public static Props Props() 
