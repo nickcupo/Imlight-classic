@@ -32,6 +32,8 @@ internal static class MonstrologyCardCatalog {
         foreach (var key in ambiguous) result.Remove(key); // Never select an arbitrary duplicate output.
         return result;
     }
+    /// <summary>Every creature the installed Monstrology cards name (QA: the max-out command).</summary>
+    internal static IEnumerable<uint> Creatures => Cards.Value.Keys.Select(key => key.Item1).Distinct();
     internal static bool TryResolve(uint creature, MonstrologyCreationKind kind, out MonstrologyCard card)
         => Cards.Value.TryGetValue((creature, kind), out card);
 }

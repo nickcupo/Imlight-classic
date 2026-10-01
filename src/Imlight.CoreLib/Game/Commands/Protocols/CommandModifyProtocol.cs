@@ -716,6 +716,33 @@ internal class CommandModifyProtocol : CommandProtocol {
 
 
     // CLASSIC: set the account's Crowns (ClassicCrowns).
+    [Command("monstrology")]
+    [AuthRequired(AuthLevel.QualityAssurance)]
+    private void MonstrologyCommand(string animus) {
+        // QA: monstrology <animus per creature>: the highest Monstrology level and that much Animus for every creature
+        // the installed Monstrology cards name. Relog to see it in the tome.
+        if (!int.TryParse(animus, out var amount) || amount < 0) {
+            InformSenderClient("Usage: monstrology <animus per creature, up to 65535>");
+
+            return;
+        }
+
+        if (!Game.Monstrology.MonstrologyService.Enabled) {
+            InformSenderClient("Monstrology is off on this server ([Classic] Monstrology).");
+
+            return;
+        }
+
+        var charId = Context.Character.CharId;
+        var result = Game.Monstrology.MonstrologyRepository.ForPlayers().Transact(charId, state =>
+            Game.Monstrology.MonstrologyRules.MaxOut(state, Game.Monstrology.MonstrologyProgression.InstalledThresholds,
+                [.. Game.Monstrology.MonstrologyCardCatalog.Creatures], amount));
+        var ledger = Game.Monstrology.MonstrologyRepository.ForPlayers().Read(charId);
+        InformSenderClient(result == Game.Monstrology.MonstrologyResult.Applied
+            ? $"Monstrology level {ledger.Level}, {ledger.Animus.Count} creatures with Animus. Relog to see the tome."
+            : $"Monstrology not changed ({result}).");
+    }
+
     [Command("setcrowns")]
     [AuthRequired(AuthLevel.QualityAssurance)]
     private void SetCrownsCommand(string crowns) {

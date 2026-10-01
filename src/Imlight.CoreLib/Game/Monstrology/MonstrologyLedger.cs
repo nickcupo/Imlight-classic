@@ -82,6 +82,25 @@ internal static class MonstrologyRules {
         return MonstrologyResult.Applied;
     }
 
+    /// <summary>
+    /// QA: the highest Monstrology level, and <paramref name="animus"/> Animus for each of <paramref name="creatures"/>
+    /// (capped at the tome's limits). Extraction and creation receipts are kept.
+    /// </summary>
+    internal static MonstrologyResult MaxOut(MonstrologyLedger state, IReadOnlyList<int> thresholds,
+                                             IEnumerable<uint> creatures, int animus) {
+        if (state.OwnerId == 0 || !ValidThresholds(thresholds) || animus < 0) return MonstrologyResult.Rejected;
+        state.Level = thresholds.Count - 1;
+        state.Experience = Math.Max(state.Experience, thresholds[^1]);
+        var amount = Math.Min(animus, (int) ushort.MaxValue);
+        foreach (var creature in creatures) {
+            if (creature == 0) continue;
+            if (!state.Animus.ContainsKey(creature) && state.Animus.Count >= MonstrologyTomeCodec.MaximumEntries) break;
+            state.Animus.TryGetValue(creature, out var current);
+            state.Animus[creature] = Math.Max(current, amount);
+        }
+        return MonstrologyResult.Applied;
+    }
+
     internal static bool ValidThresholds(IReadOnlyList<int> thresholds)
         => thresholds != null && thresholds.Count > 0 && thresholds.Count <= byte.MaxValue
             && thresholds[0] == 0 && Enumerable.Range(1, thresholds.Count - 1)
