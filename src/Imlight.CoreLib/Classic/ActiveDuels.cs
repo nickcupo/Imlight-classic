@@ -44,7 +44,7 @@ namespace Imlight.CoreLib.Classic;
 
 /// <summary>A duel in progress, as the dashboard shows it.</summary>
 public sealed record ActiveDuelInfo(ulong DuelId, string Zone, bool Pvp, int Wizards, int Creatures, int HeldSeats,
-    DateTime StartedUtc);
+    DateTime StartedUtc, IReadOnlyList<ulong> CharacterIds);
 
 /// <summary>A seat held for a wizard who dropped mid-fight.</summary>
 public sealed record HeldSeat(ulong CharacterId, string Zone, ulong InstanceOwnerId, DateTime ExpiresUtc);

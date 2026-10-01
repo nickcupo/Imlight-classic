@@ -281,6 +281,11 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
             return;
         }
 
+        // CLASSIC: a safe restart's countdown is over; it waits for the fights in progress, so no new one starts.
+        if (Classic.Admin.ServerAdmin.BlockNewDuels) {
+            return;
+        }
+
         if (_renderComponent is null) {
             Logger.Error("RenderComponent is null for duel {0}! Deleting sigil.",
                 Logger.Args(SigilId));

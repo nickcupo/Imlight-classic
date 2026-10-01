@@ -76,6 +76,7 @@ public class Logger {
         .WriteTo.Console(outputTemplate: s_logFormat)
         .WriteTo.File(s_path, rollingInterval: RollingInterval.Day)
         .WriteTo.Seq(s_seqUrl)
+        .WriteTo.Sink(RecentLogSink.Instance, LogEventLevel.Warning) // CLASSIC: the admin dashboard's recent errors.
         .CreateLogger();
 
     /// <summary>

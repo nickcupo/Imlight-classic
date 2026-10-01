@@ -314,8 +314,11 @@ internal sealed partial class CombatDuelComponent {
         var creatures = SubCircles.Count(circle => circle is { Occupied: true, IsSummonedMinion: false }
             && circle.ParticipantObject.m_templateID != 1);
         var held = SubCircles.Count(circle => circle is { Occupied: true, Disconnected: true });
+        var characters = SubCircles.Where(circle => circle is { Occupied: true, IsSummonedMinion: false })
+            .Select(circle => circle.Disconnected ? circle.HeldCharacterId : circle._wizard?.CharId ?? 0)
+            .Where(id => id != 0).ToList();
         ActiveDuels.Update(new ActiveDuelInfo(SigilId, Entity.Zone?.ZonePath ?? "", Duel.m_bPVP, wizards, creatures, held,
-            _startedUtc));
+            _startedUtc, characters));
     }
 
 }
