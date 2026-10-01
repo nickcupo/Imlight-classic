@@ -140,6 +140,8 @@ internal sealed class NpcComponent : ZoneEntityComponent, IComponentFactory, ICl
                 return;
             }
         }
+
+        Classic.CreatureStatsDirectory.Set(Entity.SelfRef, this); // CLASSIC: duels read the stats without an Ask.
     }
 
     // CLASSIC: forget a player who leaves the zone, so the same object coming back in range counts as an enter again.
@@ -192,8 +194,15 @@ internal sealed class NpcComponent : ZoneEntityComponent, IComponentFactory, ICl
     }
 
     [MessageHandler(typeof(COMBAT_106_PROTOCOL.MSG_QUERYCREATURESTATS))]
-    private void ReceiveQueryGameStats(COMBAT_106_PROTOCOL.MSG_QUERYCREATURESTATS message) {
-        var rsp = new COMBAT_106_PROTOCOL.MSG_CREATURESTATS {
+    private void ReceiveQueryGameStats(COMBAT_106_PROTOCOL.MSG_QUERYCREATURESTATS message)
+        => Sender.Tell(BuildCreatureStats());
+
+    /// <summary>
+    /// CLASSIC: the MSG_QUERYCREATURESTATS answer, also read by duels through CreatureStatsDirectory without an Ask (the
+    /// same object references the answer carried: the stats component's stats and the deck's spell list).
+    /// </summary>
+    internal COMBAT_106_PROTOCOL.MSG_CREATURESTATS BuildCreatureStats() {
+        return new COMBAT_106_PROTOCOL.MSG_CREATURESTATS {
             GameStats = _statsComponent.Stats,
             CombatIntelligence = IntelligenceFactor,
             CombatSelfishFactor = SelfishnessFactor,
@@ -202,8 +211,6 @@ internal sealed class NpcComponent : ZoneEntityComponent, IComponentFactory, ICl
             MagicSchool = MagicSchool,
             SpellList = _deckComponent?.Spells ?? [],
         };
-
-        Sender.Tell(rsp);
     }
 
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_QUERYNEARESTDUELTARGET))]

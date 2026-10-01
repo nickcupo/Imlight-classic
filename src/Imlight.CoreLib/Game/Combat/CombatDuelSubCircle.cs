@@ -614,10 +614,11 @@ public class CombatDuelSubCircle {
     }
 
     private void InitializeCreatureSubCircle(bool asMinion = false, int minionOwnerSubCircle = 0) {
-        var queryGameStatsMsg = new COMBAT_106_PROTOCOL.MSG_QUERYCREATURESTATS();
-        var creatureStats = ParticipantActor
-            .Ask<COMBAT_106_PROTOCOL.MSG_CREATURESTATS>(queryGameStatsMsg, PlayerQuery.Timeout) // CLASSIC: timeout
-            .Result;
+        // CLASSIC: a started creature's stats from the directory; one still starting is asked (blocking) as before.
+        var creatureStats = CreatureStatsDirectory.TryGet(ParticipantActor)
+            ?? ParticipantActor
+                .Ask<COMBAT_106_PROTOCOL.MSG_CREATURESTATS>(new COMBAT_106_PROTOCOL.MSG_QUERYCREATURESTATS(), PlayerQuery.Timeout) // CLASSIC: timeout
+                .Result;
 
         // Dynamic symbols start 1-4 for creatures.
         var dynamicSymbol = (DynamicSigilSymbol) (SlotIndex + 1);

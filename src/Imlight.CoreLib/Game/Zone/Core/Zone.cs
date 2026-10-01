@@ -153,6 +153,11 @@ public class Zone : ReceiveProtocolDispatcher, IWithTimers {
         => Akka.Actor.Props.Create(() => new Zone(zonePath, dynamicZoneId))
             .WithMailbox("akka.actor.mailbox.zone-priority");
 
+    protected override void PostStop() {
+        Classic.ZoneDataDirectory.Remove(Self); // CLASSIC
+        base.PostStop();
+    }
+
     protected override void PreRestart(Exception reason, object message) {
         Logger.Error("Zone {ZoneName} restarts for: {Exception}", Logger.Args(ZoneName, reason));
         base.PreRestart(reason, message);
@@ -338,6 +343,7 @@ public class Zone : ReceiveProtocolDispatcher, IWithTimers {
 
         _zoneLoadTimer.Restart();
         ZoneData = message.ZoneData;
+        Classic.ZoneDataDirectory.Set(Self, ZoneData); // CLASSIC: sessions read it without an Ask.
 
         // Inform each supervisor of the loaded zone data. They are expected to give a reply
         // to inform the zone that they have loaded their data.

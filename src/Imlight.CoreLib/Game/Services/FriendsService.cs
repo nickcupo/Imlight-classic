@@ -575,22 +575,40 @@ internal class FriendsService(SessionActor sessionActor) : MessageService(sessio
             return;
         }
 
-        // Query for the target's Wizard so that we may get their X/Y/Z coordinates.
-        var queryResult = Context.ActorSelection(onlinePlayer.ActorPath)
+        // Query for the target's Wizard so that we may get their X/Y/Z coordinates. CLASSIC: the answer comes back as a
+        // message (GoToPlayerAnswer) instead of blocking this actor and a pool thread on .Result.
+        var zone = onlinePlayer.CurrentZone;
+        Context.ActorSelection(onlinePlayer.ActorPath)
             .Ask<CHARACTER_103_PROTOCOL.MSG_CHARACTER>(
                 message: new CHARACTER_103_PROTOCOL.MSG_QUERYACTIVEWIZARD(),
                 timeout: TimeSpan.FromSeconds(QUERY_TELEPORT_WIZARD_TIMEOUT_IN_SECONDS)
             )
-            .Result;
+            .PipeTo(Self, success: rsp => new GoToPlayerAnswer(targetID, zone, rsp),
+                failure: ex => new GoToPlayerAnswer(targetID, zone, null, ex));
+    }
 
+    /// <summary>CLASSIC: the target's answer to a teleport-to-friend question.</summary>
+    internal sealed record GoToPlayerAnswer(ulong TargetId, string Zone, CHARACTER_103_PROTOCOL.MSG_CHARACTER Answer,
+                                            Exception Error = null);
+
+    [MessageHandler(typeof(GoToPlayerAnswer))]
+    private void ReceiveGoToPlayerAnswer(GoToPlayerAnswer answer) {
+        if (answer.Error is not null) {
+            // The blocking version let the timeout escape the handler; log it instead.
+            Logger.Error("Failed to query the target wizard for teleportation: {0}", Logger.Args(answer.Error.Message));
+
+            return;
+        }
+
+        var queryResult = answer.Answer;
         if (queryResult is not null) {
             var coordinates = Util.GetCompactStringFromVector((Vector4) queryResult.Wizard.Location);
 
             Teleport(
-                destinationZone: onlinePlayer.CurrentZone,
+                destinationZone: answer.Zone,
                 destinationLocation: coordinates,
                 doTeleportEffects: true,
-                ownerCharId: targetID
+                ownerCharId: answer.TargetId
             );
         } else {
             Logger.Error("Failed to query the target wizard for teleportation.");

@@ -330,6 +330,12 @@ public class ZoneEntity(
         }
     }
 
+    // CLASSIC: a creature that is gone is no longer read by duels.
+    protected override void PostStop() {
+        Classic.CreatureStatsDirectory.Remove(Self);
+        base.PostStop();
+    }
+
     /// <summary>
     /// Spawns a creature entity actor as a child of this entity, used for combat minions. Mirrors
     /// ZonePath.CreateEntityActor's load handshake; returns null on init failure.
