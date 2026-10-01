@@ -140,6 +140,14 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
         GetActiveWizard().IsInDuel = false;
         EquipMountSubtle();
 
+        // CLASSIC: a defeated wizard comes back with 1 health, which the hub's zone healing (m_healingPerMinute, 20%
+        // a minute in the world hubs) refills; at 0 the next fight was lost at once. A flee keeps its health.
+        var wizard = GetActiveWizard();
+        if (wizard.GameStats.m_currentHitpoints <= 0) {
+            wizard.UpdateHealth(1);
+            Logger.Debug("{Wizard} was defeated; back with 1 health.", Logger.Args(wizard.CharId));
+        }
+
         // We've fled or have been defeated in this duel. Send us back to the world hub.
         var hubMsg = new ZONE_102_PROTOCOL.MSG_SENDTOHUB();
         TellOtherServices(hubMsg);
