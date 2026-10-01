@@ -142,13 +142,6 @@ internal sealed partial class ZoneTriggerSupervisor(Core.Zone zone) : ZoneEntity
                 trigger.m_triggerName));
     }
 
-    // CLASSIC: a client trigger the codec could not decode arrives as a null entry (Krokotopia/KT_Pyramid/KT_Chamber
-    // has one). UpdateSpawnResultTriggers read its m_results and threw, the supervisor never reported loaded, and
-    // every transfer into the zone hung (the Altar of Kings' Chamber of Fire entrance did nothing). Such a trigger can
-    // never fire, so it is dropped with a warning.
-    internal static int DropUndecodedTriggers(List<Trigger> triggers)
-        => triggers.RemoveAll(trigger => trigger is null);
-
     private void UpdateSpawnResultTriggers(ref List<Trigger> clientTriggers, List<SpawnObject> spawners, List<PathObjectTemplate> paths, List<NodeObject> nodes) {
         foreach (var trigger in clientTriggers) {
             if (trigger.m_results == null || trigger.m_results.m_results == null) {
