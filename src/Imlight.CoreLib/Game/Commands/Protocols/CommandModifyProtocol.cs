@@ -328,6 +328,30 @@ internal class CommandModifyProtocol : CommandProtocol {
         InformSenderClient($"Set max gold to {goldInt}.");
     }
 
+    [Command("gold")]
+    [AuthRequired(AuthLevel.QualityAssurance)]
+    private void SetGoldCommand(string gold) {
+        // CLASSIC: gold <amount>: sets the wizard's gold, raising the gold pouch when the amount is above it.
+        if (!int.TryParse(gold, out var amount) || amount < 0) {
+            InformSenderClient("Usage: gold <amount>");
+
+            return;
+        }
+
+        var character = Context.Character;
+        if (amount > character.GameStats.m_baseGoldPouch) {
+            character.SetMaxGold(amount);
+        }
+
+        WizardData.Collections.WizardCollection.ChangeGold(character, (long) amount - character.GameStats.m_currentGold,
+            capToPouch: false);
+        Context.SessionActor.Tell(new WIZARD_12_PROTOCOL.MSG_UPDATEGOLD {
+            Gold = character.GameStats.m_currentGold,
+            MaxGold = character.GameStats.m_baseGoldPouch,
+        }, null);
+        InformSenderClient($"Gold set to {character.GameStats.m_currentGold}.");
+    }
+
     [Command("addgold")]
     [AuthRequired(AuthLevel.QualityAssurance)]
     private void AddGoldCommand(string gold) {
