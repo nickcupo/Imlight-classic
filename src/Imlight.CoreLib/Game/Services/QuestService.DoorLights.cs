@@ -21,6 +21,8 @@ internal sealed class LegacyDoorSnapshot : IServerMessage {
     public long AttachGeneration;
 }
 internal sealed class LegacyDoorPlayerReady : IServerMessage {
+    public bool Replay;
+    public ulong Owner;
     public byte MessageOrder => 0;
     public byte ServiceID => 102;
     public string Zone;
@@ -39,22 +41,27 @@ internal partial class QuestService {
     [MessageHandler(typeof(LegacyDoorPlayerReady))]
     private void DoorPlayerReady(LegacyDoorPlayerReady ready) {
         _doorFeed.ObserveCurrent(SessionActor.DoorAttach);
-        if (!_doorFeed.Ready(ready.Zone, ready.ZoneActor, ready.AttachGeneration)) return;
+        if (!_doorFeed.Ready(ready.Zone, ready.ZoneActor, ready.AttachGeneration, ready.Replay, ready.Owner)) return;
         RefreshDoorLights(); // A fresh authoritative snapshot follows MSG_NEWOBJECT.
     }
     [MessageHandler(typeof(LegacyDoorPlayerLeft))]
     private void DoorPlayerLeft(LegacyDoorPlayerLeft left) {
-        _doorFeed.ObserveCurrent(SessionActor.DoorAttach);
-        foreach (var packet in _doorFeed.Leave(left.Zone, left.ZoneActor, left.AttachGeneration)) SendToSocket(packet);
+        var attach = SessionActor.DoorAttach;
+        _doorFeed.ObserveCurrent(attach);
+        SendDoorPackets(attach, _doorFeed.Leave(left.Zone, left.ZoneActor, left.AttachGeneration));
     }
     [MessageHandler(typeof(LegacyDoorSnapshot))]
     private void ReceiveDoorSnapshot(LegacyDoorSnapshot snapshot) {
-        _doorFeed.ObserveCurrent(SessionActor.DoorAttach);
+        var attach = SessionActor.DoorAttach;
+        _doorFeed.ObserveCurrent(attach);
         var wizard = GetActiveWizard();
         var player = GetActiveGameObject();
         if (wizard is null || player is null) return;
-        foreach (var packet in _doorFeed.Apply(snapshot, wizard.Zone, player.m_globalID,
-            player.m_inactiveBehaviors?.OfType<ClientDynaModBehavior>().Any() == true)) SendToSocket(packet);
+        SendDoorPackets(attach, _doorFeed.Apply(snapshot, wizard.Zone, player.m_globalID,
+            player.m_inactiveBehaviors?.OfType<ClientDynaModBehavior>().Any() == true));
+    }
+    private void SendDoorPackets(ZoneAttachContext attach, List<GAME_5_PROTOCOL.MSG_DYNAMODBEHAVIOR_UPDATEMODS> packets) {
+        if (packets.Count != 0) SessionActor.ActorRef.Tell(new LegacyDoorSocketBatch(attach, packets[0].GlobalID, packets), Self);
     }
     internal static int LegacyDoorIndex(LegacyDoorBindings.Binding binding, string state) => binding.Index + (state switch {
         "Off" => 0, "Quest" => 1, "On" => 2, _ => throw new ArgumentOutOfRangeException(nameof(state)),

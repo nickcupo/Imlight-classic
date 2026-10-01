@@ -46,6 +46,7 @@ using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Classic;
+using Imlight.Classic.Quests;
 using Imlight.Common;
 using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.Game.Sigils;
@@ -131,7 +132,6 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
 
     [MessageHandler(typeof(SERVICE_101_PROTOCOL.MSG_ATTACHCOMPLETE))]
     private void ReceivePostAttach(SERVICE_101_PROTOCOL.MSG_ATTACHCOMPLETE message) {
-        DoorAttachReady(message.ZoneActorRef, message.AttachGeneration);
         // Send immediate effects.
         var wizard = GetActiveWizard();
         var timeHomeLastClicked = DateTimeOffset.FromUnixTimeSeconds(wizard.TimeHomeLastClicked);
@@ -475,16 +475,14 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
         }
 
         message.AttachGeneration = ++_attachGeneration;
-        SessionActor.PublishDoorAttach(new(GetActiveWizard().Zone, ZoneActor, _attachGeneration));
+        SessionActor.PublishDoorAttach(new(GetActiveWizard().Zone, ZoneActor, _attachGeneration, message.PlayerObject.m_globalID));
         ZoneActor.Forward(message);
     }
 
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_ADDPLAYERRSP))]
     private void ReceiveAddPlayerRsp(ZONE_102_PROTOCOL.MSG_ADDPLAYERRSP message) {
         // I've just been added to a zone. I need to spawn myself for all the other players.
-        SpawnMyself();
-        // Legacy door updates must follow the outgoing player object and its DynaMod behavior.
-        DoorAttachReady(message.ZoneActorRef, message.AttachGeneration);
+        SpawnMyself(message.ZoneActorRef, message.AttachGeneration);
 
         // Dismount in no-mount zones, re-equip on leaving (EquipmentService owns the reconcile).
         SessionActor.ActorRef.Tell(new ZONE_102_PROTOCOL.MSG_ENFORCEINTERIORMOUNT());
@@ -790,12 +788,6 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
         SendToSocket(rsp);
     }
 
-    private void DoorAttachReady(IActorRef actor, long generation) {
-        var current = SessionActor.DoorAttach;
-        if (current is null || current.Actor != actor || current.Generation != generation) return;
-        TellOtherServices(new LegacyDoorPlayerReady { Zone = current.Zone, ZoneActor = actor, AttachGeneration = generation });
-    }
-
     private void SetZone(IActorRef actorRef) {
         ZoneActor = actorRef;
         _removedForTransfer = false; // CLASSIC
@@ -913,8 +905,19 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
         ReceiveZoneBroadcast(broadcastMsg);
     }
 
-    private void SpawnMyself() {
+    internal static bool UsesLegacyDoorOrdering(string zone)
+        => ClassicQuestEngine.IsActive && LegacyDoorBindings.ForZone(zone).Count != 0;
+
+    internal static ZONE_102_PROTOCOL.MSG_ZONEBROADCAST PlayerSpawnBroadcast(GAME_5_PROTOCOL.MSG_NEWOBJECT player, bool ordered, IActorRef owner)
+        => new() { Message = player, Selfless = true, Sender = ordered ? owner : null };
+
+    private void SpawnMyself(IActorRef actor, long generation) {
         var wizard = GetActiveWizard();
+        var ordered = UsesLegacyDoorOrdering(wizard.Zone);
+        var attach = SessionActor.DoorAttach;
+        if (ordered && (attach is null || attach.Actor != actor || attach.Actor != ZoneActor
+            || attach.Generation != generation || attach.Owner != wizard.GameObjectID
+            || !string.Equals(attach.Zone, wizard.Zone, StringComparison.OrdinalIgnoreCase))) return;
         var properGameObj = WizardObjectLoader.GetPlayerGameObject(wizard);
 
         var flags = PropertyFlags.Prop_Public | PropertyFlags.Prop_Transmit | PropertyFlags.Prop_AuthorityTransmit;
@@ -928,9 +931,12 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
         var addMsg = new GAME_5_PROTOCOL.MSG_NEWOBJECT {
             Data = gameObjData,
         };
-        var broadcastMsg = new ZONE_102_PROTOCOL.MSG_ZONEBROADCAST {
-            Message = addMsg
-        };
+        var broadcastMsg = PlayerSpawnBroadcast(addMsg, ordered, SessionActor.ActorRef);
+        if (ordered) {
+            SessionActor.ActorRef.Tell(new LegacyDoorOwnerObject(attach, properGameObj.m_globalID, addMsg), Self);
+            // Peers still receive the player; the owner must receive only the
+            // marked object above, otherwise another spawn can reset its lamps.
+        }
 
         ZoneActor.Tell(broadcastMsg);
     }
