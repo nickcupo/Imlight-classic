@@ -41,6 +41,7 @@
  */
 
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using Akka.Actor;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.CoreLib.WizardData.Models.Player;
@@ -55,6 +56,7 @@ internal static class ActiveWizardDirectory {
     private sealed record Entry(Wizard Wizard, CoreObject GameObject);
 
     private static readonly ConcurrentDictionary<IActorRef, Entry> s_entries = new();
+    private static readonly ConcurrentDictionary<ulong, Wizard> s_byCharId = new(); // CLASSIC: ambient wizards read friends' facts
 
     /// <summary>How many sessions are listed (tests and the PERF log).</summary>
     internal static int Count => s_entries.Count;
@@ -66,6 +68,9 @@ internal static class ActiveWizardDirectory {
         }
 
         s_entries.AddOrUpdate(session, _ => new Entry(wizard, null), (_, old) => old with { Wizard = wizard });
+        if (wizard is not null) {
+            s_byCharId[wizard.CharId] = wizard;
+        }
     }
 
     /// <summary>The session's wizard game object changed (WizardService MSG_ADDPLAYERRSP).</summary>
@@ -79,10 +84,13 @@ internal static class ActiveWizardDirectory {
 
     /// <summary>The session is going away.</summary>
     internal static void Remove(IActorRef session) {
-        if (session is not null) {
-            s_entries.TryRemove(session, out _);
+        if (session is not null && s_entries.TryRemove(session, out var entry) && entry.Wizard is { } wizard) {
+            s_byCharId.TryRemove(new KeyValuePair<ulong, Wizard>(wizard.CharId, wizard));
         }
     }
+
+    /// <summary>The wizard of a live session by character id (the last session that set it).</summary>
+    internal static bool TryGetByCharId(ulong charId, out Wizard wizard) => s_byCharId.TryGetValue(charId, out wizard);
 
     /// <summary>
     /// The session's wizard and game object as its WizardService holds them, when the session is listed and has a wizard.

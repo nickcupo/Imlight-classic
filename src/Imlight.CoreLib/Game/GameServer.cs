@@ -94,6 +94,9 @@ public class GameServer : Server {
 
         LoadResources();
 
+        // CLASSIC: server-side ambient wizards ([Classic] AmbientWizards; off by setting it to off).
+        Classic.Ambient.AmbientDirector.StartIfEnabled(Context, Self);
+
         // Log
         Logger.Information("Game server created with name {Name} under port {Port}.",
             Logger.Args(serverName, serverPort));

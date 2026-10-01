@@ -343,7 +343,7 @@ public class Zone : ReceiveProtocolDispatcher, IWithTimers {
 
         _zoneLoadTimer.Restart();
         ZoneData = message.ZoneData;
-        Classic.ZoneDataDirectory.Set(Self, ZoneData); // CLASSIC: sessions read it without an Ask.
+        Classic.ZoneDataDirectory.Set(Self, ZoneData, message.NodeData); // CLASSIC: sessions read it without an Ask.
 
         // Inform each supervisor of the loaded zone data. They are expected to give a reply
         // to inform the zone that they have loaded their data.

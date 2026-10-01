@@ -373,6 +373,13 @@ public sealed partial class SessionActor : ReceiveActor, IDisposable {
         Receive<LegacyDoorOwnerObject>(ReceiveLegacyDoorOwnerObject);
         Receive<LegacyDoorSocketBatch>(ReceiveLegacyDoorSocketBatch);
 
+        // CLASSIC: a batch of client messages (ambient wizards' moves): each goes to the socket, in order.
+        Receive<ZONE_102_PROTOCOL.MSG_CLIENTBATCH>(batch => {
+            foreach (var message in batch.Messages ?? []) {
+                SendToSocket(message);
+            }
+        });
+
         // Generic message handlers.
         Receive<IServerMessage>(HandleInternalTell);
         Receive<IMessage>(SendToSocket);

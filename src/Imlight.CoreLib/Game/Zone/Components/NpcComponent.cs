@@ -179,6 +179,11 @@ internal sealed class NpcComponent : ZoneEntityComponent, IComponentFactory, ICl
             return;
         }
 
+        // CLASSIC: an ambient wizard walking into a duel circle does not pull this creature into a new fight.
+        if (!Classic.Ambient.AmbientWizards.MayEngage(playerActor)) {
+            return;
+        }
+
         // Hey! I'm a dueling creature and a player just entered my proximity.
         // I really don't like that.
         var interactionMsg = new ZONE_102_PROTOCOL.MSG_REQUESTCOMBATSIGIL {

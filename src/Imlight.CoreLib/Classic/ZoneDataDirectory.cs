@@ -35,6 +35,8 @@
 
 using System.Collections.Concurrent;
 using Akka.Actor;
+using System.Linq;
+using Imcodec.Math;
 using Imcodec.ObjectProperty.TypeCache;
 
 namespace Imlight.CoreLib.Classic;
@@ -43,17 +45,26 @@ namespace Imlight.CoreLib.Classic;
 internal static class ZoneDataDirectory {
 
     private static readonly ConcurrentDictionary<IActorRef, WizZoneData> s_zones = new();
+    private static readonly ConcurrentDictionary<IActorRef, Vector3[]> s_nodes = new();
 
-    internal static void Set(IActorRef zone, WizZoneData data) {
+    internal static void Set(IActorRef zone, WizZoneData data, NodeTemplateList nodes = null) {
         if (zone is not null && data is not null) {
             s_zones[zone] = data;
+            // CLASSIC: the creature path nodes too (where street mobs walk), for ambient wizards that hunt.
+            s_nodes[zone] = nodes?.m_nodeList?.Where(n => n is not null).Select(n => n.m_location).ToArray() ?? [];
         }
     }
 
     internal static void Remove(IActorRef zone) {
         if (zone is not null) {
             s_zones.TryRemove(zone, out _);
+            s_nodes.TryRemove(zone, out _);
         }
+    }
+
+    internal static bool TryGetNodes(IActorRef zone, out Vector3[] nodes) {
+        nodes = [];
+        return zone is not null && s_nodes.TryGetValue(zone, out nodes);
     }
 
     internal static bool TryGet(IActorRef zone, out WizZoneData data) {
