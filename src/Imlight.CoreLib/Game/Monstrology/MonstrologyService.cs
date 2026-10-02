@@ -116,10 +116,20 @@ internal sealed class MonstrologyService(SessionActor session) : MessageService(
             SendToSocket(new GAME_5_PROTOCOL.MSG_INVENTORYBEHAVIOR_ADDITEM { GlobalID = wizard.GameObjectID, SerializedItem = guestBytes });
         }
         SendToSocket(new WIZARD_12_PROTOCOL.MSG_UPDATEGOLD { Gold = gold, MaxGold = wizard.GameStats.m_baseGoldPouch });
-        RequestTome(new WIZARD2_53_PROTOCOL.MSG_REQUESTMONSTERTOME { GlobalID = wizard.GameObjectID });
-        // CLASSIC: no extra message. The stock client's own feedback is the card arriving in the book
-        // (MSG_ADDTREASURESPELLTOBOOK), the gold and the refreshed tome; a server message would add a "!" alert.
+        SendProgression();
+        // CLASSIC: the stock answer, MSG_MONSTERMAGICREQUESTCREATE with the result in RequestType; the tome page shows
+        // its own "A Summon Monster treasure card was created!" box (MonsterTomePage::MonsterMagicCreateResult,
+        // r806919 0x1409f5650: 0 failed, 1 summon card, 2 house guest, 3 expel card). No unsolicited tome: a tome
+        // pushed while the page's creature preview was still loading its model on demand froze the client at
+        // 100% CPU (2026-10-02, two creations 1.3 s apart). The tome is sent when the client asks for it.
+        CreateResult(wizard, message.MobTemplate, (int) kind);
     }
+
+    /// <summary>CLASSIC: the result the stock tome waits for (RequestType 0 = failed, else the kind made).</summary>
+    private void CreateResult(WizardData.Models.Player.Wizard wizard, uint creature, int result)
+        => SendToSocket(new WIZARD2_53_PROTOCOL.MSG_MONSTERMAGICREQUESTCREATE {
+            GlobalID = wizard.GameObjectID, RequestType = result, MobTemplate = creature,
+        });
 
     // CLASSIC: the tome shows Arc 1 creatures only (owner ruling 2026-10-02); Animus a wizard already holds for a later
     // world's creature (the earlier QA max-out) stays in the ledger, unseen and unusable.
@@ -127,11 +137,13 @@ internal sealed class MonstrologyService(SessionActor session) : MessageService(
         => animus.Where(pair => MonstrologyCardCatalog.IsArc1Creature(pair.Key)).ToDictionary(pair => pair.Key, pair => pair.Value);
 
     /// <summary>
-    /// CLASSIC: a refused creation goes to the log only. The stock tome shows nothing either (it greys out what the
-    /// wizard cannot afford), and MSG_SERVERMESSAGE would stack a "!" alert on the right of the screen.
+    /// CLASSIC: a refused creation: the reason goes to the log, and the tome gets the stock failed result (its own
+    /// "Monstrology Creation Failed!" box); never a MSG_SERVERMESSAGE, which stacks a "!" alert.
     /// </summary>
-    private static void Quiet(WizardData.Models.Player.Wizard wizard, string reason)
-        => Logger.Information("Monstrology create: wizard {0} refused: {1}", Logger.Args(wizard.CharId.ToString(), reason));
+    private void Quiet(WizardData.Models.Player.Wizard wizard, string reason) {
+        Logger.Information("Monstrology create: wizard {0} refused: {1}", Logger.Args(wizard.CharId.ToString(), reason));
+        CreateResult(wizard, 0, 0); // the tome's own "Monstrology Creation Failed!" box
+    }
 
     private static string CreationFailureText(MonstrologyResult result) => result switch {
         MonstrologyResult.InsufficientAnimus => "Monstrology: not enough Animus for that.",
