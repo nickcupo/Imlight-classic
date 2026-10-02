@@ -61,6 +61,19 @@ internal static class MonstrologyCardCatalog {
 
     internal static bool IsArc1Folder(string folder) => Arc1Folders.Contains(folder ?? "");
 
+    /// <summary>CLASSIC: false for a Monstrology card (summon, kill or guest) whose creature is not an Arc 1 creature; true
+    /// for every other spell. Cards made before the Arc 1 limit (a later world's summon) stay out of duels.</summary>
+    internal static bool IsUsableCard(uint spellTemplate)
+        => !CardCreatures.Value.TryGetValue(spellTemplate, out var creature) || IsArc1Creature(creature);
+
+    private static readonly Lazy<Dictionary<uint, uint>> CardCreatures = new(() => {
+        var map = new Dictionary<uint, uint>();
+        foreach (var card in Cards.Value.Values) {
+            map[card.TemplateId] = card.CreatureId;
+        }
+        return map;
+    });
+
     internal static bool IsArc1Creature(uint creature)
         => TemplateFolders.Value.TryGetValue(creature, out var folder) && IsArc1Folder(folder);
 }

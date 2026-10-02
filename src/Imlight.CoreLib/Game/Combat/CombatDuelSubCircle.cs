@@ -584,6 +584,10 @@ public class CombatDuelSubCircle {
                     isTreasureCard = true;
                 }
 
+                if (isTreasureCard && !Monstrology.MonstrologyCardCatalog.IsUsableCard(spell.m_templateID)) {
+                    continue; // CLASSIC: a later world's Monstrology card (Monstrology is Arc 1 only).
+                }
+
                 if (isTreasureCard) {
                     // Treasure cards go to the vault (separate pool, drawn on demand).
                     vaultSpells.Add(new CombatDeckSpellData {
