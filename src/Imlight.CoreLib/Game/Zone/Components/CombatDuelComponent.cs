@@ -209,6 +209,12 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
             return;
         }
 
+        // CLASSIC: the post-combat grace also keeps a wizard out of fights they walk into; they join on their next
+        // move after it ends, if they are still in the circle.
+        if (playerWizard?.IsInCombatGrace == true) {
+            return;
+        }
+
         // Check if the player is now in range of the object.
         // If there's a slot available, add the player to the duel.
         if (IsInRadius(playerObj, _combatSigilObjectInfo.m_radius) && !_entitiesInRange.ContainsKey(playerObj)) {

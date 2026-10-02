@@ -70,7 +70,13 @@ namespace Imlight.CoreLib.Game.Services;
 internal class CombatService(SessionActor sessionActor) : MessageService(sessionActor) {
 
     private const uint NO_AGGRO_EFFECT_STRINGID = 1618528611;
-    private const uint NO_AGGRO_EFFECT_DURATION_IN_SECONDS = 3;
+    // CLASSIC: [Classic] PostCombatGraceSeconds (default 5): how long after a duel monsters leave the wizard alone and
+    // the wizard does not join fights by walking into them. The 2009 value is unsourced (GAP_ANALYSIS C9).
+    private static readonly uint NO_AGGRO_EFFECT_DURATION_IN_SECONDS = GraceSeconds();
+
+    private static uint GraceSeconds()
+        => uint.TryParse(ConfigurationManager.Settings["Classic.PostCombatGraceSeconds"].AsString(), out var seconds)
+            && seconds is > 0 and <= 60 ? seconds : 5;
 
     private readonly CoreObjectSerializer _effectSerializer = new(
         behaviors: SerializerFlags.None
