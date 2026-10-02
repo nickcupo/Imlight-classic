@@ -46,7 +46,7 @@ internal abstract class CommandProtocol {
         this.Context = context;
 
         if (commandName is "help" or "?" or "" or null && !string.IsNullOrEmpty(Group)) {
-            InformClientHelp();
+            InformClientHelp(parameters.Length > 0 ? parameters[0]?.ToString() : null);
             return true;
         }
 
@@ -163,24 +163,36 @@ internal abstract class CommandProtocol {
         InformSenderClient($"Proper usage: {properUsageStr}");
     }
 
-    private void InformClientHelp() {
-        // CLASSIC: an alphabetical list, one command per line: ".mod gold <amount>  Set your gold."
-        var lines = _commandMethods.Values.Distinct()
-            .Select(method => {
-                var name = method.GetCustomAttribute<CommandAttribute>()!.Name;
-                var parameters = string.Concat(method.GetParameters().Select(p => $" <{p.Name}>"));
-                var help = method.GetCustomAttribute<HelpAttribute>()?.Text;
-                return (name, text: $".{Group} {name}{parameters}" + (help is null ? "" : $"  -  {help}"));
-            })
-            .OrderBy(line => line.name, StringComparer.OrdinalIgnoreCase)
-            .Select(line => line.text);
+    private const int HelpNamesPerLine = 6;
 
-        var sb = new StringBuilder().AppendLine($".{Group} commands:").AppendLine();
-        foreach (var line in lines) {
-            sb.AppendLine(line);
+    private void InformClientHelp(string? commandName) {
+        // CLASSIC: the whole list in one window ran off the screen. ".mod help" lists the names, a few per line;
+        // ".mod help gold" shows one command's usage and description.
+        string Usage(MethodInfo method) {
+            var parameters = string.Concat(method.GetParameters().Select(p => $" <{p.Name}>"));
+            var help = method.GetCustomAttribute<HelpAttribute>()?.Text;
+            return $".{Group} {method.GetCustomAttribute<CommandAttribute>()!.Name}{parameters}" + (help is null ? "" : $"\n{help}");
         }
 
-        InformSenderClient(sb.ToString().TrimEnd(), true);
+        if (!string.IsNullOrWhiteSpace(commandName)) {
+            InformSenderClient(_commandMethods.TryGetValue(commandName.ToLower(), out var method)
+                ? Usage(method)
+                : $"There is no .{Group} {commandName} command. Type .{Group} help for the list.", true);
+            return;
+        }
+
+        var names = _commandMethods.Values.Distinct()
+            .Select(method => method.GetCustomAttribute<CommandAttribute>()!.Name)
+            .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        var sb = new StringBuilder().AppendLine($".{Group} commands:");
+        for (var i = 0; i < names.Count; i += HelpNamesPerLine) {
+            sb.AppendLine(string.Join(",  ", names.Skip(i).Take(HelpNamesPerLine)));
+        }
+        sb.Append($"Type .{Group} help <command> for how to use one.");
+
+        InformSenderClient(sb.ToString(), true);
     }
 
 }
