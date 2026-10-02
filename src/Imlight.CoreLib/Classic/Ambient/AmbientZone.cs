@@ -310,15 +310,21 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
 
             if (wizard.Moving) {
                 Step(wizard, batch);
-                if (wizard.DuelSigil == ulong.MaxValue && now >= wizard.NextLook && _zoneActor is not null) {
-                    // Hunting: every few seconds, ask whether a street mob's aggro range covers this spot.
-                    wizard.NextLook = now.AddSeconds(3);
-                    _zoneActor.Tell(new ZONE_102_PROTOCOL.MSG_QUERYNEARESTDUELTARGET { PlayerGameObject = wizard.Wizard.GameObject },
-                        wizard.Endpoint);
-                }
             }
             else if (now >= wizard.Until) {
                 Decide(wizard, now);
+            }
+
+            if (wizard.DuelSigil == ulong.MaxValue && wizard.Activity == AmbientActivity.Walking && now >= wizard.NextLook
+                && _zoneActor is not null) {
+                // Hunting (one hunter a zone): every second, walking the path or waiting on it, fish a move to the zone as
+                // a player's MoveService does, so a street mob whose aggro range covers this spot starts a duel with it (its
+                // permit for a fight of its own is set). Static duelists answer the duel-target question instead.
+                wizard.NextLook = now.AddSeconds(1);
+                wizard.Wizard.IsInCombatGrace = false;
+                Fish(wizard);
+                _zoneActor.Tell(new ZONE_102_PROTOCOL.MSG_QUERYNEARESTDUELTARGET { PlayerGameObject = wizard.Wizard.GameObject },
+                    wizard.Endpoint);
             }
 
             if (now >= wizard.NextIdleLine && _realPlayers == 0) {
@@ -402,10 +408,8 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
                 wizard.Until = now.AddSeconds(15 + _rng.Next(45));
                 break;
             case AmbientActivity.Walking when wizard.DuelSigil == ulong.MaxValue:
-                // Hunting: look for a street mob whose aggro range covers this spot.
-                _zoneActor?.Tell(new ZONE_102_PROTOCOL.MSG_QUERYNEARESTDUELTARGET { PlayerGameObject = wizard.Wizard.GameObject },
-                    wizard.Endpoint);
-                wizard.Until = now.AddSeconds(4 + _rng.Next(6));
+                // Hunting: wait on the creatures' path a while (the tick keeps asking for a duel target).
+                wizard.Until = now.AddSeconds(15 + _rng.Next(20));
                 break;
             default:
                 wizard.Activity = AmbientActivity.Idle;
@@ -417,8 +421,8 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
     // ---- what to do next ---------------------------------------------------------------------
 
     private void Decide(AmbientWizard wizard, DateTime now) {
-        if (wizard.Activity == AmbientActivity.Helping) {
-            // The yes was not followed by a seat in time (full, or the duel ended).
+        if (wizard.Activity == AmbientActivity.Helping || wizard.DuelSigil == ulong.MaxValue) {
+            // The yes was not followed by a seat in time (full, or the duel ended), or the hunt is over.
             AmbientWizards.RevokeJoin(wizard.Endpoint);
         }
 
@@ -430,10 +434,14 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
 
         var roll = _rng.NextDouble();
         if (AmbientWizards.Settings.StreetFights && _mobNodes is { Count: > 0 } && roll < 0.35
+            && !_wizards.Any(w => w != wizard && w.DuelSigil == ulong.MaxValue)
             && wizard.Wizard.GameStats.m_currentHitpoints >= wizard.Wizard.GameStats.m_baseHitpoints * 0.6) {
-            var node = Nearby(_mobNodes, wizard.Position);
+            // Anywhere on the creatures' paths: the mobs keep to parts of a street, so a hunt may be a long walk.
+            var node = _mobNodes.Count == 0 ? (Vector3?) null : _mobNodes[_rng.Next(_mobNodes.Count)];
             if (node is { } at) {
                 wizard.DuelSigil = ulong.MaxValue; // hunting
+                AmbientWizards.PermitJoin(wizard.Endpoint, 0); // a street mob may pull it into a fight of its own
+                Logger.Debug("Ambient wizard {Name} goes hunting in {Zone}.", Logger.Args(wizard.Name, _zone));
                 WalkTo(wizard, at, AmbientActivity.Walking);
                 return;
             }
@@ -598,6 +606,7 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
             return;
         }
 
+        Logger.Debug("Ambient wizard {Name} starts a street fight.", Logger.Args(wizard.Name));
         wizard.DuelSigil = 0;
         if (wizard.Moving) {
             wizard.Moving = false; // stop where the mob noticed it

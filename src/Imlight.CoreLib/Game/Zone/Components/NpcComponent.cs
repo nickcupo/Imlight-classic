@@ -184,6 +184,11 @@ internal sealed class NpcComponent : ZoneEntityComponent, IComponentFactory, ICl
             return;
         }
 
+        if (Classic.Ambient.AmbientWizards.IsAmbient(playerActor)) {
+            Logger.Debug("{Creature} aggroes on ambient wizard {Name}.",
+                Logger.Args(Entity.ActiveGameObject?.m_debugName, playerWizard.PlayerNameBehavior?.GetWizardName()));
+        }
+
         // Hey! I'm a dueling creature and a player just entered my proximity.
         // I really don't like that.
         var interactionMsg = new ZONE_102_PROTOCOL.MSG_REQUESTCOMBATSIGIL {
