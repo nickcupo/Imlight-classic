@@ -35,6 +35,7 @@ internal class CommandModifyProtocol : CommandProtocol {
 
     internal override string Group { get; set; } = "mod";
 
+    [Help("Gain one level.")]
     [Command("levelup")]
     [AuthRequired(AuthLevel.QualityAssurance)]
     [Alias("lvlup")]
@@ -51,6 +52,7 @@ internal class CommandModifyProtocol : CommandProtocol {
         Context.SessionActor.Tell(msg, null);
     }
 
+    [Help("Set your level.")]
     [Command("level")]
     [AuthRequired(AuthLevel.QualityAssurance)]
     private void SetLevelCommand(string level) {
@@ -72,6 +74,7 @@ internal class CommandModifyProtocol : CommandProtocol {
         Context.SessionActor.Tell(msg, null);
     }
 
+    [Help("Set your run speed.")]
     [Command("speed")]
     [AuthRequired(AuthLevel.QualityAssurance)]
     private void SetSpeedCommand(string speedMultiplier) {
@@ -107,6 +110,7 @@ internal class CommandModifyProtocol : CommandProtocol {
         InformSenderClient($"Increased speed multiplier by {speedMultiplierInt}.");
     }
 
+    [Help("Add an item by template id.")]
     [Command("additem")]
     [AuthRequired(AuthLevel.QualityAssurance)]
     private void AddItemCommand(string templateId) {
@@ -160,6 +164,7 @@ internal class CommandModifyProtocol : CommandProtocol {
         InformSenderClient($"Added item {coreObject.m_debugName} to inventory.");
     }
 
+    [Help("Add a pet snack by template id.")]
     [Command("addsnack")]
     [AuthRequired(AuthLevel.QualityAssurance)]
     private void AddSnackCommand(string templateId) {
@@ -224,6 +229,7 @@ internal class CommandModifyProtocol : CommandProtocol {
         InformSenderClient($"Added snack {snackObj.m_debugName} to snack bag.");
     }
 
+    [Help("Add a reagent by template id.")]
     [Command("addreagent")]
     [AuthRequired(AuthLevel.QualityAssurance)]
     private void AddReagentCommand(string templateId) {
@@ -288,6 +294,7 @@ internal class CommandModifyProtocol : CommandProtocol {
         InformSenderClient($"Added reagent {reagentObj.m_debugName} to reagent bag.");
     }
 
+    [Help("Rename your wizard.")]
     [Command("name")]
     [AuthRequired(AuthLevel.QualityAssurance)]
     private void SetNameCommand([Remainder] string name) {
@@ -297,6 +304,7 @@ internal class CommandModifyProtocol : CommandProtocol {
         InformSenderClient($"Set name to {name}. Relog to see changes.");
     }
 
+    [Help("Set your badge.")]
     [Command("badge")]
     [AuthRequired(AuthLevel.QualityAssurance)]
     private void SetBadgeCommand([Remainder] string badge) {
@@ -306,6 +314,7 @@ internal class CommandModifyProtocol : CommandProtocol {
         InformSenderClient($"Set badge to {badge}. Relog to see changes.");
     }
 
+    [Help("Set your gold limit.")]
     [Command("maxgold")]
     [AuthRequired(AuthLevel.QualityAssurance)]
     private void SetMaxGoldCommand(string gold) {
@@ -328,6 +337,7 @@ internal class CommandModifyProtocol : CommandProtocol {
         InformSenderClient($"Set max gold to {goldInt}.");
     }
 
+    [Help("Set your gold.")]
     [Command("gold")]
     [AuthRequired(AuthLevel.QualityAssurance)]
     private void SetGoldCommand(string gold) {
@@ -352,6 +362,7 @@ internal class CommandModifyProtocol : CommandProtocol {
         InformSenderClient($"Gold set to {character.GameStats.m_currentGold}.");
     }
 
+    [Help("Add gold.")]
     [Command("addgold")]
     [AuthRequired(AuthLevel.QualityAssurance)]
     private void AddGoldCommand(string gold) {
@@ -374,6 +385,7 @@ internal class CommandModifyProtocol : CommandProtocol {
         InformSenderClient($"Added {goldInt} gold.");
     }
 
+    [Help("Set your maximum health.")]
     [Command("maxhealth")]
     [Alias("maxhp")]
     [AuthRequired(AuthLevel.QualityAssurance)]
@@ -398,6 +410,7 @@ internal class CommandModifyProtocol : CommandProtocol {
         InformSenderClient($"Set max health to {healthInt}.");
     }
 
+    [Help("Set your maximum mana.")]
     [Command("maxmana")]
     [AuthRequired(AuthLevel.QualityAssurance)]
     private void SetMaxManaCommand(string mana) {
@@ -420,6 +433,7 @@ internal class CommandModifyProtocol : CommandProtocol {
         InformSenderClient($"Set max mana to {manaInt}.");
     }
 
+    [Help("Set your maximum energy.")]
     [Command("maxenergy")]
     [Alias("maxnrg")]
     [AuthRequired(AuthLevel.QualityAssurance)]
@@ -450,6 +464,7 @@ internal class CommandModifyProtocol : CommandProtocol {
         InformSenderClient($"Set max energy to {energyInt}.");
     }
 
+    [Help("Set your current health.")]
     [Command("currenthealth")]
     [Alias("currenthp")]
     [AuthRequired(AuthLevel.QualityAssurance)]
@@ -481,6 +496,7 @@ internal class CommandModifyProtocol : CommandProtocol {
         InformSenderClient($"Set current health to {healthInt}.");
     }
 
+    [Help("Set your current mana.")]
     [Command("currentmana")]
     [AuthRequired(AuthLevel.QualityAssurance)]
     private void SetCurrentManaCommand(string mana) {
@@ -510,6 +526,7 @@ internal class CommandModifyProtocol : CommandProtocol {
         InformSenderClient($"Set current mana to {manaInt}.");
     }
 
+    [Help("Set your current energy.")]
     [Command("currentenergy")]
     [Alias("currentnrg")]
     [AuthRequired(AuthLevel.QualityAssurance)]
@@ -541,6 +558,7 @@ internal class CommandModifyProtocol : CommandProtocol {
         InformSenderClient($"Set current energy to {energyInt}.");
     }
 
+    [Help("Refill your health.")]
     [Command("refillhealth")]
     [Alias("refillhp", "heal")]
     [AuthRequired(AuthLevel.QualityAssurance)]
@@ -565,6 +583,7 @@ internal class CommandModifyProtocol : CommandProtocol {
         Context.SessionActor.Tell(networkMessage, null);
     }
 
+    [Help("Refill your mana.")]
     [Command("refillmana")]
     [Alias("refillmp", "rejuvenate", "rejuv")]
     [AuthRequired(AuthLevel.QualityAssurance)]
@@ -588,6 +607,7 @@ internal class CommandModifyProtocol : CommandProtocol {
         Context.SessionActor.Tell(networkMessage, null);
     }
 
+    [Help("Refill your energy.")]
     [Command("refillenergy")]
     [Alias("refillen", "refillnrg", "refillpet", "energize")]
     [AuthRequired(AuthLevel.QualityAssurance)]
@@ -610,6 +630,7 @@ internal class CommandModifyProtocol : CommandProtocol {
         Context.SessionActor.Tell(networkMessage, null);
     }
 
+    [Help("Gain a cantrip level.")]
     [Command("cantriplevelup")]
     [AuthRequired(AuthLevel.QualityAssurance)]
     [Alias("clvlup")]
@@ -630,6 +651,7 @@ internal class CommandModifyProtocol : CommandProtocol {
         Context.SessionActor.Tell(msg, null);
     }
 
+    [Help("Set your cantrip level.")]
     [Command("cantriplevel")]
     [AuthRequired(AuthLevel.QualityAssurance)]
     [Alias("clvl")]
@@ -656,6 +678,7 @@ internal class CommandModifyProtocol : CommandProtocol {
         Context.SessionActor.Tell(msg, null);
     }
 
+    [Help("Add training points.")]
     [Command("addtrainingpoints")]
     [Alias("addtp")]
     [AuthRequired(AuthLevel.QualityAssurance)]
@@ -679,6 +702,7 @@ internal class CommandModifyProtocol : CommandProtocol {
         InformSenderClient($"Added {trainingPointsInt} training points.");
     }
 
+    [Help("Set your training points.")]
     [Command("settrainingpoints")]
     [Alias("settp")]
     [AuthRequired(AuthLevel.QualityAssurance)]
@@ -700,6 +724,7 @@ internal class CommandModifyProtocol : CommandProtocol {
         InformSenderClient($"Set training points to {trainingPointsInt}.");
     }
 
+    [Help("Fill your potions.")]
     [Command("potionmax")]
     [Alias("pmax")]
     [AuthRequired(AuthLevel.QualityAssurance)]
@@ -720,6 +745,7 @@ internal class CommandModifyProtocol : CommandProtocol {
         InformSenderClient($"Set and filled potions to {potionMaxInt}.");
     }
     
+    [Help("Add experience.")]
     [Command("addxp")]
     [AuthRequired(AuthLevel.QualityAssurance)]
     private void AddXPCommand(string xp) {
@@ -740,6 +766,7 @@ internal class CommandModifyProtocol : CommandProtocol {
 
 
     // CLASSIC: set the account's Crowns (ClassicCrowns).
+    [Help("Top Monstrology level and Animus per creature.")]
     [Command("monstrology")]
     [AuthRequired(AuthLevel.QualityAssurance)]
     private void MonstrologyCommand(string animus) {
@@ -767,6 +794,7 @@ internal class CommandModifyProtocol : CommandProtocol {
             : $"Monstrology not changed ({result}).");
     }
 
+    [Help("Set your Crowns.")]
     [Command("setcrowns")]
     [AuthRequired(AuthLevel.QualityAssurance)]
     private void SetCrownsCommand(string crowns) {

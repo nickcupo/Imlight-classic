@@ -16,6 +16,7 @@
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+using System;
 using System.Linq;
 using System.Reflection;
 using System.Text;
@@ -145,18 +146,17 @@ internal abstract class CommandProtocol {
     private void InformClientOfProperParameterCount(string commandName, ParameterInfo[] methodParameters) {
         // Write the usage of this command.
         var properUsageStr = new StringBuilder();
-        properUsageStr.Append(commandName);
-        properUsageStr.Append("<color;1C1EC4>");
+        properUsageStr.Append($".{Group} {commandName}");
 
         foreach (var parameter in methodParameters) {
-            properUsageStr.Append(" (");
+            properUsageStr.Append(" <");
             properUsageStr.Append(parameter.Name);
 
             if (parameter.GetCustomAttribute<RemainderAttribute>() != null) {
                 properUsageStr.Append("...");
             }
 
-            properUsageStr.Append(')');
+            properUsageStr.Append('>');
         }
 
         // Inform the invoker of improper usage. Point and laugh!
@@ -164,25 +164,23 @@ internal abstract class CommandProtocol {
     }
 
     private void InformClientHelp() {
-        var sb = new StringBuilder()
-            .AppendLine("Available commands:");
+        // CLASSIC: an alphabetical list, one command per line: ".mod gold <amount>  Set your gold."
+        var lines = _commandMethods.Values.Distinct()
+            .Select(method => {
+                var name = method.GetCustomAttribute<CommandAttribute>()!.Name;
+                var parameters = string.Concat(method.GetParameters().Select(p => $" <{p.Name}>"));
+                var help = method.GetCustomAttribute<HelpAttribute>()?.Text;
+                return (name, text: $".{Group} {name}{parameters}" + (help is null ? "" : $"  -  {help}"));
+            })
+            .OrderBy(line => line.name, StringComparer.OrdinalIgnoreCase)
+            .Select(line => line.text);
 
-        var seenCommands = new HashSet<MethodInfo>();
-        foreach (var command in _commandMethods) {
-            // If we've already seen this command, skip it.
-            if (!seenCommands.Add(command.Value)) {
-                continue;
-            }
-
-            var commandAttribute = command.Value.GetCustomAttribute<CommandAttribute>();
-
-            // Get all the parameters for this command. Put a '$' in front of each parameter name.
-            var parameterStr = string.Join(" ", command.Value.GetParameters().Select(x => $"${x.Name}"));
-
-            sb.AppendLine($"{Group} {commandAttribute.Name} {parameterStr}");
+        var sb = new StringBuilder().AppendLine($".{Group} commands:").AppendLine();
+        foreach (var line in lines) {
+            sb.AppendLine(line);
         }
 
-        InformSenderClient(sb.ToString(), true);
+        InformSenderClient(sb.ToString().TrimEnd(), true);
     }
 
 }
