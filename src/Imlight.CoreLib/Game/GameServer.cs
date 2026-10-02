@@ -94,6 +94,9 @@ public class GameServer : Server {
 
         LoadResources();
 
+        // CLASSIC: the port the Mac Minion Helper connects to ([Classic] MinionHelperPort).
+        Classic.MinionHelper.MinionHelperListener.StartOnce();
+
         // Log
         Logger.Information("Game server created with name {Name} under port {Port}.",
             Logger.Args(serverName, serverPort));

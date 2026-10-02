@@ -1,9 +1,12 @@
 using System;
 namespace Imlight.CoreLib.Game.Monstrology;
 
-// Confirmed request-writer callers: 0x1409f7424=1, 0x1409f7444=2, 0x1409f7464=3.
-// 0x1409f7404=2 changes a UI tab and is NOT a request type.
-internal enum MonstrologyCreationKind { HouseGuest = 1, KillCard = 2, SummonCard = 3 }
+// CLASSIC: MSG_MONSTERMAGICREQUESTCREATE.RequestType, read from the r806919 tome (GUI/MonsterTome.gui) and its
+// handlers. The tome's button table (built at 0x1409f3569..0x1409f362c) binds CreateSummonButton to 0x1409f7420,
+// CreateHouseGuestButton to 0x1409f7440 and CreateKillButton to 0x1409f7460; those pass 1, 2 and 3 to the request
+// writer 0x1409fc710, which sends the value unchanged as RequestType. (0x1409f7404 = 2 changes a UI tab and is not a
+// request.) The first mapping here (1 = house guest) turned every Treasure Card click into a house guest.
+internal enum MonstrologyCreationKind { SummonCard = 1, HouseGuest = 2, KillCard = 3 }
 internal sealed record MonstrologyCreationCost(int Animus, int Gold, uint KnownOutputTemplate);
 internal static class MonstrologyCreation {
     internal static bool TryKind(int value, out MonstrologyCreationKind kind) {

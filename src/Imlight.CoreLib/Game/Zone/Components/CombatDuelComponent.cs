@@ -317,6 +317,8 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
         CombatResolver.Reset();
         _ownedMinionControl.NewRound();
         _ownedMinionFallbacks.Clear();
+        _ownedMinionHeldAiMoves.Clear();
+        ResetMinionHand(sendTruePips: false);
         _ownedMinionEarlyFinishScheduled = false;
         _awaitingCombatMoves = true;
 
@@ -379,6 +381,11 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
             return;
         }
 
+        // CLASSIC: a treasure-card draw while a minion's hand is showing would draw into the wrong hand.
+        if (BlockMinionHandDraw(caster)) {
+            return;
+        }
+
         // Draw a random treasure card from the vault.
         var drawnSpell = caster.DrawFromVault();
         if (drawnSpell != null) {
@@ -421,12 +428,35 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
         }
 
         if (!EnhancedGameplaySettings.Enabled) DisableAllOwnedMinionControl();
-        if (caster.IsSummonedMinion && _ownedMinionControl.HasOrder(caster.ParticipantObject)) return;
+        // CLASSIC: while a Myth wizard's card window shows their minion's hand, their moves are the minion's.
+        if (!caster.IsSummonedMinion && TryHandleMinionHandMove(caster, message)) {
+            ReevaluateOwnedMinionPlanning();
+            return;
+        }
+        if (caster.IsSummonedMinion && IsOwnerChosenMinionMove(caster)) {
+            // CLASSIC: the owner's order stands; keep the AI's move in case the owner hands the round back to it.
+            _ownedMinionHeldAiMoves[caster.ParticipantObject] = message;
+            return;
+        }
         if (!_awaitingCombatMoves && !(_ownedMinionEarlyFinishScheduled
             && !caster.IsSummonedMinion && _ownedMinionControl.IsOptedIn(caster.ParticipantObject))) {
             Logger.Warning("Duel {0} | Slot {1} | Received combat move while not expecting it.",
                 Logger.Args(Duel.m_duelID.Full, caster.SlotIndex));
 
+            return;
+        }
+
+        // CLASSIC: the stock client enchants by "casting" the enchantment card at a card in its hand (an Attack or
+        // Discard move whose card is an enchantment; the target names the hand card). Upstream Imlight's
+        // feat/enchantments branch reads it the same way. Run it through the hand-enchant transaction.
+        if (ClassicRuntime.IsActive && !caster.IsSummonedMinion
+            && message.MoveType is (byte) CombatMoveType.Attack or (byte) CombatMoveType.Discard
+            && IsEnchantmentCard(caster.GetSpellFromLastHand(message.SpellSelection))) {
+            var enchantTarget = StockEnchantTarget(caster, message);
+            Logger.Information("Duel {0} | Slot {1} | Stock enchant: card {2} onto hand card {3} (move {4}, raw target {5})",
+                Logger.Args(Duel.m_duelID.Full, caster.SlotIndex, message.SpellSelection, enchantTarget, message.MoveType, message.RawSpellTarget));
+            if (enchantTarget >= 0) HandleEnchantMove(caster, message.SpellSelection, (uint) enchantTarget);
+            else SendCurrentCombatHand(caster);
             return;
         }
 
@@ -466,6 +496,8 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
         if (caster.IsSummonedMinion && CombatResolver.GetQueuedAction(caster) is { } fallback) {
             _ownedMinionFallbacks[caster.ParticipantObject] = fallback;
         }
+        // CLASSIC: a Myth wizard who has picked their own move now picks for their minions, one at a time.
+        if (!caster.IsSummonedMinion) MaybeBeginMinionHand(caster, message.MoveType);
         ReevaluateOwnedMinionPlanning();
     }
 
@@ -481,6 +513,7 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
         // The execution phase begins. This is where combat actions take place and we actually see spell cinematics.
         _awaitingCombatMoves = false;
         _ownedMinionEarlyFinishScheduled = false;
+        ResetMinionHand(sendTruePips: true);
         PrepareOwnedMinionExecution();
         Duel.m_duelPhase = kDuelPhase.kPhase_Execution;
         SendCombatPhase((byte) Duel.m_duelPhase);
@@ -546,7 +579,10 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
         _isActive = false;
         _ownedMinionControl.Clear();
         _ownedMinionFallbacks.Clear();
+        _ownedMinionHeldAiMoves.Clear();
         _ownedControllableSummons.Clear();
+        _minionHandStages.Clear();
+        _summonOrder.Clear();
 
         // Minions are children of this sigil entity, which persists between fights; MSG_COMBATDEATH
         // deletes them outright.
@@ -1072,6 +1108,29 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
         PlayerBroadcast(msg);
     }
 
+    /// <summary>CLASSIC: a card that only changes another card (an enchantment, an Extract Animus card).</summary>
+    private static bool IsEnchantmentCard(Spell spell) {
+        if (spell is null || CoreObjectFactory.GetCoreTemplate(spell.m_templateID) is not SpellTemplate template
+            || template.m_effects is not { Count: > 0 }) return false;
+        return string.Equals(template.m_sTypeName, "Enchantment", StringComparison.OrdinalIgnoreCase)
+               || template.m_effects.All(e => e?.m_effectTarget is kEffectTarget.kSpell or kEffectTarget.kSpecificSpells);
+    }
+
+    /// <summary>CLASSIC: which hand card a stock enchant move names: the raw target, its decoded bit, or the bit index.</summary>
+    private static int StockEnchantTarget(CombatDuelSubCircle caster, COMBAT_106_PROTOCOL.MSG_ACTORCOMBATMOVE message) {
+        var hand = caster._combatDeck?.LastGivenHand;
+        var source = caster.GetSpellFromLastHand(message.SpellSelection);
+        if (hand is null || source is null) return -1;
+        var raw = message.RawSpellTarget;
+        var bit = raw > 0 && (raw & (raw - 1)) == 0 ? (int) Math.Log2(raw) : -1;
+        foreach (var candidate in new[] { (int) Math.Min(raw, int.MaxValue), (int) Math.Min(message.SpellTarget, int.MaxValue), bit }) {
+            if (candidate < 0 || candidate >= hand.Count || candidate == message.SpellSelection) continue;
+            if (ClassicHandEnchantment.TryPrepare(source, hand[candidate], out _, out _)) return candidate;
+        }
+
+        return -1;
+    }
+
     private void HandleEnchantMove(CombatDuelSubCircle caster, int sourceIndex, uint targetIndex) {
         RunMonstrologyEnchantment(caster, sourceIndex, targetIndex, () => {
             // A queued cast owns its selected card until ChangeMind. Do not invalidate its references.
@@ -1383,6 +1442,7 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
         var creaturesWin = AliveAndInDuelPlayerCount <= 0;
 
         FinishMonstrologyDuel(playersWin);
+        AwardMonstrologyExtractions(); // CLASSIC: Animus and Monstrology XP for the winners' extractions
 
         // A queued tutorial card grant must not leak into the next duel on this sigil.
         _tutorialDirector.OnDuelEnded();
@@ -1535,6 +1595,14 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
     }
 
     private void ResendMinionMoveSelections() {
+        TelegraphMinionMoves();
+        var delay = TimeSpan.FromSeconds(PLANNING_TIME);
+        Timers.StartSingleTimer(PLANNING_TIME_KEY, new COMBAT_106_PROTOCOL.MSG_PLANNINGPHASEOVER(), delay);
+    }
+
+    // CLASSIC: shows every minion's queued move again without touching the planning timer. An owner's mid-round
+    // change of a Myth minion's order used to restart the 30 s countdown (ResendMinionMoveSelections).
+    private void TelegraphMinionMoves() {
         EnactActionOnSubCircles(circle => {
             if (!circle.IsSummonedMinion || !circle.IsAlive || circle.ParticipantObject is null) {
                 return;
@@ -1549,8 +1617,6 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
             SendCombatMoveSelection(circle.ParticipantObject.m_globalID, (byte) CombatMoveType.Attack,
                 action.Spell, (byte) action.SelectedTarget.SlotIndex);
         });
-        var delay = TimeSpan.FromSeconds(PLANNING_TIME);
-        Timers.StartSingleTimer(PLANNING_TIME_KEY, new COMBAT_106_PROTOCOL.MSG_PLANNINGPHASEOVER(), delay);
     }
 
 }

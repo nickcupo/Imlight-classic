@@ -51,6 +51,7 @@ using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Classic.Rules;
 using Imlight.Common;
 using Imlight.CoreLib.Classic;
+using Imlight.CoreLib.Classic.MinionHelper;
 using Imlight.CoreLib.Game.DropTables;
 using Imlight.CoreLib.Game.Combat;
 using Imlight.CoreLib.Shared.Items;
@@ -87,6 +88,7 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
     protected override void OnDispose() {
         var message = new GAME_5_PROTOCOL.MSG_CLIENT_DISCONNECT();
         _currentDuelActor?.Tell(message, SessionActor.ActorRef);
+        MinionHelperHub.Shared.UnbindSession(_helperAccountId, SessionActor.ActorRef); // CLASSIC: Minion Helper.
     }
 
     // CLASSIC: the Crown Shop's henchman hire goes to the duel this player is in; outside a duel it fails at once.
@@ -105,6 +107,7 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
     [MessageHandler(typeof(COMBAT_106_PROTOCOL.MSG_ACTORADDEDTODUEL))]
     private void RecieveDuelAdd(COMBAT_106_PROTOCOL.MSG_ACTORADDEDTODUEL message) {
         _currentDuelActor = message.DuelActor;
+        TellDuelAboutHelper(); // CLASSIC: a Myth owner with a Minion Helper chooses their minions' moves.
 
         if (_cheatInstantCinematics) {
             _currentDuelActor.Tell(new COMBAT_106_PROTOCOL.MSG_CHEATINSTANTCINEMATICS {
@@ -138,6 +141,7 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
     private void ReceiveCombatDefeat(COMBAT_106_PROTOCOL.MSG_COMBATDEFEAT message) {
         _currentDuelActor = null; // CLASSIC: the duel is over for us; a later logout must not flee it again.
         GetActiveWizard().IsInDuel = false;
+        PushHelperIdle();
         EquipMountSubtle();
 
         // CLASSIC: a defeated wizard comes back with 1 health, which the hub's zone healing (m_healingPerMinute, 20%
@@ -159,6 +163,7 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
         // (a second "Duel ended" and a MSG_SENDTOHUB).
         _currentDuelActor = null;
         GetActiveWizard().IsInDuel = false;
+        PushHelperIdle();
         EquipMount();
         SetNoAggroGrace();
 
@@ -367,8 +372,11 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
 
     [MessageHandler(typeof(COMBAT_106_PROTOCOL.MSG_OWNEDMINIONRESPONSE))]
     private void ReceiveOwnedMinionResponse(COMBAT_106_PROTOCOL.MSG_OWNEDMINIONRESPONSE message) {
-        if (!_minionControlNegotiated || !EnhancedGameplaySettings.Enabled
-            || message.OwnerActor != SessionActor.ActorRef) return;
+        if (message.OwnerActor != SessionActor.ActorRef) return;
+        if (message.HelperView is not null && _helperAccountId != 0) {
+            MinionHelperHub.Shared.Push(_helperAccountId, message.HelperView); // CLASSIC: Minion Helper.
+        }
+        if (!_minionControlNegotiated || !EnhancedGameplaySettings.Enabled) return;
         var payload = System.Text.Json.JsonSerializer.Serialize(new {
                 message.DuelID, message.Round, message.MinionID, message.RequestID,
                 message.Accepted, Status = message.Status.ToString(),
@@ -385,6 +393,91 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
             });
         }
         SendToSocket(new EnhancedClassicProtocol.MinionState { Payload = payload });
+    }
+
+    // CLASSIC: the Minion Helper (Classic/MinionHelper). The account's helper links to this session while the wizard
+    // is in the world; while it is linked and its switch is on, a Myth wizard chooses their minions' moves in duels.
+    private ulong _helperAccountId;
+    private bool _helperLinked;
+    private bool _helperControl = true;
+
+    [MessageHandler(typeof(SERVICE_101_PROTOCOL.MSG_ATTACHCOMPLETE))]
+    private void ReceiveAttachCompleteForHelper(SERVICE_101_PROTOCOL.MSG_ATTACHCOMPLETE message) {
+        var account = GetActiveAccount();
+        if (account is null || account.AccountId == 0) return;
+        _helperAccountId = account.AccountId;
+        MinionHelperHub.Shared.BindSession(_helperAccountId, SessionActor.ActorRef);
+    }
+
+    [MessageHandler(typeof(COMBAT_106_PROTOCOL.MSG_MINIONHELPERLINK))]
+    private void ReceiveMinionHelperLink(COMBAT_106_PROTOCOL.MSG_MINIONHELPERLINK message) {
+        _helperLinked = message.Connected && EnhancedGameplaySettings.Enabled;
+        if (_helperLinked) {
+            if (_currentDuelActor is null) PushHelperIdle();
+            else TellDuelAboutHelper();
+        } else if (_currentDuelActor is not null && !_minionControlNegotiated) {
+            _currentDuelActor.Tell(new COMBAT_106_PROTOCOL.MSG_OWNEDMINIONDISABLE { OwnerActor = SessionActor.ActorRef }, Self);
+        }
+    }
+
+    [MessageHandler(typeof(COMBAT_106_PROTOCOL.MSG_MINIONHELPERCONTROL))]
+    private void ReceiveMinionHelperControl(COMBAT_106_PROTOCOL.MSG_MINIONHELPERCONTROL message) {
+        _helperControl = message.Enabled;
+        if (_currentDuelActor is null) {
+            PushHelperIdle();
+        } else if (_helperControl) {
+            TellDuelAboutHelper();
+        } else {
+            _currentDuelActor.Tell(new COMBAT_106_PROTOCOL.MSG_OWNEDMINIONDISABLE { OwnerActor = SessionActor.ActorRef }, Self);
+        }
+    }
+
+    [MessageHandler(typeof(COMBAT_106_PROTOCOL.MSG_MINIONHELPERORDER))]
+    private void ReceiveMinionHelperOrder(COMBAT_106_PROTOCOL.MSG_MINIONHELPERORDER message) {
+        if (!_helperLinked || !EnhancedGameplaySettings.Enabled || _currentDuelActor is null) {
+            if (message.RequestID != 0) {
+                MinionHelperHub.Shared.Push(_helperAccountId, System.Text.Json.JsonSerializer.Serialize(new {
+                    op = "ack", request = message.RequestID, accepted = false, status = "NotInDuel" }));
+            }
+            PushHelperIdle();
+            return;
+        }
+
+        if (message.Query) {
+            TellDuelAboutHelper();
+            return;
+        }
+
+        if (!_helperControl) {
+            MinionHelperHub.Shared.Push(_helperAccountId, System.Text.Json.JsonSerializer.Serialize(new {
+                op = "ack", request = message.RequestID, accepted = false, status = "ControlOff" }));
+            return;
+        }
+
+        _currentDuelActor.Tell(new COMBAT_106_PROTOCOL.MSG_OWNEDMINIONREQUEST {
+            OwnerActor = SessionActor.ActorRef,
+            DuelID = message.DuelID, Round = message.Round, MinionID = message.MinionID,
+            RequestID = message.RequestID, Query = false, MoveType = message.MoveType,
+            SpellSelection = message.SpellSelection, SpellTarget = message.SpellTarget
+        }, Self);
+    }
+
+    private void TellDuelAboutHelper() {
+        if (!_helperLinked || _currentDuelActor is null || !EnhancedGameplaySettings.Enabled) return;
+        _currentDuelActor.Tell(new COMBAT_106_PROTOCOL.MSG_OWNEDMINIONOPTIN {
+            OwnerActor = SessionActor.ActorRef, Enable = _helperControl
+        }, Self);
+    }
+
+    private void PushHelperIdle() {
+        if (!_helperLinked || _helperAccountId == 0) return;
+        var wizard = GetActiveWizard();
+        MinionHelperHub.Shared.Push(_helperAccountId, System.Text.Json.JsonSerializer.Serialize(new {
+            op = "state", phase = "idle",
+            wizard = wizard?.PlayerNameBehavior?.GetWizardName() ?? "",
+            myth = wizard?.MagicSchoolBehavior?.MagicSchool == MagicSchool.Myth,
+            controlling = _helperControl && EnhancedGameplaySettings.Enabled,
+        }));
     }
 
     [MessageHandler(typeof(DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_COMBATMOVE))]
@@ -407,7 +500,8 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
             MoveType = message.MoveType,
             SpellSelection = message.SpellSelection,
             SpellTarget = target,
-            TimeLeft = message.TimeLeft
+            TimeLeft = message.TimeLeft,
+            RawSpellTarget = message.SpellTarget,
         };
     }
 

@@ -1,3 +1,4 @@
+using Imlight.Common;
 /*
  * Imlight
  * Copyright (C) 2025 Revive101
@@ -123,6 +124,9 @@ internal static class UserValidator {
         // Validation happens after authentication, so we need to check if the session key matches.
         var sessionKey = ClientKeyCollection.GetSessionKey(matchedAccount.AccountId, validateMessage.MachineID);
         if (string.IsNullOrEmpty(sessionKey)) {
+            // CLASSIC: say why, so a client started with a ticket from another program (-U ..USERID KEY) can be diagnosed.
+            Logger.Debug("Validate: no session key for account {0} on machine {1}",
+                Logger.Args(matchedAccount.AccountId.ToString(), validateMessage.MachineID.ToString()));
             details._result = UserValidateResult.ValidateFailed;
 
             return details;

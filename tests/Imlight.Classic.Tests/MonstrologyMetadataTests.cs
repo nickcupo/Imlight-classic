@@ -93,6 +93,10 @@ public sealed class MonstrologyMetadataTests(ITestOutputHelper output) {
         Assert.False(MonstrologyCreation.TryKind(4, out _));
         var mob = new MonstrologyMob("fixture", 4, false, 10, 20, 30, 40, 50, 60, 7, 8, 9);
         foreach (var value in new[] { 1, 2, 3 }) Assert.True(MonstrologyCreation.TryKind(value, out _));
+        // CLASSIC: the tome's buttons send 1 (summon card), 2 (house guest), 3 (kill card); see MonstrologyCreation.cs.
+        Assert.True(MonstrologyCreation.TryKind(1, out var summon)); Assert.Equal(MonstrologyCreationKind.SummonCard, summon);
+        Assert.True(MonstrologyCreation.TryKind(2, out var guest)); Assert.Equal(MonstrologyCreationKind.HouseGuest, guest);
+        Assert.True(MonstrologyCreation.TryKind(3, out var kill)); Assert.Equal(MonstrologyCreationKind.KillCard, kill);
         Assert.Equal(new MonstrologyCreationCost(30,40,7), MonstrologyCreation.Cost(mob, MonstrologyCreationKind.HouseGuest));
         Assert.Equal(new MonstrologyCreationCost(50,60,0), MonstrologyCreation.Cost(mob, MonstrologyCreationKind.KillCard));
         Assert.Equal(new MonstrologyCreationCost(10,20,0), MonstrologyCreation.Cost(mob, MonstrologyCreationKind.SummonCard));

@@ -34,4 +34,9 @@
         <ProjectReference Include="..\..\submodule\Imcodec\src\Imcodec.Wad\Imcodec.Wad.csproj" />
     </ItemGroup>
 
+  <ItemGroup>
+    <!-- CLASSIC: the Minion Helper page, served by Classic/MinionHelper/MinionHelperListener.cs. -->
+    <EmbeddedResource Include="Classic\MinionHelper\MinionHelper.html" LogicalName="MinionHelper.html" />
+  </ItemGroup>
+
 </Project>
