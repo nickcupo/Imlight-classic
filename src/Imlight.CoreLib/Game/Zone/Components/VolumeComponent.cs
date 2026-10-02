@@ -39,6 +39,7 @@
 using Akka.Actor;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
+using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.Game.Zone.Core;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;
@@ -65,6 +66,9 @@ internal sealed class VolumeComponent(ZoneEntity entity) : ZoneEntityComponent(e
         // do not send any events.
         if (_volume != null && InVolume(playerObj) && !_playersInRange.ContainsKey(playerObj)) {
             _playersInRange.Add(playerObj, playerActor);
+            if (ClassicQuestEngine.IsActive) {
+                _arrivedInside.Add(playerObj); // CLASSIC: its enter events post on the wizard's first move (OnPlayerMove).
+            }
 
             // A player can log in standing inside a quest-proximity volume.
             NotifyProximityGoals(playerObj, playerActor, playerWizard);
@@ -75,12 +79,22 @@ internal sealed class VolumeComponent(ZoneEntity entity) : ZoneEntityComponent(e
     public override void OnPlayerLeave(IActorRef playerActor, ulong id) {
         foreach (var key in _playersInRange.Where(x => x.Value.Equals(playerActor)).Select(x => x.Key).ToList()) {
             _playersInRange.Remove(key);
+            _arrivedInside.Remove(key);
         }
     }
+
+    // CLASSIC: wizards who arrived inside this volume and have not moved yet. Their first move inside posts the enter
+    // events once (ArrivedInside, so no teleport fires): the Jade Palace's Jade Oni volume is the arrival spot itself,
+    // and Air Apparent's Sesshu volume (MS_Plague2_T5) holds the landing. Stock Imlight never posted them.
+    private readonly HashSet<CoreObject> _arrivedInside = new(ReferenceEqualityComparer.Instance);
 
     public override void OnPlayerMove(CoreObject playerObj, IActorRef playerActor, Wizard playerWizard) {
         if (_volume == null) {
             return;
+        }
+
+        if (_arrivedInside.Remove(playerObj) && IsInRadius(playerObj, _volume.m_radius)) {
+            PostEnterEvents(playerObj, playerActor, arrivedInside: true); // CLASSIC
         }
 
         // Check if the player is now in range of the object.
@@ -139,19 +153,22 @@ internal sealed class VolumeComponent(ZoneEntity entity) : ZoneEntityComponent(e
             Logger.Args(_volume.m_volumeName, Entity.Zone?.ZonePath, string.Join(", ", _volume.m_enterEvents ?? []),
                 playerActor?.Path.Name));
 
-        foreach (var enterEvent in _volume.m_enterEvents) {
-            var postEventMsg = new ZONE_102_PROTOCOL.MSG_POSTEVENT {
-                EventName = enterEvent,
-                PlayerActor = playerActor,
-                PlayerGameObject = playerObj
-            };
-
-            Entity.ZoneRef.Tell(postEventMsg);
-        }
+        PostEnterEvents(playerObj, playerActor, arrivedInside: false);
 
         // Quest proximity goals are tied to the volume by name; if the player has one of
         // this volume's goals active, tell their quest service to complete it.
         NotifyProximityGoals(playerObj, playerActor, playerWizard);
+    }
+
+    private void PostEnterEvents(CoreObject playerObj, IActorRef playerActor, bool arrivedInside) {
+        foreach (var enterEvent in _volume.m_enterEvents ?? []) {
+            Entity.ZoneRef.Tell(new ZONE_102_PROTOCOL.MSG_POSTEVENT {
+                EventName = enterEvent,
+                PlayerActor = playerActor,
+                PlayerGameObject = playerObj,
+                ArrivedInside = arrivedInside, // CLASSIC
+            });
+        }
     }
 
     private void NotifyProximityGoals(CoreObject playerObj, IActorRef playerActor, Wizard playerWizard) {

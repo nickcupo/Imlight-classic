@@ -38,12 +38,24 @@ internal sealed class ResSpawnHandler : BaseResultHandler<ResSpawn> {
         // CLASSIC: m_activate false deactivates the spawner (a boss's death trigger, after its ResDespawn); it must not
         // spawn the boss again. The spawner keeps its own respawn timer, as before Monster_Killed was posted.
         if (ClassicQuestEngine.IsActive && !Result.m_activate) {
+            // CLASSIC: a zone trigger's stop ends the spawner (its respawn timer brought the boss back 10 s after its death
+            // trigger). A quest's ResSpawn without m_activate (overlay data) still does nothing, as before.
+            if (context is not Contexts.GenericResultContext { TriggerName.Length: > 0 }) {
+                return true;
+            }
+
+            zoneActor.Tell(new ZONE_102_PROTOCOL.MSG_ZONEBROADCAST {
+                Messages = [new ZONE_102_PROTOCOL.MSG_ZONEPATHDEACTIVATE { SpawnObjectID = (uint) Result.m_spawnID }],
+                Targets = ZoneBroadcastTarget.Paths,
+            });
+
             return true;
         }
 
         var broadcastMsg = new ZONE_102_PROTOCOL.MSG_ZONEBROADCAST {
             Messages = [new ZONE_102_PROTOCOL.MSG_ZONEPATHSPAWN {
-                SpawnObjectID = (uint) Result.m_spawnID
+                SpawnObjectID = (uint) Result.m_spawnID,
+                Fill = ClassicQuestEngine.IsActive, // CLASSIC: the activated spawner fills to its maximum.
             }],
             Targets = ZoneBroadcastTarget.Paths,
         };
