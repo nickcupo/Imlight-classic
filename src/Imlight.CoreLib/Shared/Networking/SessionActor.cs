@@ -83,6 +83,8 @@ public sealed partial class SessionActor : ReceiveActor, IDisposable {
 
     public string Ip;
     public string RemoteIp;
+    // CLASSIC: the server address this client connected to (KingsIsle's launcher is sent URLs on it).
+    public string LocalIp;
 
     private readonly IActorRef _actorFactoryRef;
     // CLASSIC: filled by each service as it is constructed (RegisterService), on the service's thread.
@@ -102,6 +104,7 @@ public sealed partial class SessionActor : ReceiveActor, IDisposable {
         this._socket = socket;
         this.Ip = socket.RemoteEndPoint.ToString();
         this.RemoteIp = socket.RemoteEndPoint.ToString().Split(':')[0];
+        this.LocalIp = Imlight.CoreLib.Classic.Launcher.LauncherPatchServer.AddressText(socket.LocalEndPoint); // CLASSIC
         this.SessionID = sessionId;
         this._services = new System.Collections.Concurrent.ConcurrentDictionary<IActorRef, MessageService>();
         this.ServerRef = server;

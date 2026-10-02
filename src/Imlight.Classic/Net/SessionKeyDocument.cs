@@ -76,6 +76,15 @@ public static class SessionKeyDocument {
     /// <returns>True if the key may be used.</returns>
     public static bool Answers(ulong storedAccountId, ulong storedMachineId, string? storedKey,
                                ulong accountId, ulong machineId)
-        => storedAccountId == accountId && storedMachineId == machineId && !string.IsNullOrEmpty(storedKey);
+        => storedAccountId == accountId && !string.IsNullOrEmpty(storedKey)
+           // CLASSIC: a client started with a key on its command line (-U ..USERID KEY USER, from KingsIsle's own
+           // launcher) validates as machine 0; the key was stored for the launcher's machine. The key still has to
+           // answer the PassKey3 challenge.
+           && (storedMachineId == machineId || machineId == CommandLineMachineId);
+
+    /// <summary>
+    /// The machine id the r806919 client reports when it validates a key given on its command line.
+    /// </summary>
+    public const ulong CommandLineMachineId = 0;
 
 }
