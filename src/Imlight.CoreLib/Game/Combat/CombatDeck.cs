@@ -252,12 +252,9 @@ internal class CombatDeck {
             return null;
         }
 
-        // Player must have more total cards available than hand size to draw from vault.
-        // This prevents drawing from the sideboard when the regular deck still has cards.
-        var totalAvailableCards = RemainingCardCount + VaultRemainingCount + LastGivenHand.Count;
-        if (totalAvailableCards <= _handSize) {
-            return null;
-        }
+        // CLASSIC: a treasure card can be drawn whenever the hand has room and the deck still holds treasure cards, as on
+        // live. The rule here required more cards in all than a full hand, so a small deck (six cards and one treasure
+        // card) could never draw.
 
         var randomIndex = _rng.Next(0, _treasureVaultUsed.Count);
         var vaultData = _treasureVaultUsed[randomIndex];
