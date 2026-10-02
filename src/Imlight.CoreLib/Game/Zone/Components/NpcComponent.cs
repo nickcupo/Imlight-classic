@@ -156,7 +156,13 @@ internal sealed class NpcComponent : ZoneEntityComponent, IComponentFactory, ICl
         if (IsInRadius(playerObj, Proximity) && !_playersInRange.ContainsKey(playerObj)) {
             // If the player is in range, trigger the enter events.
             OnProximityEnter(playerObj, playerActor, playerWizard);
-            _playersInRange.Add(playerObj, playerActor);
+            // CLASSIC: a wizard still in a duel or its after-duel grace is not remembered as inside the radius, so the
+            // first move after the grace aggroes. A creature that appears beside the wizard as a duel ends (the Plague
+            // Oni rising from Ideyoshi in MS_Plague2_PalaceInterior) otherwise never fights while the wizard stays near.
+            if (!ClassicQuestEngine.IsActive || !Imlight.Classic.Quests.ProximityAggro.Deferred(
+                    IsMonster, playerWizard?.IsInCombatGrace == true, playerWizard?.IsInDuel == true)) {
+                _playersInRange.Add(playerObj, playerActor);
+            }
         } 
         else if (!IsInRadius(playerObj, Proximity) && _playersInRange.ContainsKey(playerObj)) {
             _playersInRange.Remove(playerObj);

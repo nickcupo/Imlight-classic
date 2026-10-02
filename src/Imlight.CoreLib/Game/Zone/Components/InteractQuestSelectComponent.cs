@@ -208,6 +208,7 @@ internal sealed class InteractQuestSelectComponent(ZoneEntity entity)
 
         var matches = FindActiveMatchingGoals(playerCharacter);
         StartUseSpawns(playerActor, playerCharacter, playerObject);
+        PostUseEvents(playerActor, playerObject, matches.Count > 0);
 
         foreach (var (quest, goal, goalProgress) in matches.Where(match => match.Goal.m_goalType == GOAL_TYPE.GOAL_TYPE_WAYPOINT)) {
             playerActor.Tell(new ZONE_102_PROTOCOL.MSG_COMPLETEPROXIMITYGOAL { QuestID = quest.ID, GoalID = goalProgress.ID });
@@ -238,6 +239,22 @@ internal sealed class InteractQuestSelectComponent(ZoneEntity entity)
         Entity.GetComponentOfType<RenderComponent>()?.HideCollectedForPlayer(playerActor);
         Timers?.StartSingleTimer(characterId, new ZONE_102_PROTOCOL.MSG_CLASSICCOLLECTRESPAWN { CharacterId = characterId },
             _collected.RespawnDelay);
+    }
+
+    // CLASSIC: the object's InteractableBehavior posts its quest event to the zone too, where triggers listen for it
+    // (MS_Death_Zone3_AncientTree's OpenSpiritGate on "TreeUsed"). Only a use that counted for a goal posts.
+    private void PostUseEvents(IActorRef playerActor, CoreObject playerObject, bool counted) {
+        if (!counted || Entity.Template is not GameObjectTemplate objectTemplate) {
+            return;
+        }
+
+        foreach (var eventName in InteractableQuestEvents.ZoneEventsFiredIn(objectTemplate, Entity.Zone?.ZonePath)) {
+            Entity.ZoneRef.Tell(new ZONE_102_PROTOCOL.MSG_POSTEVENT {
+                EventName = eventName,
+                PlayerActor = playerActor,
+                PlayerGameObject = playerObject,
+            });
+        }
     }
 
     // CLASSIC: Hallowe'en pumpkins and apple tubs roll a drop table for whoever uses them (InteractLoot).

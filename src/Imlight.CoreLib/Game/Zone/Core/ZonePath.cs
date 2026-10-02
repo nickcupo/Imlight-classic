@@ -179,14 +179,30 @@ public sealed class ZonePath : ZoneEntity {
     }
 
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_PATHSPAWNINTERVAL))]
-    private void ReceiveCreatureSpawnInterval(ZONE_102_PROTOCOL.MSG_PATHSPAWNINTERVAL message) 
-        => HandleCreatureSpawn(message.SpawnObject);
+    private void ReceiveCreatureSpawnInterval(ZONE_102_PROTOCOL.MSG_PATHSPAWNINTERVAL message) {
+        if (message.SpawnObject is not null && _deactivated.Contains((uint) message.SpawnObject.m_id.Full)) {
+            return; // CLASSIC: stopped by a ResSpawn with m_activate false.
+        }
+
+        HandleCreatureSpawn(message.SpawnObject);
+    }
 
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_ZONEPATHSPAWN))]
     private void ReceiveCreatureSpawn(ZONE_102_PROTOCOL.MSG_ZONEPATHSPAWN message) {
         var spawnObject = _creatures.FirstOrDefault(x => x.m_id == message.SpawnObjectID);
         if (spawnObject != null) {
+            _deactivated.Remove(message.SpawnObjectID); // CLASSIC: an activating ResSpawn starts a stopped spawner again.
             HandleCreatureSpawn(spawnObject);
+        }
+    }
+
+    // CLASSIC: spawners a ResSpawn with m_activate false stopped (the boss death triggers of the MooShu Oni rooms).
+    private readonly HashSet<uint> _deactivated = [];
+
+    [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_ZONEPATHDEACTIVATE))]
+    private void ReceiveSpawnerDeactivate(ZONE_102_PROTOCOL.MSG_ZONEPATHDEACTIVATE message) {
+        if (_creatures.Any(x => x.m_id == message.SpawnObjectID)) {
+            _deactivated.Add(message.SpawnObjectID);
         }
     }
 
