@@ -37,6 +37,10 @@
  *     {"op":"paired","token":"..."}  {"op":"welcome","version":1}  {"op":"pong"}
  *     {"op":"error","reason":"..."}  {"op":"state",...}  (see CombatDuelComponent.MinionHelper.cs)
  *
+ * CLASSIC: the same port answers plain HTTP for the players' launcher: the
+ * client patches (GET /classic/..., Classic/ClientPatches/ClientPatchFiles.cs)
+ * and the launcher login (POST /launcher/login, Classic/Launcher/LauncherLogin.cs).
+ *
  * USAGE EXAMPLE:
  * MinionHelperListener.StartOnce();   // GameServer start-up; [Classic] MinionHelperPort
  *
@@ -307,6 +311,8 @@ internal static class MinionHelperListener {
             if (filled == 0) return;
             if (filled >= 4 && head[0] == 'G' && head[1] == 'E' && head[2] == 'T' && head[3] == ' ') {
                 await ServeHttp(stream, head, filled, session, outbox);
+            } else if (filled >= 5 && head[0] == 'P' && head[1] == 'O' && head[2] == 'S' && head[3] == 'T' && head[4] == ' ') {
+                await ServePost(stream, head, filled, (client.Client.RemoteEndPoint as IPEndPoint)?.Address.ToString() ?? "?");
             } else if (!EnhancedGameplaySettings.Enabled) {
                 return; // the port is open for the client patches only
             } else {
@@ -410,6 +416,48 @@ internal static class MinionHelperListener {
         }
 
         await Respond(stream, "404 Not Found", "text/plain", "Not found"u8.ToArray());
+    }
+
+    /// <summary>CLASSIC: POST /launcher/login (Classic/Launcher/LauncherLogin.cs); a small JSON body.</summary>
+    private static async Task ServePost(NetworkStream stream, byte[] buffer, int filled, string address) {
+        int end;
+        while ((end = IndexOf(buffer, filled, "\r\n\r\n"u8)) < 0) {
+            if (filled == buffer.Length) return;
+            var read = await ReadSomeAsync(stream, buffer, filled);
+            if (read == 0) return;
+            filled += read;
+        }
+
+        var lines = Encoding.ASCII.GetString(buffer, 0, end).Split("\r\n");
+        var parts = lines[0].Split(' ');
+        var path = parts.Length > 1 ? parts[1].Split('?')[0] : "/";
+        var length = -1;
+        foreach (var line in lines.Skip(1)) {
+            var colon = line.IndexOf(':');
+            if (colon > 0 && line[..colon].Trim().Equals("Content-Length", StringComparison.OrdinalIgnoreCase)
+                && int.TryParse(line[(colon + 1)..].Trim(), out var parsed)) length = parsed;
+        }
+
+        if (path != "/launcher/login") {
+            await Respond(stream, "404 Not Found", "text/plain", "Not found"u8.ToArray());
+            return;
+        }
+
+        var bodyStart = end + 4;
+        if (length is < 0 or > 4096 || bodyStart + length > buffer.Length) {
+            await Respond(stream, "400 Bad Request", "application/json", "{\"ok\":false,\"error\":\"bad-request\"}"u8.ToArray());
+            return;
+        }
+
+        while (filled < bodyStart + length) {
+            var read = await ReadSomeAsync(stream, buffer, filled);
+            if (read == 0) return;
+            filled += read;
+        }
+
+        var body = Encoding.UTF8.GetString(buffer, bodyStart, length);
+        var answer = await Task.Run(() => Launcher.LauncherLogin.Shared.Handle(body, address));
+        await Respond(stream, "200 OK", "application/json", Encoding.UTF8.GetBytes(answer));
     }
 
     /// <summary>CLASSIC: one published client-patch file, whole or from a byte offset (resumed downloads).</summary>
