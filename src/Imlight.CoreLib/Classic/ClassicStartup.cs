@@ -114,6 +114,13 @@ public static class ClassicStartup {
                 }
             }
 
+            // CLASSIC: owner extras beyond the profile's era, switched in [Classic] (the Pet Pavilion, May 2010).
+            var petPavilion = new HashSet<string>(StringComparer.Ordinal) {
+                ClassicFeatures.PetsLeveling, ClassicFeatures.PetsHatching, ClassicFeatures.PetsTalents, ClassicFeatures.PetsEnergy,
+            };
+            IReadOnlySet<string> none = new HashSet<string>();
+            rules.OwnerExtraFeatures = () => ClassicSettings.PetPavilion ? petPavilion : none;
+
             ClassicRuntime.Initialize(rules, new LoggerAuditSink(), auditVerbose);
             s_classicDataRoot = classicDataRoot;
 

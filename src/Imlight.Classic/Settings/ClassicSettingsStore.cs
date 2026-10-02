@@ -95,6 +95,7 @@ public static class ClassicSettingKeys {
     public const string BazaarStockPerRestock = "BazaarStockPerRestock";
     public const string OpenPvp = "OpenPvp";
     public const string PvpCountdownSeconds = "PvpCountdownSeconds";
+    public const string PetPavilion = "PetPavilion";
 
 }
 
@@ -144,6 +145,9 @@ public sealed class ClassicSettingsStore {
         new(ClassicSettingKeys.PvpCountdownSeconds, ClassicSettingKind.Int, "20", "PvP",
             "Seconds an arena circle waits for more wizards once both sides have one, unless all are ready sooner.",
             3, 300),
+        new(ClassicSettingKeys.PetPavilion, ClassicSettingKind.Bool, "true", "Owner extras",
+            "The Pet Pavilion (May 2010, after the 2009 cutoff; owner request): opens the pet park and turns on pet "
+            + "leveling, talents, energy and hatching. Zone changes apply at the next zone entry."),
     ];
 
     private static readonly IReadOnlyDictionary<string, ClassicSettingDefinition> s_byKey =

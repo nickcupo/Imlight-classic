@@ -112,3 +112,20 @@ public sealed class ClassicSettingsStoreTests : IDisposable {
     }
 
 }
+
+public sealed class OwnerExtraFeatureTests {
+
+    [Fact]
+    public void OwnerExtrasTurnOnFeaturesTheProfileLeavesOff() {
+        var rules = ClassicDataFixture.RealRules("late-2009");
+        Assert.False(rules.IsFeatureEnabled(ClassicFeatures.PetsLeveling));
+        Assert.False(rules.IsZoneAllowed("WizardCity/WC_Streets/Interiors/WC_PET_Park").Allowed);
+
+        var extras = new System.Collections.Generic.HashSet<string> { ClassicFeatures.PetsLeveling, ClassicFeatures.PetsHatching };
+        rules.OwnerExtraFeatures = () => extras;
+        Assert.True(rules.IsFeatureEnabled(ClassicFeatures.PetsLeveling));
+        Assert.True(rules.IsZoneAllowed("WizardCity/WC_Streets/Interiors/WC_PET_Park").Allowed);
+        Assert.False(rules.IsFeatureEnabled(ClassicFeatures.Jewels));
+    }
+
+}
