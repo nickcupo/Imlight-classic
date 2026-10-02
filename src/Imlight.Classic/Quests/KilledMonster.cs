@@ -97,4 +97,23 @@ public static class KilledMonster {
         return false;
     }
 
+    /// <summary>
+    /// CLASSIC: how many defeated monsters a bounty goal's "&lt;object name&gt;.AdjRef" entries name (one per monster,
+    /// whatever the number of entries naming it). Plain adjective entries are not counted here.
+    /// </summary>
+    /// <param name="entries">The goal's m_npcAdjectives.</param>
+    /// <param name="defeatedObjectNames">The template object names of the defeated monsters, one per monster.</param>
+    /// <returns>The number of defeated monsters named by a template reference.</returns>
+    public static int CountTemplateReferences(IEnumerable<string?>? entries, IEnumerable<string?>? defeatedObjectNames) {
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var entry in entries ?? []) {
+            if (entry is not null && entry.EndsWith(TemplateReferenceSuffix, StringComparison.OrdinalIgnoreCase)
+                && entry.Length > TemplateReferenceSuffix.Length) {
+                names.Add(entry[..^TemplateReferenceSuffix.Length]);
+            }
+        }
+
+        return names.Count == 0 ? 0 : (defeatedObjectNames ?? []).Count(n => !string.IsNullOrEmpty(n) && names.Contains(n));
+    }
+
 }

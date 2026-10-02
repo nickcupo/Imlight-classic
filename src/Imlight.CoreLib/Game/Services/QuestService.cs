@@ -50,6 +50,7 @@ using Imlight.CoreLib.Game.Requirements.Contexts;
 using Imlight.CoreLib.Game.Results;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;
+using Imlight.CoreLib.Shared.Resources;
 using Imlight.CoreLib.WizardData.Collections;
 using Imlight.CoreLib.WizardData.Models.Misc;
 using Imlight.CoreLib.WizardData.Models.Player;
@@ -379,7 +380,7 @@ internal partial class QuestService(SessionActor sessionActor) : MessageService(
                     continue;
                 }
 
-                ProcessCombatGoal(wizard, qInstance, bountyGoal, message.MobAdjectives);
+                ProcessCombatGoal(wizard, qInstance, bountyGoal, message.MobAdjectives, message.MobTemplateIds);
             }
         }
 
@@ -853,18 +854,26 @@ internal partial class QuestService(SessionActor sessionActor) : MessageService(
     private void ProcessCombatGoal(Wizard wizard,
                                    QuestInstance qInstance,
                                    BountyGoalTemplate goalTemplate,
-                                   string[] defeatedMobAdjectives) {
+                                   string[] defeatedMobAdjectives,
+                                   ulong[] defeatedMobTemplateIds = null) {
         var shouldIncrement = goalTemplate.m_goalType == GOAL_TYPE.GOAL_TYPE_BOUNTY;
         var goalMobAdjectives = goalTemplate.m_npcAdjectives ?? [];
+        defeatedMobAdjectives ??= [];
+
+        // Determine how many of the adjectives matched. We'll increment by that amount.
+        var matchCount = defeatedMobAdjectives.Count(goalMobAdjectives.Contains);
+
+        // CLASSIC: an "<object name>.AdjRef" entry names a monster template, not an adjective (the Grizzleheim
+        // overlay goals, as KingsIsle writes them): count each defeated monster of that template once.
+        var defeatedObjectNames = (defeatedMobTemplateIds ?? [])
+            .Select(id => (CoreObjectFactory.GetCoreTemplate(id) as GameObjectTemplate)?.m_objectName);
+        matchCount += Imlight.Classic.Quests.KilledMonster.CountTemplateReferences(
+            goalMobAdjectives.Select(adjective => (string) adjective), defeatedObjectNames);
 
         // Check to see if the defeated mob matches the goal's NPC adjectives.
-        if (!defeatedMobAdjectives.Any(adjective => goalMobAdjectives.Contains(adjective))) {
+        if (matchCount == 0) {
             return;
         }
-
-        // If there were, determine how many of the adjectives matched.
-        // We'll increment by that amount.
-        var matchCount = defeatedMobAdjectives.Count(goalMobAdjectives.Contains);
 
         if (goalTemplate.m_goalType == GOAL_TYPE.GOAL_TYPE_BOUNTYCOLLECT) {
             var chance = goalTemplate.m_tallyCounter?.m_percentChance ?? DEFAULT_KILL_COLLECT_CHANCE;
