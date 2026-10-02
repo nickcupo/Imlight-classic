@@ -26,4 +26,14 @@ public sealed class HolidayObjectUseTests {
         Assert.Null(InteractableQuestEvents.UseLootTable(new GameObjectTemplate { m_objectName = "DS_Desk" }));
     }
 
+    [Fact]
+    public void ARegistryGatedSpawnerRunsWithoutAQuestOnlyOnTheClassicEngine() {
+        var ghosts = new SpawnObject { m_active = false, m_globalDynamic = true, m_globalDynamicReqs = new RequirementList() };
+        var dormant = new SpawnObject { m_active = false };
+
+        Assert.False(Imlight.CoreLib.Classic.ClassicQuestSpawns.RunsOnItsOwn(dormant));
+        Assert.True(Imlight.CoreLib.Classic.ClassicQuestSpawns.RunsOnItsOwn(new SpawnObject { m_active = true }));
+        Assert.Equal(Imlight.CoreLib.Classic.ClassicQuestEngine.IsActive, Imlight.CoreLib.Classic.ClassicQuestSpawns.RunsOnItsOwn(ghosts));
+    }
+
 }
