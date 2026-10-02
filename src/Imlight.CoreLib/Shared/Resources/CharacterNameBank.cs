@@ -134,6 +134,11 @@ public class WizardNameBank : RootSingleResourceSingleton<WizardNameBank>, IMemo
         return string.IsNullOrEmpty(firstName) ? lastName : $"{firstName} {lastName}";
     }
 
+    /// <summary>CLASSIC: the sizes of the human name tables (boy first names, girl first names, middle, last).</summary>
+    internal static (int FirstBoy, int FirstGirl, int Middle, int Last) CharacterTableSizes()
+        => (GetTableSize(FirstNameHumanMaleTableName), GetTableSize(FirstNameHumanFemaleTableName),
+            GetTableSize(MiddleNameHumanTableName), GetTableSize(LastNameHumanTableName));
+
     private static int GetTableSize(string tableName)
         => s_characterNameTable.TryGetValue(tableName, out var names) ? names.Count : 0;
 

@@ -67,7 +67,14 @@ public class ReceiveProtocolDispatcher : ReceiveActor {
     protected ReceiveProtocolDispatcher() {
         MessageHandlers = MessageHandlerTable.HandlersOf(GetType());
         ConfigureReceivers();
+        OnDispatcherConstructed();
     }
+
+    /// <summary>
+    /// CLASSIC: runs at the end of this constructor, inside the actor's context (Self is set). A derived class's field
+    /// and primary-constructor initializers have run by then; its constructor body has not.
+    /// </summary>
+    protected virtual void OnDispatcherConstructed() { }
 
     protected virtual void ConfigureReceivers() => Receive<object>(message => {
         var handler = MessageHandlerTable.DispatcherFor(GetType(), message.GetType());
@@ -76,7 +83,14 @@ public class ReceiveProtocolDispatcher : ReceiveActor {
             return;
         }
 
-        handler(this, message);
+        // CLASSIC: handler times for the PERF log ([Classic] PerfLogSeconds); free when it is off.
+        var started = Classic.PerfMonitor.Begin();
+        try {
+            handler(this, message);
+        }
+        finally {
+            Classic.PerfMonitor.EndHandler(GetType(), message.GetType(), started);
+        }
     });
 
 }

@@ -151,6 +151,10 @@ public static class ClassicSpellTemplates {
     /// </summary>
     public static bool RestrictsTraining => s_overrides is not null;
 
+    /// <summary>CLASSIC: the classic spell records in force (empty without a restricted profile).</summary>
+    internal static IReadOnlyList<ClassicSpellRecord> Records
+        => s_overrides?.Book.Records is { IsDefault: false } records ? records : [];
+
     /// <summary>
     /// Logs what the spell values changed. Call after the resources have loaded.
     /// </summary>

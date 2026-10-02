@@ -22,6 +22,7 @@ using Newtonsoft.Json;
 using Imlight.CoreLib.Game.Spells;
 using Imlight.Common;
 using Imcodec.ObjectProperty.TypeCache;
+using Imlight.CoreLib.Shared.Resources;
 
 namespace Imlight.CoreLib.Shared.Behaviors;
 
@@ -37,6 +38,8 @@ public class ServerWizSpellbookBehavior : ServerSpellbookBehavior {
     [JsonIgnore] public int SchoolMaxInstances { get; set; }
     [JsonIgnore] public int MaxSpells { get; set; }
     [JsonIgnore] public int MaxTreasureCards { get; set; }
+    // CLASSIC: the equipped deck's own rules, for the stock client's add check (Classic/ClassicDeckRules.cs).
+    [JsonIgnore] public DeckBehaviorTemplate DeckTemplate { get; set; }
 
     public Dictionary<ulong, HashSet<uint>> ExcludedItemSpellIds { get; set; } = [];
 
@@ -75,6 +78,22 @@ public class ServerWizSpellbookBehavior : ServerSpellbookBehavior {
 
     public bool AddSpellToDeck(uint spellTemplateId) {
         base.SpellList ??= new List<SpellData>();
+
+        // CLASSIC: exactly the stock client's check, so a card the deck screen shows is never refused afterwards
+        // (Treasure Cards count against m_maxTreasureCards only, with no per-card limit).
+        if (DeckTemplate is not null) {
+            var refusal = Classic.ClassicDeckRules.CanAdd(DeckTemplate, SpellList, spellTemplateId,
+                id => CoreObjectFactory.GetCoreTemplate(id) as SpellTemplate);
+            if (refusal != Classic.DeckAddRefusal.None) {
+                Logger.Debug("Deck add of spell {0} refused: {1}.", Logger.Args(spellTemplateId, refusal.ToString()));
+                return false;
+            }
+
+            var known = SpellList.Find(x => x.m_templateID == spellTemplateId);
+            if (known is null) SpellList.Add(new SpellData { m_templateID = spellTemplateId, m_quantity = 1 });
+            else known.m_quantity++;
+            return true;
+        }
 
         if (TotalSpellCount() >= MaxSpells) {
             Logger.Debug("The deck already has the maximum amount of allowed spells.");
@@ -198,6 +217,7 @@ public class ServerWizSpellbookBehavior : ServerSpellbookBehavior {
         this.SchoolMaxInstances = template.m_schoolMaxInstances;
         this.MaxSpells = template.m_maxSpells;
         this.MaxTreasureCards = template.m_maxTreasureCards;
+        this.DeckTemplate = template;
     }
     
 }

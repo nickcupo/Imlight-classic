@@ -80,15 +80,24 @@ internal class WizardService(SessionActor sessionActor) : MessageService(session
         }
     }
 
+    // CLASSIC: the directory answers for this session only while it lives.
+    protected override void PostStop() {
+        ActiveWizardDirectory.Remove(SessionActor?.ActorRef);
+        base.PostStop();
+    }
+
     #region Internal Handlers
 
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_ADDPLAYERRSP))]
-    private void ReceiveZoneAddPlayerResponse(ZONE_102_PROTOCOL.MSG_ADDPLAYERRSP message)
-        => _activeWizardGameObject = message.WizardGameObject;
+    private void ReceiveZoneAddPlayerResponse(ZONE_102_PROTOCOL.MSG_ADDPLAYERRSP message) {
+        _activeWizardGameObject = message.WizardGameObject;
+        ActiveWizardDirectory.SetGameObject(SessionActor.ActorRef, _activeWizardGameObject); // CLASSIC: no Ask needed.
+    }
 
     [MessageHandler(typeof(CHARACTER_103_PROTOCOL.MSG_SETACTIVEWIZARD))]
     private void ReceiveSetActiveWizard(CHARACTER_103_PROTOCOL.MSG_SETACTIVEWIZARD message) {
         _activeWizard = message.Wizard;
+        ActiveWizardDirectory.SetWizard(SessionActor.ActorRef, _activeWizard); // CLASSIC: no Ask needed.
         _activeWizard.UpdateLastLoginTime((uint) DateTimeOffset.UtcNow.ToUnixTimeSeconds());
     }
 

@@ -51,6 +51,24 @@ internal abstract class ZoneEntitySupervisor(Core.Zone zone) : ReceiveProtocolDi
     private int _startedEntityCount;
     private long _creationMs;
 
+    // CLASSIC: the PERF log's mailbox probe ([Classic] PerfLogSeconds): a timer message stamped with when it is due.
+    protected override void PreStart() {
+        base.PreStart();
+        if (Classic.PerfMonitor.Enabled) {
+            SchedulePerfProbe();
+        }
+    }
+
+    private void SchedulePerfProbe()
+        => Timers.StartSingleTimer("perf-probe", new Classic.PerfMonitor.ZoneProbe(System.Diagnostics.Stopwatch.GetTimestamp()
+            + (long) (Classic.PerfMonitor.ZoneProbeInterval.TotalSeconds * System.Diagnostics.Stopwatch.Frequency)), Classic.PerfMonitor.ZoneProbeInterval);
+
+    [MessageHandler(typeof(Classic.PerfMonitor.ZoneProbe))]
+    private void ReceivePerfProbe(Classic.PerfMonitor.ZoneProbe probe) {
+        Classic.PerfMonitor.ZoneProbeHandled(probe, (Context as Akka.Actor.ActorCell)?.Mailbox.MessageQueue.Count ?? 0);
+        SchedulePerfProbe();
+    }
+
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_ZONELOADRESULTS))]
     public abstract void ReceiveZoneLoadResults(ZONE_102_PROTOCOL.MSG_ZONELOADRESULTS message);
 

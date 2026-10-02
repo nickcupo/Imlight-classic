@@ -229,11 +229,16 @@ public sealed class OwnedMinionDuelTests : IDisposable {
     }
 
     [Fact]
-    public void OversizedHandCannotOptInAndTimerRetainsAiWhenNoManualOrder() {
+    public void OversizedHandStillOptsInWithoutTheOpaqueBlobs() {
+        // CLASSIC: an oversized participant used to switch control off for the whole duel; now only the service-90
+        // blobs are dropped and the Minion Helper keeps working from HelperView.
         var template = (SpellTemplate) _cache[Tid]; template.m_name = new string('x', 30000);
         for (var i = 0; i < 300; i++) _minion._combatDeck.LastGivenHand.Add(_spell);
-        var result = Request(1, query: true); Assert.Equal(OwnedMinionStatus.SnapshotUnavailable, result.Status);
-        Assert.False(result.Accepted); Assert.Empty(result.Snapshots); Assert.True(_duel.HaveAllOwnedMinionOrders());
+        var result = Request(1, query: true); Assert.Equal(OwnedMinionStatus.Accepted, result.Status);
+        Assert.True(result.Accepted);
+        var snapshot = Assert.Single(result.Snapshots);
+        Assert.Empty(snapshot.HandData); Assert.Empty(snapshot.ParticipantData);
+        Assert.False(_duel.HaveAllOwnedMinionOrders());
     }
 
     [Fact]
@@ -262,6 +267,265 @@ public sealed class OwnedMinionDuelTests : IDisposable {
         Assert.Same(_spell, _duel.CombatResolver.GetQueuedAction(_minion).Spell);
         Assert.Same(_enemy, _duel.CombatResolver.GetQueuedAction(_minion).SelectedTarget);
         Assert.True(_duel.HaveAllOwnedMinionOrders());
+    }
+
+    // CLASSIC: Minion Helper (Classic/MinionHelper) behaviour.
+
+    [Fact]
+    public void ChangingAnOrderDoesNotRestartThePlanningCountdown() {
+        Field("_ownedMinionPlanningDeadline", DateTime.UtcNow.AddSeconds(5));
+        QueueAllPasses(); Assert.True(Request(1, query: true).Accepted); Assert.True(Request(2).Accepted);
+        var before = _timers.Delays.Count;
+        Assert.True(Request(3, move: CombatMoveType.ChangeMind).Accepted);
+        Assert.All(_timers.Delays.Skip(before), delay => Assert.True(delay <= TimeSpan.FromSeconds(6), $"timer restarted at {delay}"));
+    }
+
+    [Fact]
+    public void LettingTheAiChooseCountsAsTheOrderAndKeepsTheAiMove() {
+        QueueAllPasses(); var fallback = _duel.CombatResolver.GetQueuedAction(_minion);
+        Assert.True(Request(1, query: true).Accepted); Assert.False(_duel.HaveAllOwnedMinionOrders());
+        var ai = _duel.ProcessOwnedMinionRequest(new MSG_OWNEDMINIONREQUEST {
+            OwnerActor = _ownerActor, DuelID = 123, Round = 2, RequestID = 2, MinionID = 50, MoveType = OwnedMinionAiMove,
+            SpellTarget = uint.MaxValue });
+        Assert.True(ai.Accepted);
+        Assert.True(_duel.HaveAllOwnedMinionOrders());
+        Assert.Equal(fallback.Spell, _duel.CombatResolver.GetQueuedAction(_minion).Spell);
+        CombatRegressionTests.Invoke(_duel, "PrepareOwnedMinionExecution");
+        Assert.True(_duel.HaveAllOwnedMinionOrders());
+    }
+
+    [Fact]
+    public void AnAiMoveHeldBehindTheOwnersOrderComesBackWhenTheOwnerHandsTheRoundBack() {
+        foreach (var circle in new[] { _owner, _enemy }) _duel.CombatResolver.AddCombatMove(CombatMoveType.Pass, circle, null!, null!);
+        Assert.True(Request(1, query: true).Accepted); Assert.True(Request(2).Accepted);
+        // The minion's AI moves after the owner's order: it is held, not queued.
+        CombatRegressionTests.Invoke(_duel, "ReceiveCombatMove", new MSG_ACTORCOMBATMOVE {
+            Actor = _minion.ParticipantActor, MoveType = (byte) CombatMoveType.Attack, SpellSelection = 0, SpellTarget = 0 });
+        Assert.Same(_spell, _duel.CombatResolver.GetQueuedAction(_minion).Spell);
+        Assert.Same(_enemy, _duel.CombatResolver.GetQueuedAction(_minion).SelectedTarget);
+        var ai = _duel.ProcessOwnedMinionRequest(new MSG_OWNEDMINIONREQUEST {
+            OwnerActor = _ownerActor, DuelID = 123, Round = 2, RequestID = 3, MinionID = 50, MoveType = OwnedMinionAiMove,
+            SpellTarget = uint.MaxValue });
+        Assert.True(ai.Accepted);
+        Assert.NotNull(_duel.CombatResolver.GetQueuedAction(_minion));
+        Assert.True(_duel.HaveAllOwnedMinionOrders());
+    }
+
+    [Fact]
+    public void HelperViewListsEachCardsLegalTargetsAndWhyACardCannotBeCast() {
+        QueueAllPasses();
+        var response = Request(1, query: true); Assert.True(response.Accepted);
+        using (var view = JsonDocument.Parse(_duel.BuildMinionHelperView(_ownerActor, response)!)) {
+            var root = view.RootElement;
+            Assert.Equal("planning", root.GetProperty("phase").GetString());
+            Assert.True(root.GetProperty("myth").GetBoolean());
+            Assert.True(root.GetProperty("controlling").GetBoolean());
+            var minion = Assert.Single(root.GetProperty("minions").EnumerateArray());
+            Assert.Equal("50", minion.GetProperty("id").GetString());
+            var card = Assert.Single(minion.GetProperty("hand").EnumerateArray());
+            Assert.True(card.GetProperty("castable").GetBoolean());
+            Assert.Equal([0], card.GetProperty("targets").EnumerateArray().Select(t => t.GetInt32()));
+            Assert.False(card.GetProperty("untargeted").GetBoolean());
+            Assert.Equal(3, root.GetProperty("combatants").GetArrayLength());
+            Assert.Contains(root.GetProperty("combatants").EnumerateArray(), c => c.GetProperty("yours").GetBoolean());
+        }
+
+        _minion.CombatParticipant.m_pipCount.m_genericPips = 0;
+        using (var view = JsonDocument.Parse(_duel.BuildMinionHelperView(_ownerActor, response)!)) {
+            var card = view.RootElement.GetProperty("minions")[0].GetProperty("hand")[0];
+            Assert.False(card.GetProperty("castable").GetBoolean());
+            Assert.Equal("not enough pips", card.GetProperty("reason").GetString());
+        }
+    }
+
+    [Fact]
+    public void HelperOptInWorksOutsidePlanningButNeverForNonMyth() {
+        _duel.Duel.m_duelPhase = kDuelPhase.kPhase_Execution;
+        CombatRegressionTests.Invoke(_duel, "ReceiveOwnedMinionOptIn", new MSG_OWNEDMINIONOPTIN { OwnerActor = _ownerActor, Enable = true });
+        Assert.True(OptedIn());
+        CombatRegressionTests.Invoke(_duel, "ReceiveOwnedMinionDisable", new MSG_OWNEDMINIONDISABLE { OwnerActor = _ownerActor });
+        Assert.False(OptedIn());
+        _owner._wizard.MagicSchoolBehavior.MagicSchool = MagicSchool.Fire;
+        CombatRegressionTests.Invoke(_duel, "ReceiveOwnedMinionOptIn", new MSG_OWNEDMINIONOPTIN { OwnerActor = _ownerActor, Enable = true });
+        Assert.False(OptedIn());
+    }
+
+    // CLASSIC: the Myth minion hand (Game/Zone/Components/CombatDuelComponent.MinionHand.cs).
+
+    private System.Collections.Concurrent.ConcurrentQueue<object> HandOn(MagicSchool school = MagicSchool.Myth, int dealDelayMs = 0) {
+        Settings(true, minionHand: true, dealDelayMs: dealDelayMs);
+        _owner._wizard.MagicSchoolBehavior.MagicSchool = school;
+        var inbox = new System.Collections.Concurrent.ConcurrentQueue<object>();
+        CombatRegressionTests.SetProperty(_owner, "ParticipantActor", _system.ActorOf(Props.Create(() => new Recorder(inbox))));
+        _duel.RegisterOwnedMinionForControl(_minion, _owner);
+        foreach (var circle in new[] { _minion, _enemy })
+            _duel.CombatResolver.AddCombatMove(CombatMoveType.Pass, circle, null!, null!);
+        return inbox;
+    }
+
+    private void OwnerMove(CombatMoveType move, byte card = 0, uint target = 0)
+        => CombatRegressionTests.Invoke(_duel, "ReceiveCombatMove", new MSG_ACTORCOMBATMOVE {
+            Actor = _owner.ParticipantActor, MoveType = (byte) move, SpellSelection = card, SpellTarget = target });
+
+    private static List<object> Drain(System.Collections.Concurrent.ConcurrentQueue<object> inbox, int atLeast = 1) {
+        var got = new List<object>();
+        var deadline = DateTime.UtcNow.AddSeconds(3);
+        while (DateTime.UtcNow < deadline) {
+            while (inbox.TryDequeue(out var item)) got.Add(item);
+            if (got.Count >= atLeast) {
+                System.Threading.Thread.Sleep(50);
+                while (inbox.TryDequeue(out var more)) got.Add(more);
+                return got;
+            }
+            System.Threading.Thread.Sleep(10);
+        }
+        return got;
+    }
+
+    private bool StageActive() => (bool) CombatRegressionTests.Invoke(_duel, "MinionHandStageActive", _owner)!;
+
+    [Fact]
+    public void AfterTheMythWizardsOwnMoveTheCardWindowShowsTheMinionsHand() {
+        var inbox = HandOn();
+        OwnerMove(CombatMoveType.Pass);
+        var sent = Drain(inbox, 4);
+        var hand = Assert.Single(sent.OfType<Imcodec.MessageLayer.Generated.DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_COMBATHAND>());
+        Assert.Equal(_owner.ParticipantObject.m_globalID.Full, (ulong) hand.ParticipantID);
+        var serializer = new ObjectSerializer(Versionable: false, Behaviors: SerializerFlags.None);
+        Assert.True(serializer.Deserialize<Hand>(hand.HandData, (PropertyFlags) 5, out var decoded));
+        Assert.Equal(Tid, Assert.IsType<Hand>(decoded).m_spellList.Single().m_templateID);
+        Assert.Single(sent.OfType<Imcodec.MessageLayer.Generated.DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_COMBATPIPS>());
+        Assert.Single(sent.OfType<Imcodec.MessageLayer.Generated.DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_SHOWCOMBATUI>());
+        Assert.Single(sent.OfType<Imcodec.MessageLayer.Generated.DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_SETPLANNINGPHASETIMER>());
+        // The cue is the minion "speaking" to its wizard in chat, never a server message (a stacking "!" alert).
+        var cue = Assert.Single(sent.OfType<Imcodec.MessageLayer.Generated.GAME_5_PROTOCOL.MSG_RADIALCHAT>());
+        Assert.Equal(_minion.ParticipantObject.m_globalID.Full, (ulong) cue.SourceID);
+        Assert.Empty(sent.OfType<Imcodec.MessageLayer.Generated.EXTENDEDBASE_2_PROTOCOL.MSG_SERVERMESSAGE>());
+        Assert.True(StageActive());
+        Assert.False(_duel.HaveAllOwnedMinionOrders()); // the round waits for the minion's pick (or the timer)
+    }
+
+    [Fact]
+    public void TheWizardsNextPickIsTheMinionsAndTheWizardsOwnMoveIsKept() {
+        var inbox = HandOn();
+        OwnerMove(CombatMoveType.Pass);
+        Drain(inbox, 4);
+        var own = _duel.CombatResolver.GetQueuedAction(_owner);
+        OwnerMove(CombatMoveType.Attack, card: 0, target: 0);
+        Assert.Same(own, _duel.CombatResolver.GetQueuedAction(_owner));
+        Assert.Null(_duel.CombatResolver.GetQueuedAction(_owner).Spell);
+        Assert.Same(_spell, _duel.CombatResolver.GetQueuedAction(_minion).Spell);
+        Assert.Same(_enemy, _duel.CombatResolver.GetQueuedAction(_minion).SelectedTarget);
+        Assert.False(StageActive());
+        Assert.True(_duel.HaveAllOwnedMinionOrders());
+        Assert.Equal(TimeSpan.FromSeconds(1), _timers.Delays.Last()); // everyone has moved: the round ends early
+    }
+
+    [Fact]
+    public void AMinionPickTheMinionCannotMakeIsRefusedAndItsHandShownAgain() {
+        var inbox = HandOn();
+        OwnerMove(CombatMoveType.Pass);
+        Drain(inbox, 4);
+        _minion.CombatParticipant.m_pipCount.m_genericPips = 0;
+        OwnerMove(CombatMoveType.Attack, card: 0, target: 0);
+        var again = Drain(inbox, 4);
+        Assert.Single(again.OfType<Imcodec.MessageLayer.Generated.DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_COMBATHAND>());
+        Assert.True(StageActive());
+        Assert.Null(_duel.CombatResolver.GetQueuedAction(_minion).Spell);
+        Assert.False(_duel.HaveAllOwnedMinionOrders());
+        OwnerMove(CombatMoveType.Pass); // the wizard passes for the minion
+        Assert.False(StageActive());
+        Assert.True(_duel.HaveAllOwnedMinionOrders());
+    }
+
+    [Fact]
+    public void ChangeAfterTheMinionsPickReopensIt() {
+        var inbox = HandOn();
+        OwnerMove(CombatMoveType.Pass);
+        OwnerMove(CombatMoveType.Attack, card: 0, target: 0);
+        Drain(inbox, 4);
+        OwnerMove(CombatMoveType.ChangeMind);
+        Assert.True(StageActive());
+        Assert.False(_duel.HaveAllOwnedMinionOrders());
+        Assert.Null(_duel.CombatResolver.GetQueuedAction(_minion).Spell); // back to its AI pass
+        Assert.Single(Drain(inbox, 4).OfType<Imcodec.MessageLayer.Generated.DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_COMBATHAND>());
+    }
+
+    [Theory]
+    [InlineData(MagicSchool.Fire)] [InlineData(MagicSchool.Life)] [InlineData(MagicSchool.Balance)]
+    public void OtherSchoolsKeepTheirMinionsAi(MagicSchool school) {
+        var inbox = HandOn(school);
+        OwnerMove(CombatMoveType.Pass);
+        Assert.Empty(Drain(inbox, 1).OfType<Imcodec.MessageLayer.Generated.DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_COMBATHAND>());
+        Assert.False(StageActive());
+        Assert.True(_duel.HaveAllOwnedMinionOrders());
+    }
+
+    [Fact]
+    public void AStunnedMinionIsSkippedAndTheSettingTurnsTheHandOff() {
+        var inbox = HandOn();
+        _minion.CombatParticipant.m_stunned = 1;
+        OwnerMove(CombatMoveType.Pass);
+        Assert.Empty(Drain(inbox, 1).OfType<Imcodec.MessageLayer.Generated.DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_COMBATHAND>());
+        Assert.True(_duel.HaveAllOwnedMinionOrders());
+
+        Settings(true, minionHand: false);
+        Assert.False(MythMinionHandSettings.Enabled);
+    }
+
+    [Fact]
+    public void TheMinionsHandIsDealtAfterABeatAndChangeInTheBeatIsTheWizardsOwn() {
+        var inbox = HandOn(dealDelayMs: 750);
+        OwnerMove(CombatMoveType.Pass);
+        Assert.Empty(Drain(inbox, 1).OfType<Imcodec.MessageLayer.Generated.DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_COMBATHAND>());
+        Assert.Equal(TimeSpan.FromMilliseconds(750), _timers.Delays.Last());
+        Assert.True(StageActive());                 // the round still waits for the minion
+        Assert.False(_duel.HaveAllOwnedMinionOrders());
+
+        // A stale ticket does nothing; the current one deals the hand and the minion's cue.
+        CombatRegressionTests.Invoke(_duel, "ReceiveMinionHandDeal", new MSG_MINIONHANDDEAL { Owner = _owner.ParticipantObject, Ticket = -1 });
+        Assert.Empty(Drain(inbox, 1).OfType<Imcodec.MessageLayer.Generated.DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_COMBATHAND>());
+        CombatRegressionTests.Invoke(_duel, "ReceiveMinionHandDeal", new MSG_MINIONHANDDEAL { Owner = _owner.ParticipantObject, Ticket = Ticket() });
+        var dealt = Drain(inbox, 5);
+        Assert.Single(dealt.OfType<Imcodec.MessageLayer.Generated.DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_COMBATHAND>());
+        Assert.Single(dealt.OfType<Imcodec.MessageLayer.Generated.GAME_5_PROTOCOL.MSG_RADIALCHAT>());
+
+        // A second round: "Change" during the beat re-picks the wizard's own card, and no hand is dealt.
+        var ticketBefore = Ticket();
+        OwnerMove(CombatMoveType.Attack, card: 0, target: 0); // the minion's pick
+        Assert.False(StageActive());
+        OwnerMove(CombatMoveType.ChangeMind);              // reopens the minion's pick after a beat
+        Assert.True(StageActive());
+        Assert.NotEqual(ticketBefore, Ticket());
+        OwnerMove(CombatMoveType.ChangeMind);              // in the beat: the wizard's own change
+        Assert.False(StageActive());
+        CombatRegressionTests.Invoke(_duel, "ReceiveMinionHandDeal", new MSG_MINIONHANDDEAL { Owner = _owner.ParticipantObject, Ticket = Ticket() });
+        Assert.Empty(Drain(inbox, 1).OfType<Imcodec.MessageLayer.Generated.DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_COMBATHAND>());
+    }
+
+    private int Ticket() {
+        var stages = (System.Collections.IDictionary) typeof(CombatDuelComponent).GetField("_minionHandStages", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(_duel)!;
+        var stage = stages[_owner.ParticipantObject];
+        return stage is null ? 0 : (int) stage.GetType().GetField("PendingTicket", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(stage)!;
+    }
+
+    [Fact]
+    public void ATreasureCardDrawWhileTheMinionsHandShowsIsRefused() {
+        var inbox = HandOn();
+        OwnerMove(CombatMoveType.Pass);
+        Drain(inbox, 4);
+        CombatRegressionTests.Invoke(_duel, "ReceiveCombatDraw", new MSG_ACTORCOMBATDRAW { Actor = _owner.ParticipantActor });
+        Assert.Single(Drain(inbox, 4).OfType<Imcodec.MessageLayer.Generated.DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_COMBATHAND>());
+        Assert.True(StageActive());
+    }
+
+    private sealed class Recorder : ReceiveActor {
+        public Recorder(System.Collections.Concurrent.ConcurrentQueue<object> inbox) => ReceiveAny(inbox.Enqueue);
+    }
+
+    private bool OptedIn() {
+        var control = (OwnedMinionControl) typeof(CombatDuelComponent).GetField("_ownedMinionControl", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(_duel)!;
+        return control.IsOptedIn(_owner.ParticipantObject);
     }
 
     private void QueueAllPasses() {
@@ -295,10 +559,12 @@ public sealed class OwnedMinionDuelTests : IDisposable {
 
     private void Field(string name, object value)
         => typeof(CombatDuelComponent).GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(_duel, value);
-    private static void Settings(bool enabled) {
+    // CLASSIC: these tests cover owner orders sent from outside the card window (service 90, the Minion Helper),
+    // so the in-client minion hand (on by default for Myth wizards) is off unless a test turns it on.
+    private static void Settings(bool enabled, bool minionHand = false, int dealDelayMs = 0) {
         var path = Path.GetTempFileName();
         try {
-            File.WriteAllText(path, $"[Logging]\nLogLevel=FATAL\nLogPath={Path.GetTempPath()}imlight-owned-minion-tests.log\n[Classic]\nOwnedMinionControl={enabled}\n");
+            File.WriteAllText(path, $"[Logging]\nLogLevel=FATAL\nLogPath={Path.GetTempPath()}imlight-owned-minion-tests.log\n[Classic]\nOwnedMinionControl={enabled}\nMythMinionHand={minionHand}\nMythMinionHandDelayMs={dealDelayMs}\n");
             ConfigurationManager.Initialize(path);
         } finally { File.Delete(path); }
     }

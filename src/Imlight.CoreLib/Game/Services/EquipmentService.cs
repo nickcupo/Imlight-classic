@@ -362,6 +362,11 @@ internal class EquipmentService(SessionActor sessionActor) : MessageService(sess
             return false;
         }
 
+        // CLASSIC: a loaded zone's data from the directory; only a zone still loading is asked (and blocks).
+        if (Classic.ZoneDataDirectory.TryGet(zoneActor, out var data)) {
+            return data?.m_noMounts ?? false;
+        }
+
         var rsp = zoneActor.Ask<ZONE_102_PROTOCOL.MSG_QUERYZONEDATARSP>(
             new ZONE_102_PROTOCOL.MSG_QUERYZONEDATA(), TimeSpan.FromSeconds(5)).Result;
 

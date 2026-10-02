@@ -34,7 +34,9 @@ public sealed class CrownShopCatalogTests {
 
     [Fact]
     public void Arc1HasNoMountsOrHenchmen()
-        => Assert.Empty(Real().Offered(ClassicDataFixture.RealRules("arc1-2009h1").IsFeatureEnabled));
+        => Assert.DoesNotContain(Real().Offered(ClassicDataFixture.RealRules("arc1-2009h1").IsFeatureEnabled).Values,
+            item => item.Category is CrownShopCategories.PermanentMounts or CrownShopCategories.RentalMounts
+                or CrownShopCategories.Henchmen);
 
     [Fact]
     public void TheCatalogSerializesForTheClientAndReadsBack() {

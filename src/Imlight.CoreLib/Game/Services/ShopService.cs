@@ -121,7 +121,28 @@ internal class ShopService(SessionActor sessionActor) : MessageService(sessionAc
         item.m_primaryColor = message.texture;
         item.m_secondaryColor = message.decal;
 
-        var goldCost = CalculateItemCost(template);
+        // CLASSIC: a holiday vendor's item sells at its 2009 price (classic-data/holidays). A Crowns-only item, or one the
+        // wizard chose to pay for in Crowns (CurrencyType 1), costs the item's Crowns price from the account's balance.
+        var holidayPrice = ClassicHolidays.PriceOf(itemTemplateID);
+        var crownsOnly = template.m_adjectiveList?.Exists(adjective => adjective == "FLAG_CrownsOnly") == true;
+        var crownsCost = holidayPrice?.Crowns ?? (int) template.m_creditsCost;
+        if (ClassicRuntime.IsActive && crownsCost > 0 && (crownsOnly || message.CurrencyType == 1)) {
+            var account = playerWizard.Account;
+            if (account is null || account.Crowns < crownsCost) {
+                SendShopDenyMessage();
+
+                return;
+            }
+
+            ClassicCrowns.Add(account, -crownsCost);
+            ProcessSuccessfulPurchase(playerWizard, item, itemTemplateID, 0);
+            SendToSocket(ClassicCrowns.BalanceMessage(account, playerWizard.CharId));
+            Logger.Information("{Wizard} bought {Item} for {Crowns} Crowns.", Logger.Args(playerWizard.CharId, itemTemplateID, crownsCost));
+
+            return;
+        }
+
+        var goldCost = holidayPrice?.Gold ?? CalculateItemCost(template);
 
         // Check if the user can afford the item.
         if (playerWizard.GameStats.m_currentGold >= goldCost) {

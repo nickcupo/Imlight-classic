@@ -119,6 +119,9 @@ internal sealed class InteractVendorComponent(ZoneEntity entity) : ZoneEntityCom
 
             // todo: figure this out for QA
             m_CSRTestShop = false,
+
+            // CLASSIC: the shop window shows an item with a holiday flag only while that holiday is in this list.
+            m_activeHolidayList = Classic.ClassicHolidays.ActiveRegistries,
         };
 
         // Serialize the offerings and send them to the player.
