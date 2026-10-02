@@ -138,7 +138,8 @@ public sealed class TriggerObjectResultTests : IDisposable {
 
     [Theory]
     [InlineData(Lair, "TeleportToAmbrose")]
-    [InlineData(Burial, "MS_SpiritWorldPortal_Death1 instance")]
+    // The Burial Grounds portal opens on its quest entry alone (classic-data 9250ec3: the server cannot light its
+    // candles), so it has no RequiresState and is not in this case list.
     [InlineData(Tree, "MS_SpiritWorldPortal instance")]
     public async Task RealResultDispatchOpensAndClosesOnlyNamedPortalAndReplaysState(string zone, string name) {
         using var system = ActorSystem.Create("portal-result", "akka.actor.provider = local");
