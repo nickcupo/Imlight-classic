@@ -62,6 +62,7 @@ using System.Net.WebSockets;
 using System.Security.Cryptography;
 using System.Threading.Channels;
 using Imlight.Common;
+using Imlight.CoreLib.Classic.ClientPatches;
 using Imlight.CoreLib.Shared.Networking;
 using static Imlight.CoreLib.Shared.Packets.COMBAT_106_PROTOCOL;
 
@@ -247,7 +248,8 @@ internal static class MinionHelperListener {
     /// <summary>The configured port, or 0 when the helper is off (or owned-minion control is).</summary>
     internal static int ConfiguredPort {
         get {
-            if (!EnhancedGameplaySettings.Enabled) return 0;
+            // CLASSIC: the same port serves the client patches (/classic/...), so it stays on for them alone.
+            if (!EnhancedGameplaySettings.Enabled && ClientPatchFiles.ConfiguredRoot is null) return 0;
             var value = ConfigurationManager.Settings["Classic.MinionHelperPort"].AsString();
             if (string.IsNullOrWhiteSpace(value)) return DefaultPort;
             return int.TryParse(value, out var port) && port is > 0 and < 65536 ? port : 0;
@@ -305,6 +307,8 @@ internal static class MinionHelperListener {
             if (filled == 0) return;
             if (filled >= 4 && head[0] == 'G' && head[1] == 'E' && head[2] == 'T' && head[3] == ' ') {
                 await ServeHttp(stream, head, filled, session, outbox);
+            } else if (!EnhancedGameplaySettings.Enabled) {
+                return; // the port is open for the client patches only
             } else {
                 await ServeLines(stream, head, filled, session, outbox);
             }
@@ -370,6 +374,16 @@ internal static class MinionHelperListener {
             if (colon > 0) headers[line[..colon].Trim()] = line[(colon + 1)..].Trim();
         }
 
+        if (path.StartsWith(ClientPatchFiles.Prefix, StringComparison.Ordinal)) {
+            await ServePatchFile(stream, path, headers);
+            return;
+        }
+
+        if (!EnhancedGameplaySettings.Enabled) {
+            await Respond(stream, "404 Not Found", "text/plain", "Not found"u8.ToArray());
+            return;
+        }
+
         if (path == "/ws" && headers.TryGetValue("Upgrade", out var upgrade) && upgrade.Equals("websocket", StringComparison.OrdinalIgnoreCase)
             && headers.TryGetValue("Sec-WebSocket-Key", out var key)) {
             // Only the helper page itself (served from this host and port) may open the socket.
@@ -396,6 +410,43 @@ internal static class MinionHelperListener {
         }
 
         await Respond(stream, "404 Not Found", "text/plain", "Not found"u8.ToArray());
+    }
+
+    /// <summary>CLASSIC: one published client-patch file, whole or from a byte offset (resumed downloads).</summary>
+    private static async Task ServePatchFile(NetworkStream stream, string path,
+                                             System.Collections.Generic.Dictionary<string, string> headers) {
+        var file = ClientPatchFiles.Resolve(ClientPatchFiles.ConfiguredRoot, path);
+        if (file is null) {
+            await Respond(stream, "404 Not Found", "text/plain", "Not found"u8.ToArray());
+            return;
+        }
+
+        await using var input = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete, 1 << 16, true);
+        var length = input.Length;
+        headers.TryGetValue("Range", out var rangeHeader);
+        var range = ClientPatchFiles.ParseRange(rangeHeader, length);
+        if (range is { Start: -1 }) {
+            var refuse = $"HTTP/1.1 416 Range Not Satisfiable\r\nContent-Range: bytes */{length}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+            await stream.WriteAsync(Encoding.ASCII.GetBytes(refuse));
+            return;
+        }
+
+        var (start, end) = range ?? (0, length - 1);
+        var count = length == 0 ? 0 : end - start + 1;
+        var status = range is null ? "200 OK" : "206 Partial Content";
+        var head = $"HTTP/1.1 {status}\r\nContent-Type: {ClientPatchFiles.ContentType(file)}\r\nContent-Length: {count}\r\n" +
+                   (range is null ? "" : $"Content-Range: bytes {start}-{end}/{length}\r\n") +
+                   "Accept-Ranges: bytes\r\nCache-Control: no-cache\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\n\r\n";
+        await stream.WriteAsync(Encoding.ASCII.GetBytes(head));
+        input.Seek(start, SeekOrigin.Begin);
+        var buffer = new byte[1 << 16];
+        while (count > 0) {
+            var read = await input.ReadAsync(buffer.AsMemory(0, (int) Math.Min(buffer.Length, count)));
+            if (read == 0) break;
+            using var stall = new CancellationTokenSource(IdleTimeout);
+            await stream.WriteAsync(buffer.AsMemory(0, read), stall.Token);
+            count -= read;
+        }
     }
 
     private static async Task ServeWebSocket(WebSocket socket, MinionHelperSession session, Channel<string> outbox) {
