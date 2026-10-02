@@ -472,7 +472,8 @@ internal static class MinionHelperListener {
                                             System.Collections.Generic.Dictionary<string, string> headers) {
         if (path == "/launcher/" + Launcher.LauncherFileList.FileName) {
             await Respond(stream, "200 OK", "application/octet-stream", Launcher.LauncherFileList.Bytes);
-        } else if (path is "/launcher/news" or "/launcher/news/") {
+        } else if (path == "/launcher/news" || path.StartsWith("/launcher/news/", StringComparison.Ordinal)) {
+            // The launcher also opens <NewsURL>/New/patchComplete when it has patched.
             await Respond(stream, "200 OK", "text/html; charset=utf-8",
                 Encoding.UTF8.GetBytes(Launcher.LauncherNewsPage.Render(ClientPatchFiles.ConfiguredRoot)));
         } else if (path.StartsWith(Launcher.LauncherNewsPage.ArtPrefix, StringComparison.Ordinal)) {
@@ -483,7 +484,7 @@ internal static class MinionHelperListener {
             var file = art.TryGetValue(name, out var url) ? ClientPatchFiles.Resolve(root, url) : null;
             if (file is null) await Respond(stream, "404 Not Found", "text/plain", "Not found"u8.ToArray());
             else await Respond(stream, "200 OK", "image/png", await File.ReadAllBytesAsync(file));
-        } else if (path == "/launcher/blank") {
+        } else if (path == "/launcher/blank" || path.StartsWith("/launcher/blank/", StringComparison.Ordinal)) {
             // Every other page the launcher may open (home, account, error, metrics, fail-safe check).
             await Respond(stream, "200 OK", "text/html; charset=utf-8", "<html><body></body></html>"u8.ToArray());
         } else {
