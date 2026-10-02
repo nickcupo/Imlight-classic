@@ -121,6 +121,17 @@ internal class CombatDeck {
         }
     }
 
+    // CLASSIC: the entry holding the copy at position <paramref name="copy"/> (0 <= copy < RemainingCardCount).
+    private int WeightedIndex(int copy) {
+        for (var i = 0; i < _usedUpSpellData.Count; i++) {
+            copy -= (int) _usedUpSpellData[i].Quantity;
+            if (copy < 0) {
+                return i;
+            }
+        }
+        return _usedUpSpellData.Count - 1;
+    }
+
     /// <summary>
     /// Gets a new hand of spells, discarding any used or discarded cards.
     /// </summary>
@@ -155,7 +166,9 @@ internal class CombatDeck {
                 break; // No more spells available.
             }
 
-            var randomIndex = _rng.Next(0, _usedUpSpellData.Count);
+            // CLASSIC: every remaining copy is equally likely (a spell with 4 copies left comes up 4 times as often as one
+            // with 1); this drew each distinct spell equally, whatever its count.
+            var randomIndex = WeightedIndex(_rng.Next(0, RemainingCardCount));
             var spellData = _usedUpSpellData[randomIndex];
             var spellTemplateId = spellData.TemplateId;
 

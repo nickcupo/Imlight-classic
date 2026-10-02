@@ -81,8 +81,12 @@ internal sealed class CombatCreatureDeckComponent : ZoneEntityComponent, ICompon
         var templateId = (uint) entity.ActiveGameObject.m_templateID;
         var classicSpells = ClassicDeckSpellIds(ClassicProgression.CreatureDecks, templateId,
             name => SpellFactory.GetSpell(name)?.m_templateID);
+        var classicCounts = ClassicDeckSpellCounts(ClassicProgression.CreatureDecks, templateId,
+            name => SpellFactory.GetSpell(name)?.m_templateID);
         foreach (var spellId in classicSpells) {
-            AddSpell(spellId);
+            // CLASSIC: the wiki's count weighs the draw (owner ruling 2026-10-02); creatures never run out, so each copy
+            // stands for CREATURE_COPIES_PER_COUNT.
+            AddSpell(spellId, (uint) (classicCounts.GetValueOrDefault(spellId, 1) * CREATURE_COPIES_PER_COUNT));
         }
 
         if (classicSpells.Count > 0) {
@@ -157,6 +161,26 @@ internal sealed class CombatCreatureDeckComponent : ZoneEntityComponent, ICompon
         return ids;
     }
 
+    private const int CREATURE_COPIES_PER_COUNT = 1000;
+
+    /// <summary>
+    /// CLASSIC: how many copies of each resolved spell the creature's deck file lists (repeated names add up).
+    /// </summary>
+    internal static Dictionary<uint, int> ClassicDeckSpellCounts(CreatureDecks decks, uint template, System.Func<string, uint?> resolve) {
+        var counts = new Dictionary<uint, int>();
+        if (!decks.TryGet(template, out var deck)) {
+            return counts;
+        }
+
+        foreach (var spell in deck.Spells) {
+            if (resolve(spell.Spell) is { } id) {
+                counts[id] = counts.GetValueOrDefault(id) + spell.Count;
+            }
+        }
+
+        return counts;
+    }
+
     private void AddSpellbookSpells(CreatureSpellbook spellbook) {
         foreach (var spellId in spellbook.SpellTemplateIds) {
             AddSpell(spellId);
@@ -177,7 +201,7 @@ internal sealed class CombatCreatureDeckComponent : ZoneEntityComponent, ICompon
         }
     }
 
-    private void AddSpell(uint spellId) {
+    private void AddSpell(uint spellId, uint quantity = 9999) {
         // Both sources may list the same spell; creatures carry one entry per spell.
         if (Spells.Any(x => x.m_templateID == spellId)) {
             return;
@@ -191,7 +215,7 @@ internal sealed class CombatCreatureDeckComponent : ZoneEntityComponent, ICompon
         // Creatures have infinite spells in their spellbook.
         Spells.Add(new SpellData {
             m_templateID = spellId,
-            m_quantity = 9999,
+            m_quantity = quantity,
         });
     }
 
