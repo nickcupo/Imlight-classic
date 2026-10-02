@@ -85,6 +85,12 @@ internal sealed class CombatCreatureDeckComponent : ZoneEntityComponent, ICompon
             AddSpell(spellId);
         }
 
+        if (classicSpells.Count > 0) {
+            Logger.Debug("{0} ({1}) casts its own creature-deck: {2}.",
+                Logger.Args((entity.Template as GameObjectTemplate)?.m_objectName.ToString(), templateId,
+                    string.Join(", ", Spells.Select(x => (CoreObjectFactory.GetCoreTemplate(x.m_templateID) as SpellTemplate)?.m_name?.ToString()))));
+        }
+
         // MobDeckBehaviorTemplate stores spell names directly, if it exists.
         var mobDeck = classicSpells.Count == 0 ? allBehaviors.OfType<MobDeckBehaviorTemplate>().FirstOrDefault() : null;
         if (mobDeck != null) {
