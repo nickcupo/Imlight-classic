@@ -173,6 +173,11 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
             return;
         }
 
+        // CLASSIC: a wizard who dropped mid-fight and logged back in takes their held seat again.
+        if (TryRejoin(playerObj, playerActor, playerWizard)) {
+            return;
+        }
+
         // Check if this player is in the duel. If they are, remove them from the duel.
         var subCircle = SubCircles.FirstOrDefault(x => x is not null && x.ParticipantActor == playerActor);
         if (subCircle is null) {
@@ -191,6 +196,15 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
     }
 
     public override void OnPlayerMove(CoreObject playerObj, IActorRef playerActor, Wizard playerWizard) {
+        // CLASSIC: an open PvP circle opens when a wizard walks in.
+        if (_pvp) {
+            if (_combatSigilObjectInfo is not null) {
+                PvpOnPlayerMove(playerObj, playerActor, playerWizard);
+            }
+
+            return;
+        }
+
         if (!_isActive) {
             return;
         }
@@ -210,7 +224,7 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
     }
 
     public override void OnCreatureMove(CoreObject creature, IActorRef suspect, ZoneEntity entity) {
-        if (!_isActive) {
+        if (!_isActive || _pvp) { // CLASSIC: no creature joins an open PvP circle
             return;
         }
 
@@ -256,6 +270,13 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
         }
     });
 
+    // CLASSIC: every wizard in the duel, whatever team (open PvP).
+    internal void WizardBroadcast(IMessage message) => EnactActionOnSubCircles(circle => {
+        if (circle.IsWizard) {
+            circle.ParticipantActor.Tell(message);
+        }
+    });
+
     internal new void PlayerBroadcast(IMessage message) => EnactActionOnSubCircles(circle => {
         if (circle.OccupiedTeam == CombatTeam.Player) {
             circle.ParticipantActor.Tell(message);
@@ -268,11 +289,20 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
 
         // Get the sigil template.
         _sigilTemplate = (CombatSigilTemplate) SigilFactory.GetSigilTemplate(_combatSigilObjectInfo.m_sigilType);
+
+        // CLASSIC: one of the server's open PvP circles (classic-data/pvp).
+        _pvp = ClassicPvp.IsPvpCircle(Entity.Zone?.ZonePath, _combatSigilObjectInfo.m_zoneTag);
     }
 
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_REQUESTCOMBATSIGIL))]
     private void ReceiveDuelStart(ZONE_102_PROTOCOL.MSG_REQUESTCOMBATSIGIL message) {
         if (_isActive) {
+            return;
+        }
+
+        // CLASSIC: a safe restart's countdown is over; it waits for the fights in progress, so no new one starts. An
+        // open PvP circle is never started by a creature.
+        if (Classic.Admin.ServerAdmin.BlockNewDuels || _pvp) {
             return;
         }
 
@@ -306,6 +336,16 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
     [MessageHandler(typeof(COMBAT_106_PROTOCOL.MSG_NEWROUND))]
     private void ReceiveNewRound(COMBAT_106_PROTOCOL.MSG_NEWROUND message) {
         if (!_isActive) {
+            return;
+        }
+
+        // CLASSIC: every wizard in the fight dropped; it waits for one to log back in (or for the holds to run out).
+        if (ShouldWaitForRejoin()) {
+            _waitingForRejoin = true;
+            Logger.Information("Duel {0} | every wizard has dropped; waiting for one to rejoin.",
+                Logger.Args(Duel.m_duelID.Full));
+            PublishActiveDuel();
+
             return;
         }
 
@@ -356,6 +396,9 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
 
         // Re-telegraph minion AI moves now that the planning HUD exists.
         ResendMinionMoveSelections();
+
+        // CLASSIC: a seat held for a dropped wizard passes.
+        PassHeldSeats();
 
         // Tutorial duels flush queued card grants and re-script the golems before planning.
         _tutorialDirector.OnPlanningPhaseBegin();
@@ -520,6 +563,8 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
 
         // Determine how long the cinematics will take.
         var cinematicTimeInSeconds = CombatResolver.ApplyQueuedCombatActions(out var actions);
+        // CLASSIC: [Classic] SpellAnimationSpeed shortens the server's wait for the spell animations.
+        cinematicTimeInSeconds /= (float) ClassicSettings.SpellAnimationSpeed;
         var actionExecutionTime = TimeSpan.FromSeconds(cinematicTimeInSeconds);
         Duel.m_executionPhaseTimer = (float) actionExecutionTime.TotalSeconds;
 
@@ -550,7 +595,7 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
         // Players can be healed and therefore don't need to be removed.
         EnactActionOnSubCircles(circle => {
             // A dead minion can't be revived; remove it like an enemy.
-            if ((circle.OccupiedTeam == CombatTeam.Monster || circle.IsSummonedMinion) && !circle.IsAlive) {
+            if ((circle.OccupiedTeam == CombatTeam.Monster || circle.IsSummonedMinion) && !circle.IsAlive && !circle.IsWizard) {
                 var removeMsg = new COMBAT_106_PROTOCOL.MSG_COMBATDEATH();
                 circle.ParticipantActor.Tell(removeMsg);
             }
@@ -576,6 +621,16 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
 
     [MessageHandler(typeof(DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_ENDDUEL))]
     private void DespawnDuel() {
+        // CLASSIC: the duel leaves the server-wide view; seats still held are let go.
+        if (SubCircles is not null) {
+            foreach (var held in SubCircles.Where(circle => circle is { Occupied: true, Disconnected: true })) {
+                Timers.Cancel(REJOIN_TIMER_PREFIX + held.HeldCharacterId);
+                ActiveDuels.Release(held.HeldCharacterId);
+            }
+        }
+
+        ActiveDuels.Remove(SigilId);
+        _waitingForRejoin = false;
         _isActive = false;
         _ownedMinionControl.Clear();
         _ownedMinionFallbacks.Clear();
@@ -600,8 +655,13 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
     [MessageHandler(typeof(GAME_5_PROTOCOL.MSG_CLIENT_DISCONNECT))]
     private void ReceiveClientDisconnect(GAME_5_PROTOCOL.MSG_CLIENT_DISCONNECT message) {
         // Find the sub circle that the client was in and remove them from the duel.
-        var subCircle = SubCircles.FirstOrDefault(x => x.ParticipantActor == Sender);
+        var subCircle = SubCircles?.FirstOrDefault(x => x.ParticipantActor == Sender);
         if (subCircle is null) {
+            return;
+        }
+
+        // CLASSIC: a dropped client keeps its seat for a while, so the wizard can log back in to this fight.
+        if (TryHoldSeat(subCircle)) {
             return;
         }
 
@@ -670,12 +730,23 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
         AssignParticipantToSubCircle(availablePlayerSubCircle, startingPlayerActor.Key, startingPlayerObject);
 
         _isActive = true;
+        _startedUtc = DateTime.UtcNow; // CLASSIC
+        PublishActiveDuel();
 
         Logger.Debug("Duel {0} | Created. Grace period over in {1}",
             Logger.Args(Duel.m_duelID.Full, DUEL_GRACE_PERIOD_IN_SECONDS));
     }
 
-    private Duel CreateDuelWithDefaults() => new() {
+    private Duel CreateDuelWithDefaults() {
+        var duel = CreateDuelWithPvEDefaults();
+        if (_pvp) {
+            ApplyPvpDuelSettings(duel); // CLASSIC
+        }
+
+        return duel;
+    }
+
+    private Duel CreateDuelWithPvEDefaults() => new() {
         m_duelID = SigilId,
         m_planningTimer = PLANNING_TIME,
 
@@ -734,6 +805,8 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
 
             // Cretae the sub circle object and add it to the array.
             var subCircle = new CombatDuelSubCircle(this, radius, rotation, color, i) {
+                // CLASSIC: open PvP seats wizards on both halves; the first half is the other team.
+                PvpTeam = _pvp ? (i < 4 ? CombatTeam.Monster : CombatTeam.Player) : null,
                 WorldPosition = rotatedSigilPos,
                 WorldRotation = faceTowardsYaw,
                 SlotName = subCircles[i].m_locationPreference,
@@ -871,6 +944,7 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
         }
 
         AssignParticipantToSubCircle(subCircle, participantActor, participantObject);
+        PublishActiveDuel(); // CLASSIC
 
         Logger.Debug("Duel {0} | Slot {1} | Participant {2} joined",
             Logger.Args(Duel.m_duelID.Full, subCircle.SlotIndex, participantObject.m_debugName));
@@ -930,6 +1004,14 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
             Time = planningPhaseTimer,
         };
 
+        // CLASSIC: in open PvP both teams are wizards.
+        if (_pvp) {
+            WizardBroadcast(combatUiMsg);
+            WizardBroadcast(planningMsg);
+
+            return;
+        }
+
         PlayerBroadcast(combatUiMsg);
         PlayerBroadcast(planningMsg);
     }
@@ -965,7 +1047,7 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
         // Serialize the combat hand and send it to the participant, locally.
         // We're skipping creatures for now.
         EnactActionOnSubCircles(circle => {
-            if (circle.OccupiedTeam == CombatTeam.Monster) {
+            if (circle.OccupiedTeam == CombatTeam.Monster && !circle.IsWizard) { // CLASSIC: PvP wizards on that team
                 return;
             }
 
@@ -993,7 +1075,7 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
 
     internal void SendCurrentCombatHand(CombatDuelSubCircle circle) {
         // As-is, no draw or refill, so a discarded slot stays visibly open for the vault draw.
-        if (circle is null || circle.OccupiedTeam == CombatTeam.Monster) {
+        if (circle is null || (circle.OccupiedTeam == CombatTeam.Monster && !circle.IsWizard)) {
             return;
         }
 
@@ -1105,6 +1187,19 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
             IsTreasureCard = isTreasureCard,
             IsBattleCard = isBattleCard,
         };
+
+        // CLASSIC: in open PvP a pick is shown only to the picker's own side.
+        if (_pvp) {
+            var team = SubCircles.FirstOrDefault(c => c is { Occupied: true } && c.ParticipantObject.m_globalID == participantId)?.OccupiedTeam;
+            EnactActionOnSubCircles(circle => {
+                if (circle.IsWizard && circle.OccupiedTeam == team) {
+                    circle.ParticipantActor.Tell(msg);
+                }
+            });
+
+            return;
+        }
+
         PlayerBroadcast(msg);
     }
 
@@ -1177,7 +1272,7 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
         // If the participant passes, we don't need to know what spell they were casting.
         CombatResolver.AddCombatMove(CombatMoveType.Pass, caster, null, null);
 
-        if (caster.OccupiedTeam == CombatTeam.Player) {
+        if (caster.OccupiedTeam == CombatTeam.Player || caster.IsWizard) { // CLASSIC: PvP
             SendCombatMoveSelection(caster.ParticipantObject.m_globalID, (byte) CombatMoveType.Pass, null, 0);
         }
     }
@@ -1231,7 +1326,7 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
         }
 
         // Minions are AI-driven; their telegraph comes from ResendMinionMoveSelections, not an echo.
-        if (!caster.IsSummonedMinion && caster.OccupiedTeam == CombatTeam.Player) {
+        if (!caster.IsSummonedMinion && (caster.OccupiedTeam == CombatTeam.Player || caster.IsWizard)) { // CLASSIC: PvP
             SendCombatMoveSelection(caster.ParticipantObject.m_globalID, (byte) CombatMoveType.Attack, spell, (byte) spellTarget);
         }
     }
@@ -1266,12 +1361,31 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
         CombatResolver.AddCombatMove(CombatMoveType.ChangeMind, caster, null, null);
 
         // Echo the change mind action to each player participant
-        if (caster.OccupiedTeam == CombatTeam.Player) {
+        if (caster.OccupiedTeam == CombatTeam.Player || caster.IsWizard) { // CLASSIC: PvP
             SendCombatMoveSelection(caster.ParticipantObject.m_globalID, (byte) CombatMoveType.ChangeMind, null, 0);
         }
     }
 
     private void HandleFleeAction(CombatDuelSubCircle caster) {
+        // CLASSIC: leaving an open PvP fight costs nothing; the other side wins once one side is empty.
+        if (_pvp && caster.IsWizard) {
+            DisableOwnedMinionControl(caster.ParticipantObject);
+            PvpReleaseSeat(caster, won: false, fought: !_pvpLobby);
+            if (_pvpLobby) {
+                if (PvpSeats() == (0, 0)) {
+                    PvpClose("everyone left");
+                }
+            }
+            else if (AliveAndInDuelPlayerCount <= 0 || AliveAndInDuelCreatureCount <= 0) {
+                EndDuel();
+            }
+            else {
+                PvpPublish();
+            }
+
+            return;
+        }
+
         DisableOwnedMinionControl(caster.ParticipantObject);
         var actor = caster.ParticipantActor;
         var participantObjId = caster.ParticipantObject.m_globalID;
@@ -1304,6 +1418,9 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
         if (AliveAndInDuelPlayerCount <= 0) {
             EndDuel();
         }
+        else {
+            PublishActiveDuel(); // CLASSIC
+        }
     }
 
     private CombatTeam DetermineFirstTeam()
@@ -1315,7 +1432,7 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
     // period), and never changes: the wizards if four of them are in the duel then, else the duel's random side
     // (owner ruling 2026-09-28).
     private void ApplyFullTeamGoesFirst() {
-        if (!ClassicRuntime.IsActive || IsScriptedDuel() || Duel.m_roundNum != 1) {
+        if (!ClassicRuntime.IsActive || IsScriptedDuel() || Duel.m_roundNum != 1 || _pvp) {
             return;
         }
 
@@ -1437,6 +1554,13 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
     }
 
     private void EndDuel() {
+        // CLASSIC: an open PvP fight ends with no rewards and no penalty.
+        if (_pvp) {
+            PvpEndDuel();
+
+            return;
+        }
+
         // The duel has ended. Inform the clients of the result.
         var playersWin = AliveAndInDuelCreatureCount <= 0;
         var creaturesWin = AliveAndInDuelPlayerCount <= 0;
@@ -1446,6 +1570,11 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
 
         // A queued tutorial card grant must not leak into the next duel on this sigil.
         _tutorialDirector.OnDuelEnded();
+
+        // CLASSIC: wizards still away when the fight ends lose their seat (no rewards; a defeat sends them home).
+        foreach (var held in SubCircles.Where(circle => circle is { Occupied: true, Disconnected: true })) {
+            ReleaseHeldSeat(held);
+        }
 
         RemovePlayersFromDuel();
 
@@ -1521,9 +1650,17 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
     private void CreatureWin() {
         Logger.Debug("Duel {0} | Duel ended. Creatures win.", Logger.Args(Duel.m_duelID.Full));
 
-        // Send combat death to all creatures anyways. This will get rid of their game object.
-        var deathMsg = new COMBAT_106_PROTOCOL.MSG_COMBATDEATH();
-        EnactActionOnSubCircles(circle => circle.ParticipantActor.Tell(deathMsg));
+        // CLASSIC: the creatures that won stay in the world at full health (a dungeon keeps its guards and boss), and
+        // an instanced zone resets once the defeated party has left it. Stock Imlight deleted them.
+        if (ClassicRuntime.IsActive) {
+            ResetCreatures();
+            ReportPartyLost();
+        }
+        else {
+            // Send combat death to all creatures anyways. This will get rid of their game object.
+            var deathMsg = new COMBAT_106_PROTOCOL.MSG_COMBATDEATH();
+            EnactActionOnSubCircles(circle => circle.ParticipantActor.Tell(deathMsg));
+        }
 
         // Inform each player that they've been defeated.
         var defeatMsg = new COMBAT_106_PROTOCOL.MSG_COMBATDEFEAT();

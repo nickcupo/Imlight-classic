@@ -69,6 +69,9 @@ public static class ClassicStartup {
 
     private static string? s_classicDataRoot;
 
+    /// <summary>The classic-data directory the profile came from, or null without a profile.</summary>
+    public static string? ClassicDataRoot => s_classicDataRoot;
+
     /// <summary>
     /// Loads the configured profile and zone map into <see cref="ClassicRuntime"/>.
     /// </summary>
@@ -110,6 +113,13 @@ public static class ClassicStartup {
                     ClassicProgression.Initialize(profile, classicDataRoot);
                 }
             }
+
+            // CLASSIC: owner extras beyond the profile's era, switched in [Classic] (the Pet Pavilion, May 2010).
+            var petPavilion = new HashSet<string>(StringComparer.Ordinal) {
+                ClassicFeatures.PetsLeveling, ClassicFeatures.PetsHatching, ClassicFeatures.PetsTalents, ClassicFeatures.PetsEnergy,
+            };
+            IReadOnlySet<string> none = new HashSet<string>();
+            rules.OwnerExtraFeatures = () => ClassicSettings.PetPavilion ? petPavilion : none;
 
             ClassicRuntime.Initialize(rules, new LoggerAuditSink(), auditVerbose);
             s_classicDataRoot = classicDataRoot;

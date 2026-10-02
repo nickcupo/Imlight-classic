@@ -45,6 +45,7 @@ using System.Collections.Generic;
 using Akka.Actor;
 using Imlight.Classic;
 using Imlight.CoreLib.Classic;
+using Imlight.Classic.Bazaar;
 using Imlight.CoreLib.Shared.Resources;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.WizardData.Collections;
@@ -176,60 +177,89 @@ internal class AuctionHouseService(SessionActor sessionActor) : MessageService(s
 
     private void BuyFromAuctionHouse(ulong templateId, int texture, int decal, uint key) {
         var wizard = GetActiveWizard();
-        var template = (WizItemTemplate) CoreObjectFactory.GetCoreTemplate(templateId);
-
-        var item = (WizClientObjectItem) CoreObjectFactory.FinalizeCoreObject(templateId);
-        item.m_primaryColor = texture;
-        item.m_secondaryColor = decal;
-
-        // Try serializing item data.
-        if (!_itemSerializer.Serialize(item, 1, out var itemData)) {
-            Logger.Error("Failed to serialize item data.");
+        var coreTemplate = CoreObjectFactory.GetCoreTemplate(templateId);
+        if (wizard is null || coreTemplate is null) {
+            SendBuyFailure();
 
             return;
         }
 
-        var entry = AuctionHouseCollection.GetAuctionHouseEntry(templateId);
-        if (entry is null) { // Entry does not exist.
-            return;
-        }
-        var goldCost = entry.m_buyPrice;
+        // CLASSIC: one lock from reading the stock to saving it (other players and the restock timer change it too); a
+        // wizard who cannot pay is refused; with classic Bazaar rules the price follows the copies left.
+        int goldCost;
+        AuctionHouseEntry updated;
+        lock (AuctionHouseCollection.Lock) {
+            var entry = AuctionHouseCollection.GetAuctionHouseEntry(templateId);
+            if (entry is null || entry.m_numForSale < 1) {
+                SendBuyFailure();
 
-        // Update stock and push to database.
-        entry.m_numForSale -= 1;
-        if (entry.m_numForSale < 1) {
-            // Remove entry if no more stock.
-            AuctionHouseCollection.RemoveAuctionHouseEntry(templateId);
-        }
-        else {
-            AuctionHouseCollection.UpdateAuctionHouseEntry(entry);
+                return;
+            }
+
+            goldCost = entry.m_buyPrice;
+            if (ClassicRuntime.IsActive && wizard.GameStats.m_currentGold < goldCost) {
+                SendBuyFailure();
+
+                return;
+            }
+
+            entry.m_numForSale -= 1;
+            if (ClassicBazaar.Rules is not null) {
+                (entry.m_buyPrice, entry.m_sellPrice) = ClassicBazaar.PricesFor(templateId, entry.m_numForSale);
+            }
+
+            if (entry.m_numForSale < 1) {
+                AuctionHouseCollection.RemoveAuctionHouseEntry(templateId);
+            }
+            else {
+                AuctionHouseCollection.UpdateAuctionHouseEntry(entry);
+            }
+
+            updated = new AuctionHouseEntry {
+                m_templateID = entry.m_templateID, m_numForSale = entry.m_numForSale,
+                m_buyPrice = entry.m_buyPrice, m_sellPrice = entry.m_sellPrice,
+            };
         }
 
         // Inform of update.
-        var houseEntryData = WriteAuctionBlob(0, [entry]);
-        var auctionUpdateMsg = new GAME_5_PROTOCOL.MSG_AUCTIONHOUSEUPDATE {
-            UpdateInfo = houseEntryData,
+        SendToSocket(new GAME_5_PROTOCOL.MSG_AUCTIONHOUSEUPDATE {
+            UpdateInfo = WriteAuctionBlob(0, [updated]),
             CharacterID = wizard.CharId
-        };
-        SendToSocket(auctionUpdateMsg);
+        });
 
-        // Add item to inventory
-        var addItemMsg = new GAME_5_PROTOCOL.MSG_INVENTORYBEHAVIOR_ADDITEM {
-            GlobalID = wizard.GameObjectID,
-            SerializedItem = itemData,
-        };
-        SendToSocket(addItemMsg);
+        // CLASSIC: treasure cards go to the treasure book and reagents to the reagent bag; everything else is an item.
+        switch (coreTemplate) {
+            case SpellTemplate when templateId <= uint.MaxValue:
+                DropTables.LootGranter.GrantTreasureCard(SessionActor.ActorRef, wizard, (uint) templateId);
+                break;
+            case ReagentItemTemplate:
+                DropTables.LootGranter.GrantReagent(SessionActor.ActorRef, wizard, templateId, 1);
+                break;
+            default: {
+                var item = (WizClientObjectItem) CoreObjectFactory.FinalizeCoreObject(templateId);
+                item.m_primaryColor = texture;
+                item.m_secondaryColor = decal;
+                if (!_itemSerializer.Serialize(item, 1, out var itemData)) {
+                    Logger.Error("Failed to serialize item data.");
 
-        // Add item to inventory after message to prevent crashes.
-        wizard.AddItemToInventory(item);
+                    return;
+                }
 
-        // Alert client of new item.
-        var itemAcqMsg = new WIZARD2_53_PROTOCOL.MSG_ITEMACQUISITION {
-            ItemGlobalID = item.m_globalID,
-            ItemTemplateID = (uint) item.m_templateID,
-            ItemLocation = 1,
-        };
-        SendToSocket(itemAcqMsg);
+                SendToSocket(new GAME_5_PROTOCOL.MSG_INVENTORYBEHAVIOR_ADDITEM {
+                    GlobalID = wizard.GameObjectID,
+                    SerializedItem = itemData,
+                });
+
+                // Add item to inventory after message to prevent crashes.
+                wizard.AddItemToInventory(item);
+                SendToSocket(new WIZARD2_53_PROTOCOL.MSG_ITEMACQUISITION {
+                    ItemGlobalID = item.m_globalID,
+                    ItemTemplateID = (uint) item.m_templateID,
+                    ItemLocation = 1,
+                });
+                break;
+            }
+        }
 
         // Update gold balances.
         wizard.RemoveGold(goldCost);
@@ -247,6 +277,8 @@ internal class AuctionHouseService(SessionActor sessionActor) : MessageService(s
         };
         SendToSocket(shopBuyConfirmMsg);
     }
+
+    private void SendBuyFailure() => SendToSocket(new WIZARD_12_PROTOCOL.MSG_SHOPBUYCONFIRM { Failure = 1 });
 
     private void SellToAuctionHouse(ulong itemGlobalId, uint key) {
         var wizard = GetActiveWizard();
@@ -281,10 +313,26 @@ internal class AuctionHouseService(SessionActor sessionActor) : MessageService(s
             return;
         }
 
+        // CLASSIC: the Bazaar does not take Crowns items (October 2009 Update Notes).
+        var crownsItem = template.m_adjectiveList.Any(x => x == "FLAG_CrownsOnly");
+        if (ClassicRuntime.IsActive && crownsItem) {
+            SendToSocket(new WIZARD_12_PROTOCOL.MSG_AUCTIONRESPONSE {
+                Command = 2, ItemTemplateID = item.m_templateID, Cost = 0, ReturnCode = 1
+            });
+
+            return;
+        }
+
         // Calculate gold sell value.
         var gold = (int) Math.Ceiling(template.m_baseCost * 0.5f); // Bazaar buys items at 50% of their value.
         if (template.m_numPrimaryColors != 1 && template.m_numSecondaryColors != 0) {
             gold = (int) Math.Ceiling(gold * 1.225f);
+        }
+
+        // CLASSIC: the 2009 Bazaar pays by how many copies it holds already (classic-data/rules/bazaar-*.yaml).
+        if (ClassicBazaar.Rules is { } bazaar) {
+            var held = AuctionHouseCollection.GetAuctionHouseEntry(item.m_templateID)?.m_numForSale ?? 0;
+            gold = bazaar.SellPrice((int) template.m_baseCost, held, ClassicBazaar.KindOf(template) ?? BazaarKind.Gear);
         }
 
         var auctionRspMsg = new WIZARD_12_PROTOCOL.MSG_AUCTIONRESPONSE {
@@ -296,19 +344,29 @@ internal class AuctionHouseService(SessionActor sessionActor) : MessageService(s
         SendToSocket(auctionRspMsg);
 
         // Update stock and push to database.
-        var entry = AuctionHouseCollection.GetAuctionHouseEntry(item.m_templateID);
-        if (entry is null) {
-            entry = new AuctionHouseEntry {
-                m_templateID = (GID) item.m_templateID,
-                m_buyPrice = (int)(template.m_baseCost * 2), // Bazaar sells items at 200% of their value.
-                m_numForSale = 1,
-                m_sellPrice = gold
-            };
-            AuctionHouseCollection.AddAuctionHouseEntry(entry);
-        }
-        else {
-            if (entry.m_numForSale < 99) { // Stock limit of 99. Players can still sell item but stock will not increase.
+        AuctionHouseEntry entry;
+        lock (AuctionHouseCollection.Lock) { // CLASSIC: other players and the restock timer change the stock too.
+            var cap = ClassicBazaar.Rules?.CapFor(BazaarKind.Gear) ?? 99;
+            entry = AuctionHouseCollection.GetAuctionHouseEntry(item.m_templateID);
+            if (entry is null) {
+                entry = new AuctionHouseEntry {
+                    m_templateID = (GID) item.m_templateID,
+                    m_buyPrice = (int)(template.m_baseCost * 2), // Bazaar sells items at 200% of their value.
+                    m_numForSale = 1,
+                    m_sellPrice = gold
+                };
+                if (ClassicBazaar.Rules is not null) {
+                    (entry.m_buyPrice, entry.m_sellPrice) = ClassicBazaar.PricesFor(item.m_templateID, 1);
+                }
+
+                AuctionHouseCollection.AddAuctionHouseEntry(entry);
+            }
+            else if (entry.m_numForSale < cap) { // Players can still sell at the cap, but the stock does not grow.
                 entry.m_numForSale += 1;
+                if (ClassicBazaar.Rules is not null) {
+                    (entry.m_buyPrice, entry.m_sellPrice) = ClassicBazaar.PricesFor(item.m_templateID, entry.m_numForSale);
+                }
+
                 AuctionHouseCollection.UpdateAuctionHouseEntry(entry);
             }
         }

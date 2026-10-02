@@ -75,6 +75,10 @@ public static class LootGranter {
     /// <param name="wizard">The player wizard data receiving the rewards.</param>
     /// <param name="results">The rolled drop table results to grant.</param>
     public static void GrantAndDisplay(IActorRef playerActor, Wizard wizard, DropTableResult results) {
+        // CLASSIC: [Classic] GoldMultiplier and XpMultiplier (dashboard switches; 2009: 1) scale the gold and XP of mob
+        // and quest rewards before they are granted and shown.
+        results.GoldAmount = Classic.ClassicSettings.Scale(results.GoldAmount, Classic.ClassicSettings.GoldMultiplier);
+        results.ExperienceAmount = Classic.ClassicSettings.Scale(results.ExperienceAmount, Classic.ClassicSettings.XpMultiplier);
         UpdateWizardGold(playerActor, wizard, results.GoldAmount);
         UpdateWizardXP(playerActor, results.ExperienceAmount);
         UpdateWizardTP(playerActor, wizard, results.TrainingPoints);
@@ -87,6 +91,14 @@ public static class LootGranter {
             UpdateWizardPotionMax(playerActor, wizard);
         }
     }
+
+    /// <summary>CLASSIC: adds one treasure card to the wizard's treasure book (a Bazaar purchase).</summary>
+    internal static void GrantTreasureCard(IActorRef playerActor, Wizard wizard, uint templateId)
+        => UpdateTreasureCards(playerActor, wizard, new DropTableResult { TreasureCards = [templateId] });
+
+    /// <summary>CLASSIC: adds reagents to the wizard's reagent bag (a Bazaar purchase).</summary>
+    internal static void GrantReagent(IActorRef playerActor, Wizard wizard, ulong templateId, int quantity)
+        => UpdateReagents(playerActor, wizard, [new DropItemResult { ItemId = templateId.ToString(), ItemName = string.Empty, Quantity = quantity }]);
 
     private static void UpdateWizardGold(IActorRef playerActor, Wizard wizard, int goldDelta) {
         if (goldDelta == 0) {

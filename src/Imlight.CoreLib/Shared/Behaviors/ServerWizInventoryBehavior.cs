@@ -32,7 +32,13 @@ public class ServerWizInventoryBehavior : IClientBehaviorProvider<ClientWizInven
 
     [JsonIgnore] public bool NoTransfer { get; set; } = false;
 
-    private static int s_maxItemsAllowed = ConfigurationManager.Settings["Character.MaxInventoryItems"].AsInt();
+    private static int s_iniMaxItemsAllowed = ConfigurationManager.Settings["Character.MaxInventoryItems"].AsInt();
+
+    // CLASSIC: [Classic] BackpackSize (dashboard switch) overrides Character.MaxInventoryItems when set above 0.
+    private static int s_maxItemsAllowed {
+        get => Classic.ClassicSettings.BackpackSize is > 0 and var size ? size : s_iniMaxItemsAllowed;
+        set => s_iniMaxItemsAllowed = value;
+    }
     private static readonly int s_maxJewelsAllowed = ConfigurationManager.Settings["Character.MaxJewelsAllowed"].AsInt();
     private static readonly int s_maxItemsAllowedFallback = 20;
     private static readonly Lock s_writeLock = new(); // CLASSIC: static, so it is never serialized.

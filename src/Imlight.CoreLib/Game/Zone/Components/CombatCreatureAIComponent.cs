@@ -281,6 +281,33 @@ internal sealed class CombatCreatureAIComponent(ZoneEntity entity) : ZoneEntityC
         Timers.StartSingleTimer("FinalKill", new COMBAT_106_PROTOCOL.MSG_COMBATDEATH(), delay);
     }
 
+    // CLASSIC: the duel ended without this creature's defeat (the wizards lost, fled or dropped for good). It leaves
+    // the duel at full health and goes back to its path, so it can be fought again; a summoned minion is removed.
+    [MessageHandler(typeof(CLASSIC_FEATURES_PROTOCOL.MSG_COMBATRESET))]
+    private void ReceiveCombatReset(CLASSIC_FEATURES_PROTOCOL.MSG_COMBATRESET message) {
+        if (_sentFinalKill) {
+            return;
+        }
+
+        if (_currentSubCircle?.IsSummonedMinion == true || Entity.IsCombatOnlyMinion) {
+            _sentFinalKill = true;
+            Entity.DeleteObject();
+
+            return;
+        }
+
+        _isInDuel = false;
+        _currentDuelComponent = null;
+        _currentSubCircle = null;
+        _roundHand = null;
+        _hateTable.Clear();
+        if (_stats?.Stats is { } stats) {
+            stats.m_currentHitpoints = stats.m_baseHitpoints;
+        }
+
+        _pathMovementComponent?.Resume();
+    }
+
     private void DetermineAttitude() {
         _determinedSmartThisTurn = _random.NextDouble() < _intelligenceFactor;
         _determinedAggressiveThisTurn = _random.NextDouble() < _aggressivenessFactor;

@@ -42,6 +42,8 @@
 
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
+using System.Linq;
 using Akka.Actor;
 using Imcodec.CoreObject;
 using Imcodec.IO;
@@ -157,6 +159,48 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
         TellOtherServices(hubMsg);
     }
 
+    // CLASSIC: an open PvP fight ended, or this wizard left the circle: no rewards, no penalty, no trip home. A defeated
+    // wizard keeps 1 health, which regenerates.
+    [MessageHandler(typeof(CLASSIC_FEATURES_PROTOCOL.MSG_PVPRELEASE))]
+    private void ReceivePvpRelease(CLASSIC_FEATURES_PROTOCOL.MSG_PVPRELEASE message) {
+        _currentDuelActor = null;
+        var wizard = GetActiveWizard();
+        if (wizard is null) {
+            return;
+        }
+
+        wizard.IsInDuel = false;
+        if (wizard.GameStats.m_currentHitpoints <= 0) {
+            wizard.UpdateHealth(1);
+            SendToSocket(new WIZARD_12_PROTOCOL.MSG_UPDATEHEALTH {
+                CharacterID = wizard.GameObjectID,
+                NewHealth = 1,
+                NewHealthMax = wizard.GameStats.m_baseHitpoints,
+                DisplayDiff = 0,
+            });
+        }
+
+        SetNoAggroGrace();
+        Timers.StartSingleTimer("NoAggroGraceOver", new COMBAT_106_PROTOCOL.MSG_NOAGGROGRACEOVER(),
+            TimeSpan.FromSeconds(NO_AGGRO_EFFECT_DURATION_IN_SECONDS));
+        if (message.Fought) {
+            InformGameClient(message.Won ? "Your side won the duel!" : "Your side lost the duel.");
+        }
+    }
+
+    // CLASSIC: ".pvp ready" / ".pvp leave" go to the open PvP circle this wizard sits in.
+    [MessageHandler(typeof(CLASSIC_FEATURES_PROTOCOL.MSG_PVPCOMMAND))]
+    private void ReceivePvpCommand(CLASSIC_FEATURES_PROTOCOL.MSG_PVPCOMMAND message) {
+        if (_currentDuelActor is null) {
+            InformGameClient("You are not in an open PvP circle.");
+
+            return;
+        }
+
+        message.Actor = SessionActor.ActorRef;
+        _currentDuelActor.Tell(message, SessionActor.ActorRef);
+    }
+
     [MessageHandler(typeof(COMBAT_106_PROTOCOL.MSG_COMBATWIN))]
     private void ReceiveCombatVictory(COMBAT_106_PROTOCOL.MSG_COMBATWIN message) {
         // CLASSIC: the duel is over; a logout after it used to reach the ended duel, which ran flee and defeat on it
@@ -218,11 +262,13 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
 
         var random = Random.Shared;
         foreach (var templateId in defeatedMobTemplateIds ?? []) {
+            AddHolidayDrops(rules, templateId, result, random); // CLASSIC: classic-data/holidays boss drops in season
+
             if (ClassicMobInfo.Of(templateId) is not { } mob) {
                 continue;
             }
 
-            var loot = rules.Roll(mob, random);
+            var loot = rules.Roll(mob, random, ClassicSettings.DropRateMultiplier); // CLASSIC: dashboard switch
             result.GoldAmount += loot.Gold;
             foreach (var item in loot.Items) {
                 if (CoreObjectFactory.GetCoreTemplate(item) is not null) {
@@ -252,6 +298,29 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
         LootGranter.GrantAndDisplay(SessionActor.ActorRef, GetActiveWizard(), result);
 
         return result.GoldAmount;
+    }
+
+    // CLASSIC: while a holiday event runs, its bosses also roll their 2009 drops (classic-data/holidays), each list at
+    // the 2009 boss rate for a list that long (MobRewardRules), times [Classic] DropRateMultiplier.
+    private static void AddHolidayDrops(MobRewardRules rules, ulong templateId, DropTableResult result, Random random) {
+        if (ClassicHolidays.DropsFor(templateId) is not { } drops) {
+            return;
+        }
+
+        var multiplier = ClassicSettings.DropRateMultiplier;
+        var gear = drops.Items.Select(item => new DropEntry(item, null)).ToImmutableArray();
+        foreach (var item in rules.ItemDrops.Roll(gear, MobKind.Boss, gear.Length, tallied: false, random, multiplier)) {
+            if (CoreObjectFactory.GetCoreTemplate(item) is not null) {
+                result.Items.Add(new DropItemResult { ItemId = item.ToString(), ItemName = string.Empty, Quantity = 1 });
+            }
+        }
+
+        var cards = drops.TreasureCards.Select(card => new DropEntry(card, null)).ToImmutableArray();
+        foreach (var card in rules.TreasureCardDrops.Roll(cards, MobKind.Boss, cards.Length, tallied: false, random, multiplier)) {
+            if (card <= uint.MaxValue && CoreObjectFactory.GetCoreTemplate(card) is SpellTemplate) {
+                result.TreasureCards.Add((uint) card);
+            }
+        }
     }
 
     // Returns the gold granted.

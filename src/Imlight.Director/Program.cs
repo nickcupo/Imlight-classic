@@ -164,6 +164,10 @@ internal static class Program {
 
         OnlinePlayerCollection.Clear();
 
+        // CLASSIC: broadcasts, safe restarts and the admin dashboard ([Classic] AdminDashboardPort).
+        Imlight.CoreLib.Classic.Admin.ServerAdmin.Initialize(s_imlightSystem);
+        Imlight.CoreLib.Classic.Admin.AdminDashboard.Start();
+
         // Keep program busy with a while loop.
         Logger.Information("Imlight may now be connected to.");
         while (true) {
