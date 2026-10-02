@@ -102,9 +102,20 @@ public sealed class SchemaDriftTests {
         Assert.Equal(EnumValues(rules.GetProperty("dragonspyre_difficulty")), ClassicSchema.DragonspyreDifficulties.ToArray());
         Assert.Equal(EnumValues(rules.GetProperty("tutorial")), ClassicSchema.Tutorials.ToArray());
         Assert.Equal(EnumValues(rules.GetProperty("teleport_stones")), ClassicSchema.TeleportStoneRules.ToArray());
-        Assert.Equal(new[] { "accuracy_table", "xp_table", "mob_rewards", "badges", "quest_cards", "treasure_prices", "mob_stats", "crown_shop", "later_objects", "power_pips_from_rank",
+        Assert.Equal(new[] { "accuracy_table", "xp_table", "mob_rewards", "badges", "quest_cards", "treasure_prices", "mob_stats", "crown_shop", "later_objects", "creature_decks", "power_pips_from_rank",
                              "dragonspyre_difficulty", "tutorial", "teleport_stones" },
             rules.EnumerateObject().Select(rule => rule.Name).ToArray());
+    }
+
+    [Fact]
+    public void CreatureDeckLoaderKeysMatchTheirSchema() { // CLASSIC
+        string[] Keys(System.Text.Json.JsonElement node) => [.. node.GetProperty("properties").EnumerateObject().Select(p => p.Name).Order(StringComparer.Ordinal)];
+        string[] Sorted(IEnumerable<string> keys) => [.. keys.Order(StringComparer.Ordinal)];
+        var decks = ReadSchema("creature-decks.schema.json");
+
+        Assert.Equal(Keys(decks), Sorted(CreatureDecksLoader.s_rootKeys));
+        Assert.Equal(Keys(decks.GetProperty("$defs").GetProperty("creature")), Sorted(CreatureDecksLoader.s_creatureKeys));
+        Assert.Equal(Keys(decks.GetProperty("$defs").GetProperty("spell")), Sorted(CreatureDecksLoader.s_spellKeys));
     }
 
     [Fact]

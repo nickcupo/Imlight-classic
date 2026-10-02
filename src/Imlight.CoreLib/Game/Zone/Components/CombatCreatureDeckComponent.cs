@@ -41,7 +41,9 @@ using System.Collections.Generic;
 using System.Linq;
 using Imcodec.IO;
 using Imcodec.ObjectProperty.TypeCache;
+using Imlight.Classic.Rules;
 using Imlight.Common;
+using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.Game.Spells;
 using Imlight.CoreLib.Game.Zone.Core;
 using Imlight.CoreLib.Shared.Resources;
@@ -74,8 +76,23 @@ internal sealed class CombatCreatureDeckComponent : ZoneEntityComponent, ICompon
         var allBehaviors = entity.Template.m_behaviors
             .Concat(equipmentItemBehaviors);
 
+        // CLASSIC: a creature the profile's creature-deck file lists (from its 2009 wiki page) casts that deck and nothing
+        // else, so each minion, Monstrology creature and mob has its own spells rather than its school's.
+        var templateId = (uint) entity.ActiveGameObject.m_templateID;
+        var classicSpells = ClassicDeckSpellIds(ClassicProgression.CreatureDecks, templateId,
+            name => SpellFactory.GetSpell(name)?.m_templateID);
+        foreach (var spellId in classicSpells) {
+            AddSpell(spellId);
+        }
+
+        if (classicSpells.Count > 0) {
+            Logger.Debug("{0} ({1}) casts its own creature-deck: {2}.",
+                Logger.Args((entity.Template as GameObjectTemplate)?.m_objectName.ToString(), templateId,
+                    string.Join(", ", Spells.Select(x => (CoreObjectFactory.GetCoreTemplate(x.m_templateID) as SpellTemplate)?.m_name?.ToString()))));
+        }
+
         // MobDeckBehaviorTemplate stores spell names directly, if it exists.
-        var mobDeck = allBehaviors.OfType<MobDeckBehaviorTemplate>().FirstOrDefault();
+        var mobDeck = classicSpells.Count == 0 ? allBehaviors.OfType<MobDeckBehaviorTemplate>().FirstOrDefault() : null;
         if (mobDeck != null) {
             AddSpellsFromNames(mobDeck.m_spellList);
         }
@@ -83,7 +100,7 @@ internal sealed class CombatCreatureDeckComponent : ZoneEntityComponent, ICompon
         // DeckBehaviorTemplate stores a deck name that maps to a SpiralDB spellbook.
         // The deck is the union of both sources: the client's own spell names and the
         // SpiralDB spellbook named by the deck behavior. Either source may be missing.
-        var deckBehavior = allBehaviors.OfType<DeckBehaviorTemplate>().FirstOrDefault();
+        var deckBehavior = classicSpells.Count == 0 ? allBehaviors.OfType<DeckBehaviorTemplate>().FirstOrDefault() : null;
         if (deckBehavior is not null && !string.IsNullOrEmpty(deckBehavior.m_defaultDeck)) {
             var spellbook = CreatureSpellbookCollection.GetCreatureSpellbook(deckBehavior.m_defaultDeck);
             if (spellbook is not null) {
@@ -116,6 +133,28 @@ internal sealed class CombatCreatureDeckComponent : ZoneEntityComponent, ICompon
             );
             AddSpellbookSpells(CreatureSpellbookCollection.GetDefaultCreatureSpellbook());
         }
+    }
+
+    /// <summary>
+    /// CLASSIC: the spell template ids of the creature's own 2009 deck, in file order; empty when the file lists no deck
+    /// for <paramref name="template"/> or none of its spell names resolve.
+    /// </summary>
+    /// <param name="decks">The profile's creature decks.</param>
+    /// <param name="template">The creature's template id.</param>
+    /// <param name="resolve">Maps a spell template name to its template id, or null when the client has no such spell.</param>
+    internal static List<uint> ClassicDeckSpellIds(CreatureDecks decks, uint template, System.Func<string, uint?> resolve) {
+        var ids = new List<uint>();
+        if (!decks.TryGet(template, out var deck)) {
+            return ids;
+        }
+
+        foreach (var spell in deck.Spells) {
+            if (resolve(spell.Spell) is { } id && !ids.Contains(id)) {
+                ids.Add(id);
+            }
+        }
+
+        return ids;
     }
 
     private void AddSpellbookSpells(CreatureSpellbook spellbook) {
