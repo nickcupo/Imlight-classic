@@ -34,7 +34,11 @@
  * Imlight counted the wizard inside the radius during the grace, so the Oni
  * never fought until the wizard left the room and came back (ms.md, Release).
  *
+ * A wizard who stays inside the radius is tried again every few seconds
+ * (Retry), as a try can come to nothing.
+ *
  * TODO:
+ * - KingsIsle's retry interval is not known; 5 s is ours.
  *
  * Created by: Nick with Claude Code (claude-opus-5-5)
  * Version: KALI 1.0
@@ -52,5 +56,17 @@ public static class ProximityAggro {
     /// </summary>
     public static bool Deferred(bool isMonster, bool inGrace, bool inDuel)
         => isMonster && (inGrace || inDuel);
+
+    /// <summary>How long a creature waits before it tries again to fight a wizard still inside its radius.</summary>
+    public static readonly System.TimeSpan RetryAfter = System.TimeSpan.FromSeconds(5);
+
+    /// <summary>
+    /// True when a creature should try again to fight a wizard who is still inside its radius: the wizard is free (not in
+    /// a duel or its grace) and the last try is at least <see cref="RetryAfter"/> old. A try can come to nothing (the
+    /// wizard was pulled into another creature's duel first), and stock Imlight never tried again while the wizard stayed
+    /// near: a soldier on the Crimson Fields beside the last fight never engaged (Battle of Evermore).
+    /// </summary>
+    public static bool Retry(bool isMonster, bool inGrace, bool inDuel, System.DateTime lastTryUtc, System.DateTime nowUtc)
+        => isMonster && !inGrace && !inDuel && nowUtc - lastTryUtc >= RetryAfter;
 
 }

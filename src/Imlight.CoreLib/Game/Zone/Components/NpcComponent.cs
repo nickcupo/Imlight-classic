@@ -69,6 +69,7 @@ internal sealed class NpcComponent : ZoneEntityComponent, IComponentFactory, ICl
     // CLASSIC: keyed by the object instance. CoreObject is a record whose hash follows its location, so the default
     // comparer missed the entry after any move: enter events re-fired on every move and exit never fired.
     private readonly Dictionary<CoreObject, IActorRef> _playersInRange = new(ReferenceEqualityComparer.Instance);
+    private readonly Dictionary<CoreObject, DateTime> _lastAggroTry = new(ReferenceEqualityComparer.Instance); // CLASSIC
     private readonly NPCBehaviorTemplate _npcBehaviorTemplate;
     private readonly DuelistBehaviorTemplate _duelistBehaviorTemplate;
 
@@ -148,6 +149,7 @@ internal sealed class NpcComponent : ZoneEntityComponent, IComponentFactory, ICl
     public override void OnPlayerLeave(IActorRef playerActor, ulong id) {
         foreach (var key in _playersInRange.Where(x => x.Value.Equals(playerActor)).Select(x => x.Key).ToList()) {
             _playersInRange.Remove(key);
+            _lastAggroTry.Remove(key); // CLASSIC
         }
     }
 
@@ -163,9 +165,17 @@ internal sealed class NpcComponent : ZoneEntityComponent, IComponentFactory, ICl
                     IsMonster, playerWizard?.IsInCombatGrace == true, playerWizard?.IsInDuel == true)) {
                 _playersInRange.Add(playerObj, playerActor);
             }
+        }
+        // CLASSIC: a wizard still inside the radius and free again is tried again (ProximityAggro.Retry).
+        else if (ClassicQuestEngine.IsActive && playerWizard is not null && IsInRadius(playerObj, Proximity)
+                && _playersInRange.ContainsKey(playerObj)
+                && Imlight.Classic.Quests.ProximityAggro.Retry(IsMonster, playerWizard.IsInCombatGrace, playerWizard.IsInDuel,
+                    _lastAggroTry.GetValueOrDefault(playerObj), DateTime.UtcNow)) {
+            OnProximityEnter(playerObj, playerActor, playerWizard);
         } 
         else if (!IsInRadius(playerObj, Proximity) && _playersInRange.ContainsKey(playerObj)) {
             _playersInRange.Remove(playerObj);
+            _lastAggroTry.Remove(playerObj); // CLASSIC
         }
     }
 
@@ -182,6 +192,11 @@ internal sealed class NpcComponent : ZoneEntityComponent, IComponentFactory, ICl
         }
 
         if (!IsMonster || playerWizard.IsInCombatGrace || playerWizard.IsInDuel) {
+            if (IsMonster && ClassicQuestEngine.IsActive) { // CLASSIC: a trace of aggro the grace or a duel held back.
+                Logger.Debug("{Creature} does not aggro on {Player}: grace {Grace}, in duel {Duel}.",
+                    Logger.Args(Entity.ActiveGameObject?.m_debugName, playerActor?.Path.Name, playerWizard.IsInCombatGrace, playerWizard.IsInDuel));
+            }
+
             return;
         }
 
@@ -194,6 +209,8 @@ internal sealed class NpcComponent : ZoneEntityComponent, IComponentFactory, ICl
             Logger.Debug("{Creature} aggroes on ambient wizard {Name}.",
                 Logger.Args(Entity.ActiveGameObject?.m_debugName, playerWizard.PlayerNameBehavior?.GetWizardName()));
         }
+
+        _lastAggroTry[playerObj] = DateTime.UtcNow; // CLASSIC: ProximityAggro.Retry
 
         // Hey! I'm a dueling creature and a player just entered my proximity.
         // I really don't like that.

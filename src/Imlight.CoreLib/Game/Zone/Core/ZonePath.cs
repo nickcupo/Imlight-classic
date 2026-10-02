@@ -48,6 +48,7 @@ using System.Collections.Generic;
 using System.Linq;
 using Akka.Actor;
 using Imlight.Common;
+using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;
 using Imlight.CoreLib.Shared.Resources;
@@ -193,6 +194,12 @@ public sealed class ZonePath : ZoneEntity {
         if (spawnObject != null) {
             _deactivated.Remove(message.SpawnObjectID); // CLASSIC: an activating ResSpawn starts a stopped spawner again.
             HandleCreatureSpawn(spawnObject);
+
+            // CLASSIC: an activated spawner fills to its m_maxNumberOfSpawns, as KingsIsle's spawners do. Stock Imlight
+            // spawned one creature: Battle of Evermore's SpawnMobs started 7 of its 13 invaders, short of the 10 kills.
+            for (var i = 1; message.Fill && ClassicQuestEngine.IsActive && i < spawnObject.m_maxNumberOfSpawns && CanSpawn(spawnObject); i++) {
+                HandleCreatureSpawn(spawnObject);
+            }
         }
     }
 

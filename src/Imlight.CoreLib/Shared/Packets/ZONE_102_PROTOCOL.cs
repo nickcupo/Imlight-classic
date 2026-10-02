@@ -752,6 +752,9 @@ public class ZONE_102_PROTOCOL : IServerProtocol {
         public byte ServiceID { get; } = 102;
 
         public uint SpawnObjectID;
+
+        /// <summary>CLASSIC: a zone trigger's activating ResSpawn: the spawner fills to its m_maxNumberOfSpawns.</summary>
+        public bool Fill;
     }
 
     /// <summary>

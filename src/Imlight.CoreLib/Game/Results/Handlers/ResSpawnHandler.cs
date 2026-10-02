@@ -54,7 +54,8 @@ internal sealed class ResSpawnHandler : BaseResultHandler<ResSpawn> {
 
         var broadcastMsg = new ZONE_102_PROTOCOL.MSG_ZONEBROADCAST {
             Messages = [new ZONE_102_PROTOCOL.MSG_ZONEPATHSPAWN {
-                SpawnObjectID = (uint) Result.m_spawnID
+                SpawnObjectID = (uint) Result.m_spawnID,
+                Fill = ClassicQuestEngine.IsActive, // CLASSIC: the activated spawner fills to its maximum.
             }],
             Targets = ZoneBroadcastTarget.Paths,
         };

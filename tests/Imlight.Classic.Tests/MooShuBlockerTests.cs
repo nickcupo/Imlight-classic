@@ -78,6 +78,16 @@ public sealed class MooShuBlockerTests {
     }
 
     [Fact]
+    public void ACreatureTriesAgainAFreeWizardStillInsideItsRadius() {
+        var t0 = new System.DateTime(2026, 10, 2, 12, 0, 0, System.DateTimeKind.Utc);
+        Assert.False(ProximityAggro.Retry(true, inGrace: false, inDuel: false, t0, t0.AddSeconds(4)));
+        Assert.True(ProximityAggro.Retry(true, inGrace: false, inDuel: false, t0, t0.AddSeconds(5)));
+        Assert.False(ProximityAggro.Retry(true, inGrace: true, inDuel: false, t0, t0.AddSeconds(30)));
+        Assert.False(ProximityAggro.Retry(true, inGrace: false, inDuel: true, t0, t0.AddSeconds(30)));
+        Assert.False(ProximityAggro.Retry(false, inGrace: false, inDuel: false, t0, t0.AddSeconds(30)));
+    }
+
+    [Fact]
     public void AnArrivalInsideAVolumeFiresItsTriggersButNeverATeleport() {
         Assert.True(VolumeArrival.Fires(arrivedInside: true, triggerTeleports: false));
         Assert.False(VolumeArrival.Fires(arrivedInside: true, triggerTeleports: true));
