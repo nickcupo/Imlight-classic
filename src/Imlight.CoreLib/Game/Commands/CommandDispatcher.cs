@@ -196,7 +196,7 @@ internal class CommandDispatcher : ReceiveProtocolDispatcher {
     }
 
     private void InformSenderClient(CommandContext context, string reason)
-        => context.SessionActor.Tell(new EXTENDEDBASE_2_PROTOCOL.MSG_SERVERMESSAGE() { Message = reason });
+        => context.SessionActor.Tell(Classic.ClassicChat.Line(reason)); // CLASSIC: a chat line, not a "!" alert
 
     private void InformSenderClientImportant(CommandContext context, string reason)
         => context.SessionActor.Tell(new EXTENDEDBASE_2_PROTOCOL.MSG_SERVERMESSAGE() { Message = reason, Modal = 1 });

@@ -69,7 +69,7 @@ namespace Imlight.CoreLib.Game.Services;
 
 internal class CombatService(SessionActor sessionActor) : MessageService(sessionActor) {
 
-    private const uint NO_AGGRO_EFFECT_STRINGID = 1618528611;
+    private const uint NO_AGGRO_EFFECT_STRINGID = 1618528611; // StringHash("PostCombatEffect")
     // CLASSIC: [Classic] PostCombatGraceSeconds (default 5): how long after a duel monsters leave the wizard alone and
     // the wizard does not join fights by walking into them. The 2009 value is unsourced (GAP_ANALYSIS C9).
     private static readonly uint NO_AGGRO_EFFECT_DURATION_IN_SECONDS = GraceSeconds();
@@ -766,9 +766,16 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
         }
     }
 
+    /// <summary>
+    /// CLASSIC: the post-combat grace: the client's "PostCombatEffect" (GameEffectData/WizardEffects.xml: category
+    /// PostCombat, AddTranslucentEffect / RemoveTranslucentEffect, public) makes the wizard translucent. The effect is
+    /// looked up by name, so it carries no override name (the old "NoAggro" override named no template, and the
+    /// client dropped the effect: no fade). It is public, so everyone in the zone sees the wizard fade, as retail did.
+    /// </summary>
     private void SetNoAggroGrace() {
         var wizard = GetActiveWizard();
         var charObjId = GetActiveGameObject().m_globalID;
+        RemoveNoAggroEffect(); // a second duel inside the grace: one effect at a time
         var effectInternalId = wizard.GameEffects.Count + 1;
 
         var epoch = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
@@ -778,22 +785,23 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
             m_effectNameID = NO_AGGRO_EFFECT_STRINGID,
             m_internalID = effectInternalId,
             m_endTime = (uint) endTime,
-            m_overrideName = "NoAggro"
         };
 
         wizard.GameEffects.Add(effect);
         wizard.IsInCombatGrace = true;
 
-        if (!_effectSerializer.Serialize(effect, PropertyFlags.Prop_Transmit, out var effectSerializedData)) {
+        // The client reads MSG_ADDEFFECT with Transmit | AuthorityTransmit (GameClient::MSG_AddEffect).
+        if (!_effectSerializer.Serialize(effect, PropertyFlags.Prop_Transmit | PropertyFlags.Prop_AuthorityTransmit,
+                out var effectSerializedData)) {
             Logger.Error("Failed to serialize effect {0}", Logger.Args(effect.m_effectNameID));
 
             return;
         }
 
-        SendToSocket(new GAME_5_PROTOCOL.MSG_ADDEFFECT() {
+        ZoneBroadcast(new GAME_5_PROTOCOL.MSG_ADDEFFECT() {
             GameObjectID = charObjId,
             EffectData = effectSerializedData
-        });
+        }, isSelfless: false);
     }
 
     private void RemoveNoAggroEffect() {
@@ -808,11 +816,11 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
         wizard.GameEffects.Remove(effect);
         wizard.IsInCombatGrace = false;
 
-        SendToSocket(new GAME_5_PROTOCOL.MSG_REMOVEEFFECT() {
+        ZoneBroadcast(new GAME_5_PROTOCOL.MSG_REMOVEEFFECT() {
             GameObjectID = charObjId,
             EffectNameID = effect.m_effectNameID,
             InternalID = effect.m_internalID,
-        });
+        }, isSelfless: false);
     }
 
 }

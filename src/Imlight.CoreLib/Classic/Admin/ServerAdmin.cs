@@ -113,10 +113,7 @@ public static class ServerAdmin {
                 continue;
             }
 
-            s_system.ActorSelection(player.ActorPath).Tell(new EXTENDEDBASE_2_PROTOCOL.MSG_SERVERMESSAGE {
-                Message = text,
-                Modal = (byte) (modal ? 1 : 0),
-            });
+            s_system.ActorSelection(player.ActorPath).Tell(ClassicChat.Notice(text, modal)); // chat line or popup
             sent++;
         }
 

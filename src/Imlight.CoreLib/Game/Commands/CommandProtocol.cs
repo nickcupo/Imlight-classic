@@ -115,11 +115,9 @@ internal abstract class CommandProtocol {
         }
     }
 
+    // CLASSIC: a reply is a chat line; only important ones (help pages) are a popup. Never a "!" alert.
     protected void InformSenderClient(string reason, bool isImportant = false)
-        => Context.SessionActor.Tell(new EXTENDEDBASE_2_PROTOCOL.MSG_SERVERMESSAGE {
-            Message = reason,
-            Modal = (byte) (isImportant ? 1 : 0)
-        });
+        => Context.SessionActor.Tell(Classic.ClassicChat.Notice(reason, isImportant));
 
     private void InitiateHandlers() {
         _hasInitiated = true;
