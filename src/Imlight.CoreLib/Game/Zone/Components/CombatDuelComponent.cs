@@ -1260,8 +1260,7 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
                 && CombatResolver.GetQueuedAction(caster) is null
                 && caster._combatDeck.TryEnchant(sourceIndex, targetIndex, out var consumedId)
                 && consumedId != 0 && caster._wizard is { } wizard) {
-                wizard.SpellbookBehavior.RemoveTreasureCard(consumedId);
-                WizardCollection.RemoveTreasureCard(wizard, consumedId);
+                // CLASSIC: only the deck's copy (it left the book when it went into the deck); see DoSpellCastConsequences.
                 var deckSlot = wizard.EquipmentBehavior.SlotList.FirstOrDefault(s => s.SlotType == EquipmentSlotType.Deck);
                 if (deckSlot?.ItemId is { } deckId) {
                     wizard.RemoveSpellFromDeck(consumedId, deckId);

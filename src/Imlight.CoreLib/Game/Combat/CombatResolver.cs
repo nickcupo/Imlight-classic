@@ -568,9 +568,8 @@ public class CombatResolver(Duel duel, CombatDuelSubCircle[] actorSubCircles) {
         if (action.m_spell.m_treasureCard) {
             var consumedTemplateId = caster.ConsumeFromVault(action.m_spell);
             if (consumedTemplateId != 0 && caster._wizard != null) {
-                // Persist the removal from the player's treasure card book.
-                caster._wizard.SpellbookBehavior.RemoveTreasureCard(consumedTemplateId);
-                WizardCollection.RemoveTreasureCard(caster._wizard, consumedTemplateId);
+                // CLASSIC: the card came from the deck's Treasure Cards (the vault), which already left the book when the
+                // wizard put it in the deck (Wizard.AddTreasureCardToDeck). Taking a book copy as well spent two cards.
 
                 // Also remove from the equipped deck's spell list so it doesn't
                 // reappear when the player re-opens their deck after combat.

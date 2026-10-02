@@ -352,8 +352,8 @@ public sealed class OwnedMinionDuelTests : IDisposable {
 
     // CLASSIC: the Myth minion hand (Game/Zone/Components/CombatDuelComponent.MinionHand.cs).
 
-    private System.Collections.Concurrent.ConcurrentQueue<object> HandOn(MagicSchool school = MagicSchool.Myth) {
-        Settings(true, minionHand: true);
+    private System.Collections.Concurrent.ConcurrentQueue<object> HandOn(MagicSchool school = MagicSchool.Myth, int dealDelayMs = 0) {
+        Settings(true, minionHand: true, dealDelayMs: dealDelayMs);
         _owner._wizard.MagicSchoolBehavior.MagicSchool = school;
         var inbox = new System.Collections.Concurrent.ConcurrentQueue<object>();
         CombatRegressionTests.SetProperty(_owner, "ParticipantActor", _system.ActorOf(Props.Create(() => new Recorder(inbox))));
@@ -397,8 +397,10 @@ public sealed class OwnedMinionDuelTests : IDisposable {
         Assert.Single(sent.OfType<Imcodec.MessageLayer.Generated.DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_COMBATPIPS>());
         Assert.Single(sent.OfType<Imcodec.MessageLayer.Generated.DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_SHOWCOMBATUI>());
         Assert.Single(sent.OfType<Imcodec.MessageLayer.Generated.DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_SETPLANNINGPHASETIMER>());
-        Assert.Contains(sent.OfType<Imcodec.MessageLayer.Generated.EXTENDEDBASE_2_PROTOCOL.MSG_SERVERMESSAGE>(),
-            m => m.Message.ToString().Contains("minion", StringComparison.OrdinalIgnoreCase) || m.Message.ToString().Contains("spell for your"));
+        // The cue is the minion "speaking" to its wizard in chat, never a server message (a stacking "!" alert).
+        var cue = Assert.Single(sent.OfType<Imcodec.MessageLayer.Generated.GAME_5_PROTOCOL.MSG_RADIALCHAT>());
+        Assert.Equal(_minion.ParticipantObject.m_globalID.Full, (ulong) cue.SourceID);
+        Assert.Empty(sent.OfType<Imcodec.MessageLayer.Generated.EXTENDEDBASE_2_PROTOCOL.MSG_SERVERMESSAGE>());
         Assert.True(StageActive());
         Assert.False(_duel.HaveAllOwnedMinionOrders()); // the round waits for the minion's pick (or the timer)
     }
@@ -472,6 +474,42 @@ public sealed class OwnedMinionDuelTests : IDisposable {
     }
 
     [Fact]
+    public void TheMinionsHandIsDealtAfterABeatAndChangeInTheBeatIsTheWizardsOwn() {
+        var inbox = HandOn(dealDelayMs: 750);
+        OwnerMove(CombatMoveType.Pass);
+        Assert.Empty(Drain(inbox, 1).OfType<Imcodec.MessageLayer.Generated.DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_COMBATHAND>());
+        Assert.Equal(TimeSpan.FromMilliseconds(750), _timers.Delays.Last());
+        Assert.True(StageActive());                 // the round still waits for the minion
+        Assert.False(_duel.HaveAllOwnedMinionOrders());
+
+        // A stale ticket does nothing; the current one deals the hand and the minion's cue.
+        CombatRegressionTests.Invoke(_duel, "ReceiveMinionHandDeal", new MSG_MINIONHANDDEAL { Owner = _owner.ParticipantObject, Ticket = -1 });
+        Assert.Empty(Drain(inbox, 1).OfType<Imcodec.MessageLayer.Generated.DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_COMBATHAND>());
+        CombatRegressionTests.Invoke(_duel, "ReceiveMinionHandDeal", new MSG_MINIONHANDDEAL { Owner = _owner.ParticipantObject, Ticket = Ticket() });
+        var dealt = Drain(inbox, 5);
+        Assert.Single(dealt.OfType<Imcodec.MessageLayer.Generated.DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_COMBATHAND>());
+        Assert.Single(dealt.OfType<Imcodec.MessageLayer.Generated.GAME_5_PROTOCOL.MSG_RADIALCHAT>());
+
+        // A second round: "Change" during the beat re-picks the wizard's own card, and no hand is dealt.
+        var ticketBefore = Ticket();
+        OwnerMove(CombatMoveType.Attack, card: 0, target: 0); // the minion's pick
+        Assert.False(StageActive());
+        OwnerMove(CombatMoveType.ChangeMind);              // reopens the minion's pick after a beat
+        Assert.True(StageActive());
+        Assert.NotEqual(ticketBefore, Ticket());
+        OwnerMove(CombatMoveType.ChangeMind);              // in the beat: the wizard's own change
+        Assert.False(StageActive());
+        CombatRegressionTests.Invoke(_duel, "ReceiveMinionHandDeal", new MSG_MINIONHANDDEAL { Owner = _owner.ParticipantObject, Ticket = Ticket() });
+        Assert.Empty(Drain(inbox, 1).OfType<Imcodec.MessageLayer.Generated.DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_COMBATHAND>());
+    }
+
+    private int Ticket() {
+        var stages = (System.Collections.IDictionary) typeof(CombatDuelComponent).GetField("_minionHandStages", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(_duel)!;
+        var stage = stages[_owner.ParticipantObject];
+        return stage is null ? 0 : (int) stage.GetType().GetField("PendingTicket", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(stage)!;
+    }
+
+    [Fact]
     public void ATreasureCardDrawWhileTheMinionsHandShowsIsRefused() {
         var inbox = HandOn();
         OwnerMove(CombatMoveType.Pass);
@@ -523,10 +561,10 @@ public sealed class OwnedMinionDuelTests : IDisposable {
         => typeof(CombatDuelComponent).GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(_duel, value);
     // CLASSIC: these tests cover owner orders sent from outside the card window (service 90, the Minion Helper),
     // so the in-client minion hand (on by default for Myth wizards) is off unless a test turns it on.
-    private static void Settings(bool enabled, bool minionHand = false) {
+    private static void Settings(bool enabled, bool minionHand = false, int dealDelayMs = 0) {
         var path = Path.GetTempFileName();
         try {
-            File.WriteAllText(path, $"[Logging]\nLogLevel=FATAL\nLogPath={Path.GetTempPath()}imlight-owned-minion-tests.log\n[Classic]\nOwnedMinionControl={enabled}\nMythMinionHand={minionHand}\n");
+            File.WriteAllText(path, $"[Logging]\nLogLevel=FATAL\nLogPath={Path.GetTempPath()}imlight-owned-minion-tests.log\n[Classic]\nOwnedMinionControl={enabled}\nMythMinionHand={minionHand}\nMythMinionHandDelayMs={dealDelayMs}\n");
             ConfigurationManager.Initialize(path);
         } finally { File.Delete(path); }
     }
