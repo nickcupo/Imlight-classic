@@ -70,6 +70,7 @@ public class GameServiceFactory : ServiceFactory {
         typeof(Imlight.CoreLib.Game.Monstrology.MonstrologyService),
         typeof(TrainService),
         typeof(PetService),
+        typeof(PetGameService), // CLASSIC: Pet Pavilion pet games and training.
         typeof(MinigameService),
         typeof(FriendsService),
         typeof(TutorialService),

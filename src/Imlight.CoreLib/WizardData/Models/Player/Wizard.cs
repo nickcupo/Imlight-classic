@@ -464,9 +464,19 @@ public class Wizard {
         // The pet factory owns the pet's behavior state, so this skips the template
         // re-initialization that AddItemToInventory does.
         pet = PetFactory.CreateHatchedPet(CharId, templateId);
+
+        return AddPetToInventory(pet);
+    }
+
+    /// <summary>
+    /// CLASSIC: adds a pet PetFactory made (bought, hatched or granted) without re-initializing its behaviors from the template.
+    /// </summary>
+    public bool AddPetToInventory(WizClientObjectItem pet) {
         if (pet is null) {
             return false;
         }
+
+        pet.m_characterId = (GID) CharId;
 
         if (!InventoryBehavior.AddItem(pet)) {
             Logger.Warning("Could not add pet {0} to player {1}'s inventory.",

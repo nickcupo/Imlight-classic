@@ -106,6 +106,14 @@ internal class ShopService(SessionActor sessionActor) : MessageService(sessionAc
         }
 
         var playerWizard = GetActiveWizard();
+
+        // CLASSIC: a pet snack (the Pet Pavilion's snack vendor) goes to the snack bag, not the backpack.
+        if (CoreObjectFactory.GetCoreTemplate(itemTemplateID) is PetSnackItemTemplate snackTemplate) {
+            BuySnack(playerWizard, snackTemplate);
+
+            return;
+        }
+
         var template = (WizItemTemplate) CoreObjectFactory.GetCoreTemplate(itemTemplateID);
 
         // CLASSIC: some vendors in open zones list a jewel; buying one follows the profile's jewels switch.
@@ -117,7 +125,10 @@ internal class ShopService(SessionActor sessionActor) : MessageService(sessionAc
             return;
         }
 
-        var item = (WizClientObjectItem) CoreObjectFactory.FinalizeCoreObject(itemTemplateID);
+        // CLASSIC: a pet from a vendor comes hatched, with its pet behaviors (level, stats, name), as PetFactory makes it.
+        var item = PetFactory.IsPetTemplate(itemTemplateID)
+            ? PetFactory.CreateHatchedPet(playerWizard.CharId, itemTemplateID)
+            : (WizClientObjectItem) CoreObjectFactory.FinalizeCoreObject(itemTemplateID);
         item.m_primaryColor = message.texture;
         item.m_secondaryColor = message.decal;
 
@@ -447,15 +458,60 @@ internal class ShopService(SessionActor sessionActor) : MessageService(sessionAc
         SendToSocket(shopDenyMsg);
     }
 
+    // CLASSIC: buys one pet snack into the snack bag (MSG_PETSNACKADD for a new stack, MSG_PETSNACKUPDATE for more).
+    private void BuySnack(Wizard wizard, PetSnackItemTemplate template) {
+        var cost = (int) template.m_baseCost;
+        if (wizard.GameStats.m_currentGold < cost) {
+            SendShopDenyMessage();
+
+            return;
+        }
+
+        var hadStack = wizard.PetSnackBehavior.GetSnack(template.m_templateID) is not null;
+        if (!wizard.AddSnack(template.m_templateID, out var snack)) {
+            SendShopDenyMessage();
+
+            return;
+        }
+
+        wizard.RemoveGold(cost);
+        var stack = wizard.PetSnackBehavior.GetSnack(template.m_templateID) ?? snack;
+        // As .mod addsnack does: a new stack is MSG_PETSNACKADD, and every buy ends with the stack's MSG_PETSNACKUPDATE.
+        if (!hadStack && s_snackSerializer.Serialize(stack, (PropertyFlags) 24, out var data)) {
+            SendToSocket(new PET_9_PROTOCOL.MSG_PETSNACKADD { GlobalID = wizard.GameObjectID, Data = data });
+        }
+
+        SendToSocket(new PET_9_PROTOCOL.MSG_PETSNACKUPDATE {
+            GlobalID = wizard.GameObjectID, ItemID = stack.m_globalID, Quantity = stack.m_quantity
+        });
+
+        SendToSocket(new WIZARD_12_PROTOCOL.MSG_UPDATEGOLD {
+            Gold = wizard.GameStats.m_currentGold, MaxGold = wizard.GameStats.m_baseGoldPouch
+        });
+        SendToSocket(new WIZARD_12_PROTOCOL.MSG_SHOPBUYCONFIRM());
+        Logger.Information("{0} bought pet snack {1} for {2} gold (stack {3}).",
+            Logger.Args(wizard.CharId, template.m_templateID, cost, stack.m_quantity));
+    }
+
+    private static readonly CoreObjectSerializer s_snackSerializer = new(behaviors: Imcodec.ObjectProperty.SerializerFlags.None);
+
     private void ProcessSuccessfulPurchase(Wizard playerWizard, WizClientObjectItem item, uint itemTemplateID, int goldCost) {
+        // CLASSIC: a pet keeps the behaviors PetFactory gave it and goes out with them (as .mod additem sends one).
+        var isPet = PetFactory.IsPetTemplate(itemTemplateID);
+
         // Serialize the item without behaviors.
-        if (!s_itemSerializer.Serialize(item, 1, out var serializedItemWithoutBehaviors)) {
+        if (!s_itemSerializer.Serialize(item, isPet ? (PropertyFlags) 24 : (PropertyFlags) 1, out var serializedItemWithoutBehaviors)) {
             Logger.Error("Failed to serialize item {0} for purchase", 
                 Logger.Args(item.m_globalID));
 
             return;
         }
-        playerWizard.AddItemToInventory(item);
+        if (isPet) {
+            playerWizard.AddPetToInventory(item);
+        }
+        else {
+            playerWizard.AddItemToInventory(item);
+        }
         playerWizard.RemoveGold(goldCost);
 
         // Inform the game client that a new item has been added to the player's inventory.
