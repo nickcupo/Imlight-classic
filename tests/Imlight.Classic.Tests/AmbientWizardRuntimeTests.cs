@@ -154,9 +154,29 @@ public sealed class AmbientWizardRuntimeTests {
         Assert.Equal(y, unchecked((short) move.LocationY * 4), 4f);
         Assert.Equal(z, unchecked((short) move.LocationZ * 4), 4f);
         var degrees = move.Direction * (360f / byte.MaxValue) * 1.035f;
-        var expected = ((yaw * 180f / MathF.PI) % 360f + 360f) % 360f;
+        var expected = AmbientWizards.ClientYaw(yaw) * 180f / MathF.PI;
         Assert.InRange(MathF.Abs(degrees - expected) % 360f, 0f, 3f);
         Assert.Equal((ushort) 3277, move.MobileID);
+    }
+
+    [Theory]
+    [InlineData(0f)]
+    [InlineData(1.2f)]
+    [InlineData(3.0f)]
+    [InlineData(5.9f)]
+    public void HeadingAndClientYawAreInverses(float heading) {
+        var back = AmbientWizards.Heading(AmbientWizards.ClientYaw(heading));
+        Assert.InRange(MathF.Abs(MathF.IEEERemainder(back - heading, 2 * MathF.PI)), 0f, 1e-4f);
+    }
+
+    [Fact]
+    public void ClientYawMatchesTheDuelSeatConversion() {
+        // CombatDuelComponent seats a duelist facing the circle's middle with 2pi - atan2(dy, dx) - 1.58.
+        var theta = MathF.Atan2(-300f, 120f);
+        var seat = 2 * MathF.PI - theta - 1.58f;
+        seat = seat < 0 ? seat + 2 * MathF.PI : seat % (2 * MathF.PI);
+
+        Assert.Equal(seat, AmbientWizards.ClientYaw(theta), 3);
     }
 
     [Fact]
