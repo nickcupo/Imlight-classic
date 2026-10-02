@@ -95,6 +95,11 @@ internal sealed partial class ZoneTriggerSupervisor {
             Messages = [new Imlight.CoreLib.Game.Zone.Components.DoorLightRefresh { Player = message.PlayerActor }],
         });
 
+        if (fires.Count > 0) { // CLASSIC: which triggers an event fires (the Temple of Storms puzzle evidence).
+            Logger.Debug("Zone {Zone} event {Event} for {Player} fires {Triggers}.", Logger.Args(Zone.ZonePath, message.EventName,
+                message.PlayerActor?.Path.Name, string.Join(", ", fires.Select(fire => (string) fire.Trigger.Trigger?.m_triggerName))));
+        }
+
         foreach (var fire in fires) {
             fire.Trigger.Actor.Forward(new ZONE_102_PROTOCOL.MSG_POSTEVENT {
                 EventName = message.EventName,

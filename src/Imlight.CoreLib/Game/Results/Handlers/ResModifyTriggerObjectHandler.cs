@@ -50,6 +50,16 @@ internal sealed class ResModifyTriggerObjectHandler : BaseResultHandler<ClassicR
                 Logger.Args(Result?.ObjectName));
             return false;
         }
+        // CLASSIC: the zone's state objects keep the new state for ReqState, and a state object that changed posts
+        // "<tag>.<state>.EnterState" (the Temple of Storms moons turning the suns off).
+        if (ZoneObjectStates.For(zone)?.Set(Result.ObjectName, Result.State) == true
+                && ZoneObjectStates.IsListened(zone, Result.ObjectName)) {
+            zone.Tell(new ZONE_102_PROTOCOL.MSG_POSTEVENT {
+                EventName = Imlight.Classic.Quests.ObjectStateRules.EnterStateEvent(Result.ObjectName, Result.State),
+                PlayerActor = context.GetPlayerRef(),
+                PlayerGameObject = context.GetPlayerObj(),
+            });
+        }
         zone.Tell(new ZONE_102_PROTOCOL.MSG_ZONEBROADCAST {
             Targets = ZoneBroadcastTarget.Objects,
             Messages = [new ZONE_102_PROTOCOL.MSG_MODIFYTRIGGEROBJECT {
