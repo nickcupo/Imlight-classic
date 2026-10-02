@@ -93,6 +93,22 @@ internal sealed class CombatCreatureDeckComponent : ZoneEntityComponent, ICompon
 
         // A creature with an empty deck (no usable client names and no SpiralDB deck) falls
         // back to the default spellbook so it can cast instead of passing every round.
+        // CLASSIC: before that, the client's generic deck for the creature's school and rank (Mdeck-<school>-R<n>), so
+        // summoned minions and Monstrology creatures cast their own school's spells instead of the same starter set.
+        if (Spells.Count == 0) {
+            var npc = allBehaviors.OfType<NPCBehaviorTemplate>().FirstOrDefault();
+            var school = (entity.Template as WizGameObjectTemplate)?.m_primarySchoolName.ToString();
+            if (string.IsNullOrEmpty(school)) {
+                school = npc?.m_schoolOfFocus.ToString();
+            }
+            var generic = CreatureSpellbookCollection.GetGenericCreatureSpellbook(school, npc?.m_nLevel ?? 1);
+            if (generic is not null) {
+                Logger.Debug("{0} has no deck of its own; using {1} ({2}, rank {3}).",
+                    Logger.Args((entity.Template as GameObjectTemplate)?.m_objectName.ToString(), generic.DeckName, school, npc?.m_nLevel ?? 1));
+                AddSpellbookSpells(generic);
+            }
+        }
+
         if (Spells.Count == 0) {
             Logger.Warning(
                 "{0} {1} has no usable spells from its client deck or SpiralDB deck, falling back to the default spellbook.",

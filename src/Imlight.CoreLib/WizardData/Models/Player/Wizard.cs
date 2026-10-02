@@ -199,6 +199,37 @@ public class Wizard {
         DynamodCollection.AddDynamodSet(DynamodSet);
     }
 
+    /// <summary>
+    /// CLASSIC: an ambient wizard (Classic/Ambient): built like a new character but never written to the database (no
+    /// DynamodSet row; WizardCollection ignores its character id). Its friends come from BuddyRelationshipCollection.
+    /// </summary>
+    internal static Wizard CreateAmbient(ulong charId, MagicSchool school, WizardCharacterBehavior avatar, uint nameIndices,
+                                         byte level, string zone) {
+        var wizard = new Wizard {
+            CharId = charId,
+            Zone = zone,
+            World = 1,
+            LastLoginTime = (uint) DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+            WizardAvatar = avatar,
+        };
+        wizard.InitializeDefaultEquipment();
+        wizard.InitializePlayerName(nameIndices);
+        wizard.InitializeMagicSchoolBehavior(school, level);
+        wizard.InitializeSpellbookBehavior();
+        wizard.InitializeMountOwnerBehavior();
+        wizard.InitializeWizardGameStats(school, level);
+        wizard.InitializeDefaultPetSnackBehavior();
+        wizard.InitializePetOwnerBehavior();
+        wizard.InitializeDefaultInventory();
+        wizard.InitializeAlchemyBehavior();
+        wizard.ObjectStateBehavior = new ServerObjectStateBehavior("PlayerMobileStates");
+        wizard.QuestBehavior = new ServerQuestBehavior();
+        wizard.FriendsBehavior = new ServerFriendBehavior();
+        wizard.DynamodSet = new DynamodSet(charId);
+
+        return wizard;
+    }
+
     public WizClientObject GetInitializedGameObject()
         => HasInitializedGameObject ? GameObject : null;
 
@@ -787,7 +818,17 @@ public class Wizard {
             return false;
         }
 
-        var spellList = deckBehavior.m_spellList ?? [];
+        var spellList = deckBehavior.m_spellList ??= [];
+        // CLASSIC: the stock client's own deck check (Classic/ClassicDeckRules.cs) for a deck in the backpack too.
+        if (Classic.ClassicDeckRules.DeckTemplateOf((uint) item.m_templateID) is { } deckTemplate) {
+            var refusal = Classic.ClassicDeckRules.CanAdd(deckTemplate, spellList, spellTemplateId,
+                id => CoreObjectFactory.GetCoreTemplate(id) as SpellTemplate);
+            if (refusal != Classic.DeckAddRefusal.None) {
+                Logger.Debug("Deck add of spell {0} to deck {1} refused: {2}.", Logger.Args(spellTemplateId, deckId, refusal.ToString()));
+                return false;
+            }
+        }
+
         var spellDeckData = spellList.FirstOrDefault(s => s.m_templateID == spellTemplateId);
         if (spellDeckData is null) {
             // It may not be included yet. We'll add another entry.

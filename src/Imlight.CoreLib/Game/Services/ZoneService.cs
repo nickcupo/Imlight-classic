@@ -811,7 +811,8 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
 
     private void DoZoneTransfer() {
         // Remove the player from their current zone. We're awaiting a reply so the zone can properly clean up
-        // before we continue on potentially a different thread.
+        // before we continue. CLASSIC: the reply comes back as a message (ZoneRemovedForTransfer) instead of blocking
+        // this actor and a pool thread on .Result for up to 8 s during every zone change.
         try {
             SessionActor.PublishDoorAttach(null);
             var removePlayerMsg = new ZONE_102_PROTOCOL.MSG_REMOVEPLAYER() {
@@ -821,13 +822,26 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
                 IsPlayerStillConnected = true,
                 MobileId = GetActiveGameObject().m_nMobileID
             };
-            _ = ZoneActor.Ask<ZONE_102_PROTOCOL.MSG_REMOVEPLAYERRSP>(removePlayerMsg, _zoneRemovalWaitTime).Result;
+            ZoneActor.Ask<ZONE_102_PROTOCOL.MSG_REMOVEPLAYERRSP>(removePlayerMsg, _zoneRemovalWaitTime)
+                .PipeTo(Self, success: _ => new ZoneRemovedForTransfer(true), failure: _ => new ZoneRemovedForTransfer(false));
+        }
+        catch {
+            Self.Tell(new ZoneRemovedForTransfer(false));
+        }
+    }
+
+    /// <summary>CLASSIC: the zone's answer to DoZoneTransfer's MSG_REMOVEPLAYER, or its timeout.</summary>
+    internal sealed record ZoneRemovedForTransfer(bool Removed);
+
+    [MessageHandler(typeof(ZoneRemovedForTransfer))]
+    private void ReceiveZoneRemovedForTransfer(ZoneRemovedForTransfer message) {
+        if (message.Removed) {
             _removedForTransfer = true; // CLASSIC
 
             // Remove the player from the online player collection.
             OnlinePlayerCollection.RemoveOnlinePlayer(SessionActor.SessionID);
         }
-        catch {
+        else {
             Logger.Warning("Zone removal timeout of {0} seconds exceeded.", Logger.Args(ZONE_REMOVAL_WAIT_TIME_IN_SECONDS));
         }
 

@@ -240,9 +240,7 @@ internal sealed class MinigameProcess : Process {
         var queryMsg = new CHARACTER_103_PROTOCOL.MSG_QUERYACTIVEWIZARD();
         try {
             var timeout = TimeSpan.FromMilliseconds(QUERY_WIZARD_TIMEOUT_IN_MS);
-            var response = Sender
-                .Ask<CHARACTER_103_PROTOCOL.MSG_CHARACTER>(queryMsg, timeout)
-                .Result;
+            var response = Imlight.CoreLib.Classic.PlayerQuery.Character(Sender, timeout); // CLASSIC: pushed wizard, else Ask
 
             return response.Wizard;
         }

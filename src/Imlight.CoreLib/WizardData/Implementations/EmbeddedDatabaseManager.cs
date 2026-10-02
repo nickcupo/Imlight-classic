@@ -39,6 +39,28 @@ public static class EmbeddedDatabaseManager {
     private static readonly long s_embeddedDatabaseTimeoutTime 
         = ConfigurationManager.Settings["Database.EmbeddedDatabaseTimeoutTime"].AsLong();
 
+    private static volatile bool s_shuttingDown;
+
+    /// <summary>
+    /// CLASSIC: stops the embedded database cleanly before the server exits (safe restarts), and keeps it stopped.
+    /// </summary>
+    public static void Shutdown(TimeSpan timeout) {
+        s_shuttingDown = true;
+        if (!IsRunning) {
+            return;
+        }
+
+        try {
+            var dispose = System.Threading.Tasks.Task.Run(() => EmbeddedServer.Instance.Dispose());
+            if (!dispose.Wait(timeout)) {
+                Logger.Warning("The embedded database did not stop within {0}.", Logger.Args(timeout));
+            }
+        }
+        catch (Exception ex) {
+            Logger.Warning("Stopping the embedded database failed: {0}", Logger.Args(ex.Message));
+        }
+    }
+
     public static void Start() {
         try {
             if (IsRunning) {
@@ -68,7 +90,14 @@ public static class EmbeddedDatabaseManager {
             EmbeddedServer.Instance.StartServer(serverOptions);
             IsRunning = true;
 
+            // CLASSIC: a shutdown (safe restart, systemctl stop) must not bring the database back as an orphan.
+            AppDomain.CurrentDomain.ProcessExit += (_, _) => s_shuttingDown = true;
+
             EmbeddedServer.Instance.ServerProcessExited += (sender, args) => {
+                if (s_shuttingDown) {
+                    return;
+                }
+
                 Logger.Error("Embedded database process exited unexpectedly. Restarting..");
                 
                 try {

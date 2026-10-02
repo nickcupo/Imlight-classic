@@ -33,6 +33,8 @@ internal sealed class MonstrologyService(SessionActor session) : MessageService(
         if (!Available || wizard == null || (message.GlobalID != wizard.CharId && message.GlobalID != wizard.GameObjectID)) return;
         SendProgression();
         var state = MonstrologyRepository.ForPlayers().Read(wizard.CharId);
+        Logger.Information("Monstrology tome: wizard {0} level {1}, {2} creatures with Animus",
+            Logger.Args(wizard.CharId.ToString(), state.Level.ToString(), state.Animus.Count.ToString()));
         SendToSocket(new WIZARD2_53_PROTOCOL.MSG_REQUESTMONSTERTOME {
             GlobalID = wizard.GameObjectID,
             MonsterData = new ByteString(MonstrologyTomeCodec.Encode(state.Animus))
@@ -42,13 +44,18 @@ internal sealed class MonstrologyService(SessionActor session) : MessageService(
     private void RequestCreate(WIZARD2_53_PROTOCOL.MSG_MONSTERMAGICREQUESTCREATE message) {
         var wizard = GetActiveWizard();
         if (!Available || wizard == null || (message.GlobalID != wizard.CharId && message.GlobalID != wizard.GameObjectID)) return;
-        if (!MonstrologyCreation.TryKind(message.RequestType, out var kind) || message.MobTemplate == 0) {
-            InformGameClient("Invalid Monstrology creation request.");
+        var validKind = MonstrologyCreation.TryKind(message.RequestType, out var kind);
+        // CLASSIC: every creation request and its result at Information level, so a wrong button mapping shows.
+        Logger.Information("Monstrology create: wizard {0} RequestType {1} ({2}) creature {3}",
+            Logger.Args(wizard.CharId.ToString(), message.RequestType.ToString(), validKind ? kind.ToString() : "invalid",
+                message.MobTemplate.ToString()));
+        if (!validKind || message.MobTemplate == 0) {
+            Quiet(wizard, "Invalid Monstrology creation request.");
             return;
         }
         var creature = CoreObjectFactory.GetCoreTemplate(message.MobTemplate);
         var metadata = creature?.m_behaviors?.OfType<MobMonsterMagicBehaviorTemplate>().SingleOrDefault();
-        if (metadata == null) { InformGameClient("This creature has no Monstrology recipe."); return; }
+        if (metadata == null) { Quiet(wizard, "This creature has no Monstrology recipe."); return; }
         var mob = MonstrologyMetadata.ReadMob(metadata);
         var collected = mob.CollectedTemplate != 0 ? mob.CollectedTemplate : message.MobTemplate;
         var cost = MonstrologyCreation.Cost(mob, kind);
@@ -60,18 +67,18 @@ internal sealed class MonstrologyService(SessionActor session) : MessageService(
             output = cost.KnownOutputTemplate;
             if (output == 0 || CoreObjectFactory.GetCoreTemplate(output) is not WizItemTemplate
                 || wizard.InventoryBehavior.IsFull) {
-                InformGameClient("House guest recipe or backpack capacity is unavailable."); return;
+                Quiet(wizard, "House guest recipe or backpack capacity is unavailable."); return;
             }
             guest = CoreObjectFactory.FinalizeCoreObject(output) as WizClientObjectItem;
-            if (guest == null || guest.m_globalID == 0) { InformGameClient("Invalid house guest output identity."); return; }
+            if (guest == null || guest.m_globalID == 0) { Quiet(wizard, "Invalid house guest output identity."); return; }
             CoreObjectFactory.InitializeCoreObjectBehaviors(guest, output);
             guest.m_characterId = wizard.CharId;
             if (!new CoreObjectSerializer(behaviors: Imcodec.ObjectProperty.SerializerFlags.None).Serialize(guest,24,out guestBytes)) {
-                InformGameClient("House guest delivery could not be serialized."); return;
+                Quiet(wizard, "House guest delivery could not be serialized."); return;
             }
         } else {
             if (!MonstrologyCardCatalog.TryResolve(collected, kind, out card)) {
-                InformGameClient("No matching installed Monstrology card is available."); return;
+                Quiet(wizard, "No matching installed Monstrology card is available."); return;
             }
             output = card.TemplateId;
         }
@@ -92,8 +99,15 @@ internal sealed class MonstrologyService(SessionActor session) : MessageService(
                     }
                 }));
         }
-        catch (Exception) { InformGameClient("Monstrology creation could not be committed. Refresh the tome before retrying."); return; }
-        if (result != MonstrologyResult.Applied) { InformGameClient("Monstrology creation refused: " + result); return; }
+        catch (Exception ex) {
+            Logger.Warning("Monstrology create: wizard {0} {1} creature {2} failed: {3}",
+                Logger.Args(wizard.CharId.ToString(), kind.ToString(), collected.ToString(), ex.Message));
+            Quiet(wizard, "Monstrology creation could not be committed. Refresh the tome before retrying."); return;
+        }
+        Logger.Information("Monstrology create: wizard {0} {1} creature {2} -> template {3}: {4} (Animus {5}, gold {6})",
+            Logger.Args(wizard.CharId.ToString(), kind.ToString(), collected.ToString(), output.ToString(), result.ToString(),
+                cost.Animus.ToString(), cost.Gold.ToString()));
+        if (result != MonstrologyResult.Applied) { Quiet(wizard, CreationFailureText(result)); return; }
         if (guest == null) {
             SendToSocket(new WIZARD_12_PROTOCOL.MSG_ADDTREASURESPELLTOBOOK {
                 SpellID = unchecked((int)Imcodec.Cryptography.StringHash.Compute(card.SpellName)), EnchantmentID = 0
@@ -103,7 +117,23 @@ internal sealed class MonstrologyService(SessionActor session) : MessageService(
         }
         SendToSocket(new WIZARD_12_PROTOCOL.MSG_UPDATEGOLD { Gold = gold, MaxGold = wizard.GameStats.m_baseGoldPouch });
         RequestTome(new WIZARD2_53_PROTOCOL.MSG_REQUESTMONSTERTOME { GlobalID = wizard.GameObjectID });
+        // CLASSIC: no extra message. The stock client's own feedback is the card arriving in the book
+        // (MSG_ADDTREASURESPELLTOBOOK), the gold and the refreshed tome; a server message would add a "!" alert.
     }
+
+    /// <summary>
+    /// CLASSIC: a refused creation goes to the log only. The stock tome shows nothing either (it greys out what the
+    /// wizard cannot afford), and MSG_SERVERMESSAGE would stack a "!" alert on the right of the screen.
+    /// </summary>
+    private static void Quiet(WizardData.Models.Player.Wizard wizard, string reason)
+        => Logger.Information("Monstrology create: wizard {0} refused: {1}", Logger.Args(wizard.CharId.ToString(), reason));
+
+    private static string CreationFailureText(MonstrologyResult result) => result switch {
+        MonstrologyResult.InsufficientAnimus => "Monstrology: not enough Animus for that.",
+        MonstrologyResult.InsufficientGold => "Monstrology: not enough gold for that.",
+        _ => "Monstrology creation refused: " + result,
+    };
+
     [MessageHandler(typeof(MonstrologyExtractionCommitted))]
     private void ExtractionCommitted(MonstrologyExtractionCommitted message) {
         var wizard = GetActiveWizard();
@@ -111,6 +141,8 @@ internal sealed class MonstrologyService(SessionActor session) : MessageService(
             || _announcedExtractions.Contains(message.OperationId)) return;
         var state = MonstrologyRepository.ForPlayers().Read(wizard.CharId);
         if (!state.Extractions.TryGetValue(message.OperationId, out var receipt)) return;
+        Logger.Information("Monstrology extraction: wizard {0} creature {1} +{2} Animus, +{3} XP",
+            Logger.Args(wizard.CharId.ToString(), receipt.Creature.ToString(), receipt.Animus.ToString(), receipt.Experience.ToString()));
         var bytes = MonstrologyContracts.EncodeEssence(wizard.GameObjectID, receipt);
         SendToSocket(new WIZARD2_53_PROTOCOL.MSG_UPDATECOLLECTEDESSENCES { EssenceData = new ByteString(bytes) });
         SendToSocket(new WIZARD2_53_PROTOCOL.MSG_DISPLAYCOLLECTEDESSENCES { EssenceData = new ByteString(bytes) });

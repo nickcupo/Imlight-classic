@@ -311,7 +311,7 @@ internal class ChatService(SessionActor sessionActor) : MessageService(sessionAc
         => Logger.Information("[{0}] {1}: {2}", Logger.Args(zoneName, name, message));
 
     private static void SaveChatLog(string message, CoreObject charObj, Wizard character) 
-        => ChatLogCollection.AddChatLog(new ChatLog() {
+        => ChatLogCollection.QueueChatLog(new ChatLog() { // CLASSIC: off the speaker's thread
             TimeStamp = DateTime.UtcNow,
             ZoneName = character.Zone,
             CharacterId = character.CharId,

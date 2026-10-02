@@ -34,9 +34,7 @@ internal sealed class ResLearnSpellHandler : BaseResultHandler<ResLearnSpell> {
         // Context does not ship with a wizard reference, so we need to query for it.
         var queryWizardMsg = new CHARACTER_103_PROTOCOL.MSG_QUERYACTIVEWIZARD();
         var queryTimeout = TimeSpan.FromSeconds(QUERY_WIZARD_TIMEOUT_SECONDS);
-        var queryResponse = context
-            .GetPlayerRef()
-            .Ask<CHARACTER_103_PROTOCOL.MSG_CHARACTER>(queryWizardMsg, queryTimeout).Result;
+        var queryResponse = Classic.PlayerQuery.Character(context.GetPlayerRef(), queryTimeout) /* CLASSIC: pushed wizard, else Ask */;
         if (queryResponse == null) {
             Logger.Error("ResLearnSpell handler failed to retrieve character data within {0} seconds.",
                 Logger.Args(QUERY_WIZARD_TIMEOUT_SECONDS));

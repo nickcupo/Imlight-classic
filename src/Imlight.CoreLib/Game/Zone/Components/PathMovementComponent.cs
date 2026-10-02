@@ -140,6 +140,9 @@ internal sealed class PathMovementComponent(ZoneEntity entity) : ZoneEntityCompo
 
     public void Stop() => Stopped = true;
 
+    // CLASSIC: a creature back from a duel it did not lose walks its path again (CombatCreatureAIComponent).
+    public void Resume() => Stopped = false;
+
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_PATHDETAILS))]
     private void ReceivePathDetails(ZONE_102_PROTOCOL.MSG_PATHDETAILS message) {
         _receivedPathDetails = true;

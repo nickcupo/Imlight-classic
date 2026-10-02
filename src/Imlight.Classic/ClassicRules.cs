@@ -358,7 +358,15 @@ public sealed class ClassicRules {
     /// <returns>True if the feature is enabled.</returns>
     /// <exception cref="ArgumentException">The path is not a known feature path.</exception>
     public bool IsFeatureEnabled(string featurePath)
-        => Profile.Features.IsEnabled(featurePath);
+        => Profile.Features.IsEnabled(featurePath) || OwnerExtraFeatures().Contains(featurePath);
+
+    /// <summary>
+    /// CLASSIC: features the owner turned on beyond the profile's era ([Classic] switches such as PetPavilion), read on
+    /// every check so a dashboard change applies at once. Empty by default.
+    /// </summary>
+    public Func<IReadOnlySet<string>> OwnerExtraFeatures { get; set; } = () => EmptyFeatures;
+
+    private static readonly IReadOnlySet<string> EmptyFeatures = new HashSet<string>();
 
     private string? FallbackHubKey() {
         if (Zones.FindWorld(Zones.FallbackWorldId) is { HubKey: { } fallbackKey } fallback && Profile.AllowsWorld(fallback.Id)) {

@@ -112,6 +112,9 @@ internal static class Program {
         );
         Logger.Information("Imlight configuration loaded.");
 
+        // CLASSIC: thread pool headroom for handlers that still block (see ClassicStartup.ConfigureThreadPool).
+        ClassicStartup.ConfigureThreadPool();
+
         // CLASSIC: the rules profile loads before any resource or server reads it; a broken profile stops the boot.
         if (!ClassicStartup.Initialize()) {
             Environment.ExitCode = 1;
@@ -131,6 +134,8 @@ internal static class Program {
         }
         Logger.Information("Akka.NET system created.");
         s_imlightSystem = system;
+        // CLASSIC: optional PERF log lines (handler times, mailbox waits, starvation, GC).
+        ClassicStartup.StartPerfMonitor(system);
 
         // =============================================================
         // RESOURCES
@@ -163,6 +168,10 @@ internal static class Program {
         CreateEmbeddedDatabaseAccounts();
 
         OnlinePlayerCollection.Clear();
+
+        // CLASSIC: broadcasts, safe restarts and the admin dashboard ([Classic] AdminDashboardPort).
+        Imlight.CoreLib.Classic.Admin.ServerAdmin.Initialize(s_imlightSystem);
+        Imlight.CoreLib.Classic.Admin.AdminDashboard.Start();
 
         // Keep program busy with a while loop.
         Logger.Information("Imlight may now be connected to.");

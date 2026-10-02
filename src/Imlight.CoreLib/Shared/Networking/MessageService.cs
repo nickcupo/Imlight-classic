@@ -67,6 +67,10 @@ internal abstract class MessageService(SessionActor sessionActor) : ReceiveProto
     private Wizard _cachedWizard;
     private CoreObject _cachedWizardGameObject;
 
+    // CLASSIC: tell the session who we are as soon as we exist, instead of the session blocking on an identity Ask per
+    // service while it builds a connection (logins and every zone change).
+    protected override void OnDispatcherConstructed() => SessionActor?.RegisterService(Self, this);
+
     /// <summary>
     /// Sends a message directly to the socket.
     /// </summary>
@@ -223,6 +227,12 @@ internal abstract class MessageService(SessionActor sessionActor) : ReceiveProto
             return;
         }
 
+        // CLASSIC: the WizardService pushes both to the directory; ask it (blocking) only before it has.
+        if (Classic.ActiveWizardDirectory.TryGet(SessionActor?.ActorRef, out var wizard, out var gameObject) && gameObject is not null) {
+            (_cachedWizard, _cachedWizardGameObject) = (wizard, gameObject);
+            return;
+        }
+
         var msg = new CHARACTER_103_PROTOCOL.MSG_QUERYACTIVEWIZARD();
         var response = AskOtherService<CHARACTER_103_PROTOCOL.MSG_CHARACTER>(msg);
         _cachedWizard = response.Wizard;
@@ -345,11 +355,9 @@ internal abstract class MessageService(SessionActor sessionActor) : ReceiveProto
     /// </summary>
     /// <param name="reason">The reason for the message.</param>
     /// <param name="isImportant">Specifies whether the message is important or not. Default is false.</param>
+    // CLASSIC: a chat line unless important (a popup); the client makes every other server message a "!" alert.
     protected void InformGameClient(string reason, bool isImportant = false)
-        => SessionActor.ActorRef.Tell(new EXTENDEDBASE_2_PROTOCOL.MSG_SERVERMESSAGE {
-            Message = reason,
-            Modal = (byte) (isImportant ? 1 : 0)
-        });
+        => SessionActor.ActorRef.Tell(Classic.ClassicChat.Notice(reason, isImportant));
 
     protected override void PreRestart(Exception reason, object message) {
         Logger.Error("MessageService {ServiceName} restarting due to {Reason}",

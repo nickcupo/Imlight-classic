@@ -94,6 +94,11 @@ public class GameServer : Server {
 
         LoadResources();
 
+        // CLASSIC: the port the Mac Minion Helper connects to ([Classic] MinionHelperPort).
+        Classic.MinionHelper.MinionHelperListener.StartOnce();
+        // CLASSIC: server-side ambient wizards ([Classic] AmbientWizards; off by setting it to off).
+        Classic.Ambient.AmbientDirector.StartIfEnabled(Context, Self);
+
         // Log
         Logger.Information("Game server created with name {Name} under port {Port}.",
             Logger.Args(serverName, serverPort));
@@ -290,6 +295,13 @@ public class GameServer : Server {
     private void LoadResources() {
         // Load SpiralDB — the in-memory world database from JSON files.
         SpiralDB.Load();
+
+        // CLASSIC: the holiday events stock their vendors in SpiralDB and set its registry entries.
+        if (Imlight.Classic.ClassicRuntime.IsActive) {
+            Classic.ClassicHolidays.Initialize(Classic.ClassicStartup.ClassicDataRoot, Imlight.Classic.ClassicRuntime.Rules.Profile.Id);
+            Classic.ClassicPvp.Initialize(Classic.ClassicStartup.ClassicDataRoot, Imlight.Classic.ClassicRuntime.Rules.Profile.Id);
+            Classic.ClassicBazaar.Initialize(Classic.ClassicStartup.ClassicDataRoot, Imlight.Classic.ClassicRuntime.Rules.Profile.Id);
+        }
     }
 
     private void ActiveSessionsChangedEvent(object obj, NotifyCollectionChangedEventArgs args) {

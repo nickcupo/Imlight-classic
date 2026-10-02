@@ -22,6 +22,7 @@ using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
 using Imlight.CoreLib.Shared.Packets;
+using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.WizardData.Models.Player;
 
 namespace Imlight.CoreLib.Game.Results.Handlers;
@@ -38,9 +39,7 @@ internal sealed class ResAddManaHandler : BaseResultHandler<ResAddMana> {
         // Context does not ship with a wizard reference, so we need to query for it.
         var queryWizardMsg = new CHARACTER_103_PROTOCOL.MSG_QUERYACTIVEWIZARD();
         var queryTimeout = TimeSpan.FromSeconds(QUERY_WIZARD_TIMEOUT_SECONDS);
-        var queryResponse = context
-            .GetPlayerRef()
-            .Ask<CHARACTER_103_PROTOCOL.MSG_CHARACTER>(queryWizardMsg, queryTimeout).Result;
+        var queryResponse = PlayerQuery.Character(context.GetPlayerRef(), queryTimeout) /* CLASSIC: pushed wizard, else Ask */;
         if (queryResponse?.Wizard is not Wizard wizard) {
             Logger.Error("Handler failed to retrieve character data within {0} seconds.",
                 Logger.Args(QUERY_WIZARD_TIMEOUT_SECONDS));

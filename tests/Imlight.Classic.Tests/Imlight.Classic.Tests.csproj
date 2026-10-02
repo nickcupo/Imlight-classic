@@ -23,6 +23,7 @@
     <ServerIntegrationTest Include="ClassicMinionOwnershipTests.cs" />
     <ServerIntegrationTest Include="OwnedMinionControlTests.cs" />
     <ServerIntegrationTest Include="OwnedMinionDuelTests.cs" />
+    <ServerIntegrationTest Include="MinionHelperTests.cs" />
     <ServerIntegrationTest Include="MonstrologyConcurrencyTests.cs" />
     <ServerIntegrationTest Include="ClassicDialogCameraTests.cs" />
     <ServerIntegrationTest Include="ClassicLaterObjectsTests.cs" />
@@ -37,6 +38,7 @@
     <ServerIntegrationTest Include="MonstrologyPendingExtractionTests.cs" />
     <ServerIntegrationTest Include="MonstrologySessionPolicyTests.cs" />
     <ServerIntegrationTest Include="MonstrologyCastGuardTests.cs" />
+    <ServerIntegrationTest Include="MonstrologyRewardsTests.cs" />
     <ServerIntegrationTest Include="ClassicMinionAITargetTests.cs" />
     <ServerIntegrationTest Include="CraftingProtocolEvidenceTests.cs" />
     <ServerIntegrationTest Include="ClassicUtilityCombatTests.cs" />
@@ -51,6 +53,10 @@
     <ServerIntegrationTest Include="LegacyDoorRuntimeTests.cs" />
     <ServerIntegrationTest Include="LegacyDoorOrderingTests.cs" />
     <ServerIntegrationTest Include="ZoneMarkerLifecycleTests.cs" />
+    <ServerIntegrationTest Include="CombatRejoinTests.cs" />
+    <ServerIntegrationTest Include="ServerAdminTests.cs" />
+    <ServerIntegrationTest Include="PerfMonitorTests.cs" />
+    <ServerIntegrationTest Include="AmbientWizardRuntimeTests.cs" />
   </ItemGroup>
   <PropertyGroup>
     <_TypeInputPath>$(MSBuildThisFileDirectory)../../submodule/Imcodec/src/Imcodec.ObjectProperty/GeneratorInput</_TypeInputPath>

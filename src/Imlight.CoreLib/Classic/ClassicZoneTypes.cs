@@ -216,6 +216,7 @@ public sealed class ClassicZoneTypeRegistry : TypeRegistry {
     private readonly ClientGeneratedTypeRegistry _client = new();
     private readonly Dictionary<uint, Type> _extra = new() {
         [ClassicReqMonsterKilled.CLASS_HASH] = typeof(ClassicReqMonsterKilled),
+        [Imlight.Classic.Quests.ReqStateIds.ClassHash] = typeof(ClassicReqState), // CLASSIC: the object-state check (ClassicReqState.cs).
         // The zone-trigger results that play cinematics (Classic/Cinematics/ClassicCinematicResults.cs).
         [16312488] = typeof(ClassicResPlayCinematic),
         [82637767] = typeof(ClassicResCinematic),

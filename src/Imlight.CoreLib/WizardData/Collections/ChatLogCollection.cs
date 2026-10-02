@@ -44,5 +44,44 @@ public static class ChatLogCollection {
 
         session.SaveChanges();
     }
-    
+
+    // CLASSIC: chat logs written off the speaker's thread, in order, by one background writer (a Say used to wait for
+    // the database write before reaching anyone). Logs still queued when the server stops are lost.
+    private static readonly System.Threading.Channels.Channel<ChatLog> s_pending =
+        System.Threading.Channels.Channel.CreateUnbounded<ChatLog>(new() { SingleReader = true });
+    private static readonly System.Threading.Tasks.Task s_writer = System.Threading.Tasks.Task.Run(WriteQueuedAsync);
+
+    /// <summary>
+    /// CLASSIC: queues a chat log for the background writer; returns at once.
+    /// </summary>
+    /// <param name="chatLog">The chat log to add.</param>
+    public static void QueueChatLog(ChatLog chatLog) {
+        _ = s_writer;
+        s_pending.Writer.TryWrite(chatLog);
+    }
+
+    private static async System.Threading.Tasks.Task WriteQueuedAsync() {
+        var batch = new System.Collections.Generic.List<ChatLog>();
+        while (await s_pending.Reader.WaitToReadAsync()) {
+            batch.Clear();
+            while (batch.Count < 64 && s_pending.Reader.TryRead(out var log)) {
+                batch.Add(log);
+            }
+
+            try {
+                using var session = s_store.OpenAsyncSession();
+                foreach (var log in batch) {
+                    await session.StoreAsync(log);
+                    session.Advanced.GetMetadataFor(log)[Raven.Client.Constants.Documents.Metadata.Collection] = CollectionName;
+                }
+
+                await session.SaveChangesAsync();
+            }
+            catch (System.Exception ex) {
+                Imlight.Common.Logger.Error("Chat log write of {Count} line(s) failed: {Error}",
+                    Imlight.Common.Logger.Args(batch.Count, ex.Message));
+            }
+        }
+    }
+
 }

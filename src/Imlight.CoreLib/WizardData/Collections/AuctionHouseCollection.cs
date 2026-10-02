@@ -32,6 +32,12 @@ internal class AuctionHouseCollection {
     private static bool s_isInitialized;
     private static List<AuctionHouseEntry> s_entries;
 
+    /// <summary>
+    /// CLASSIC: one lock for the Bazaar's stock. Every player's session actor and the server's restock timer change the
+    /// same entries; a buy or sale holds it from reading the entry to saving it.
+    /// </summary>
+    internal static readonly object Lock = new();
+
     static AuctionHouseCollection() {
         s_store = PlayerDatabase.Instance.Store;
     }
@@ -41,6 +47,12 @@ internal class AuctionHouseCollection {
     /// </summary>
     /// <returns>A list of all available Auction House entries, or null if none found.</returns>
     public static List<AuctionHouseEntry> GetAllAuctionHouseEntries() {
+        lock (Lock) {
+            return [.. GetAllAuctionHouseEntriesUnlocked()]; // a snapshot: others may change the stock meanwhile
+        }
+    }
+
+    private static List<AuctionHouseEntry> GetAllAuctionHouseEntriesUnlocked() {
         if (s_isInitialized) {
             return s_entries;
         }
@@ -65,8 +77,14 @@ internal class AuctionHouseCollection {
     /// <param name="templateID">The template ID of an object.</param>
     /// <returns>The Auction House entry, or null if not found.</returns>
     public static AuctionHouseEntry GetAuctionHouseEntry(ulong templateID) {
+        lock (Lock) {
+            return GetAuctionHouseEntryUnlocked(templateID);
+        }
+    }
+
+    private static AuctionHouseEntry GetAuctionHouseEntryUnlocked(ulong templateID) {
         if (!s_isInitialized) {
-            GetAllAuctionHouseEntries();
+            GetAllAuctionHouseEntriesUnlocked();
         }
 
         if (s_entries is null) {
@@ -83,8 +101,14 @@ internal class AuctionHouseCollection {
     /// </summary>
     /// <param name="entry">The Auction House entry to add.</param>
     public static void AddAuctionHouseEntry(AuctionHouseEntry entry) {
+        lock (Lock) {
+            AddAuctionHouseEntryUnlocked(entry);
+        }
+    }
+
+    private static void AddAuctionHouseEntryUnlocked(AuctionHouseEntry entry) {
         if (!s_isInitialized) {
-            GetAllAuctionHouseEntries();
+            GetAllAuctionHouseEntriesUnlocked();
         }
 
         using var session = s_store.OpenSession();
@@ -105,8 +129,14 @@ internal class AuctionHouseCollection {
     /// <param name="templateID">The template ID of the object to remove the entry for.</param>
     /// <returns>True if the Auction House entry was successfully removed, false otherwise.</returns>
     public static bool RemoveAuctionHouseEntry(ulong templateID) {
+        lock (Lock) {
+            return RemoveAuctionHouseEntryUnlocked(templateID);
+        }
+    }
+
+    private static bool RemoveAuctionHouseEntryUnlocked(ulong templateID) {
         if (!s_isInitialized) {
-            GetAllAuctionHouseEntries();
+            GetAllAuctionHouseEntriesUnlocked();
         }
 
         using var session = s_store.OpenSession();
@@ -130,19 +160,77 @@ internal class AuctionHouseCollection {
     /// <param name="entry">The new Auction House entry to update with.</param>
     /// <returns>True if the Auction House entry was updated, false if the entry could not be found.</returns>
     public static bool UpdateAuctionHouseEntry(AuctionHouseEntry entry) {
+        lock (Lock) {
+            return UpdateAuctionHouseEntryUnlocked(entry);
+        }
+    }
+
+    private static bool UpdateAuctionHouseEntryUnlocked(AuctionHouseEntry entry) {
         if (!s_isInitialized) {
-            GetAllAuctionHouseEntries();
+            GetAllAuctionHouseEntriesUnlocked();
         }
 
-        var removeSuccess = RemoveAuctionHouseEntry(entry.m_templateID);
+        var removeSuccess = RemoveAuctionHouseEntryUnlocked(entry.m_templateID);
 
         if (!removeSuccess) {
             return false;
         }
 
-        AddAuctionHouseEntry(entry);
+        AddAuctionHouseEntryUnlocked(entry);
 
         return true;
+    }
+
+    /// <summary>
+    /// CLASSIC: applies a whole restock in one database session: entries to add or update by template, and templates to
+    /// remove. The caller holds <see cref="Lock"/>.
+    /// </summary>
+    internal static void ApplyStockChanges(IReadOnlyCollection<AuctionHouseEntry> upserts, IReadOnlyCollection<ulong> removals) {
+        GetAllAuctionHouseEntriesUnlocked();
+        using var session = s_store.OpenSession();
+        var stored = session.Query<AuctionHouseEntry>(collectionName: CollectionName).Take(int.MaxValue).ToList();
+        var byTemplate = stored.GroupBy(entry => entry.m_templateID.Full).ToDictionary(group => group.Key, group => group.ToList());
+
+        foreach (var template in removals) {
+            if (byTemplate.Remove(template, out var docs)) {
+                docs.ForEach(session.Delete);
+            }
+
+            s_entries.RemoveAll(entry => entry.m_templateID.Full == template);
+        }
+
+        foreach (var entry in upserts) {
+            var template = entry.m_templateID.Full;
+            if (byTemplate.TryGetValue(template, out var docs) && docs.Count > 0) {
+                docs[0].m_numForSale = entry.m_numForSale;
+                docs[0].m_buyPrice = entry.m_buyPrice;
+                docs[0].m_sellPrice = entry.m_sellPrice;
+                docs.Skip(1).ToList().ForEach(session.Delete);
+            }
+            else {
+                var copy = new AuctionHouseEntry {
+                    m_templateID = entry.m_templateID,
+                    m_numForSale = entry.m_numForSale,
+                    m_buyPrice = entry.m_buyPrice,
+                    m_sellPrice = entry.m_sellPrice,
+                };
+                session.Store(copy);
+                session.Advanced.GetMetadataFor(copy)[Raven.Client.Constants.Documents.Metadata.Collection] = CollectionName;
+            }
+
+            var cached = s_entries.FirstOrDefault(x => x.m_templateID.Full == template);
+            if (cached is null) {
+                s_entries.Add(entry);
+            }
+            else {
+                cached.m_numForSale = entry.m_numForSale;
+                cached.m_buyPrice = entry.m_buyPrice;
+                cached.m_sellPrice = entry.m_sellPrice;
+            }
+        }
+
+        session.Advanced.MaxNumberOfRequestsPerSession = int.MaxValue;
+        session.SaveChanges();
     }
 
 }
