@@ -203,10 +203,15 @@ internal sealed partial class CombatDuelComponent {
     /// <summary>After the wizard's own move: deal the first minion's hand, if the wizard has one to choose for.</summary>
     private void MaybeBeginMinionHand(CombatDuelSubCircle owner, byte moveType) {
         if (!MythMinionHandSettings.Enabled || _tutorialDirector.IsActive || owner.IsSummonedMinion
-            || moveType is not ((byte) CombatMoveType.Attack or (byte) CombatMoveType.Pass)
-            || Duel?.m_duelPhase != kDuelPhase.kPhase_Planning || !IsMythOwner(owner) || !owner.IsAlive
+            || moveType is not ((byte) CombatMoveType.Attack or (byte) CombatMoveType.Pass)) return;
+        if (Duel?.m_duelPhase != kDuelPhase.kPhase_Planning || !IsMythOwner(owner) || !owner.IsAlive
             || !_ownedMinionControl.IsOptedIn(owner.ParticipantObject)
-            || CombatResolver.GetQueuedAction(owner) is null) return;
+            || CombatResolver.GetQueuedAction(owner) is null) {
+            Logger.Debug("Duel {0} | Slot {1} | no minion hand: phase {2}, Myth owner {3}, alive {4}, opted in {5}, queued {6}",
+                Logger.Args(Duel?.m_duelID.Full, owner.SlotIndex, Duel?.m_duelPhase.ToString(), IsMythOwner(owner), owner.IsAlive,
+                    _ownedMinionControl.IsOptedIn(owner.ParticipantObject), CombatResolver.GetQueuedAction(owner) is not null));
+            return;
+        }
         if (!_minionHandStages.TryGetValue(owner.ParticipantObject, out var stage)) {
             stage = new MinionHandStage();
             _minionHandStages[owner.ParticipantObject] = stage;
