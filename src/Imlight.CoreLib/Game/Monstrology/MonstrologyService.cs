@@ -37,7 +37,7 @@ internal sealed class MonstrologyService(SessionActor session) : MessageService(
             Logger.Args(wizard.CharId.ToString(), state.Level.ToString(), state.Animus.Count.ToString()));
         SendToSocket(new WIZARD2_53_PROTOCOL.MSG_REQUESTMONSTERTOME {
             GlobalID = wizard.GameObjectID,
-            MonsterData = new ByteString(MonstrologyTomeCodec.Encode(state.Animus))
+            MonsterData = new ByteString(MonstrologyTomeCodec.Encode(Arc1Only(state.Animus)))
         }); // Never echo incoming MonsterData; authoritative raw binary only.
     }
     [MessageHandler(typeof(WIZARD2_53_PROTOCOL.MSG_MONSTERMAGICREQUESTCREATE))]
@@ -120,6 +120,11 @@ internal sealed class MonstrologyService(SessionActor session) : MessageService(
         // CLASSIC: no extra message. The stock client's own feedback is the card arriving in the book
         // (MSG_ADDTREASURESPELLTOBOOK), the gold and the refreshed tome; a server message would add a "!" alert.
     }
+
+    // CLASSIC: the tome shows Arc 1 creatures only (owner ruling 2026-10-02); Animus a wizard already holds for a later
+    // world's creature (the earlier QA max-out) stays in the ledger, unseen and unusable.
+    private static Dictionary<uint, int> Arc1Only(Dictionary<uint, int> animus)
+        => animus.Where(pair => MonstrologyCardCatalog.IsArc1Creature(pair.Key)).ToDictionary(pair => pair.Key, pair => pair.Value);
 
     /// <summary>
     /// CLASSIC: a refused creation goes to the log only. The stock tome shows nothing either (it greys out what the

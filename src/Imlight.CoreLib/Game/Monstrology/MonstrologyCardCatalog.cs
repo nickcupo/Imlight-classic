@@ -32,8 +32,35 @@ internal static class MonstrologyCardCatalog {
         foreach (var key in ambiguous) result.Remove(key); // Never select an arbitrary duplicate output.
         return result;
     }
-    /// <summary>Every creature the installed Monstrology cards name (QA: the max-out command).</summary>
-    internal static IEnumerable<uint> Creatures => Cards.Value.Keys.Select(key => key.Item1).Distinct();
-    internal static bool TryResolve(uint creature, MonstrologyCreationKind kind, out MonstrologyCard card)
-        => Cards.Value.TryGetValue((creature, kind), out card);
+    /// <summary>Every Arc 1 creature the installed Monstrology cards name (QA: the max-out command).</summary>
+    internal static IEnumerable<uint> Creatures => Cards.Value.Keys.Select(key => key.Item1).Distinct().Where(IsArc1Creature);
+    internal static bool TryResolve(uint creature, MonstrologyCreationKind kind, out MonstrologyCard card) {
+        card = default!;
+        return IsArc1Creature(creature) && Cards.Value.TryGetValue((creature, kind), out card);
+    }
+
+    // CLASSIC (owner ruling 2026-10-02): Monstrology covers the Arc 1 worlds only. A creature counts when the client
+    // files its template under an Arc 1 world folder (ObjectData/WC, KT, MB, MS, DS, GH); later worlds and later
+    // events placed in Arc 1 zones (Community Event, Weaving, Gauntlet, SkeletonKeys...) are left out.
+    private static readonly HashSet<string> Arc1Folders = new(StringComparer.OrdinalIgnoreCase) {
+        "WC", "KT", "MB", "MS", "DS", "GH", "WizardCity", "Krokotopia", "Marleybone", "MooShu", "DragonSpire", "Grizzleheim",
+    };
+
+    private static readonly Lazy<Dictionary<uint, string>> TemplateFolders = new(() => {
+        var folders = new Dictionary<uint, string>();
+        foreach (var entry in CoreObjectFactory.TemplateManifest.m_serializedTemplates) {
+            folders[entry.m_id] = FolderOf(entry.m_filename);
+        }
+        return folders;
+    });
+
+    internal static string FolderOf(string path) {
+        var parts = (path ?? "").Split('/');
+        return parts.Length >= 3 && parts[0].Equals("ObjectData", StringComparison.OrdinalIgnoreCase) ? parts[1] : "";
+    }
+
+    internal static bool IsArc1Folder(string folder) => Arc1Folders.Contains(folder ?? "");
+
+    internal static bool IsArc1Creature(uint creature)
+        => TemplateFolders.Value.TryGetValue(creature, out var folder) && IsArc1Folder(folder);
 }
