@@ -253,7 +253,8 @@ internal static class MinionHelperListener {
     internal static int ConfiguredPort {
         get {
             // CLASSIC: the same port serves the client patches (/classic/...), so it stays on for them alone.
-            if (!EnhancedGameplaySettings.Enabled && ClientPatchFiles.ConfiguredRoot is null) return 0;
+            if (!EnhancedGameplaySettings.Enabled && ClientPatchFiles.ConfiguredRoot is null
+                && Launcher.LauncherPatchServer.ConfiguredPort == 0) return 0; // CLASSIC: also KingsIsle's launcher
             var value = ConfigurationManager.Settings["Classic.MinionHelperPort"].AsString();
             if (string.IsNullOrWhiteSpace(value)) return DefaultPort;
             return int.TryParse(value, out var port) && port is > 0 and < 65536 ? port : 0;
@@ -385,6 +386,12 @@ internal static class MinionHelperListener {
             return;
         }
 
+        // CLASSIC: KingsIsle's own launcher (Classic/Launcher): its news page, art and nothing-to-patch file list.
+        if (path.StartsWith("/launcher/", StringComparison.Ordinal)) {
+            await ServeLauncher(stream, path, headers);
+            return;
+        }
+
         if (!EnhancedGameplaySettings.Enabled) {
             await Respond(stream, "404 Not Found", "text/plain", "Not found"u8.ToArray());
             return;
@@ -458,6 +465,30 @@ internal static class MinionHelperListener {
         var body = Encoding.UTF8.GetString(buffer, bodyStart, length);
         var answer = await Task.Run(() => Launcher.LauncherLogin.Shared.Handle(body, address));
         await Respond(stream, "200 OK", "application/json", Encoding.UTF8.GetBytes(answer));
+    }
+
+    /// <summary>CLASSIC: what KingsIsle's own launcher fetches from us (LauncherPatchServer, LauncherNewsPage).</summary>
+    private static async Task ServeLauncher(NetworkStream stream, string path,
+                                            System.Collections.Generic.Dictionary<string, string> headers) {
+        if (path == "/launcher/" + Launcher.LauncherFileList.FileName) {
+            await Respond(stream, "200 OK", "application/octet-stream", Launcher.LauncherFileList.Bytes);
+        } else if (path is "/launcher/news" or "/launcher/news/") {
+            await Respond(stream, "200 OK", "text/html; charset=utf-8",
+                Encoding.UTF8.GetBytes(Launcher.LauncherNewsPage.Render(ClientPatchFiles.ConfiguredRoot)));
+        } else if (path.StartsWith(Launcher.LauncherNewsPage.ArtPrefix, StringComparison.Ordinal)) {
+            var root = ClientPatchFiles.ConfiguredRoot;
+            var manifest = root is null ? null : Path.Combine(root, "manifest.json");
+            var art = Launcher.LauncherNewsPage.ArtUrls(manifest is not null && File.Exists(manifest) ? await File.ReadAllTextAsync(manifest) : null);
+            var name = path[Launcher.LauncherNewsPage.ArtPrefix.Length..];
+            var file = art.TryGetValue(name, out var url) ? ClientPatchFiles.Resolve(root, url) : null;
+            if (file is null) await Respond(stream, "404 Not Found", "text/plain", "Not found"u8.ToArray());
+            else await Respond(stream, "200 OK", "image/png", await File.ReadAllBytesAsync(file));
+        } else if (path == "/launcher/blank") {
+            // Every other page the launcher may open (home, account, error, metrics, fail-safe check).
+            await Respond(stream, "200 OK", "text/html; charset=utf-8", "<html><body></body></html>"u8.ToArray());
+        } else {
+            await Respond(stream, "404 Not Found", "text/plain", "Not found"u8.ToArray());
+        }
     }
 
     /// <summary>CLASSIC: one published client-patch file, whole or from a byte offset (resumed downloads).</summary>
