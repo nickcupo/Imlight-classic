@@ -78,6 +78,11 @@ internal static class InteractableQuestEvents {
     private const string AmphitheatreTowers = "DragonSpire/DS_A3_Kings/Interiors/DS_Amphitheatre_T";
 
     private static readonly Dictionary<string, QuestEvent[]> s_questEventsByObject = new() {
+        // CLASSIC: Hallowe'en 2009's Jack O'Lanterns fire one event per street (Pumpkin.xml's InteractableBehavior; the three
+        // pumpkin templates share them); the Commons and the Shopping District both fire GetTreat.
+        ["HO_Pumpkin"] = PumpkinEvents(),
+        ["HO_Pumpkin02"] = PumpkinEvents(),
+        ["HO_Pumpkin03"] = PumpkinEvents(),
         ["MS_SoulChainForge"] = [new("forgeSoulChain")], // MS-DTH2-C02-001 goal 3, in the Village of Sorrow
         ["MS_AirShrine"] = [new("AirShrineUsed", "MooShu/MS_Plague/Interiors/MS_Plague2_T5")], // MS-PLAG2-C04-005 goal 2
         ["KT_MapRoomStaff"] = [new("UseStaff")], // KT-PYMHub-C01-005 goal 3, in the Throne Room of Fire
@@ -117,6 +122,26 @@ internal static class InteractableQuestEvents {
             new("GotObsidianChest9", "DragonSpire/DS_A2_Battle/Interiors/DS_Detention_T4"),
         ],
     };
+
+    private static QuestEvent[] PumpkinEvents() => [
+        new("GetTreat", "WizardCity/WC_Hub"), new("GetTreat", "WizardCity/WC_Shop_Area"),
+        new("FirecatPumpkin", "WizardCity/WC_Streets/WC_Firecat"), new("UnicornPumpkin", "WizardCity/WC_Streets/WC_Unicorn"),
+        new("TritonPumpkin", "WizardCity/WC_Streets/WC_Triton"), new("CyclopsPumpkin", "WizardCity/WC_Streets/WC_Cyclops"),
+    ];
+
+    // CLASSIC: the drop table an object's InteractableBehavior (InteractLoot) rolls for whoever uses it for a quest goal.
+    private static readonly Dictionary<string, string> s_useLootByObject = new() {
+        ["HO_Pumpkin"] = "HO-Gold-Pumpkins", ["HO_Pumpkin02"] = "HO-Gold-Pumpkins", ["HO_Pumpkin03"] = "HO-Gold-Pumpkins",
+        ["HO_AppleTub01"] = "HO-AppleTub-01", ["HO_AppleTub02"] = "HO-AppleTub-02",
+        ["HO_AppleTub03"] = "HO-AppleTub-03", ["HO_AppleTub04"] = "HO-AppleTub-04",
+    };
+
+    /// <summary>
+    /// CLASSIC: the drop table using the object rolls (Hallowe'en pumpkins give gold, apple tubs gold and an item), or null.
+    /// </summary>
+    /// <param name="objectTemplate">The used object's template.</param>
+    internal static string UseLootTable(GameObjectTemplate objectTemplate)
+        => objectTemplate?.m_objectName is not null && s_useLootByObject.TryGetValue(objectTemplate.m_objectName, out var table) ? table : null;
 
     // CLASSIC: zone spawners an object's use starts (its InteractableBehavior's ResSpawn), with the
     // requirements that branch of the behavior checks.

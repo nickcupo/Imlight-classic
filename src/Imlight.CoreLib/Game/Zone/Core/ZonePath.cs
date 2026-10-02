@@ -96,7 +96,7 @@ public sealed class ZonePath : ZoneEntity {
             var spawnObject = creatures[i];
             _creatureCount.Add(spawnObject, 0);
 
-            if (!spawnObject.m_active) {
+            if (!Imlight.CoreLib.Classic.ClassicQuestSpawns.RunsOnItsOwn(spawnObject)) { // CLASSIC: registry-gated spawners (Hallowe'en ghosts).
                 continue;
             }
 

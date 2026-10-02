@@ -218,6 +218,8 @@ internal sealed class InteractQuestSelectComponent(ZoneEntity entity)
             return;
         }
 
+        GrantUseLoot(playerActor, playerCharacter, playerObject); // CLASSIC: the object's InteractLoot.
+
         playerActor.Tell(new CHARACTER_103_PROTOCOL.MSG_COMPLETEUSAGEGOAL {
             QuestID = usage.Quest.ID,
             GoalID = usage.GoalProgress.ID,
@@ -236,6 +238,16 @@ internal sealed class InteractQuestSelectComponent(ZoneEntity entity)
         Entity.GetComponentOfType<RenderComponent>()?.HideCollectedForPlayer(playerActor);
         Timers?.StartSingleTimer(characterId, new ZONE_102_PROTOCOL.MSG_CLASSICCOLLECTRESPAWN { CharacterId = characterId },
             _collected.RespawnDelay);
+    }
+
+    // CLASSIC: Hallowe'en pumpkins and apple tubs roll a drop table for whoever uses them (InteractLoot).
+    private void GrantUseLoot(IActorRef playerActor, Wizard playerCharacter, CoreObject playerObject) {
+        if (Entity.Template is not GameObjectTemplate objectTemplate || InteractableQuestEvents.UseLootTable(objectTemplate) is not { } table) {
+            return;
+        }
+
+        var rolled = Imlight.CoreLib.Game.DropTables.DropTableRoller.Roll([table], playerActor, playerObject, playerCharacter);
+        Imlight.CoreLib.Game.DropTables.LootGranter.GrantAndDisplay(playerActor, playerCharacter, rolled);
     }
 
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_CLASSICCOLLECTRESPAWN))]
