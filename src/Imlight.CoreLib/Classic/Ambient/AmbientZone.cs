@@ -207,11 +207,11 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
         character.Zone = _zone;
         character.ZoneDisplayName = wizard.ZoneDisplayName;
         character.Location = wizard.Position;
-        character.Orientation = new Vector3(0, 0, wizard.Yaw);
+        character.Orientation = new Vector3(0, 0, AmbientWizards.ClientYaw(wizard.Yaw));
         var gameObject = WizardObjectLoader.GetPlayerGameObject(character);
         gameObject.m_nMobileID = rsp.MobileId;
         gameObject.m_location = wizard.Position;
-        gameObject.m_orientation = new Vector3(0, 0, wizard.Yaw);
+        gameObject.m_orientation = new Vector3(0, 0, AmbientWizards.ClientYaw(wizard.Yaw));
         character.GameObject = gameObject;
         character.IsInDuel = false;
         ActiveWizardDirectory.SetGameObject(wizard.Endpoint, gameObject);
@@ -260,7 +260,7 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
     private void SpawnFor(AmbientWizard wizard, IActorRef player) {
         var character = wizard.Wizard;
         character.Location = wizard.Position;
-        character.Orientation = new Vector3(0, 0, wizard.Yaw);
+        character.Orientation = new Vector3(0, 0, AmbientWizards.ClientYaw(wizard.Yaw));
         var gameObject = WizardObjectLoader.GetPlayerGameObject(character);
         var flags = PropertyFlags.Prop_Public | PropertyFlags.Prop_Transmit | PropertyFlags.Prop_AuthorityTransmit;
         if (!_serializer.Serialize(gameObject, flags, out var data)) {
@@ -368,6 +368,11 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
         if (distance <= Math.Max(step, Arrive)) {
             wizard.Position = target;
             wizard.Moving = false;
+            if (wizard.ArriveYaw is { } face) {
+                wizard.Yaw = face;
+                wizard.ArriveYaw = null;
+            }
+
             Arrived(wizard);
         }
         else {
@@ -376,7 +381,7 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
         }
 
         wizard.Wizard.Location = wizard.Position;
-        wizard.Wizard.Orientation = new Vector3(0, 0, wizard.Yaw);
+        wizard.Wizard.Orientation = new Vector3(0, 0, AmbientWizards.ClientYaw(wizard.Yaw));
         batch.Add(Move(wizard));
         if (!wizard.Moving) {
             batch.Add(new GAME_5_PROTOCOL.MSG_MOVESTATE { GlobalID = wizard.Wizard.GameObjectID, NewState = 0 });
@@ -385,7 +390,7 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
 
     /// <summary>MSG_SERVERMOVE as MoveService relays a client's move: position over 4, yaw as a packed byte.</summary>
     internal static GAME_5_PROTOCOL.MSG_SERVERMOVE Move(AmbientWizard wizard) {
-        var degrees = wizard.Yaw * 180f / MathF.PI;
+        var degrees = AmbientWizards.ClientYaw(wizard.Yaw) * 180f / MathF.PI; // CLASSIC: the client's clockwise yaw
         degrees = ((degrees % 360f) + 360f) % 360f;
         return new GAME_5_PROTOCOL.MSG_SERVERMOVE {
             LocationX = unchecked((ushort) (short) MathF.Round(wizard.Position.X / 4)),
@@ -453,9 +458,7 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
             if (pool.Count > 0) {
                 var spot = pool[_rng.Next(pool.Count)];
                 WalkTo(wizard, spot.At, spot.Npc ? AmbientActivity.Shopping : AmbientActivity.Walking);
-                if (spot.Npc) {
-                    wizard.Yaw = spot.FaceYaw;
-                }
+                wizard.ArriveYaw = spot.Npc ? spot.FaceYaw : null; // turn to the NPC on arrival
 
                 return;
             }
@@ -488,6 +491,7 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
     }
 
     private void WalkTo(AmbientWizard wizard, Vector3 target, AmbientActivity activity) {
+        wizard.ArriveYaw = null;
         wizard.Target = target;
         wizard.Activity = activity;
         wizard.Moving = true;
@@ -513,15 +517,15 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
                 continue;
             }
 
-            // A few steps in front of the NPC, facing it.
-            var facing = info.m_orientation.Z;
+            // A few steps in front of the NPC, facing it (the object's yaw is the client's; Heading turns it back).
+            var facing = AmbientWizards.Heading(info.m_orientation.Z);
             var at = new Vector3(info.m_location.X + MathF.Cos(facing) * 90, info.m_location.Y + MathF.Sin(facing) * 90, info.m_location.Z);
             spots.Add(new Spot(at, facing + MathF.PI, true));
         }
 
         foreach (var location in data.m_locationList ?? []) {
             if (location is not null) {
-                spots.Add(new Spot(location.m_location, location.m_direction, false));
+                spots.Add(new Spot(location.m_location, AmbientWizards.Heading(location.m_direction), false));
             }
         }
 
@@ -631,6 +635,17 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
         wizard.Wizard.IsInDuel = true;
         wizard.Position = added.SlotPosition;
         wizard.Wizard.Location = added.SlotPosition;
+        // CLASSIC (2026-10-02): face the circle's middle, as a joining client does by moving onto its slot (an
+        // ambient wizard kept the heading it walked in with: the owner saw it facing the wrong way in the duel).
+        wizard.Yaw = AmbientWizards.Heading(added.SlotOrientation);
+        wizard.Wizard.Orientation = new Vector3(0, 0, added.SlotOrientation);
+        _zoneActor?.Tell(new ZONE_102_PROTOCOL.MSG_ZONEBROADCAST {
+            Messages = [new ZONE_102_PROTOCOL.MSG_CLIENTBATCH { Messages = [
+                Move(wizard), new GAME_5_PROTOCOL.MSG_MOVESTATE { GlobalID = wizard.Wizard.GameObjectID, NewState = 0 },
+            ] }],
+            Targets = ZoneBroadcastTarget.Players,
+            Sender = Self,
+        });
         if (_duels.TryGetValue(wizard.DuelSigil, out var notice)) {
             foreach (var player in notice.PlayerCharIds) {
                 Remember(wizard, player, helped: false);

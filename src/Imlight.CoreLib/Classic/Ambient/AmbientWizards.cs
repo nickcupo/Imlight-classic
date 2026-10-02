@@ -56,6 +56,7 @@ using Imcodec.ObjectProperty.Bit;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Classic.Ambient;
 using Imlight.CoreLib.Shared.Behaviors;
+using Imlight.CoreLib.Shared.Resources;
 using Imlight.CoreLib.WizardData.Models.Player;
 
 namespace Imlight.CoreLib.Classic.Ambient;
@@ -90,6 +91,7 @@ internal sealed class AmbientWizard {
     public AmbientActivity Activity { get; set; } = AmbientActivity.Arriving;
     public Vector3 Position { get; set; }
     public float Yaw { get; set; }
+    public float? ArriveYaw { get; set; }
     public Vector3? Target { get; set; }
     public DateTime Until { get; set; }
     public bool Moving { get; set; }
@@ -248,7 +250,52 @@ internal static class AmbientWizards {
         wizard.Account = new Account { AuthLevel = AuthLevel.None, ChatMode = ChatMode.Open }; // in memory only
         wizard.Account.Characters.Add(wizard);
 
+        // The experience points of the level's start, as a real wizard of that level has.
+        wizard.MagicSchoolBehavior.ExperiencePoints = Shared.Character.MagicLevelsConfig.GetExperiencePointsAtLevel(identity.Level);
+
+        // CLASSIC (2026-10-02): wear what a classic new wizard wears, the school's starter wand and the starter deck.
+        // Without a wand the official client builds the player as "NA Player - Unarmed", whose cast cinematics have no
+        // wand node to put the spell effect on ("Effect Relative to Actor, but no name was provided"); the client froze
+        // in the first ambient wizard's cast on live (owner, Unicorn Way, 2026-10-02).
+        foreach (var templateId in ClassicStart.StarterItemTemplateIds(wizard.MagicSchoolBehavior.MagicSchool)) {
+            EquipInMemory(wizard, templateId);
+        }
+
+        Shared.Character.CharacterHelper.RecalculateGameStats(wizard);
+        wizard.GameStats.m_currentHitpoints = wizard.GameStats.m_baseHitpoints;
+        wizard.GameStats.m_currentMana = wizard.GameStats.m_baseMana;
+
         return wizard;
+    }
+
+    /// <summary>Puts an item made from <paramref name="templateId"/> in its slot, in memory only.</summary>
+    internal static bool EquipInMemory(Wizard wizard, ulong templateId) {
+        if (CoreObjectFactory.GetCoreTemplate(templateId) is not WizItemTemplate template
+            || Shared.Items.ItemHelper.GetItemSlot(template) is not { } slot) {
+            return false;
+        }
+
+        var item = (WizClientObjectItem) CoreObjectFactory.FinalizeCoreObject(templateId);
+        CoreObjectFactory.InitializeCoreObjectBehaviors(item, templateId);
+        item.m_characterId = (Imcodec.Types.GID) wizard.CharId;
+
+        return wizard.EquipmentBehavior.EquipItem(item, slot.SlotType);
+    }
+
+    /// <summary>
+    /// The client's yaw for a heading <paramref name="theta"/> (radians from +X towards +Y). The client turns clockwise
+    /// with a quarter-turn offset; CombatDuelComponent seats duelists with the same conversion (YAW_ERROR_COMPENSATION).
+    /// </summary>
+    internal static float ClientYaw(float theta) => Wrap(2 * MathF.PI - theta - YawOffset);
+
+    /// <summary>The heading for a client yaw (the inverse of <see cref="ClientYaw"/>).</summary>
+    internal static float Heading(float clientYaw) => Wrap(2 * MathF.PI - YawOffset - clientYaw);
+
+    private const float YawOffset = 1.58f;
+
+    private static float Wrap(float angle) {
+        angle %= 2 * MathF.PI;
+        return angle < 0 ? angle + 2 * MathF.PI : angle;
     }
 
 }
