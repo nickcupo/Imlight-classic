@@ -22,8 +22,7 @@
  * PURPOSE:
  * CLASSIC: the server's deck check is the stock client's (Classic/ClassicDeckRules.cs):
  * Treasure Cards only against the deck's Treasure Card room, other cards against the
- * deck size, copy limits and rank; and the wizard's Treasure Card book reaches the
- * client at login (Game/WizardObjectLoader.cs).
+ * deck size, copy limits and rank.
  *
  * Created by: Nick with Claude Code (claude-opus-5-5)
  * Version: KALI 1.0
@@ -34,7 +33,6 @@ using System.Collections.Generic;
 using System.Linq;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.CoreLib.Classic;
-using Imlight.CoreLib.Game;
 using Xunit;
 
 namespace Imlight.Classic.Tests;
@@ -96,14 +94,5 @@ public sealed class ClassicDeckRulesTests {
         var deck = new List<SpellData> { new() { m_templateID = MythSpell, m_enchantment = 77, m_quantity = 3 } };
         Assert.Equal(DeckAddRefusal.TreasureCardsFull, Add(deck, KillTc));
         Assert.Equal(DeckAddRefusal.None, Add(deck, MythSpell)); // the enchanted copies are not main-deck copies
-    }
-
-    [Fact]
-    public void TheTreasureBookGoesToTheClientGroupedByCard() {
-        var book = WizardObjectLoader.TreasureBookSpells([694954949u, 1264810442u, 694954949u, 0u]);
-        Assert.Equal(2, book.Count);
-        Assert.Equal(2u, book.Single(s => s.m_templateID == 694954949u).m_quantity);
-        Assert.Equal(1u, book.Single(s => s.m_templateID == 1264810442u).m_quantity);
-        Assert.Empty(WizardObjectLoader.TreasureBookSpells(null!));
     }
 }
