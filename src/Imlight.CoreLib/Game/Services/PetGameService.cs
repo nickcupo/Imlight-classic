@@ -67,7 +67,7 @@ using Imlight.CoreLib.WizardData.Models.Player;
 
 namespace Imlight.CoreLib.Game.Services;
 
-internal sealed class PetGameService(SessionActor sessionActor) : MessageService(sessionActor) {
+internal sealed partial class PetGameService(SessionActor sessionActor) : MessageService(sessionActor) {
 
     private const byte CommandDebugWin = 1;
     private const byte CommandDebugLose = 2;
@@ -106,6 +106,12 @@ internal sealed class PetGameService(SessionActor sessionActor) : MessageService
     private void ReceiveJoin(PET_9_PROTOCOL.MSG_PETGAMEJOIN message) {
         var game = message.Game.ToString();
         var wizard = GetActiveWizard();
+        if (game == MorphGame) {
+            JoinMorph(wizard);
+
+            return;
+        }
+
         if (!Enabled || wizard is null || !PetGameConfigs.TryGet(game, out var info)) {
             Logger.Information("Pet game {0}: refused (pets off or not a 2010 game).", Logger.Args(game));
             SendToSocket(new PET_9_PROTOCOL.MSG_PETGAMEJOINRSP { Game = game, Success = 0 });
@@ -195,6 +201,12 @@ internal sealed class PetGameService(SessionActor sessionActor) : MessageService
 
     [MessageHandler(typeof(PET_9_PROTOCOL.MSG_PETGAMEDATA))]
     private void ReceiveData(PET_9_PROTOCOL.MSG_PETGAMEDATA message) {
+        if (_morph is not null && message.Game.ToString() == MorphGame) {
+            ReceiveMorphCommand(message.Data.ToString() ?? "");
+
+            return;
+        }
+
         if (_session is null) {
             return;
         }
@@ -232,6 +244,7 @@ internal sealed class PetGameService(SessionActor sessionActor) : MessageService
 
         Timers.Cancel("petDanceRound");
         _session = null;
+        LeaveMorph();
     }
 
     private void Finish(int points, int wins) {

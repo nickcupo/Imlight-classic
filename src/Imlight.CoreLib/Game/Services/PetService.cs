@@ -246,6 +246,19 @@ internal class PetService(SessionActor sessionActor) : MessageService(sessionAct
 
         // Remove the egg from morphing slots and notify client.
         wizard.PetOwnerBehavior.HatchEgg(egg);
+        WizardData.Collections.WizardCollection.UpdateCharacterPetOwnerBehavior(wizard); // CLASSIC: the egg is gone for good.
+
+        // CLASSIC: the egg is the level-0 pet item with the same GID; it becomes a Baby with its template's (or, for a
+        // hatched egg, its parents') stats and talent pool.
+        byte hatchedRating = DEFAULT_PET_OVERALL_RATING;
+        var eggItem = wizard.InventoryBehavior.Items?.FirstOrDefault(i => i.m_globalID == egg.m_globalID);
+        if (Game.Pet.PetProgress.Behavior(eggItem) is { } petItem) {
+            petItem.m_level = 1;
+            petItem.m_hatchedTimeSecs = 0;
+            Game.Pet.PetProgress.EnsureInitialized(eggItem);
+            WizardData.Collections.WizardItemCollection.SavePetGrowth(eggItem);
+            hatchedRating = (byte) Math.Min(255u, petItem.m_overallRating);
+        }
 
         SendToSocket(new PET_9_PROTOCOL.MSG_PETMORPHINGSLOT {
             GlobalID = egg.m_globalID,
@@ -256,7 +269,7 @@ internal class PetService(SessionActor sessionActor) : MessageService(sessionAct
         // 1. MSG_PETLEVELUP — pet goes from level 0 (egg) to level 1.
         SendToSocket(new PET_9_PROTOCOL.MSG_PETLEVELUP {
             GlobalID = egg.m_globalID,
-            OverallRating = DEFAULT_PET_OVERALL_RATING,
+            OverallRating = hatchedRating, // CLASSIC: the hatched pet's pedigree.
             ActiveRating = 0,
             PetLevel = 1,
             NewTalent = 0,
@@ -287,7 +300,7 @@ internal class PetService(SessionActor sessionActor) : MessageService(sessionAct
         });
 
         Logger.Information("Pet hatched! Egg {0} → template {1} (tome entry: {2})",
-            Logger.Args(egg.m_globalID, petTemplateId, petTomeGlobalId));
+            Logger.Args(egg.m_globalID.Full, petTemplateId, petTomeGlobalId.Full)); // CLASSIC: the GID itself, not its type name.
     }
 
 }
