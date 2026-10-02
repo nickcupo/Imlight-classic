@@ -551,11 +551,14 @@ public class CombatDuelSubCircle {
 
     private void InitializePlayerSubCircle() {
         // todo: this method is a mess.
-        var queryCharacterMsg = new CHARACTER_103_PROTOCOL.MSG_QUERYACTIVEWIZARD();
-        _wizard = ParticipantActor
-            .Ask<CHARACTER_103_PROTOCOL.MSG_CHARACTER>(queryCharacterMsg, PlayerQuery.Timeout) // CLASSIC: timeout
-            .Result
-            .Wizard;
+        // CLASSIC: the session's pushed wizard when it has one; else the (blocking) question as before.
+        if (!ActiveWizardDirectory.TryGet(ParticipantActor, out _wizard, out _)) {
+            var queryCharacterMsg = new CHARACTER_103_PROTOCOL.MSG_QUERYACTIVEWIZARD();
+            _wizard = ParticipantActor
+                .Ask<CHARACTER_103_PROTOCOL.MSG_CHARACTER>(queryCharacterMsg, PlayerQuery.Timeout) // CLASSIC: timeout
+                .Result
+                .Wizard;
+        }
 
         // Dyanmic symbols start at 9 for players.
         var dynamicSymbol = (DynamicSigilSymbol) (SlotIndex + 9);
@@ -658,10 +661,11 @@ public class CombatDuelSubCircle {
     }
 
     private void InitializeCreatureSubCircle(bool asMinion = false, int minionOwnerSubCircle = 0) {
-        var queryGameStatsMsg = new COMBAT_106_PROTOCOL.MSG_QUERYCREATURESTATS();
-        var creatureStats = ParticipantActor
-            .Ask<COMBAT_106_PROTOCOL.MSG_CREATURESTATS>(queryGameStatsMsg, PlayerQuery.Timeout) // CLASSIC: timeout
-            .Result;
+        // CLASSIC: a started creature's stats from the directory; one still starting is asked (blocking) as before.
+        var creatureStats = CreatureStatsDirectory.TryGet(ParticipantActor)
+            ?? ParticipantActor
+                .Ask<COMBAT_106_PROTOCOL.MSG_CREATURESTATS>(new COMBAT_106_PROTOCOL.MSG_QUERYCREATURESTATS(), PlayerQuery.Timeout) // CLASSIC: timeout
+                .Result;
 
         // Dynamic symbols start 1-4 for creatures.
         var dynamicSymbol = (DynamicSigilSymbol) (SlotIndex + 1);

@@ -67,6 +67,10 @@ internal abstract class MessageService(SessionActor sessionActor) : ReceiveProto
     private Wizard _cachedWizard;
     private CoreObject _cachedWizardGameObject;
 
+    // CLASSIC: tell the session who we are as soon as we exist, instead of the session blocking on an identity Ask per
+    // service while it builds a connection (logins and every zone change).
+    protected override void OnDispatcherConstructed() => SessionActor?.RegisterService(Self, this);
+
     /// <summary>
     /// Sends a message directly to the socket.
     /// </summary>
@@ -220,6 +224,12 @@ internal abstract class MessageService(SessionActor sessionActor) : ReceiveProto
 
     private void EnsureActiveWizardCached() {
         if (_cachedWizard is not null && _cachedWizardGameObject is not null) {
+            return;
+        }
+
+        // CLASSIC: the WizardService pushes both to the directory; ask it (blocking) only before it has.
+        if (Classic.ActiveWizardDirectory.TryGet(SessionActor?.ActorRef, out var wizard, out var gameObject) && gameObject is not null) {
+            (_cachedWizard, _cachedWizardGameObject) = (wizard, gameObject);
             return;
         }
 

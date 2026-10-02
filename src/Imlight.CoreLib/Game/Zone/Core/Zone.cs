@@ -193,6 +193,11 @@ public class Zone : ReceiveProtocolDispatcher, IWithTimers {
         Context.Parent.Tell(new CLASSIC_FEATURES_PROTOCOL.MSG_DROPSELF { ZoneName = ZonePath });
     }
 
+    protected override void PostStop() {
+        Classic.ZoneDataDirectory.Remove(Self); // CLASSIC
+        base.PostStop();
+    }
+
     protected override void PreRestart(Exception reason, object message) {
         Logger.Error("Zone {ZoneName} restarts for: {Exception}", Logger.Args(ZoneName, reason));
         base.PreRestart(reason, message);
@@ -226,6 +231,24 @@ public class Zone : ReceiveProtocolDispatcher, IWithTimers {
         // Inform the supervisor (GameWorld) that the zone is closing.
         Context.Parent.Tell(msg);
         Context.Stop(Self);
+    }
+
+    // CLASSIC: the PERF log's mailbox probe ([Classic] PerfLogSeconds): a timer message stamped with when it is due.
+    protected override void PreStart() {
+        base.PreStart();
+        if (Classic.PerfMonitor.Enabled) {
+            SchedulePerfProbe();
+        }
+    }
+
+    private void SchedulePerfProbe()
+        => Timers.StartSingleTimer("perf-probe", new Classic.PerfMonitor.ZoneProbe(System.Diagnostics.Stopwatch.GetTimestamp()
+            + (long) (Classic.PerfMonitor.ZoneProbeInterval.TotalSeconds * System.Diagnostics.Stopwatch.Frequency)), Classic.PerfMonitor.ZoneProbeInterval);
+
+    [MessageHandler(typeof(Classic.PerfMonitor.ZoneProbe))]
+    private void ReceivePerfProbe(Classic.PerfMonitor.ZoneProbe probe) {
+        Classic.PerfMonitor.ZoneProbeHandled(probe, (Context as Akka.Actor.ActorCell)?.Mailbox.MessageQueue.Count ?? 0);
+        SchedulePerfProbe();
     }
 
     #region Handlers
@@ -361,6 +384,7 @@ public class Zone : ReceiveProtocolDispatcher, IWithTimers {
 
         _zoneLoadTimer.Restart();
         ZoneData = message.ZoneData;
+        Classic.ZoneDataDirectory.Set(Self, ZoneData, message.NodeData); // CLASSIC: sessions read it without an Ask.
 
         // Inform each supervisor of the loaded zone data. They are expected to give a reply
         // to inform the zone that they have loaded their data.

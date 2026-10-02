@@ -58,6 +58,7 @@ using Imcodec.Types;
 using Imlight.Classic;
 using Imlight.Classic.Spells;
 using Imlight.CoreLib.Classic;
+using Imlight.CoreLib.Classic.Ambient;
 using Imlight.Common;
 using Imlight.CoreLib.Game.Combat;
 using Imlight.CoreLib.Game.Sigils;
@@ -90,6 +91,9 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
     : ZoneEntityComponent(entity), IComponentFactory, IWithTimers, IClientBehaviorProvider<WizardClientDuelBehavior> {
 
     private const byte PLANNING_TIME = 30;
+    // CLASSIC: PERF combat turnaround (see PerfMonitor): when the round's last move came, and whether planning ended early.
+    private long _perfAllMovesTicks;
+    private bool _ownedMinionEarlyFinishScheduledWas;
     private const float DUEL_GRACE_PERIOD_IN_SECONDS = 3.75f;
     private const float DUEL_NEW_ROUND_DELAY = 2.5f;
     private const float YAW_ERROR_COMPENSATION = 1.58f;
@@ -218,10 +222,17 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
         // Check if the player is now in range of the object.
         // If there's a slot available, add the player to the duel.
         if (IsInRadius(playerObj, _combatSigilObjectInfo.m_radius) && !_entitiesInRange.ContainsKey(playerObj)) {
+            // CLASSIC: an ambient wizard walks in only with a permit for this duel (see CombatDuelComponent.Ambient.cs).
+            if (!AmbientWizards.MayJoin(playerActor, SigilId)) {
+                return;
+            }
+
             _entitiesInRange.Add(playerObj, playerActor);
 
-            if (IsSlotAvailable(CombatTeam.Player)) {
+            // CLASSIC: a real player at a full circle takes an ambient wizard's slot.
+            if (IsSlotAvailable(CombatTeam.Player) || MakeRoomForRealPlayer(playerActor)) {
                 AddParticipant(playerObj, playerActor);
+                NotifyAmbientWizards();
             }
         }
         else if (!IsInRadius(playerObj, _combatSigilObjectInfo.m_radius) && _entitiesInRange.ContainsKey(playerObj)) {
@@ -324,6 +335,7 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
         // Activate the sigil.
         InitializeDuel(message.StartingParticipants);
         _renderComponent.Enable();
+        NotifyAmbientWizards(); // CLASSIC
 
         // Broadcast MSG_DUEL to inform all clients a duel is now active.
         // The live server sends this to enable 3D combat targeting.
@@ -405,6 +417,8 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
 
         // CLASSIC: a seat held for a dropped wizard passes.
         PassHeldSeats();
+        // CLASSIC: ambient wizards in the duel pick their cards a few seconds in.
+        ScheduleAmbientTurns();
 
         // Tutorial duels flush queued card grants and re-script the golems before planning.
         _tutorialDirector.OnPlanningPhaseBegin();
@@ -561,6 +575,7 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
 
         // The execution phase begins. This is where combat actions take place and we actually see spell cinematics.
         _awaitingCombatMoves = false;
+        _ownedMinionEarlyFinishScheduledWas = _ownedMinionEarlyFinishScheduled;
         _ownedMinionEarlyFinishScheduled = false;
         ResetMinionHand(sendTruePips: true);
         PrepareOwnedMinionExecution();
@@ -587,6 +602,12 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
             ActionData = buffer,
         };
         ZoneBroadcast(msg);
+        if (_perfAllMovesTicks != 0 && _ownedMinionEarlyFinishScheduledWas) {
+            // CLASSIC: PERF combat turnaround: the last move to the actions going out, less the 1 s early-finish delay.
+            Classic.PerfMonitor.CombatTurnaround(Classic.PerfMonitor.Ms(_perfAllMovesTicks, System.Diagnostics.Stopwatch.GetTimestamp()) - 1000);
+        }
+
+        _perfAllMovesTicks = 0;
 
         Timers.StartSingleTimer(RESOUTION_TIME_KEY, new COMBAT_106_PROTOCOL.MSG_ROUNDRESOLUTION(), actionExecutionTime);
     }
@@ -1426,6 +1447,7 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
         }
         else {
             PublishActiveDuel(); // CLASSIC
+            NotifyAmbientWizards(); // CLASSIC: a slot opened.
         }
     }
 
@@ -1442,8 +1464,9 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
             return;
         }
 
+        // CLASSIC: ambient wizards are not real wizards for this rule (owner, 2026-10-01).
         var wizards = SubCircles.Count(circle => circle is { Occupied: true, AddedToDuel: true, IsSummonedMinion: false }
-            && circle.OccupiedTeam == CombatTeam.Player);
+            && circle.OccupiedTeam == CombatTeam.Player && !AmbientWizards.IsAmbient(circle.ParticipantActor));
         var first = wizards >= 4 ? CombatTeam.Player : _randomFirstTeam;
         Duel.m_firstTeamToAct = (int) first;
         Logger.Debug("Duel {0} | combat starts with {1} wizards: team {2} acts first for the whole duel.",
@@ -1607,6 +1630,7 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
 
         DespawnDuel();
         _isActive = false;
+        NotifyAmbientWizards(active: false); // CLASSIC
     }
 
     private void PlayerWin() {

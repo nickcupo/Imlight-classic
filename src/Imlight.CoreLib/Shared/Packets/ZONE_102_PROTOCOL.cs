@@ -923,6 +923,19 @@ public class ZONE_102_PROTOCOL : IServerProtocol {
     /// the given player in its aggro radius, e.g. for <c>ResInitiateCombat</c>. Any number of
     /// creatures may reply; the first reply wins.
     /// </summary>
+    /// <summary>
+    /// CLASSIC: several client messages for each player in one zone broadcast (ambient wizards' moves of one tick); a
+    /// session writes each to its socket in order.
+    /// </summary>
+    public sealed class MSG_CLIENTBATCH : IServerMessage {
+
+        public byte MessageOrder { get; } = 120;
+        public byte ServiceID { get; } = 102;
+
+        public IMessage[] Messages;
+
+    }
+
     public sealed class MSG_QUERYNEARESTDUELTARGET : IServerMessage {
 
         public byte MessageOrder { get; } = 57;

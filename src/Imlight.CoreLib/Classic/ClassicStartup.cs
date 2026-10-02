@@ -155,6 +155,35 @@ public static class ClassicStartup {
     }
 
     /// <summary>
+    /// CLASSIC: raises the thread pool's minimum worker threads to [Classic] MinWorkerThreads (default 64; 0 keeps the
+    /// .NET default of one per core). Actors run on the .NET thread pool, and many handlers still block a thread on a
+    /// database call or an Ask. With four cores the pool started with four threads and added about one a second once
+    /// they were all blocked, so a burst of blocking work (logins, duel ends, saves) stalled every zone and session for
+    /// seconds (2026-10-01 load test: 20 s mailbox waits, dropped clients). Threads up to the minimum start at once.
+    /// </summary>
+    public static void ConfigureThreadPool() {
+        var wanted = ConfigurationManager.Settings["Classic.MinWorkerThreads"].AsString().Trim() is { Length: > 0 } text
+            && int.TryParse(text, out var configured) ? configured : 64;
+        System.Threading.ThreadPool.GetMinThreads(out var workers, out var io);
+        if (wanted <= workers) {
+            Logger.Information("Thread pool minimum left at {Workers} worker threads.", Logger.Args(workers));
+
+            return;
+        }
+
+        System.Threading.ThreadPool.SetMinThreads(wanted, Math.Max(io, wanted / 4));
+        Logger.Information("Thread pool minimum raised from {Old} to {New} worker threads ([Classic] MinWorkerThreads).",
+            Logger.Args(workers, wanted));
+    }
+
+    /// <summary>
+    /// CLASSIC: starts the PERF log when [Classic] PerfLogSeconds is positive (see <see cref="PerfMonitor"/>).
+    /// </summary>
+    /// <param name="system">The server's actor system.</param>
+    public static void StartPerfMonitor(Akka.Actor.ActorSystem system)
+        => PerfMonitor.Start(system, ConfigurationManager.Settings["Classic.PerfLogSeconds"].AsInt(0));
+
+    /// <summary>
     /// Checks the active profile against the loaded client resources. Only warns; read the startup log.
     /// </summary>
     public static void ValidateAfterResources() {

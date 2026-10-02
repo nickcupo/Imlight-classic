@@ -65,16 +65,17 @@ internal class CommandTeleport : CommandProtocol {
         var teleportEffectsMsg = new CHARACTER_103_PROTOCOL.MSG_DOTELEPORTEFFECTS();
         Context.SessionActor.Tell(teleportEffectsMsg);
 
-        // Wait 2 seconds.
-        Task.Delay(2000).Wait();
-
         var msg = new ZONE_102_PROTOCOL.MSG_ZONETRANSFER() {
             DestinationZone = actualZoneName,
             DestinationLocation = "Start",
             SendToClient = true,
             OwnerCharId = Context.Character.CharId
         };
-        Context.SessionActor.Tell(msg);
+
+        // Wait 2 seconds. CLASSIC: without blocking the command dispatcher, which runs every player's commands one at
+        // a time (each .teleport held all of them, and a pool thread, for 2 s).
+        var session = Context.SessionActor;
+        _ = Task.Delay(2000).ContinueWith(_ => session.Tell(msg), TaskScheduler.Default);
     }
 
 }

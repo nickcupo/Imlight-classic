@@ -77,6 +77,17 @@ public static class BuddyRelationshipCollection {
     /// <param name="relationship">The relationship to add.</param>
     /// <returns>The added relationship, if one was added rather than restored. Otherwise, the restored relationship.</returns>
     public static Relationship AddRelationship(Relationship relationship) {
+        // CLASSIC: GetCharactersWhoBlocked's cache is cleared before and after every write.
+        InvalidateBlockedCache();
+        try {
+            return AddRelationshipCore(relationship);
+        }
+        finally {
+            InvalidateBlockedCache();
+        }
+    }
+
+    private static Relationship AddRelationshipCore(Relationship relationship) {
         using var session = s_store.OpenSession();
 
         // Check to see if we can find an existing relationship. If we can find one, we'll instead restore it
@@ -119,6 +130,17 @@ public static class BuddyRelationshipCollection {
     /// </summary>
     /// <param name="relationship">The relationship to update.</param>
     public static void UpdateRelationship(Relationship relationship) {
+        // CLASSIC: GetCharactersWhoBlocked's cache is cleared before and after every write.
+        InvalidateBlockedCache();
+        try {
+            UpdateRelationshipCore(relationship);
+        }
+        finally {
+            InvalidateBlockedCache();
+        }
+    }
+
+    private static void UpdateRelationshipCore(Relationship relationship) {
         using var session = s_store.OpenSession();
 
         // Get the relationship matching either ID order (bidirectional).
@@ -149,7 +171,18 @@ public static class BuddyRelationshipCollection {
     /// <param name="firstId">One player's character ID.</param>
     /// <param name="secondId">The other's.</param>
     /// <returns>The stored relationship, or null when the two are not friends.</returns>
-    public static Relationship SetTrueFriends(ulong firstId, ulong secondId) { // CLASSIC
+    public static Relationship SetTrueFriends(ulong firstId, ulong secondId) {
+        // CLASSIC: GetCharactersWhoBlocked's cache is cleared before and after every write.
+        InvalidateBlockedCache();
+        try {
+            return SetTrueFriendsCore(firstId, secondId);
+        }
+        finally {
+            InvalidateBlockedCache();
+        }
+    }
+
+    private static Relationship SetTrueFriendsCore(ulong firstId, ulong secondId) { // CLASSIC
         using var session = s_store.OpenSession();
 
         var existingRelationship = session.Query<Relationship>(collectionName: CollectionName)
@@ -225,12 +258,34 @@ public static class BuddyRelationshipCollection {
     /// <param name="targetId">The character ID of the player who may have been blocked.</param>
     /// <returns>An array of character IDs that have blocked the target.</returns>
     public static ulong[] GetCharactersWhoBlocked(ulong targetId) {
+        // CLASSIC: every Say asked the database (a blocking query on the speaker's thread); the answer is kept until
+        // the next relationship write through this class, which clears it. A write during the query leaves it uncached.
+        if (s_blockedBy.TryGetValue(targetId, out var cached)) {
+            return cached;
+        }
+
+        var version = System.Threading.Volatile.Read(ref s_blockedVersion);
         using var session = s_store.OpenSession();
 
-        return session.Query<Relationship>(collectionName: CollectionName)
+        var blockers = session.Query<Relationship>(collectionName: CollectionName)
+            .Statistics(out var stats)
             .Where(r => r.SecondPlayerId == targetId && r.Blocked)
             .Select(r => r.FirstPlayerId)
             .ToArray();
+        if (!stats.IsStale && System.Threading.Volatile.Read(ref s_blockedVersion) == version) {
+            s_blockedBy[targetId] = blockers;
+        }
+
+        return blockers;
+    }
+
+    // CLASSIC: GetCharactersWhoBlocked answers by target, cleared on every write.
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<ulong, ulong[]> s_blockedBy = new();
+    private static int s_blockedVersion;
+
+    private static void InvalidateBlockedCache() {
+        System.Threading.Interlocked.Increment(ref s_blockedVersion);
+        s_blockedBy.Clear();
     }
 
 }

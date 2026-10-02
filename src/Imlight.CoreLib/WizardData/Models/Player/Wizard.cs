@@ -199,6 +199,37 @@ public class Wizard {
         DynamodCollection.AddDynamodSet(DynamodSet);
     }
 
+    /// <summary>
+    /// CLASSIC: an ambient wizard (Classic/Ambient): built like a new character but never written to the database (no
+    /// DynamodSet row; WizardCollection ignores its character id). Its friends come from BuddyRelationshipCollection.
+    /// </summary>
+    internal static Wizard CreateAmbient(ulong charId, MagicSchool school, WizardCharacterBehavior avatar, uint nameIndices,
+                                         byte level, string zone) {
+        var wizard = new Wizard {
+            CharId = charId,
+            Zone = zone,
+            World = 1,
+            LastLoginTime = (uint) DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+            WizardAvatar = avatar,
+        };
+        wizard.InitializeDefaultEquipment();
+        wizard.InitializePlayerName(nameIndices);
+        wizard.InitializeMagicSchoolBehavior(school, level);
+        wizard.InitializeSpellbookBehavior();
+        wizard.InitializeMountOwnerBehavior();
+        wizard.InitializeWizardGameStats(school, level);
+        wizard.InitializeDefaultPetSnackBehavior();
+        wizard.InitializePetOwnerBehavior();
+        wizard.InitializeDefaultInventory();
+        wizard.InitializeAlchemyBehavior();
+        wizard.ObjectStateBehavior = new ServerObjectStateBehavior("PlayerMobileStates");
+        wizard.QuestBehavior = new ServerQuestBehavior();
+        wizard.FriendsBehavior = new ServerFriendBehavior();
+        wizard.DynamodSet = new DynamodSet(charId);
+
+        return wizard;
+    }
+
     public WizClientObject GetInitializedGameObject()
         => HasInitializedGameObject ? GameObject : null;
 

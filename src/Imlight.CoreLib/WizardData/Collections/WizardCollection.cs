@@ -86,6 +86,10 @@ public static class WizardCollection {
     internal static bool CommitCharacterMutation(ulong charId, Func<IDocumentSession, Wizard, bool> operation,
         Action<Wizard> afterCommit, Func<IDocumentSession> openSession = null,
         Func<IDocumentSession, ulong, Wizard> loadWizard = null) {
+        if (Classic.Ambient.AmbientWizards.IsAmbientChar(charId)) {
+            return false; // CLASSIC: an ambient wizard has no character document.
+        }
+
         return WithWriteLane(charId, () => {
             using var session = openSession is null ? s_store.OpenSession() : openSession();
             session.Advanced.OptimisticConcurrencyMode = OptimisticConcurrencyMode.Writes;
@@ -124,6 +128,10 @@ public static class WizardCollection {
     }
 
     private static bool UpdateCharacter(ulong charId, Action<Wizard> update) {
+        if (Classic.Ambient.AmbientWizards.IsAmbientChar(charId)) {
+            return false; // CLASSIC: an ambient wizard has no character document.
+        }
+
         return WithWriteLane(charId, () => {
             using var session = s_store.OpenSession();
             var existingCharacter = GetCharacterByCharId(session, charId);
@@ -197,6 +205,11 @@ public static class WizardCollection {
     /// <param name="id">The ID of the character to retrieve.</param>
     /// <returns>The character with the specified ID, or null if not found.</returns>
     public static Wizard GetCharacter(ulong id) {
+        // CLASSIC: an ambient wizard lives in memory (Classic/Ambient), not in this collection.
+        if (Classic.Ambient.AmbientWizards.TryGetWizard(id, out var ambient)) {
+            return ambient;
+        }
+
         using var session = s_store.OpenSession();
 
         var character = GetCharacterByCharId(session, id);
@@ -255,6 +268,10 @@ public static class WizardCollection {
     /// <param name="getAccount">Whether to retrieve the account associated with the character.</param>
     /// <returns>The character with the specified account ID, or null if not found.</returns>
     public static Wizard GetCharacterUnloaded(ulong charId) {
+        if (Classic.Ambient.AmbientWizards.TryGetWizard(charId, out var ambient)) {
+            return ambient; // CLASSIC
+        }
+
         using var session = s_store.OpenSession();
 
         var character = GetCharacterByCharId(session, charId);

@@ -85,6 +85,15 @@ public static class OnlinePlayerCollection {
     }
 
     /// <summary>
+    /// CLASSIC: lists an ambient wizard as online (memory only, never the database), keyed by its character id.
+    /// </summary>
+    public static void SetVirtualOnlinePlayer(OnlinePlayer onlinePlayer)
+        => s_onlinePlayerCache[onlinePlayer.AccountId] = onlinePlayer;
+
+    /// <summary>CLASSIC: takes an ambient wizard off the online list.</summary>
+    public static void RemoveVirtualOnlinePlayer(ulong key) => s_onlinePlayerCache.TryRemove(key, out _);
+
+    /// <summary>
     /// Removes an online player from the collection based on the specified account ID.
     /// </summary>
     /// <param name="accountId">The character ID of the online player to remove.</param>
@@ -110,7 +119,7 @@ public static class OnlinePlayerCollection {
     public static void RemoveOnlinePlayer(ushort sessionId) {
         // Scan the snapshot and remove every entry with a matching SessionId.
         foreach (var kvp in s_onlinePlayerCache) {
-            if (kvp.Value.SessionId == sessionId) {
+            if (kvp.Value.SessionId == sessionId && !Classic.Ambient.AmbientWizards.IsAmbientChar(kvp.Value.CharacterId)) { // CLASSIC
                 s_onlinePlayerCache.TryRemove(kvp.Key, out _);
             }
         }
