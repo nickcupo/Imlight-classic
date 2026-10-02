@@ -17,6 +17,8 @@
  */
 
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using Imcodec.ObjectProperty.TypeCache;
 using Imcodec.Types;
 using Imlight.CoreLib.Shared.Resources;
@@ -55,6 +57,7 @@ public static class WizardObjectLoader {
         SetInventoryBehavior(clientObject, ref character);
         SetMagicSchoolBehavior(clientObject, ref character);
         SetSpellbookBehavior(clientObject, ref character);
+        SetTreasureBookBehavior(clientObject, character);
         SetMountOwnerBehavior(clientObject, ref character);
         SetPetSnackBehavior(clientObject, ref character);
         SetPetOwnerBehavior(clientObject, ref character);
@@ -146,6 +149,23 @@ public static class WizardObjectLoader {
             throw new Exception("Behavior ClientSpellbookBehavior not found!");
         }
     }
+
+    /// <summary>
+    /// CLASSIC: the Treasure Cards in the wizard's book (not in a deck). Without this the client's book starts
+    /// empty every login and shows only cards added during the session (MSG_ADDTREASURESPELLTOBOOK).
+    /// </summary>
+    public static void SetTreasureBookBehavior(WizClientObject clientObject, Wizard character) {
+        if (!CoreObjectFactory.FindBehaviorInstance<ClientTreasureBookBehavior>(clientObject, out var treasureBook)) return;
+        treasureBook.m_spellList = TreasureBookSpells(character.SpellbookBehavior?.TreasureCardTemplateIds);
+    }
+
+    internal static List<SpellData> TreasureBookSpells(IEnumerable<uint> templateIds)
+        => (templateIds ?? [])
+            .Where(id => id != 0)
+            .GroupBy(id => id)
+            .OrderBy(group => group.Key)
+            .Select(group => new SpellData { m_templateID = group.Key, m_quantity = (uint) group.Count() })
+            .ToList();
 
     public static void SetMountOwnerBehavior(WizClientObject clientObject, ref Wizard character) {
         if (CoreObjectFactory.FindBehaviorInstance<ClientMountOwnerBehavior>(clientObject, out var mountOwnerBehavior)) {

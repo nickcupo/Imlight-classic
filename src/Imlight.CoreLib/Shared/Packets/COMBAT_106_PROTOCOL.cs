@@ -395,6 +395,17 @@ public sealed class COMBAT_106_PROTOCOL : IServerProtocol {
         public bool Enable;
     }
 
+    /// <summary>
+    /// CLASSIC: a short beat after a Myth wizard's pick, deal their next minion's hand (CombatDuelComponent.MinionHand.cs).
+    /// Internal timer message, never on the wire.
+    /// </summary>
+    internal sealed class MSG_MINIONHANDDEAL : IServerMessage {
+        public byte MessageOrder => 36;
+        public byte ServiceID => 106;
+        public CoreObject Owner;
+        public int Ticket;
+    }
+
     // Internal roaming rejection, never a combat death or a wire message.
     internal sealed class MSG_REJECTEDROAMINGCREATURE : IServerMessage {
         public byte MessageOrder => 31;

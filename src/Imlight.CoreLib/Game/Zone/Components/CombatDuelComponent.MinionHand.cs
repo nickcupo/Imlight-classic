@@ -40,10 +40,15 @@
  * [Classic] MythMinionHand = false turns this off (minions use their AI,
  * or the Minion Helper page if the player has paired one).
  *
+ * After each pick there is a short beat ([Classic] MythMinionHandDelayMs,
+ * default 750 ms: the client's own "card chosen" moment) before the next
+ * minion's hand is dealt; "Change" in that beat is still the wizard's own.
+ *
  * The stock client is told only what it already handles every round:
  * MSG_COMBATHAND (for its own participant), MSG_COMBATPIPS,
- * MSG_SHOWCOMBATUI, MSG_SETPLANNINGPHASETIMER, plus a MSG_SERVERMESSAGE
- * chat line.
+ * MSG_SHOWCOMBATUI, MSG_SETPLANNINGPHASETIMER, plus the minion "saying"
+ * "Choose my spell!" (MSG_RADIALCHAT under its name, to the wizard only;
+ * never MSG_SERVERMESSAGE, which the client stacks as "!" alerts).
  *
  * Created by: Nick with Claude Code (claude-opus-5-5)
  * Version: KALI 1.0
@@ -61,6 +66,7 @@ using Imlight.Common;
 using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.Game.Combat;
 using Imlight.CoreLib.Shared.Behaviors;
+using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Resources;
 using static Imlight.CoreLib.Shared.Packets.COMBAT_106_PROTOCOL;
 
@@ -75,6 +81,15 @@ internal static class MythMinionHandSettings {
             return string.IsNullOrWhiteSpace(value) || (bool.TryParse(value, out var enabled) && enabled);
         }
     }
+
+    /// <summary>[Classic] MythMinionHandDelayMs: the beat between a pick and the next minion's hand (default 750).</summary>
+    internal static TimeSpan DealDelay {
+        get {
+            var value = ConfigurationManager.Settings["Classic.MythMinionHandDelayMs"].AsString();
+            var ms = int.TryParse(value, out var parsed) && parsed is >= 0 and <= 5000 ? parsed : 750;
+            return TimeSpan.FromMilliseconds(ms);
+        }
+    }
 }
 
 internal sealed partial class CombatDuelComponent {
@@ -84,11 +99,14 @@ internal sealed partial class CombatDuelComponent {
         internal CoreObject Current;      // the minion whose hand is in the wizard's card window, or null when done
         internal CoreObject LastPicked;   // the minion "Change" reopens
         internal readonly HashSet<CoreObject> Done = new(ReferenceEqualityComparer.Instance);
+        internal int PendingTicket;       // non-zero: Current's hand is dealt when this timer ticket arrives
+        internal string PendingCue;
     }
 
     private readonly Dictionary<CoreObject, MinionHandStage> _minionHandStages = new(ReferenceEqualityComparer.Instance);
     private readonly List<CoreObject> _summonOrder = [];
     private bool _minionHandPipsShown;
+    private int _minionHandTickets;
 
     /// <summary>A Myth wizard whose minion this is will pick its moves (called when the minion is registered).</summary>
     private void OptInForMinionHand(CombatDuelSubCircle owner, CombatDuelSubCircle minion) {
@@ -119,8 +137,25 @@ internal sealed partial class CombatDuelComponent {
             stage.Done.Remove(last.ParticipantObject);
             stage.Current = last.ParticipantObject;
             TelegraphMinionMoves();
-            PresentMinionHand(owner, last, $"Choose again for your {ParticipantName(last)}.");
+            DealMinionHand(owner, stage, last, "Choose again for me.");
             ReevaluateOwnedMinionPlanning();
+            return true;
+        }
+
+        if (stage.PendingTicket != 0) {
+            // The beat before the minion's hand: "Change" is still the wizard's own (re-pick their card; the minion
+            // waits for the wizard's new pick). Anything else waits for the hand.
+            if (message.MoveType == (byte) CombatMoveType.ChangeMind) {
+                stage.PendingTicket = 0;
+                stage.Current = null;
+                return false;
+            }
+
+            if (message.MoveType == (byte) CombatMoveType.Flee) {
+                EndMinionHand(owner);
+                return false;
+            }
+
             return true;
         }
 
@@ -144,14 +179,15 @@ internal sealed partial class CombatDuelComponent {
                     stage.LastPicked = minion.ParticipantObject;
                     AdvanceMinionHand(owner, stage);
                 } else {
-                    PresentMinionHand(owner, minion, $"Your {ParticipantName(minion)} can't do that ({ReasonText(status)}). Choose again.");
+                    PresentMinionHand(owner, minion);
+                    MinionSays(owner, minion, $"I can't do that ({ReasonText(status)}). Choose again.");
                 }
 
                 return true;
             }
             default:
                 // Discard, enchant, draw or a stray change: the minion's hand is not the wizard's deck. Show it again.
-                PresentMinionHand(owner, minion, null);
+                PresentMinionHand(owner, minion);
                 return true;
         }
     }
@@ -160,7 +196,7 @@ internal sealed partial class CombatDuelComponent {
     private bool BlockMinionHandDraw(CombatDuelSubCircle owner) {
         if (!MinionHandStageActive(owner)) return false;
         var stage = _minionHandStages[owner.ParticipantObject];
-        if (LiveMinion(owner, stage.Current) is { } minion) PresentMinionHand(owner, minion, null);
+        if (stage.PendingTicket == 0 && LiveMinion(owner, stage.Current) is { } minion) PresentMinionHand(owner, minion);
         return true;
     }
 
@@ -193,17 +229,17 @@ internal sealed partial class CombatDuelComponent {
                 // A stunned minion loses this action anyway; leave it to the round.
                 stage.Done.Add(minion.ParticipantObject);
                 _ownedMinionControl.SetOrder(minion.ParticipantObject, new OwnedMinionOrder(OwnedMinionAiMove, 0, uint.MaxValue));
-                Notify(owner, $"Your {ParticipantName(minion)} is stunned this round.");
+                MinionSays(owner, minion, "I'm stunned this round.");
                 continue;
             }
 
-            stage.Current = minion.ParticipantObject;
-            PresentMinionHand(owner, minion, $"Now choose a spell for your {ParticipantName(minion)}.");
+            DealMinionHand(owner, stage, minion, "Choose my spell!");
             ReevaluateOwnedMinionPlanning();
             return;
         }
 
         // Every minion has its move: show the wizard's own pips again and every chosen card over its caster.
+        stage.PendingTicket = 0;
         RestoreOwnerPips(owner);
         if (CombatResolver.GetQueuedAction(owner) is { } own) {
             SendCombatMoveSelection(owner.ParticipantObject.m_globalID, own.Spell is null ? (byte) CombatMoveType.Pass : (byte) CombatMoveType.Attack,
@@ -244,8 +280,44 @@ internal sealed partial class CombatDuelComponent {
         => identity is null ? null : SubCircles.FirstOrDefault(circle => ReferenceEquals(circle.ParticipantObject, identity)
                                                                          && IsSupportedOwnedMinion(owner, circle));
 
+    /// <summary>
+    /// The minion is next: after a short beat (the client's own "card chosen" moment, [Classic] MythMinionHandDelayMs)
+    /// its hand replaces the wizard's in the card window, and the minion says so in chat.
+    /// </summary>
+    private void DealMinionHand(CombatDuelSubCircle owner, MinionHandStage stage, CombatDuelSubCircle minion, string cue) {
+        stage.Current = minion.ParticipantObject;
+        stage.PendingCue = cue;
+        stage.PendingTicket = ++_minionHandTickets;
+        var delay = MythMinionHandSettings.DealDelay;
+        if (delay <= TimeSpan.Zero || Timers is null) {
+            ReceiveMinionHandDeal(new MSG_MINIONHANDDEAL { Owner = owner.ParticipantObject, Ticket = stage.PendingTicket });
+            return;
+        }
+
+        Timers.StartSingleTimer("MinionHandDeal" + owner.ParticipantObject.m_globalID.Full,
+            new MSG_MINIONHANDDEAL { Owner = owner.ParticipantObject, Ticket = stage.PendingTicket }, delay);
+    }
+
+    [MessageHandler(typeof(MSG_MINIONHANDDEAL))]
+    private void ReceiveMinionHandDeal(MSG_MINIONHANDDEAL message) {
+        if (message.Owner is null || !_minionHandStages.TryGetValue(message.Owner, out var stage)
+            || stage.PendingTicket == 0 || stage.PendingTicket != message.Ticket) return; // superseded or reset
+        stage.PendingTicket = 0;
+        var owner = SubCircles.FirstOrDefault(circle => ReferenceEquals(circle.ParticipantObject, message.Owner));
+        if (owner is null || Duel?.m_duelPhase != kDuelPhase.kPhase_Planning) return;
+        var minion = LiveMinion(owner, stage.Current);
+        if (minion is null) {
+            AdvanceMinionHand(owner, stage);
+            return;
+        }
+
+        PresentMinionHand(owner, minion);
+        if (stage.PendingCue is { } cue) MinionSays(owner, minion, cue);
+        stage.PendingCue = null;
+    }
+
     /// <summary>Deals the minion's hand into the wizard's card window, with the minion's pips, and reopens the pick.</summary>
-    private void PresentMinionHand(CombatDuelSubCircle owner, CombatDuelSubCircle minion, string notice) {
+    private void PresentMinionHand(CombatDuelSubCircle owner, CombatDuelSubCircle minion) {
         if (owner.ParticipantActor is null || minion._combatDeck is null) return;
         if (!_serializer.Serialize(minion.GetCurrentHand(), _combatParticipantHandFlags, out var hand)) {
             Logger.Error("Duel {0} | Could not serialize a minion's hand for its owner", Logger.Args(Duel.m_duelID.Full));
@@ -267,7 +339,6 @@ internal sealed partial class CombatDuelComponent {
         owner.ParticipantActor.Tell(new DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_SETPLANNINGPHASETIMER {
             DuelID = SigilId, Time = Math.Min(remaining, PLANNING_TIME),
         });
-        if (notice is not null) Notify(owner, notice);
     }
 
     /// <summary>
@@ -296,8 +367,18 @@ internal sealed partial class CombatDuelComponent {
         if (owner.ParticipantActor is not null && owner.CombatParticipant?.m_pipCount is not null) SendPipsTo(owner, owner);
     }
 
-    private static void Notify(CombatDuelSubCircle owner, string text)
-        => owner.ParticipantActor?.Tell(new EXTENDEDBASE_2_PROTOCOL.MSG_SERVERMESSAGE { Message = text, Modal = 0 });
+    /// <summary>
+    /// The minion "speaks" to its wizard only: an ordinary chat line under the minion's own name (and its speech
+    /// bubble), so the wizard sees which minion is choosing. Not MSG_SERVERMESSAGE: the stock client stacks every
+    /// one of those as a "!" alert on the right of the screen.
+    /// </summary>
+    private static void MinionSays(CombatDuelSubCircle owner, CombatDuelSubCircle minion, string text)
+        => owner.ParticipantActor?.Tell(new GAME_5_PROTOCOL.MSG_RADIALCHAT {
+            SourceName = ParticipantName(minion),
+            SourceID = minion.ParticipantObject.m_globalID,
+            Message = text,
+            Filter = 2,
+        });
 
     /// <summary>The wizard is leaving the stage (fled, removed): their minions go back to the AI for this round.</summary>
     private void EndMinionHand(CombatDuelSubCircle owner) {

@@ -49,12 +49,14 @@ public sealed class MonstrologyMetadataTests(ITestOutputHelper output) {
     [Theory]
     [InlineData("SummonFirstGuardianTC1402223", kSpellEffects.kSummonCreature)]
     [InlineData("KillFirstGuardianTC1402223", kSpellEffects.kKillCreature)]
+    [InlineData("SummonB-BugTC1489286", kSpellEffects.kSummonCreature)]
+    [InlineData("KillB-BugTC1489286", kSpellEffects.kKillCreature)]
     public void OwnedMonstrologyCardsDecodeActualEffectTemplates(string file, kSpellEffects required) {
         var path = "/Users/nick/w101c-private/extract/r806919/spells_probe/Spells/MonsterMagicTC/" + file + ".xml";
         if (!File.Exists(path)) Assert.Skip("Owned Monstrology card resource unavailable.");
         Assert.True(new BindSerializer().Deserialize<SpellTemplate>(File.ReadAllBytes(path), 1, out var spell));
         Assert.Contains(spell.m_effects, effect => effect.m_effectType == required);
-        output.WriteLine(spell.m_name + " type=" + spell.m_sTypeName + " front=" + spell.m_cardFront + " treasure=" + spell.m_Treasure + " adjectives=" + string.Join(",",spell.m_adjectives ?? new()) + " effects=" + string.Join(";", spell.m_effects.Select(e =>
+        output.WriteLine(spell.m_name + " display=" + spell.m_displayName + " school=" + spell.m_sMagicSchoolName + " type=" + spell.m_sTypeName + " front=" + spell.m_cardFront + " treasure=" + spell.m_Treasure + " adjectives=" + string.Join(",",spell.m_adjectives ?? new()) + " effects=" + string.Join(";", spell.m_effects.Select(e =>
             e.m_effectType + ":param=" + e.m_effectParam + ":template=" + e.m_spellTemplateID + ":type=" + e.m_sDamageType)));
     }
     [Fact] public void ActualManifestAndLostSoulCardsResolveByPathAndCreatureEffect() {

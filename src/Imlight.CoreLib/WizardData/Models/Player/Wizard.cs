@@ -787,7 +787,17 @@ public class Wizard {
             return false;
         }
 
-        var spellList = deckBehavior.m_spellList ?? [];
+        var spellList = deckBehavior.m_spellList ??= [];
+        // CLASSIC: the stock client's own deck check (Classic/ClassicDeckRules.cs) for a deck in the backpack too.
+        if (Classic.ClassicDeckRules.DeckTemplateOf((uint) item.m_templateID) is { } deckTemplate) {
+            var refusal = Classic.ClassicDeckRules.CanAdd(deckTemplate, spellList, spellTemplateId,
+                id => CoreObjectFactory.GetCoreTemplate(id) as SpellTemplate);
+            if (refusal != Classic.DeckAddRefusal.None) {
+                Logger.Debug("Deck add of spell {0} to deck {1} refused: {2}.", Logger.Args(spellTemplateId, deckId, refusal.ToString()));
+                return false;
+            }
+        }
+
         var spellDeckData = spellList.FirstOrDefault(s => s.m_templateID == spellTemplateId);
         if (spellDeckData is null) {
             // It may not be included yet. We'll add another entry.
