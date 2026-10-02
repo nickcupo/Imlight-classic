@@ -115,4 +115,31 @@ internal sealed class CLASSIC_FEATURES_PROTOCOL : IServerProtocol {
 
     }
 
+    /// <summary>
+    /// CLASSIC: to a wizard's session when their open PvP fight ends or they leave it: no defeat penalty, they stay in
+    /// the arena (with 1 health if they were defeated).
+    /// </summary>
+    public sealed class MSG_PVPRELEASE : IServerMessage {
+
+        public byte MessageOrder { get; } = 7;
+        public byte ServiceID { get; } = 110;
+
+        public bool Won;
+        public bool Fought;
+
+    }
+
+    /// <summary>
+    /// CLASSIC: ".pvp ready" or ".pvp leave" from a wizard seated in an open PvP circle, through their session.
+    /// </summary>
+    public sealed class MSG_PVPCOMMAND : IServerMessage {
+
+        public byte MessageOrder { get; } = 8;
+        public byte ServiceID { get; } = 110;
+
+        public IActorRef Actor;
+        public bool Leave;
+
+    }
+
 }

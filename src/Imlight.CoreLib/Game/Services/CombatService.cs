@@ -155,6 +155,48 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
         TellOtherServices(hubMsg);
     }
 
+    // CLASSIC: an open PvP fight ended, or this wizard left the circle: no rewards, no penalty, no trip home. A defeated
+    // wizard keeps 1 health, which regenerates.
+    [MessageHandler(typeof(CLASSIC_FEATURES_PROTOCOL.MSG_PVPRELEASE))]
+    private void ReceivePvpRelease(CLASSIC_FEATURES_PROTOCOL.MSG_PVPRELEASE message) {
+        _currentDuelActor = null;
+        var wizard = GetActiveWizard();
+        if (wizard is null) {
+            return;
+        }
+
+        wizard.IsInDuel = false;
+        if (wizard.GameStats.m_currentHitpoints <= 0) {
+            wizard.UpdateHealth(1);
+            SendToSocket(new WIZARD_12_PROTOCOL.MSG_UPDATEHEALTH {
+                CharacterID = wizard.GameObjectID,
+                NewHealth = 1,
+                NewHealthMax = wizard.GameStats.m_baseHitpoints,
+                DisplayDiff = 0,
+            });
+        }
+
+        SetNoAggroGrace();
+        Timers.StartSingleTimer("NoAggroGraceOver", new COMBAT_106_PROTOCOL.MSG_NOAGGROGRACEOVER(),
+            TimeSpan.FromSeconds(NO_AGGRO_EFFECT_DURATION_IN_SECONDS));
+        if (message.Fought) {
+            InformGameClient(message.Won ? "Your side won the duel!" : "Your side lost the duel.");
+        }
+    }
+
+    // CLASSIC: ".pvp ready" / ".pvp leave" go to the open PvP circle this wizard sits in.
+    [MessageHandler(typeof(CLASSIC_FEATURES_PROTOCOL.MSG_PVPCOMMAND))]
+    private void ReceivePvpCommand(CLASSIC_FEATURES_PROTOCOL.MSG_PVPCOMMAND message) {
+        if (_currentDuelActor is null) {
+            InformGameClient("You are not in an open PvP circle.");
+
+            return;
+        }
+
+        message.Actor = SessionActor.ActorRef;
+        _currentDuelActor.Tell(message, SessionActor.ActorRef);
+    }
+
     [MessageHandler(typeof(COMBAT_106_PROTOCOL.MSG_COMBATWIN))]
     private void ReceiveCombatVictory(COMBAT_106_PROTOCOL.MSG_COMBATWIN message) {
         // CLASSIC: the duel is over; a logout after it used to reach the ended duel, which ran flee and defeat on it

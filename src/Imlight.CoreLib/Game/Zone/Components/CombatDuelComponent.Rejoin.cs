@@ -71,7 +71,7 @@ internal sealed partial class CombatDuelComponent {
     /// <summary>Holds a dropped wizard's seat if the rejoin window is on; false when they should flee instead.</summary>
     private bool TryHoldSeat(CombatDuelSubCircle circle) {
         var seconds = ClassicSettings.CombatRejoinSeconds;
-        if (!_isActive || seconds <= 0 || circle.OccupiedTeam != CombatTeam.Player || circle.IsSummonedMinion
+        if (!_isActive || seconds <= 0 || !circle.IsWizard || (_pvp && _pvpLobby)
                 || circle._wizard is null || IsScriptedDuel()) {
             return false;
         }
@@ -108,8 +108,7 @@ internal sealed partial class CombatDuelComponent {
 
     /// <summary>True when the next round must wait: wizards are seated, all of them dropped.</summary>
     private bool ShouldWaitForRejoin() {
-        var wizards = SubCircles.Where(circle => circle is { Occupied: true } && circle.OccupiedTeam == CombatTeam.Player
-            && !circle.IsSummonedMinion && circle.IsAlive).ToList();
+        var wizards = SubCircles.Where(circle => circle is { Occupied: true, IsWizard: true } && circle.IsAlive).ToList();
 
         return wizards.Count > 0 && wizards.All(circle => circle.Disconnected);
     }
@@ -231,6 +230,12 @@ internal sealed partial class CombatDuelComponent {
     /// 1 health, as a defeat in person would (owner ruling 2026-10-01).
     /// </summary>
     private void ReleaseHeldSeat(CombatDuelSubCircle circle) {
+        if (_pvp) {
+            PvpReleaseSeat(circle, won: false, fought: true); // CLASSIC: no defeat penalty in open PvP
+
+            return;
+        }
+
         var wizard = circle._wizard;
         var participantId = circle.ParticipantObject?.m_globalID ?? 0;
         if (circle.HeldCharacterId != 0) {

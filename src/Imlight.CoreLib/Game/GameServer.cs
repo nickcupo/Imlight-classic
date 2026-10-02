@@ -294,6 +294,7 @@ public class GameServer : Server {
         // CLASSIC: the holiday events stock their vendors in SpiralDB and set its registry entries.
         if (Imlight.Classic.ClassicRuntime.IsActive) {
             Classic.ClassicHolidays.Initialize(Classic.ClassicStartup.ClassicDataRoot, Imlight.Classic.ClassicRuntime.Rules.Profile.Id);
+            Classic.ClassicPvp.Initialize(Classic.ClassicStartup.ClassicDataRoot, Imlight.Classic.ClassicRuntime.Rules.Profile.Id);
             Classic.ClassicBazaar.Initialize(Classic.ClassicStartup.ClassicDataRoot, Imlight.Classic.ClassicRuntime.Rules.Profile.Id);
         }
     }

@@ -70,8 +70,11 @@ internal sealed class ZoneSigilSupervisor(Core.Zone zone) : ZoneEntitySupervisor
             CreateEntityActor(coreObject, template, objectInfo);
         }
 
+        // CLASSIC: the open PvP circles the server places itself (classic-data/pvp; the client's arena has none).
+        var classicPvpCircles = Classic.ClassicPvp.CircleInfosFor(zoneData.m_zoneName).ToList();
+
         // Initialize any objects found within the zone data.
-        foreach (var objectInfo in zoneData.m_objectList) {
+        foreach (var objectInfo in zoneData.m_objectList.Concat(classicPvpCircles)) {
             if (!IsObjectEligibleForSpawn(objectInfo)) {
                 continue;
             }

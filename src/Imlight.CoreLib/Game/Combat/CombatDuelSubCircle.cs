@@ -150,10 +150,21 @@ public class CombatDuelSubCircle {
                 return ClassicRuntime.IsActive ? _minionTeam : CombatTeam.Player;
             }
 
+            // CLASSIC: in an open PvP circle the wizards on the first half (slots 0-3) are the other team.
+            if (PvpTeam is { } pvpTeam) {
+                return pvpTeam;
+            }
+
             return ParticipantObject.m_templateID == 1 ? CombatTeam.Player : CombatTeam.Monster;
         }
     }
     internal bool IsAlive => ParticipantGameStats?.m_currentHitpoints > 0;
+
+    /// <summary>CLASSIC: the open PvP team of this slot (slots 0-3 Monster, 4-7 Player), or null outside PvP.</summary>
+    internal CombatTeam? PvpTeam { get; set; }
+
+    /// <summary>CLASSIC: a wizard (a player's or an ambient wizard's seat), not a creature or minion.</summary>
+    internal bool IsWizard => ParticipantObject?.m_templateID == 1 && !IsSummonedMinion;
 
     /// <summary>
     /// Beguile (kMindControl): the number of this combatant's next actions taken for the other side.
@@ -622,7 +633,7 @@ public class CombatDuelSubCircle {
             m_isPlayer = true,
             m_zoneID = _duelActor.SigilId,
             m_isMonster = 0,
-            m_teamID = 0,
+            m_teamID = (int) (PvpTeam ?? CombatTeam.Player), // CLASSIC: open PvP seats wizards on both teams
             m_primaryMagicSchoolID = (int) _wizard.MagicSchoolBehavior.MagicSchool,
             m_pipCount = DetermineStartingPips(),
             m_pipRoundRates = new(),
@@ -633,7 +644,7 @@ public class CombatDuelSubCircle {
             // The client's crit sim reads the participant level from m_mobLevel (it zeroes its
             // crit chance below the level threshold when this is missing).
             m_mobLevel = ParticipantGameStats.Level,
-            m_myTeamTurn = _duelActor.Duel.m_firstTeamToAct == 0,
+            m_myTeamTurn = _duelActor.Duel.m_firstTeamToAct == (int) (PvpTeam ?? CombatTeam.Player),
             m_pGameStats = combatStats,
             m_pPlayDeck = new PlayDeck(),
             m_subcircle = SlotIndex,
