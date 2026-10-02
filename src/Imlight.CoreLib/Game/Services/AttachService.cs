@@ -159,6 +159,9 @@ internal class AttachService(SessionActor sessionActor) : MessageService(session
 
             // Misc
             ShowSubscriberIcon = 0,
+            // CLASSIC: members pay the full Crowns price. Left at 0, the client offered every non-member a
+            // "Members Pay 0" price in the Crown Shop; at 100 it shows no members' price at all.
+            SubscriberCrownsPricePercent = 100,
             TestServer = 1
         };
 
