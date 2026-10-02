@@ -92,6 +92,14 @@ public static class LootGranter {
         }
     }
 
+    /// <summary>CLASSIC: adds one treasure card to the wizard's treasure book (a Bazaar purchase).</summary>
+    internal static void GrantTreasureCard(IActorRef playerActor, Wizard wizard, uint templateId)
+        => UpdateTreasureCards(playerActor, wizard, new DropTableResult { TreasureCards = [templateId] });
+
+    /// <summary>CLASSIC: adds reagents to the wizard's reagent bag (a Bazaar purchase).</summary>
+    internal static void GrantReagent(IActorRef playerActor, Wizard wizard, ulong templateId, int quantity)
+        => UpdateReagents(playerActor, wizard, [new DropItemResult { ItemId = templateId.ToString(), ItemName = string.Empty, Quantity = quantity }]);
+
     private static void UpdateWizardGold(IActorRef playerActor, Wizard wizard, int goldDelta) {
         if (goldDelta == 0) {
             return;
