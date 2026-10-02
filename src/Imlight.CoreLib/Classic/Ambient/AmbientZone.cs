@@ -724,7 +724,8 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
     /// Called when the duel is announced and every few seconds while it runs and nobody has asked yet.
     /// </summary>
     private void TryOffer(AmbientDuelNotice notice) {
-        if (!AmbientWizards.Settings.Battles || notice.Pvp || notice.FreePlayerSlots <= 0 || notice.PlayerCharIds.Length == 0
+        // No chat, no offer: an ambient wizard never joins a real player's duel without asking first.
+        if (!AmbientWizards.Settings.Battles || !AmbientWizards.Settings.Chat || notice.Pvp || notice.FreePlayerSlots <= 0 || notice.PlayerCharIds.Length == 0
             || _offeredDuels.Contains(notice.SigilId)) {
             return;
         }

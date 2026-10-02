@@ -203,7 +203,32 @@ public sealed class AmbientWizardRuntimeTests {
         Assert.Equal("AmbientWizards/" + 0xA3B1E00000000106UL, record.Id);
     }
 
+    [Fact]
+    public void SayIsEncodedAsTheOfficialClientWritesIt() {
+        // GameClient::HandleSendRadialChat: a 16-bit character count, then UTF-16LE.
+        Assert.Equal(new byte[] { 0x02, 0x00, (byte) 'h', 0x00, (byte) 'i', 0x00 }, AmbientChat.EncodeSay("hi"));
+        var line = AmbientChat.EncodeSay("need a hand?");
+        Assert.Equal(2 + 2 * 12, line.Length);
+        Assert.Equal(12, line[0] | line[1] << 8);
+        Assert.Equal("need a hand?", AmbientChat.Text(line));
+    }
+
+    [Fact]
+    public void ChatOffSendsNothing() {
+        var before = AmbientWizards.Settings;
+        try {
+            AmbientWizards.Settings = AmbientSettings.Parse("4", "", "false", "", "");
+            var ambient = new AmbientWizard(Record(9, 0xA3B1E00000000109), new Wizard { CharId = 0xA3B1E00000000109 });
+            Assert.False(AmbientChat.Say(ambient, "need a hand?"));
+            Assert.False(AmbientChat.Whisper(ambient, 1234, "hi"));
+        }
+        finally {
+            AmbientWizards.Settings = before;
+        }
+    }
+
     [Theory]
+    [InlineData(new byte[] { 0x02, 0x00, (byte) 'h', 0x00, (byte) 'i', 0x00 }, "hi")]
     [InlineData(new byte[] { 0x01, (byte) 'h', (byte) 'i' }, "hi")]
     [InlineData(new byte[] { (byte) 'h', (byte) 'i', (byte) ' ' }, "hi")]
     [InlineData(new byte[0], "")]

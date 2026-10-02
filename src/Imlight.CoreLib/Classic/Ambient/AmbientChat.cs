@@ -25,11 +25,10 @@
  *   - Say goes out as MSG_RADIALCHAT to the real players in its zone (as
  *     ChatService sends a player's Say, ignore lists respected); a Text
  *     (whisper) as MSG_DIRECTEDCHAT to the player's session.
- *   - The official client sends Say text with a leading marker byte that
- *     ChatService strips when it logs a line, and relays the bytes as they
- *     came. Which byte is not documented here, so the first marker seen
- *     from a real player is learned and put in front of ambient lines; the
- *     rig's headless bot sends none and gets none.
+ *   - A Say's Message is in the official client's own form (EncodeSay: a
+ *     16-bit character count, then UTF-16LE), byte for byte what a real
+ *     client sends and ChatService relays. With [Classic] AmbientWizardChat
+ *     off, Say and Whisper send nothing.
  *   - WhereIs answers "where is X" from the quest templates: a goal titled
  *     "Talk to Lady Blackhope" whose destination is WizardCity/WC_Streets/
  *     WC_HauntedCave gives "Lady Blackhope" -> "Haunted Cave".
@@ -62,20 +61,36 @@ namespace Imlight.CoreLib.Classic.Ambient;
 /// <summary>Ambient wizard chat out (see the file header).</summary>
 internal static class AmbientChat {
 
-    private static volatile int s_prefix = -1;
+    /// <summary>
+    /// CLASSIC (2026-10-02): a Say's Message as the r806919 client writes and reads it. MSG_RADIALCHAT's Message is an
+    /// STR, but the client fills it with its own little-endian buffer (GameClient::HandleSendRadialChat, 0x1412416e0):
+    /// a 16-bit character count, then the text in UTF-16LE. MSG_RadialChat (0x141708e50 -> 0x1412c8990) reads the
+    /// count and then count * 2 bytes. Plain UTF-8 made the official client read a count of 0x656E from "ne" and
+    /// spin at 100% CPU (owner's client froze on "need a hand?"; ChatService's "drop the first byte" was a guess at
+    /// the low byte of this count).
+    /// </summary>
+    internal static byte[] EncodeSay(string text) {
+        text ??= "";
+        var body = Encoding.Unicode.GetBytes(text);
+        var bytes = new byte[2 + body.Length];
+        bytes[0] = (byte) text.Length;
+        bytes[1] = (byte) (text.Length >> 8);
+        body.CopyTo(bytes, 2);
 
-    /// <summary>Remembers the marker byte a real client puts in front of Say text, the first time one is seen.</summary>
-    internal static void LearnPrefix(byte[] raw) {
-        if (s_prefix < 0 && raw is { Length: > 1 } && raw[0] < 0x20 && raw[0] != (byte) '.') {
-            s_prefix = raw[0];
-            Logger.Information("Ambient wizards: Say lines get the client's marker byte 0x{Marker:X2}.", Logger.Args(raw[0]));
-        }
+        return bytes;
     }
 
-    /// <summary>The text of a Say as players read it (a leading marker dropped).</summary>
+    /// <summary>
+    /// The text of a Say: the client's count + UTF-16LE form when the bytes are exactly that, else plain text (our own
+    /// headless bot sends UTF-8).
+    /// </summary>
     internal static string Text(byte[] raw) {
         if (raw is null || raw.Length == 0) {
             return "";
+        }
+
+        if (raw.Length >= 2 && raw.Length == 2 + 2 * (raw[0] | raw[1] << 8)) {
+            return Encoding.Unicode.GetString(raw, 2, raw.Length - 2).Trim();
         }
 
         var start = raw[0] < 0x20 ? 1 : 0;
@@ -86,12 +101,17 @@ internal static class AmbientChat {
     internal static byte[] NameBytes(Wizard wizard)
         => DataManipulation.SpacedHexStringToBytes(wizard.PlayerNameBehavior.GetWizardNameAsByteHexString());
 
-    /// <summary>Says <paramref name="text"/> to the real players in the wizard's zone.</summary>
-    internal static void Say(AmbientWizard wizard, string text) {
-        var body = Encoding.UTF8.GetBytes(text);
-        var bytes = s_prefix >= 0 ? [(byte) s_prefix, .. body] : body;
+    /// <summary>
+    /// Says <paramref name="text"/> to the real players in the wizard's zone. Nothing at all goes out when
+    /// [Classic] AmbientWizardChat is off.
+    /// </summary>
+    internal static bool Say(AmbientWizard wizard, string text) {
+        if (!AmbientWizards.Settings.Chat || string.IsNullOrEmpty(text)) {
+            return false;
+        }
+
         var message = new GAME_5_PROTOCOL.MSG_RADIALCHAT {
-            Message = bytes,
+            Message = EncodeSay(text),
             SourceID = wizard.Wizard.GameObjectID,
             SourceName = NameBytes(wizard.Wizard),
             Filter = 2,
@@ -106,10 +126,16 @@ internal static class AmbientChat {
         }
 
         Logger.Debug("[{Zone}] {Name} (ambient): {Text}", Logger.Args(wizard.Zone, wizard.Name, text));
+
+        return true;
     }
 
     /// <summary>Whispers <paramref name="text"/> to a player (MSG_DIRECTEDCHAT, as from a friend).</summary>
     internal static bool Whisper(AmbientWizard wizard, ulong toCharId, string text) {
+        if (!AmbientWizards.Settings.Chat || string.IsNullOrEmpty(text)) {
+            return false; // [Classic] AmbientWizardChat off: no chat at all
+        }
+
         var target = OnlinePlayerCollection.GetOnlinePlayer(toCharId);
         if (target is null || AmbientWizards.IsAmbientChar(toCharId)
             || BuddyRelationshipCollection.GetCharactersWhoBlocked(wizard.CharId).Contains(toCharId)) {
