@@ -397,9 +397,8 @@ public sealed class OwnedMinionDuelTests : IDisposable {
         Assert.Single(sent.OfType<Imcodec.MessageLayer.Generated.DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_COMBATPIPS>());
         Assert.Single(sent.OfType<Imcodec.MessageLayer.Generated.DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_SHOWCOMBATUI>());
         Assert.Single(sent.OfType<Imcodec.MessageLayer.Generated.DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_SETPLANNINGPHASETIMER>());
-        // The cue is the minion "speaking" to its wizard in chat, never a server message (a stacking "!" alert).
-        var cue = Assert.Single(sent.OfType<Imcodec.MessageLayer.Generated.GAME_5_PROTOCOL.MSG_RADIALCHAT>());
-        Assert.Equal(_minion.ParticipantObject.m_globalID.Full, (ulong) cue.SourceID);
+        // No chat cue: a chat line under the creature's plain-text name froze the client.
+        Assert.Empty(sent.OfType<Imcodec.MessageLayer.Generated.GAME_5_PROTOCOL.MSG_RADIALCHAT>());
         Assert.Empty(sent.OfType<Imcodec.MessageLayer.Generated.EXTENDEDBASE_2_PROTOCOL.MSG_SERVERMESSAGE>());
         Assert.True(StageActive());
         Assert.False(_duel.HaveAllOwnedMinionOrders()); // the round waits for the minion's pick (or the timer)
@@ -488,7 +487,7 @@ public sealed class OwnedMinionDuelTests : IDisposable {
         CombatRegressionTests.Invoke(_duel, "ReceiveMinionHandDeal", new MSG_MINIONHANDDEAL { Owner = _owner.ParticipantObject, Ticket = Ticket() });
         var dealt = Drain(inbox, 5);
         Assert.Single(dealt.OfType<Imcodec.MessageLayer.Generated.DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_COMBATHAND>());
-        Assert.Single(dealt.OfType<Imcodec.MessageLayer.Generated.GAME_5_PROTOCOL.MSG_RADIALCHAT>());
+        Assert.Empty(dealt.OfType<Imcodec.MessageLayer.Generated.GAME_5_PROTOCOL.MSG_RADIALCHAT>());
 
         // A second round: "Change" during the beat re-picks the wizard's own card, and no hand is dealt.
         var ticketBefore = Ticket();

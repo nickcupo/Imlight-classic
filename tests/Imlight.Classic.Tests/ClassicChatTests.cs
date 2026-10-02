@@ -37,11 +37,11 @@ namespace Imlight.Classic.Tests;
 
 public sealed class ClassicChatTests {
     [Fact]
-    public void NoticesAreChatLinesUnlessModal() {
-        var line = Assert.IsType<GAME_5_PROTOCOL.MSG_RADIALCHAT>(ClassicChat.Notice("Added 5 gold.", modal: false));
+    public void NoticesNeverCarryAnUnpackedSpeakerName() {
+        // A chat line's speaker must be a packed name; plain text froze the client. Notices are server messages.
+        var line = Assert.IsType<EXTENDEDBASE_2_PROTOCOL.MSG_SERVERMESSAGE>(ClassicChat.Notice("Added 5 gold.", modal: false));
         Assert.Equal("Added 5 gold.", line.Message.ToString());
-        Assert.Equal(ClassicChat.Speaker, line.SourceName.ToString());
-        Assert.Equal(0UL, (ulong) line.SourceID);
+        Assert.Equal(0, line.Modal);
         var popup = Assert.IsType<EXTENDEDBASE_2_PROTOCOL.MSG_SERVERMESSAGE>(ClassicChat.Notice("Help", modal: true));
         Assert.Equal(1, popup.Modal);
     }

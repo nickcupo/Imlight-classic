@@ -46,9 +46,9 @@
  *
  * The stock client is told only what it already handles every round:
  * MSG_COMBATHAND (for its own participant), MSG_COMBATPIPS,
- * MSG_SHOWCOMBATUI, MSG_SETPLANNINGPHASETIMER, plus the minion "saying"
- * "Choose my spell!" (MSG_RADIALCHAT under its name, to the wizard only;
- * never MSG_SERVERMESSAGE, which the client stacks as "!" alerts).
+ * MSG_SHOWCOMBATUI and MSG_SETPLANNINGPHASETIMER. No chat line: a chat
+ * line under the minion's name froze the client (the name is not a packed
+ * name), and MSG_SERVERMESSAGE stacks "!" alerts.
  *
  * Created by: Nick with Claude Code (claude-opus-5-5)
  * Version: KALI 1.0
@@ -373,17 +373,13 @@ internal sealed partial class CombatDuelComponent {
     }
 
     /// <summary>
-    /// The minion "speaks" to its wizard only: an ordinary chat line under the minion's own name (and its speech
-    /// bubble), so the wizard sees which minion is choosing. Not MSG_SERVERMESSAGE: the stock client stacks every
-    /// one of those as a "!" alert on the right of the screen.
+    /// No chat cue. MSG_RADIALCHAT carries the speaker as a packed name (name keys or a serialized MadlibBlock), and a
+    /// creature's plain-text name is neither: the r806919 client logged "Failed to unpack name" and froze at 100% CPU
+    /// right after the minion's hand (2026-10-02 17:59, Durvish captain). The minion's hand and pips in the card
+    /// window are the cue; this only logs.
     /// </summary>
-    private static void MinionSays(CombatDuelSubCircle owner, CombatDuelSubCircle minion, string text)
-        => owner.ParticipantActor?.Tell(new GAME_5_PROTOCOL.MSG_RADIALCHAT {
-            SourceName = ParticipantName(minion),
-            SourceID = minion.ParticipantObject.m_globalID,
-            Message = text,
-            Filter = 2,
-        });
+    private void MinionSays(CombatDuelSubCircle owner, CombatDuelSubCircle minion, string text)
+        => Logger.Debug("Duel {0} | Slot {1} | minion slot {2}: {3}", Logger.Args(Duel?.m_duelID.Full, owner.SlotIndex, minion.SlotIndex, text));
 
     /// <summary>The wizard is leaving the stage (fled, removed): their minions go back to the AI for this round.</summary>
     private void EndMinionHand(CombatDuelSubCircle owner) {
