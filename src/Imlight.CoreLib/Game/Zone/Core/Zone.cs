@@ -195,6 +195,7 @@ public class Zone : ReceiveProtocolDispatcher, IWithTimers {
 
     protected override void PostStop() {
         Classic.ZoneDataDirectory.Remove(Self); // CLASSIC
+        Classic.ZoneObjectStates.Remove(Self); // CLASSIC: the instance's state objects (Temple of Storms obelisks).
         base.PostStop();
     }
 

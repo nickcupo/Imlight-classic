@@ -61,6 +61,11 @@ internal sealed partial class ZoneTriggerSupervisor(Core.Zone zone) : ZoneEntity
                 Logger.Warning("Zone {Zone}: {Count} trigger(s) could not be read and were skipped.", Logger.Args(Zone.ZoneName, unreadable));
             }
             ApplyStoneDiscovery(replacedTriggers); // CLASSIC
+            if (ClassicQuestEngine.IsActive) { // CLASSIC: the state objects the triggers listen to (InteractStateObjectComponent).
+                ZoneObjectStates.SetListenedTags(ZoneRef, Imlight.Classic.Quests.ObjectStateRules.ListenedTags(replacedTriggers
+                    .SelectMany(t => (t.m_fireEvents ?? []).Concat(t.m_activateEvents ?? []))
+                    .Select(name => (string) name)));
+            }
             var spawners = message.SpawnData.m_spawners;
             UpdateSpawnResultTriggers(ref replacedTriggers, spawners, message.PathData.m_pathList, message.NodeData.m_nodeList);
         }
