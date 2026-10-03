@@ -29,6 +29,9 @@
  * tones, the ten classic faces, and one of the fourteen starter-gear
  * colours with a trim colour. Same seed, same wizard.
  *
+ * Names: a first name and a two-part last name from the creation screen's
+ * own tables, only the parts the 2009 screen offered (see NameTableSizes).
+ *
  * USAGE EXAMPLE:
  * var id = AmbientIdentity.Generate(seed: 7, homeZone: "WizardCity/WC_Hub", tables, levels: (1, 12));
  *
@@ -44,12 +47,25 @@ namespace Imlight.Classic.Ambient;
 /// <summary>The seven schools a 2009 wizard could pick, by their game names.</summary>
 public enum AmbientSchool { Fire, Ice, Storm, Myth, Life, Death, Balance }
 
-/// <summary>Sizes of the game's character name tables (CharacterNames.xml).</summary>
+/// <summary>
+/// How many entries of each character-creation name table a 2009 wizard could pick (CharacterNames.xml): the first
+/// names count from index 0; the middle and last tables start with an empty "no part" entry, so their parts are table
+/// indices 1..count. The tables only grew by appending, so the 2009 choices are each list's first alphabetical run
+/// (145 boy and 131 girl first names; 84 last-name prefixes, Angle..Wyrm; 78 suffixes).
+/// </summary>
 /// <param name="FirstBoy">FirstName_HumanMale.</param>
 /// <param name="FirstGirl">FirstName_HumanFemale.</param>
-/// <param name="Middle">MiddleName_Human.</param>
-/// <param name="Last">LastName_Human.</param>
-public sealed record NameTableSizes(int FirstBoy, int FirstGirl, int Middle, int Last);
+/// <param name="Middle">MiddleName_Human (the last name's first half).</param>
+/// <param name="Last">LastName_Human (the last name's second half).</param>
+public sealed record NameTableSizes(int FirstBoy, int FirstGirl, int Middle, int Last) {
+
+    /// <summary>True when every part of <paramref name="nameKeys"/> is one a 2009 wizard could pick.</summary>
+    public bool Allows(uint nameKeys, bool female) {
+        var (first, middle, last) = ((int) (nameKeys >> 16) & 0xFF, (int) (nameKeys >> 8) & 0xFF, (int) nameKeys & 0xFF);
+        return first < (female ? FirstGirl : FirstBoy) && middle >= 1 && middle <= Middle && last >= 1 && last <= Last;
+    }
+
+}
 
 /// <summary>
 /// An ambient wizard's look as WizardCharacterBehavior numbers (the server's race-table indices).
@@ -79,9 +95,9 @@ public sealed record AmbientIdentity(int Seed, uint NameKeys, AmbientSchool Scho
         ArgumentNullException.ThrowIfNull(tables);
         var rng = new Random(seed);
         var female = rng.Next(2) == 1;
-        var first = Pick(rng, female ? tables.FirstGirl : tables.FirstBoy);
-        var middle = Pick(rng, tables.Middle);
-        var last = Pick(rng, tables.Last);
+        var first = rng.Next(Math.Max(1, Math.Min(female ? tables.FirstGirl : tables.FirstBoy, 256)));
+        var middle = 1 + rng.Next(Math.Max(1, Math.Min(tables.Middle, 255)));
+        var last = 1 + rng.Next(Math.Max(1, Math.Min(tables.Last, 255)));
         var school = (AmbientSchool) rng.Next(7);
         var level = (byte) rng.Next(levels.Min, Math.Max(levels.Min, levels.Max) + 1);
         var hairModel = (byte) rng.Next(10);
@@ -96,6 +112,19 @@ public sealed record AmbientIdentity(int Seed, uint NameKeys, AmbientSchool Scho
         var temper = (AmbientTemper) rng.Next(3);
 
         return new AmbientIdentity(seed, (uint) (first << 16 | middle << 8 | last), school, level, look, homeZone, temper);
+    }
+
+    /// <summary>
+    /// A fresh 2009 creation-screen name for a <paramref name="female"/> (or boy) wizard, for renaming one whose stored
+    /// name uses later parts. The same seed gives the same name.
+    /// </summary>
+    public static uint ClassicNameKeys(int seed, bool female, NameTableSizes tables) {
+        ArgumentNullException.ThrowIfNull(tables);
+        var rng = new Random(seed);
+        var first = rng.Next(Math.Max(1, Math.Min(female ? tables.FirstGirl : tables.FirstBoy, 256)));
+        var middle = 1 + rng.Next(Math.Max(1, Math.Min(tables.Middle, 255)));
+        var last = 1 + rng.Next(Math.Max(1, Math.Min(tables.Last, 255)));
+        return (uint) (first << 16 | middle << 8 | last);
     }
 
     /// <summary>
@@ -119,9 +148,6 @@ public sealed record AmbientIdentity(int Seed, uint NameKeys, AmbientSchool Scho
 
         return colors[rng.Next(colors.Length)];
     }
-
-    private static int Pick(Random rng, int tableSize)
-        => tableSize <= 1 ? 0 : rng.Next(1, Math.Min(tableSize, 256));
 
     /// <summary>
     /// The level range of ambient wizards in a zone: Wizard City's streets 1-12, later worlds around their quests' levels,
