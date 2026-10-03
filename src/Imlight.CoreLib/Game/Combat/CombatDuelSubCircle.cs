@@ -327,8 +327,8 @@ public class CombatDuelSubCircle {
         CombatParticipant.m_pipCount.m_powerPips = 0;
     }
 
-    internal void DiscardCard(Spell spell) {
-        _combatDeck.Discard(spell);
+    internal bool DiscardCard(Spell spell) {
+        return _combatDeck.Discard(spell);
     }
 
     internal Spell GetSpellFromLastHand(byte index) {

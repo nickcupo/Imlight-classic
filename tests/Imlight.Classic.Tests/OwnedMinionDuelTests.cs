@@ -542,6 +542,33 @@ public sealed class OwnedMinionDuelTests : IDisposable {
     }
 
     [Fact]
+    public void AWizardsTreasureCardDiscardIsRefusedWithTheHandAsItStands() {
+        var inbox = HandOn();
+        _owner._combatDeck = new CombatDeck([], [new CombatDeckSpellData { TemplateId = Tid, Quantity = 1, IsTreasureCard = true }], 7);
+        var tc = Assert.IsType<Spell>(_owner._combatDeck.DrawFromVault());
+        OwnerMove(CombatMoveType.Discard, card: 0);
+        var hand = Assert.Single(Drain(inbox, 1).OfType<Imcodec.MessageLayer.Generated.DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_COMBATHAND>());
+        Assert.Equal(_owner.ParticipantObject.m_globalID.Full, (ulong) hand.ParticipantID);
+        Assert.Same(tc, Assert.Single(_owner._combatDeck.LastGivenHand));
+        Assert.Equal(1, _owner._combatDeck.VaultTotalCount);
+        Assert.Equal(0, _owner._combatDeck.VaultRemainingCount);
+    }
+
+    [Fact]
+    public void ATreasureCardInTheMinionsHandCannotBeDiscarded() {
+        _minion._combatDeck = new CombatDeck([], [], 7);
+        var tc = new Spell { m_templateID = Tid, m_magicSchoolID = (uint) MagicSchool.Myth, m_pipCost = new SpellRank { m_spellRank = 2 }, m_treasureCard = true };
+        _minion._combatDeck.AddCardToHand(tc);
+        var inbox = HandOn();
+        OwnerMove(CombatMoveType.Pass);
+        Drain(inbox, 4);
+        OwnerMove(CombatMoveType.Discard, card: 0);
+        Assert.Single(Drain(inbox, 1).OfType<Imcodec.MessageLayer.Generated.DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_COMBATHAND>());
+        Assert.Same(tc, Assert.Single(_minion._combatDeck.LastGivenHand));
+        Assert.True(StageActive());
+    }
+
+    [Fact]
     public void ATreasureCardDrawWhileTheMinionsHandShowsIsRefused() {
         var inbox = HandOn();
         OwnerMove(CombatMoveType.Pass);

@@ -199,11 +199,16 @@ internal class CombatDeck {
     }
 
     /// <summary>
-    /// Discards a spell from the current hand. Treasure cards are returned to the vault.
+    /// Discards a spell from the current hand. False when it was not discarded: a classic treasure card cannot be
+    /// (in 2009 a treasure card leaves only when it is cast or deleted from the spellbook), so it stays in the hand.
     /// </summary>
     /// <param name="spell">The spell to discard.</param>
-    internal void Discard(Spell spell) {
-        if (ClassicRuntime.IsActive && !spell.m_treasureCard) {
+    internal bool Discard(Spell spell) {
+        if (ClassicRuntime.IsActive && spell.m_treasureCard) {
+            return false;
+        }
+
+        if (ClassicRuntime.IsActive) {
             if (RemoveHeldCard(spell)) {
                 _classicDiscardPile.Add(new CombatDeckSpellData {
                     TemplateId = spell.m_premutationSpellID != 0 ? spell.m_premutationSpellID : spell.m_templateID, Quantity = 1,
@@ -211,7 +216,7 @@ internal class CombatDeck {
                 });
             }
             // Drawing already removed this copy from the draw pile. A repeated discard is a no-op.
-            return;
+            return true;
         }
 
         if (spell.m_treasureCard) {
@@ -223,6 +228,8 @@ internal class CombatDeck {
             // Free the slot now so a vault draw can be made this turn; GetHand's removal is a no-op.
             LastGivenHand.Remove(spell);
         }
+
+        return true;
     }
 
     /// <summary>

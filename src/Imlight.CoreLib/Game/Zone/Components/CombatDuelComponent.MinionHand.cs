@@ -200,7 +200,7 @@ internal sealed partial class CombatDuelComponent {
     private void DiscardFromMinionHand(CombatDuelSubCircle owner, CombatDuelSubCircle minion, byte card) {
         var spell = minion.GetSpellFromLastHand(card);
         if (spell is null) return;
-        minion.DiscardCard(spell);
+        if (!minion.DiscardCard(spell)) return; // a treasure card stays (see HandleDiscardMove)
         // The minion's own AI pick (its fallback when the wizard does not choose) must not cast the discarded card.
         if (CombatResolver.GetQueuedAction(minion) is { } queued && ReferenceEquals(queued.Spell, spell)) {
             CombatResolver.AddCombatMove(CombatMoveType.Pass, minion, null, null);
