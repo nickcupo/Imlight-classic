@@ -89,6 +89,7 @@ public class QueuedCombatAction {
 public class CombatResolver(Duel duel, CombatDuelSubCircle[] actorSubCircles) {
     
     private const int SPELL_FIZZLE_TIME = 4;
+    private const float SPELL_FIZZLE_FAIL_TIME = 3.0f; // the failed casting sign and smoke after the summon
     private const int SPELL_PASS_TIME = 1;
     private const float SPELL_CAST_TIME = 5.0f;
     private const float HANGING_EFFECT_CONSUME_TIME = 1.0f;
@@ -349,7 +350,21 @@ public class CombatResolver(Duel duel, CombatDuelSubCircle[] actorSubCircles) {
         Logger.Debug("Duel {0} | Slot {1} | Spell fizzled.",
             Logger.Args(_duel.m_duelID.Full, action.SpellCaster.SlotIndex));
 
-        return SPELL_FIZZLE_TIME;
+        return GetFizzleCinematicTime(action);
+    }
+
+    /// <summary>
+    /// CLASSIC: a fizzle plays the spell's Summon stage, the cast and the failed casting sign with its smoke. A flat 4 s
+    /// was shorter than that for creature spells (NA Wraith: Summon 2 s), so when a minion fizzled last in the round
+    /// the next phase cut its cinematic off (owner client log 2026-10-03 11:13:33: the smoke camera and
+    /// kPhase_Resolution in the same second) and the owner saw nothing happen.
+    /// </summary>
+    private static float GetFizzleCinematicTime(QueuedCombatAction action) {
+        if (action.Spell is null) return SPELL_FIZZLE_TIME;
+        var name = SpellFactory.GetBaseSpellName(action.Spell.m_templateID);
+        if (string.IsNullOrEmpty(name)) return SPELL_FIZZLE_TIME;
+        var summon = SpellCinematics.GetSpellSummonTime(name);
+        return Math.Max(SPELL_FIZZLE_TIME, summon + SPELL_FIZZLE_FAIL_TIME);
     }
 
     private float HandleSuccessfulAction(QueuedCombatAction action, CombatActionListObj combatActionList) {
