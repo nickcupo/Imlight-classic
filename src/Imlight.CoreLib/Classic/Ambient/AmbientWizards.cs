@@ -93,6 +93,12 @@ internal sealed class AmbientWizard {
     public float Yaw { get; set; }
     public float? ArriveYaw { get; set; }
     public Vector3? Target { get; set; }
+
+    /// <summary>CLASSIC (2026-10-03): the turns still ahead on the current walk (NavGrid), Target being the next.</summary>
+    public Queue<Vector3> Route { get; } = new();
+
+    /// <summary>A short stop at a corner of the walk, until then.</summary>
+    public DateTime PauseUntil { get; set; }
     public DateTime Until { get; set; }
     public bool Moving { get; set; }
     public ulong DuelSigil { get; set; }
