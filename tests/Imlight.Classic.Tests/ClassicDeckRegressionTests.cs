@@ -109,8 +109,8 @@ public sealed class ClassicDeckRegressionTests : IDisposable {
     public void VaultReturnsAndSuccessfulConsumptionAreIdempotentAndReshuffleCannotRestoreTreasureCards() {
         var deck = new CombatDeck([], [Card(Treasure, 3)], 1);
         var card = Assert.IsType<Spell>(deck.DrawFromVault());
-        deck.Discard(card);
-        deck.Discard(card);
+        deck.ReturnToVault(card);
+        deck.ReturnToVault(card);
         Assert.Equal(3, deck.VaultRemainingCount);
         Assert.Equal(0, deck.TreasureCardsInHand);
         card = Assert.IsType<Spell>(deck.DrawFromVault());
@@ -126,6 +126,34 @@ public sealed class ClassicDeckRegressionTests : IDisposable {
         Assert.Same(card, Assert.Single(deck.LastGivenHand));
         Assert.Equal(1, deck.VaultRemainingCount);
         Assert.Equal(1, deck.TreasureCardsInHand);
+    }
+
+    [Fact]
+    public void ATreasureCardCannotBeDiscardedAndStaysInTheHand() {
+        var deck = new CombatDeck([Card(Regular, 3)], [Card(Treasure, 2)], 7);
+        deck.GetHand();
+        var tc = Assert.IsType<Spell>(deck.DrawFromVault());
+        var regular = deck.LastGivenHand.First(c => !c.m_treasureCard);
+        Assert.False(deck.Discard(tc));
+        Assert.False(deck.Discard(tc));
+        Assert.Contains(tc, deck.LastGivenHand);
+        Assert.Equal(1, deck.TreasureCardsInHand);
+        Assert.Equal(1, deck.VaultRemainingCount); // not returned to the pile
+        Assert.Equal(2, deck.VaultTotalCount);     // nothing consumed
+        Assert.True(deck.Discard(regular));        // a regular card still can be
+        Assert.DoesNotContain(regular, deck.LastGivenHand);
+    }
+
+    [Fact]
+    public void ATreasureCardStillInTheHandAtDuelEndIsNeitherConsumedNorReturnedToTheBook() {
+        // The duel's end drops the combat deck; only ConsumeFromVault (a cast) reports a card for the persistent deck
+        // to lose (CombatResolver.DoSpellCastConsequences), so a drawn but uncast treasure card stays in the deck.
+        var deck = new CombatDeck([Card(Regular, 3)], [Card(Treasure, 2)], 7);
+        deck.GetHand();
+        Assert.IsType<Spell>(deck.DrawFromVault());
+        deck.ClearHand();
+        Assert.Equal(2, deck.VaultTotalCount);
+        Assert.Equal(0, deck.TreasureCardsInHand);
     }
 
     [Fact]

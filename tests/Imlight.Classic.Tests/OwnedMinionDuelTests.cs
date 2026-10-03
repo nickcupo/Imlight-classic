@@ -529,16 +529,128 @@ public sealed class OwnedMinionDuelTests : IDisposable {
         Assert.True(StageActive()); // still the minion's pick
     }
 
-    [Fact]
-    public void AnEndlessCreatureDeckShowsItsDifferentCardsOnTheCounter() {
-        _minion._combatDeck = new CombatDeck([new CombatDeckSpellData { TemplateId = Tid, Quantity = 9999 },
-            new CombatDeckSpellData { TemplateId = Tid - 1, Quantity = 9999 }], [], 7);
+    [Theory]
+    [InlineData(9999)] // a creature's deck
+    [InlineData(1000)] // a spell-summoned minion's (rig mp2: Minion Myth 001 read 13993 of 14000)
+    public void AnEndlessCreatureDeckShowsItsDifferentCardsOnTheCounter(uint copies) {
+        _minion._combatDeck = new CombatDeck([new CombatDeckSpellData { TemplateId = Tid, Quantity = copies },
+            new CombatDeckSpellData { TemplateId = Tid - 1, Quantity = copies }], [], 7);
         _minion._combatDeck.AddCardToHand(_spell);
         var inbox = HandOn();
         OwnerMove(CombatMoveType.Pass);
         var hand = Assert.Single(Drain(inbox, 4).OfType<Imcodec.MessageLayer.Generated.DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_COMBATHAND>());
         Assert.Equal(2, hand.DeckCount);
         Assert.Equal(2, hand.TotalDeckCount);
+    }
+
+    [Fact]
+    public void AWizardsTreasureCardDiscardIsRefusedWithTheHandAsItStands() {
+        var inbox = HandOn();
+        _owner._combatDeck = new CombatDeck([], [new CombatDeckSpellData { TemplateId = Tid, Quantity = 1, IsTreasureCard = true }], 7);
+        var tc = Assert.IsType<Spell>(_owner._combatDeck.DrawFromVault());
+        OwnerMove(CombatMoveType.Discard, card: 0);
+        var hand = Assert.Single(Drain(inbox, 1).OfType<Imcodec.MessageLayer.Generated.DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_COMBATHAND>());
+        Assert.Equal(_owner.ParticipantObject.m_globalID.Full, (ulong) hand.ParticipantID);
+        Assert.Same(tc, Assert.Single(_owner._combatDeck.LastGivenHand));
+        Assert.Equal(1, _owner._combatDeck.VaultTotalCount);
+        Assert.Equal(0, _owner._combatDeck.VaultRemainingCount);
+    }
+
+    [Fact]
+    public void ATreasureCardInTheMinionsHandCannotBeDiscarded() {
+        _minion._combatDeck = new CombatDeck([], [], 7);
+        var tc = new Spell { m_templateID = Tid, m_magicSchoolID = (uint) MagicSchool.Myth, m_pipCost = new SpellRank { m_spellRank = 2 }, m_treasureCard = true };
+        _minion._combatDeck.AddCardToHand(tc);
+        var inbox = HandOn();
+        OwnerMove(CombatMoveType.Pass);
+        Drain(inbox, 4);
+        OwnerMove(CombatMoveType.Discard, card: 0);
+        Assert.Single(Drain(inbox, 1).OfType<Imcodec.MessageLayer.Generated.DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_COMBATHAND>());
+        Assert.Same(tc, Assert.Single(_minion._combatDeck.LastGivenHand));
+        Assert.True(StageActive());
+    }
+
+    /// <summary>
+    /// The r806919 client's pip-gain flags (ClientDuelManager::MSG_CombatPips, 0x1420d6130) and when the combat-message
+    /// code (0x1402d3ad0) would announce them: generic when the generic gain is above one, power when the power flag is set.
+    /// </summary>
+    private sealed class ClientPipFlags {
+        public (int G, int P) Pips; public int GenericGain; public bool PowerFlag;
+        public ClientPipFlags((int, int) start) => Pips = start;
+        public void Apply((int G, int P) next) {
+            if (next.G > Pips.G) { GenericGain = next.G - Pips.G; PowerFlag = false; }
+            if (next.P > Pips.P) { PowerFlag = true; GenericGain = 0; }
+            Pips = next;
+        }
+        public bool WouldAnnounce => GenericGain > 1 || PowerFlag;
+    }
+
+    [Fact]
+    public void FlagNeutralPipStepsReachEveryTargetWithoutAnAnnouncement() {
+        for (var g0 = 0; g0 <= 7; g0++) for (var p0 = 0; p0 + g0 <= 7; p0++)
+        for (var g1 = 0; g1 <= 7; g1++) for (var p1 = 0; p1 + g1 <= 7; p1++) {
+            var client = new ClientPipFlags((g0, p0)) { GenericGain = 3, PowerFlag = true }; // worst stale state
+            var steps = CombatDuelComponent.FlagNeutralPipSteps(((byte) g0, (byte) p0), ((byte) g1, (byte) p1));
+            foreach (var s in steps) client.Apply((s.Generic, s.Power));
+            Assert.Equal((g1, p1), client.Pips);
+            if (steps.Count > 0) Assert.False(client.WouldAnnounce, $"{g0}+{p0}P -> {g1}+{p1}P");
+            else Assert.Equal((g0, p0), (g1, p1));
+            Assert.True(steps.All(s => s.Generic <= 7));
+        }
+    }
+
+    private static (int G, int P)? OwnerEntry(Imcodec.MessageLayer.Generated.DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_COMBATPIPS m, ulong owner) {
+        var serializer = new ObjectSerializer(Versionable: false, Behaviors: SerializerFlags.None);
+        Assert.True(serializer.Deserialize<CombatPipListObj>(m.PipData, (PropertyFlags) 5, out var list));
+        var e = list!.m_pipList.FirstOrDefault(x => (ulong) x.m_partID == owner);
+        return e is null ? null : (e.m_pips.m_genericPips, e.m_pips.m_powerPips);
+    }
+
+    [Fact]
+    public void TheMinionsHandGreysByTheMinionsPipsAndTheWizardsComeBackWithoutAnAnnouncement() {
+        _owner.CombatParticipant.m_pipCount = new PipCount { m_genericPips = 1, m_powerPips = 0 };
+        _minion.CombatParticipant.m_pipCount = new PipCount { m_genericPips = 1, m_powerPips = 2 };
+        var inbox = HandOn();
+        OwnerMove(CombatMoveType.Pass);
+        var sent = Drain(inbox, 5);
+        var pipMsgs = sent.OfType<Imcodec.MessageLayer.Generated.DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_COMBATPIPS>().ToList();
+        Assert.NotEmpty(pipMsgs);
+        Assert.True(sent.IndexOf(pipMsgs.Last()) < sent.IndexOf(sent.OfType<Imcodec.MessageLayer.Generated.DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_COMBATHAND>().Single()));
+        var owner = _owner.ParticipantObject.m_globalID.Full;
+        var client = new ClientPipFlags((1, 0));
+        foreach (var m in pipMsgs) client.Apply(OwnerEntry(m, owner)!.Value);
+        Assert.Equal((1, 2), client.Pips);   // the minion's pips: a 3-pip card (2 power pips count double) is castable
+        Assert.False(client.WouldAnnounce);
+        Assert.Equal(1, _owner.CombatParticipant.m_pipCount.m_genericPips); // the wizard's real pips never change
+        Assert.Equal(0, _owner.CombatParticipant.m_pipCount.m_powerPips);
+
+        OwnerMove(CombatMoveType.Attack, card: 0, target: 0); // the minion's pick: the stage ends
+        foreach (var m in Drain(inbox, 1).OfType<Imcodec.MessageLayer.Generated.DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_COMBATPIPS>()) client.Apply(OwnerEntry(m, owner)!.Value);
+        Assert.Equal((1, 0), client.Pips);
+        Assert.False(client.WouldAnnounce);
+        Assert.False(StageActive());
+    }
+
+    [Fact]
+    public void ANewRoundWithEmptyCirclesResetsTheMinionHandWithoutThrowing() {
+        // Rig mp1: an empty circle's null participant object as a dictionary key stopped every duel's MSG_NEWROUND.
+        Assert.Contains(_duel.SubCircles, circle => circle is not null && circle.ParticipantObject is null);
+        _owner.CombatParticipant.m_pipCount = new PipCount { m_genericPips = 1, m_powerPips = 0 };
+        _minion.CombatParticipant.m_pipCount = new PipCount { m_genericPips = 3, m_powerPips = 0 };
+        var inbox = HandOn();
+        OwnerMove(CombatMoveType.Pass); // the minion's pips are now shown
+        Drain(inbox, 5);
+        typeof(CombatDuelComponent).GetMethod("ResetMinionHand", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(_duel, null);
+        Assert.False(StageActive());
+    }
+
+    [Fact]
+    public void AMinionOfAnotherSchoolShowsItsSchoolValueAsPlainPips() {
+        _minion.CombatParticipant.m_primaryMagicSchoolID = (int) MagicSchool.Death;
+        _minion.CombatParticipant.m_pipCount = new PipCount { m_genericPips = 1, m_powerPips = 2 };
+        Assert.Equal(((byte) 5, (byte) 0), CombatDuelComponent.MinionPipsForOwnerWindow(_owner, _minion));
+        _minion.CombatParticipant.m_pipCount = new PipCount { m_genericPips = 3, m_powerPips = 4 };
+        Assert.Equal(((byte) 7, (byte) 0), CombatDuelComponent.MinionPipsForOwnerWindow(_owner, _minion));
     }
 
     [Fact]

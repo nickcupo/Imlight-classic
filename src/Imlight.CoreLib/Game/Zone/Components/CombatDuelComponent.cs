@@ -1291,7 +1291,15 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
             return;
         }
 
-        caster.DiscardCard(spell);
+        if (!caster.DiscardCard(spell)) {
+            // CLASSIC: a treasure card cannot be discarded (2009: it leaves only when cast or deleted from the book). The
+            // r806919 client blocks a discard only for m_noDiscard templates (GUI2_NoDiscardSpell) and has no failure
+            // reply for a refused one, so the authoritative answer is the hand as it stands, the card still in it.
+            Logger.Debug("Duel {0} | Slot {1} | Discard of treasure card {2} refused.",
+                Logger.Args(Duel.m_duelID.Full, caster.SlotIndex, spell.m_templateID));
+            SendCurrentCombatHand(caster);
+            return;
+        }
 
         Logger.Debug("Duel {0} | Slot {1} | Discarded a card: {2}",
             Logger.Args(Duel.m_duelID.Full, caster.SlotIndex, spell.m_templateID.ToString() ?? "None"));
