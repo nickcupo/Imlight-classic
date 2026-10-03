@@ -134,10 +134,31 @@ public class WizardNameBank : RootSingleResourceSingleton<WizardNameBank>, IMemo
         return string.IsNullOrEmpty(firstName) ? lastName : $"{firstName} {lastName}";
     }
 
-    /// <summary>CLASSIC: the sizes of the human name tables (boy first names, girl first names, middle, last).</summary>
-    internal static (int FirstBoy, int FirstGirl, int Middle, int Last) CharacterTableSizes()
-        => (GetTableSize(FirstNameHumanMaleTableName), GetTableSize(FirstNameHumanFemaleTableName),
-            GetTableSize(MiddleNameHumanTableName), GetTableSize(LastNameHumanTableName));
+    /// <summary>
+    /// CLASSIC: how many entries of each human name table the 2009 creation screen offered: the lists grew only by
+    /// appending, so each list's first alphabetical run (English names) is the original set. Middle and last tables
+    /// start with an empty entry, which is not counted.
+    /// </summary>
+    internal static (int FirstBoy, int FirstGirl, int Middle, int Last) ClassicCreationNameCounts()
+        => (AlphabeticalRun(FirstNameHumanMaleTableName, 0), AlphabeticalRun(FirstNameHumanFemaleTableName, 0),
+            AlphabeticalRun(MiddleNameHumanTableName, 1), AlphabeticalRun(LastNameHumanTableName, 1));
+
+    private static int AlphabeticalRun(string tableName, int skip) {
+        var size = GetTableSize(tableName);
+        string previous = null;
+        var count = 0;
+        for (var i = skip; i < size; i++) {
+            var name = GetEnglishNamePart(tableName, i);
+            if (previous is not null && string.Compare(name, previous, System.StringComparison.OrdinalIgnoreCase) < 0) {
+                break;
+            }
+
+            previous = name;
+            count++;
+        }
+
+        return count;
+    }
 
     private static int GetTableSize(string tableName)
         => s_characterNameTable.TryGetValue(tableName, out var names) ? names.Count : 0;
