@@ -58,8 +58,9 @@ internal class CombatDeck {
     internal int VaultTotalCount => (int) _treasureVault.Sum(s => s.Quantity);
     internal int VaultRemainingCount => (int) _treasureVaultUsed.Sum(s => s.Quantity);
     internal int TreasureCardsInHand { get; private set; }
-    // CLASSIC: a creature's deck lists each spell once with 9999 copies (CombatCreatureDeckComponent): it never runs out.
-    internal bool IsEndless => _spellData.Any(s => s.Quantity >= 9999);
+    // CLASSIC: a creature's deck lists each spell once with 9999 copies (CombatCreatureDeckComponent), a spell-summoned
+    // minion's (Minion Myth 001) with 1000 (the counter read 13993 of 14000): neither runs out. No wizard deck holds 1000.
+    internal bool IsEndless => _spellData.Any(s => s.Quantity >= 1000);
     internal int DistinctCardCount => _spellData.Count;
 
     private readonly List<CombatDeckSpellData> _spellData;

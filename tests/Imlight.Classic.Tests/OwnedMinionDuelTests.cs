@@ -529,10 +529,12 @@ public sealed class OwnedMinionDuelTests : IDisposable {
         Assert.True(StageActive()); // still the minion's pick
     }
 
-    [Fact]
-    public void AnEndlessCreatureDeckShowsItsDifferentCardsOnTheCounter() {
-        _minion._combatDeck = new CombatDeck([new CombatDeckSpellData { TemplateId = Tid, Quantity = 9999 },
-            new CombatDeckSpellData { TemplateId = Tid - 1, Quantity = 9999 }], [], 7);
+    [Theory]
+    [InlineData(9999)] // a creature's deck
+    [InlineData(1000)] // a spell-summoned minion's (rig mp2: Minion Myth 001 read 13993 of 14000)
+    public void AnEndlessCreatureDeckShowsItsDifferentCardsOnTheCounter(uint copies) {
+        _minion._combatDeck = new CombatDeck([new CombatDeckSpellData { TemplateId = Tid, Quantity = copies },
+            new CombatDeckSpellData { TemplateId = Tid - 1, Quantity = copies }], [], 7);
         _minion._combatDeck.AddCardToHand(_spell);
         var inbox = HandOn();
         OwnerMove(CombatMoveType.Pass);
