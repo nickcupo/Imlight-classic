@@ -84,6 +84,9 @@ internal static class InteractableQuestEvents {
         ["HO_Pumpkin02"] = PumpkinEvents(),
         ["HO_Pumpkin03"] = PumpkinEvents(),
         ["MS_SoulChainForge"] = [new("forgeSoulChain")], // MS-DTH2-C02-001 goal 3, in the Village of Sorrow
+        // CLASSIC: the Tree of Life (MS_LifeTree.xml's InteractableBehavior fires "TreeUsed"); MS-DTH3-C03-002 goal 1 counts the
+        // use, and the zone's OpenSpiritGate trigger opens the spirit-world portal on the same event (ZoneEventsFiredIn).
+        ["MS_LifeTree"] = [new("TreeUsed", "MooShu/MS_Death/MS_Death_Zone3_AncientTree")],
         ["MS_AirShrine"] = [new("AirShrineUsed", "MooShu/MS_Plague/Interiors/MS_Plague2_T5")], // MS-PLAG2-C04-005 goal 2
         ["KT_MapRoomStaff"] = [new("UseStaff")], // KT-PYMHub-C01-005 goal 3, in the Throne Room of Fire
         ["DS_Crystal_SampleGrove2_006"] = [new("CollectCrystal_Grove2_6")], // DS-ACAD1-C01-002 goal 6, in the Crystal Grove
@@ -151,6 +154,18 @@ internal static class InteractableQuestEvents {
             new([812068], () => [HasQuest("DS-NEC1-C02-002"), GoalIncomplete("DS-NEC1-C02-002", "Goal")]),
         ],
     };
+
+    /// <summary>
+    /// CLASSIC: the events using the object posts to its zone, which zone triggers listen for (the Tree of Life's
+    /// "TreeUsed" opens the spirit-world portal). The same names its quest goals count.
+    /// </summary>
+    /// <param name="objectTemplate">The used object's template.</param>
+    /// <param name="zonePath">The zone the object is in.</param>
+    internal static IReadOnlyList<string> ZoneEventsFiredIn(GameObjectTemplate objectTemplate, string zonePath)
+        => ClassicQuestEngine.IsActive && objectTemplate?.m_objectName is not null
+            && s_questEventsByObject.TryGetValue(objectTemplate.m_objectName, out var questEvents)
+            ? [.. questEvents.Where(questEvent => questEvent.FiresIn(zonePath)).Select(questEvent => questEvent.Name).Distinct()]
+            : [];
 
     /// <summary>
     /// Whether the object fires any quest event a goal can name.

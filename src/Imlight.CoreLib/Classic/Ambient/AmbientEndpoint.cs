@@ -68,11 +68,9 @@ internal sealed class AmbientEndpoint : UntypedActor {
                 });
                 break;
 
-            case GAME_5_PROTOCOL.MSG_RADIALCHAT chat:
-                AmbientChat.LearnPrefix((byte[]) chat.Message);
-                _group.Tell(new AmbientInbox(_wizard, message, Sender));
-                break;
-
+            case GAME_5_PROTOCOL.MSG_RADIALCHAT:
+            case GAME_5_PROTOCOL.MSG_RADIALQUICKCHAT:
+            case GAME_5_PROTOCOL.MSG_DIRECTEDQUICKCHAT:
             case ZONE_102_PROTOCOL.MSG_ZONETRANSFERRSP:
             case ZONE_102_PROTOCOL.MSG_ADDPLAYERRSP:
             case ZONE_102_PROTOCOL.MSG_PLAYERADDEDTOZONE:

@@ -53,6 +53,11 @@ public class ServerPetOwnerBehavior : IClientBehaviorProvider<ClientPetOwnerBeha
     public List<PetEggData> Eggs { get; set; }
 
     /// <summary>
+    /// CLASSIC: when each of this wizard's pets last hatched (pet item GID to Unix seconds); 2010: once every 24 hours.
+    /// </summary>
+    public Dictionary<ulong, long> PetHatchTimes { get; set; }
+
+    /// <summary>
     /// Runtime-only CraftingSlot list rebuilt from Eggs on load.
     /// ClientPetOwnerBehavior.m_morphingSlots is NOT populated from this —
     /// the client learns about eggs via MSG_PETEGGMORPHED/MSG_PETMORPHINGSLOT messages.

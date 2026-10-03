@@ -52,7 +52,9 @@ internal static class ResourceManager {
 
             wad = cachedWad;
         }
-        catch {
+        catch (Exception ex) {
+            // CLASSIC: say why; a zone that cannot load only showed "patch server unavailable".
+            Logger.Error("Could not load the archive {0}: {1}", Logger.Args(wadName, ex.ToString()));
             return false;
         }
 

@@ -560,6 +560,12 @@ public class ZONE_102_PROTOCOL : IServerProtocol {
         /// </summary>
         public ulong[] KilledTemplateIds;
 
+        /// <summary>
+        /// CLASSIC: a volume's enter event for a wizard who arrived inside the volume (posted on their first move there).
+        /// Triggers that teleport do not fire on it, so a landing spot inside an exit volume never bounces the wizard.
+        /// </summary>
+        public bool ArrivedInside;
+
     }
 
     /// <summary>
@@ -743,6 +749,21 @@ public class ZONE_102_PROTOCOL : IServerProtocol {
     public sealed class MSG_ZONEPATHSPAWN : IServerMessage {
 
         public byte MessageOrder { get; } = 42;
+        public byte ServiceID { get; } = 102;
+
+        public uint SpawnObjectID;
+
+        /// <summary>CLASSIC: a zone trigger's activating ResSpawn: the spawner fills to its m_maxNumberOfSpawns.</summary>
+        public bool Fill;
+    }
+
+    /// <summary>
+    /// CLASSIC: a ResSpawn with m_activate false: the spawner stops spawning until a ResSpawn activates it again (a boss's
+    /// death trigger, so Ideyoshi and Kagemoosha do not come back beside the Oni they turned into).
+    /// </summary>
+    public sealed class MSG_ZONEPATHDEACTIVATE : IServerMessage {
+
+        public byte MessageOrder { get; } = 121;
         public byte ServiceID { get; } = 102;
 
         public uint SpawnObjectID;

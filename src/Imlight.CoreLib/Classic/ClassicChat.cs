@@ -20,12 +20,13 @@
  * ========================================================================
  *
  * PURPOSE:
- * CLASSIC: a plain chat line from the server to one player. The r806919
- * client turns every non-modal MSG_SERVERMESSAGE into a "!" alert icon on the
- * right of the screen (WizardGUIManager::HandleServerMessage, 0x140dd30d0),
- * and they stack. Short notices (command replies, "your side won", PvP seat
- * notices) go to the chat log instead, as an MSG_RADIALCHAT sent only to that
- * player. Modal messages (help pages, kicks) stay server messages: a popup.
+ * CLASSIC: a short server notice to one player. The r806919 client turns every
+ * non-modal MSG_SERVERMESSAGE into a "!" alert icon (WizardGUIManager::
+ * HandleServerMessage, 0x140dd30d0). A chat line (MSG_RADIALCHAT) would avoid
+ * that, but its SourceName must be a packed name (name keys, or a serialized
+ * MadlibBlock): plain text made the client log "Failed to unpack name" and freeze
+ * at 100% CPU (2026-10-02 17:59, a minion's chat cue). Until a packed speaker
+ * name is proven in the client, Notice and Line send MSG_SERVERMESSAGE again.
  *
  * USAGE EXAMPLE:
  * session.Tell(ClassicChat.Line("Added 200000 gold."));
@@ -42,11 +43,11 @@ namespace Imlight.CoreLib.Classic;
 internal static class ClassicChat {
     internal const string Speaker = "Wizard101 Classic";
 
-    /// <summary>A chat line to one player (send it to that player's session only). No speech bubble: no source object.</summary>
-    internal static GAME_5_PROTOCOL.MSG_RADIALCHAT Line(string text, string speaker = Speaker)
-        => new() { SourceName = speaker, SourceID = 0, Message = text ?? "", Filter = 2 };
+    /// <summary>A short notice to one player (send it to that player's session only).</summary>
+    internal static EXTENDEDBASE_2_PROTOCOL.MSG_SERVERMESSAGE Line(string text)
+        => new() { Message = text ?? "", Modal = 0 };
 
-    /// <summary>A server notice: a popup when modal, otherwise a chat line (never a stacking "!" alert).</summary>
+    /// <summary>A server notice: a popup when modal, otherwise a short notice.</summary>
     internal static object Notice(string text, bool modal)
         => modal ? new EXTENDEDBASE_2_PROTOCOL.MSG_SERVERMESSAGE { Message = text, Modal = 1 } : Line(text);
 }

@@ -159,7 +159,8 @@ public sealed class GoldenBattleTests : IDisposable {
         Assert.True(hash == GoldenHash, $"golden fight changed ({hash}):\n{log}");
     }
 
-    private const string GoldenHash = "AB2C10F4D5F6BC36";
+    // 2026-10-02: draws weigh each remaining copy (CombatDeck.WeightedIndex), so the seed deals different hands.
+    private const string GoldenHash = "66CE29FED56035DD";
     private const uint CardBase = uint.MaxValue - 300;
 
     // Two wizards and two monsters, eight rounds. Every caster casts a 75% Fire card whose damage is one of three

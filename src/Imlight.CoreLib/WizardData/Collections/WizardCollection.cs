@@ -583,6 +583,15 @@ public static class WizardCollection {
             .Any(e => i.m_globalID == e))
         ];
 
+        // CLASSIC: the snack bag lives in its own collection and was never read back, so bought snacks were gone at the
+        // next zone. Load it like the backpack.
+        var snacks = session.Query<ClientPetSnackItem>(collectionName: WizardPetSnackCollection.CollectionName)
+            .Where(x => x.m_characterId == wizard.CharId)
+            .ToList();
+        wizard.PetSnackBehavior ??= new();
+        var snackIds = wizard.PetSnackBehavior.SnackItemIds;
+        wizard.PetSnackBehavior.Snacks = [.. snacks.Where(s => s.m_quantity > 0 && (snackIds is null || snackIds.Contains(s.m_globalID)))];
+
         // The friends list is expanded to include a 'relationship' model
         // which helps keep track of the relationship between two players for moderation purposes.
         // `Wizard` only keeps track of the IDs of the relationships.

@@ -161,6 +161,7 @@ public static class WizardObjectLoader {
         if (CoreObjectFactory.FindBehaviorInstance<ClientPetSnackBehavior>(clientObject, out var petSnackBehavior)) {
             var idx = clientObject.m_inactiveBehaviors.IndexOf(petSnackBehavior);
             clientObject.m_inactiveBehaviors[idx] = character.PetSnackBehavior.GetClientBehaviorInstance();
+            Imlight.Common.Logger.Debug("Snack bag for {0}: {1} stack(s).", Imlight.Common.Logger.Args(character.CharId, character.PetSnackBehavior.Snacks?.Count ?? -1)); // CLASSIC
         }
         else {
             throw new Exception("Behavior ClientPetSnackBehavior not found!");

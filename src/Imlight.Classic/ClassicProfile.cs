@@ -174,6 +174,11 @@ public sealed class ProfileRules {
     public string? LaterObjects { get; init; }
 
     /// <summary>
+    /// The creature-deck file (such as creatures/creature-decks-2009.yaml): each listed creature template casts its own spells. CLASSIC.
+    /// </summary>
+    public string? CreatureDecks { get; init; }
+
+    /// <summary>
     /// The rank from which power pips appear; null when unset or set to null.
     /// </summary>
     public string? PowerPipsFromRank { get; init; }

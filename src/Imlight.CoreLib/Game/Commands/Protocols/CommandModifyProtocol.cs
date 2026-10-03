@@ -433,6 +433,26 @@ internal class CommandModifyProtocol : CommandProtocol {
         InformSenderClient($"Set max mana to {manaInt}.");
     }
 
+    // CLASSIC: QA help for the Pet Pavilion; the level up itself still comes from a pet game or snack.
+    [Help("Add experience to your equipped pet without leveling it (stops 1 short of its next level).")]
+    [Command("petxp")]
+    [AuthRequired(AuthLevel.QualityAssurance)]
+    private void AddPetXpCommand(string xp) {
+        var pet = Services.PetGameService.EquippedPet(Context.Character);
+        var behavior = PetProgress.Behavior(pet);
+        if (!int.TryParse(xp, out var amount) || behavior is null || behavior.m_level == 0) {
+            InformSenderClient("Equip a hatched pet and give an amount.");
+
+            return;
+        }
+
+        PetProgress.EnsureInitialized(pet);
+        var stop = (int) behavior.m_requiredXP - 1;
+        behavior.m_XP = (uint) Math.Clamp((int) behavior.m_XP + amount, 0, Math.Max((int) behavior.m_XP, stop));
+        WizardData.Collections.WizardItemCollection.SavePetGrowth(pet);
+        InformSenderClient($"Pet XP now {behavior.m_XP} of {behavior.m_requiredXP} (level {behavior.m_level}).");
+    }
+
     [Help("Set your maximum energy.")]
     [Command("maxenergy")]
     [Alias("maxnrg")]

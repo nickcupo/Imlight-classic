@@ -45,10 +45,10 @@
  * minion's hand is dealt; "Change" in that beat is still the wizard's own.
  *
  * The stock client is told only what it already handles every round:
- * MSG_COMBATHAND (for its own participant), MSG_COMBATPIPS,
- * MSG_SHOWCOMBATUI, MSG_SETPLANNINGPHASETIMER, plus the minion "saying"
- * "Choose my spell!" (MSG_RADIALCHAT under its name, to the wizard only;
- * never MSG_SERVERMESSAGE, which the client stacks as "!" alerts).
+ * MSG_COMBATHAND (for its own participant), MSG_SHOWCOMBATUI and
+ * MSG_SETPLANNINGPHASETIMER. No chat line: a chat
+ * line under the minion's name froze the client (the name is not a packed
+ * name), and MSG_SERVERMESSAGE stacks "!" alerts.
  *
  * Created by: Nick with Claude Code (claude-opus-5-5)
  * Version: KALI 1.0
@@ -105,7 +105,6 @@ internal sealed partial class CombatDuelComponent {
 
     private readonly Dictionary<CoreObject, MinionHandStage> _minionHandStages = new(ReferenceEqualityComparer.Instance);
     private readonly List<CoreObject> _summonOrder = [];
-    private bool _minionHandPipsShown;
     private int _minionHandTickets;
 
     /// <summary>A Myth wizard whose minion this is will pick its moves (called when the minion is registered).</summary>
@@ -185,11 +184,34 @@ internal sealed partial class CombatDuelComponent {
 
                 return true;
             }
+            case (byte) CombatMoveType.Discard:
+                // The minion's card, the way a wizard's discard works (HandleDiscardMove): it leaves the minion's hand
+                // and the slot stays open until the next round's draw refills it from the minion's own deck.
+                DiscardFromMinionHand(owner, minion, message.SpellSelection);
+                PresentMinionHand(owner, minion);
+                return true;
             default:
-                // Discard, enchant, draw or a stray change: the minion's hand is not the wizard's deck. Show it again.
+                // Enchant, draw or a stray change: the minion's hand is not the wizard's deck. Show it again.
                 PresentMinionHand(owner, minion);
                 return true;
         }
+    }
+
+    private void DiscardFromMinionHand(CombatDuelSubCircle owner, CombatDuelSubCircle minion, byte card) {
+        var spell = minion.GetSpellFromLastHand(card);
+        if (spell is null) return;
+        minion.DiscardCard(spell);
+        // The minion's own AI pick (its fallback when the wizard does not choose) must not cast the discarded card.
+        if (CombatResolver.GetQueuedAction(minion) is { } queued && ReferenceEquals(queued.Spell, spell)) {
+            CombatResolver.AddCombatMove(CombatMoveType.Pass, minion, null, null);
+        }
+
+        if (_ownedMinionFallbacks.TryGetValue(minion.ParticipantObject, out var fallback) && ReferenceEquals(fallback.Spell, spell)) {
+            _ownedMinionFallbacks.Remove(minion.ParticipantObject);
+        }
+
+        Logger.Debug("Duel {0} | Slot {1} | minion slot {2} discarded card {3} ({4})",
+            Logger.Args(Duel.m_duelID.Full, owner.SlotIndex, minion.SlotIndex, card, spell.m_templateID));
     }
 
     /// <summary>The wizard asked for a treasure card while a minion's hand is showing: not for the minion.</summary>
@@ -245,7 +267,6 @@ internal sealed partial class CombatDuelComponent {
 
         // Every minion has its move: show the wizard's own pips again and every chosen card over its caster.
         stage.PendingTicket = 0;
-        RestoreOwnerPips(owner);
         if (CombatResolver.GetQueuedAction(owner) is { } own) {
             SendCombatMoveSelection(owner.ParticipantObject.m_globalID, own.Spell is null ? (byte) CombatMoveType.Pass : (byte) CombatMoveType.Attack,
                 own.Spell, (byte) (own.SelectedTarget?.SlotIndex ?? 0));
@@ -321,7 +342,13 @@ internal sealed partial class CombatDuelComponent {
         stage.PendingCue = null;
     }
 
-    /// <summary>Deals the minion's hand into the wizard's card window, with the minion's pips, and reopens the pick.</summary>
+    /// <summary>
+    /// Deals the minion's hand into the wizard's card window and reopens the pick. The deck counter
+    /// (GUI_DeckCounter: CARDSREMAINING = DeckCount, CARDSTOTAL = TotalDeckCount) shows the minion's own deck.
+    /// The pip display keeps the wizard's own pips: the stock client plays its "gained a pip" notice whenever a
+    /// participant's pips go up in MSG_COMBATPIPS (ClientDuelManager::MSG_CombatPips), and retail never put a
+    /// minion's pips there. The minion's pips are checked on its pick (ValidateOwnedMinionOrder).
+    /// </summary>
     private void PresentMinionHand(CombatDuelSubCircle owner, CombatDuelSubCircle minion) {
         if (owner.ParticipantActor is null || minion._combatDeck is null) return;
         if (!_serializer.Serialize(minion.GetCurrentHand(), _combatParticipantHandFlags, out var hand)) {
@@ -329,16 +356,15 @@ internal sealed partial class CombatDuelComponent {
             return;
         }
 
-        // The deck counter keeps the wizard's own numbers (a creature's deck is not a player deck: tens of thousands).
         owner.ParticipantActor.Tell(new DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_COMBATHAND {
-            DeckCount = (byte) owner.AvailableSpells,
-            TotalDeckCount = (ushort) owner.TotalSpells,
-            TreasureCardCount = 0,
+            // A creature's deck is endless (each spell 9999 times, so the counter read 65535 of 65535): it shows the
+            // number of different cards the minion can be dealt, the same on both sides, as it never runs down.
+            DeckCount = minion._combatDeck.IsEndless ? DeckCounter((uint) minion._combatDeck.DistinctCardCount) : DeckCounter(minion.AvailableSpells),
+            TotalDeckCount = minion._combatDeck.IsEndless ? DeckCounter((uint) minion._combatDeck.DistinctCardCount) : DeckCounter(minion.TotalSpells),
+            TreasureCardCount = 0, // a minion has no treasure cards
             ParticipantID = owner.ParticipantObject.m_globalID,
             HandData = hand,
         });
-        SendPipsTo(owner, minion);
-        _minionHandPipsShown = true;
         var remaining = (int) Math.Ceiling(Math.Max(1, (_ownedMinionPlanningDeadline - DateTime.UtcNow).TotalSeconds));
         owner.ParticipantActor.Tell(new DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_SHOWCOMBATUI { DuelID = SigilId });
         owner.ParticipantActor.Tell(new DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_SETPLANNINGPHASETIMER {
@@ -347,48 +373,17 @@ internal sealed partial class CombatDuelComponent {
     }
 
     /// <summary>
-    /// MSG_COMBATPIPS for the wizard's client only, with <paramref name="shown"/>'s pips on the wizard's own entry,
-    /// so the card window greys out exactly the cards the shown participant cannot pay for.
+    /// No chat cue. MSG_RADIALCHAT carries the speaker as a packed name (name keys or a serialized MadlibBlock), and a
+    /// creature's plain-text name is neither: the r806919 client logged "Failed to unpack name" and froze at 100% CPU
+    /// right after the minion's hand (2026-10-02 17:59, Durvish captain). The minion's hand and pips in the card
+    /// window are the cue; this only logs.
     /// </summary>
-    private void SendPipsTo(CombatDuelSubCircle owner, CombatDuelSubCircle shown) {
-        var pips = new CombatPipListObj { m_pipList = [], m_duelID = SigilId };
-        EnactActionOnSubCircles(circle => {
-            if (!circle.AddedToDuel || !circle.IsAlive) return;
-            var source = ReferenceEquals(circle, owner) ? shown : circle;
-            pips.m_pipList.Add(new ParticipantPipData {
-                m_acq = 1,
-                m_partID = (GID) circle.ParticipantObject.m_globalID,
-                m_pips = new PipCount {
-                    m_genericPips = source.CombatParticipant.m_pipCount.m_genericPips,
-                    m_powerPips = source.CombatParticipant.m_pipCount.m_powerPips,
-                },
-            });
-        });
-        if (!_serializer.Serialize(pips, _combatParticipantStatFlags, out var buffer)) return;
-        owner.ParticipantActor.Tell(new DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_COMBATPIPS { DuelID = SigilId, PipData = buffer });
-    }
-
-    private void RestoreOwnerPips(CombatDuelSubCircle owner) {
-        if (owner.ParticipantActor is not null && owner.CombatParticipant?.m_pipCount is not null) SendPipsTo(owner, owner);
-    }
-
-    /// <summary>
-    /// The minion "speaks" to its wizard only: an ordinary chat line under the minion's own name (and its speech
-    /// bubble), so the wizard sees which minion is choosing. Not MSG_SERVERMESSAGE: the stock client stacks every
-    /// one of those as a "!" alert on the right of the screen.
-    /// </summary>
-    private static void MinionSays(CombatDuelSubCircle owner, CombatDuelSubCircle minion, string text)
-        => owner.ParticipantActor?.Tell(new GAME_5_PROTOCOL.MSG_RADIALCHAT {
-            SourceName = ParticipantName(minion),
-            SourceID = minion.ParticipantObject.m_globalID,
-            Message = text,
-            Filter = 2,
-        });
+    private void MinionSays(CombatDuelSubCircle owner, CombatDuelSubCircle minion, string text)
+        => Logger.Debug("Duel {0} | Slot {1} | minion slot {2}: {3}", Logger.Args(Duel?.m_duelID.Full, owner.SlotIndex, minion.SlotIndex, text));
 
     /// <summary>The wizard is leaving the stage (fled, removed): their minions go back to the AI for this round.</summary>
     private void EndMinionHand(CombatDuelSubCircle owner) {
-        if (!_minionHandStages.Remove(owner.ParticipantObject, out var stage)) return;
-        if (stage.Current is not null) RestoreOwnerPips(owner);
+        _minionHandStages.Remove(owner.ParticipantObject);
     }
 
     /// <summary>A minion left mid-planning: move its owner's stage on if it was that minion's turn.</summary>
@@ -406,10 +401,6 @@ internal sealed partial class CombatDuelComponent {
         }
     }
 
-    /// <summary>Planning ended or a new round began: no stage carries over, and every client sees true pips.</summary>
-    private void ResetMinionHand(bool sendTruePips) {
-        _minionHandStages.Clear();
-        if (sendTruePips && _minionHandPipsShown) SendCombatPips();
-        _minionHandPipsShown = false;
-    }
+    /// <summary>Planning ended or a new round began: no stage carries over.</summary>
+    private void ResetMinionHand() => _minionHandStages.Clear();
 }

@@ -145,6 +145,9 @@ internal static class Program {
         var task = StartPatchServer();
         task.Wait();
 
+        // CLASSIC: the patch server KingsIsle's own launcher talks to ([Classic] LauncherPatchPort; off when empty).
+        Imlight.CoreLib.Classic.Launcher.LauncherPatchServer.Start(s_imlightSystem);
+
         // Load resources. Record the time it takes to load resources.
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
         Logger.Information("Director is now explicitly loading resources..");

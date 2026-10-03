@@ -64,6 +64,7 @@ public static class ClassicProgression {
     private static volatile MobStats? s_mobStats; // CLASSIC
     private static volatile CrownShopCatalog? s_crownShop; // CLASSIC
     private static volatile LaterObjects s_laterObjects = LaterObjects.Empty; // CLASSIC
+    private static volatile CreatureDecks s_creatureDecks = CreatureDecks.Empty; // CLASSIC
 
     /// <summary>
     /// The profile's XP table, or null for the client's curve.
@@ -104,6 +105,11 @@ public static class ClassicProgression {
     /// The zone objects of later versions the server does not spawn; empty when the profile names no list.
     /// </summary>
     public static LaterObjects LaterObjects => s_laterObjects;
+
+    /// <summary>
+    /// The decks creatures of the era cast, by creature template; empty when the profile names no file. CLASSIC.
+    /// </summary>
+    public static CreatureDecks CreatureDecks => s_creatureDecks;
 
     /// <summary>
     /// Loads the tables a restricted profile names.
@@ -153,6 +159,12 @@ public static class ClassicProgression {
             s_laterObjects = LaterObjectsLoader.Load(Path.Combine(classicDataRoot, laterObjects));
             Logger.Information("Classic later objects {Table}: {Count} entries hide {Templates} templates of later versions.",
                 Logger.Args(s_laterObjects.Id, s_laterObjects.Objects.Length, s_laterObjects.TemplateCount));
+        }
+
+        if (profile.Rules.CreatureDecks is { } creatureDecks && File.Exists(Path.Combine(classicDataRoot, creatureDecks))) {
+            s_creatureDecks = CreatureDecksLoader.Load(Path.Combine(classicDataRoot, creatureDecks)); // CLASSIC
+            Logger.Information("Classic creature decks {Table}: own spell lists for {Count} creature templates.",
+                Logger.Args(s_creatureDecks.Id, s_creatureDecks.Count));
         }
 
         if (profile.Rules.CrownShop is { } crownShop && File.Exists(Path.Combine(classicDataRoot, crownShop))) {

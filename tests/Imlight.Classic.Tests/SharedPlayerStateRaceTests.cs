@@ -218,6 +218,9 @@ public sealed class SharedPlayerStateRaceTests {
     [InlineData(5UL, 77UL, "key", 5UL, 77UL, true)]
     [InlineData(5UL, 77UL, "key", 5UL, 78UL, false)]  // another machine
     [InlineData(5UL, 77UL, "key", 6UL, 77UL, false)]  // another account
+    [InlineData(5UL, 77UL, "key", 5UL, 0UL, true)]    // the client KingsIsle's launcher started with this key
+    [InlineData(5UL, 77UL, "key", 6UL, 0UL, false)]   // ... but only for its own account
+    [InlineData(5UL, 0UL, "key", 5UL, 77UL, false)]   // a command-line key does not answer another machine
     [InlineData(5UL, 77UL, "", 5UL, 77UL, false)]
     [InlineData(5UL, 77UL, null, 5UL, 77UL, false)]
     public void AStoredKeyAnswersOnlyItsAccountAndMachine(ulong storedAccount, ulong storedMachine, string? key,

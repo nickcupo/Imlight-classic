@@ -41,7 +41,9 @@ using System.Collections.Generic;
 using System.Linq;
 using Imcodec.IO;
 using Imcodec.ObjectProperty.TypeCache;
+using Imlight.Classic.Rules;
 using Imlight.Common;
+using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.Game.Spells;
 using Imlight.CoreLib.Game.Zone.Core;
 using Imlight.CoreLib.Shared.Resources;
@@ -74,8 +76,27 @@ internal sealed class CombatCreatureDeckComponent : ZoneEntityComponent, ICompon
         var allBehaviors = entity.Template.m_behaviors
             .Concat(equipmentItemBehaviors);
 
+        // CLASSIC: a creature the profile's creature-deck file lists (from its 2009 wiki page) casts that deck and nothing
+        // else, so each minion, Monstrology creature and mob has its own spells rather than its school's.
+        var templateId = (uint) entity.ActiveGameObject.m_templateID;
+        var classicSpells = ClassicDeckSpellIds(ClassicProgression.CreatureDecks, templateId,
+            name => SpellFactory.GetSpell(name)?.m_templateID);
+        var classicCounts = ClassicDeckSpellCounts(ClassicProgression.CreatureDecks, templateId,
+            name => SpellFactory.GetSpell(name)?.m_templateID);
+        foreach (var spellId in classicSpells) {
+            // CLASSIC: the wiki's count weighs the draw (owner ruling 2026-10-02); creatures never run out, so each copy
+            // stands for CREATURE_COPIES_PER_COUNT.
+            AddSpell(spellId, (uint) (classicCounts.GetValueOrDefault(spellId, 1) * CREATURE_COPIES_PER_COUNT));
+        }
+
+        if (classicSpells.Count > 0) {
+            Logger.Debug("{0} ({1}) casts its own creature-deck: {2}.",
+                Logger.Args((entity.Template as GameObjectTemplate)?.m_objectName.ToString(), templateId,
+                    string.Join(", ", Spells.Select(x => (CoreObjectFactory.GetCoreTemplate(x.m_templateID) as SpellTemplate)?.m_name?.ToString()))));
+        }
+
         // MobDeckBehaviorTemplate stores spell names directly, if it exists.
-        var mobDeck = allBehaviors.OfType<MobDeckBehaviorTemplate>().FirstOrDefault();
+        var mobDeck = classicSpells.Count == 0 ? allBehaviors.OfType<MobDeckBehaviorTemplate>().FirstOrDefault() : null;
         if (mobDeck != null) {
             AddSpellsFromNames(mobDeck.m_spellList);
         }
@@ -83,7 +104,7 @@ internal sealed class CombatCreatureDeckComponent : ZoneEntityComponent, ICompon
         // DeckBehaviorTemplate stores a deck name that maps to a SpiralDB spellbook.
         // The deck is the union of both sources: the client's own spell names and the
         // SpiralDB spellbook named by the deck behavior. Either source may be missing.
-        var deckBehavior = allBehaviors.OfType<DeckBehaviorTemplate>().FirstOrDefault();
+        var deckBehavior = classicSpells.Count == 0 ? allBehaviors.OfType<DeckBehaviorTemplate>().FirstOrDefault() : null;
         if (deckBehavior is not null && !string.IsNullOrEmpty(deckBehavior.m_defaultDeck)) {
             var spellbook = CreatureSpellbookCollection.GetCreatureSpellbook(deckBehavior.m_defaultDeck);
             if (spellbook is not null) {
@@ -118,6 +139,48 @@ internal sealed class CombatCreatureDeckComponent : ZoneEntityComponent, ICompon
         }
     }
 
+    /// <summary>
+    /// CLASSIC: the spell template ids of the creature's own 2009 deck, in file order; empty when the file lists no deck
+    /// for <paramref name="template"/> or none of its spell names resolve.
+    /// </summary>
+    /// <param name="decks">The profile's creature decks.</param>
+    /// <param name="template">The creature's template id.</param>
+    /// <param name="resolve">Maps a spell template name to its template id, or null when the client has no such spell.</param>
+    internal static List<uint> ClassicDeckSpellIds(CreatureDecks decks, uint template, System.Func<string, uint?> resolve) {
+        var ids = new List<uint>();
+        if (!decks.TryGet(template, out var deck)) {
+            return ids;
+        }
+
+        foreach (var spell in deck.Spells) {
+            if (resolve(spell.Spell) is { } id && !ids.Contains(id)) {
+                ids.Add(id);
+            }
+        }
+
+        return ids;
+    }
+
+    private const int CREATURE_COPIES_PER_COUNT = 1000;
+
+    /// <summary>
+    /// CLASSIC: how many copies of each resolved spell the creature's deck file lists (repeated names add up).
+    /// </summary>
+    internal static Dictionary<uint, int> ClassicDeckSpellCounts(CreatureDecks decks, uint template, System.Func<string, uint?> resolve) {
+        var counts = new Dictionary<uint, int>();
+        if (!decks.TryGet(template, out var deck)) {
+            return counts;
+        }
+
+        foreach (var spell in deck.Spells) {
+            if (resolve(spell.Spell) is { } id) {
+                counts[id] = counts.GetValueOrDefault(id) + spell.Count;
+            }
+        }
+
+        return counts;
+    }
+
     private void AddSpellbookSpells(CreatureSpellbook spellbook) {
         foreach (var spellId in spellbook.SpellTemplateIds) {
             AddSpell(spellId);
@@ -138,7 +201,7 @@ internal sealed class CombatCreatureDeckComponent : ZoneEntityComponent, ICompon
         }
     }
 
-    private void AddSpell(uint spellId) {
+    private void AddSpell(uint spellId, uint quantity = 9999) {
         // Both sources may list the same spell; creatures carry one entry per spell.
         if (Spells.Any(x => x.m_templateID == spellId)) {
             return;
@@ -152,7 +215,7 @@ internal sealed class CombatCreatureDeckComponent : ZoneEntityComponent, ICompon
         // Creatures have infinite spells in their spellbook.
         Spells.Add(new SpellData {
             m_templateID = spellId,
-            m_quantity = 9999,
+            m_quantity = quantity,
         });
     }
 

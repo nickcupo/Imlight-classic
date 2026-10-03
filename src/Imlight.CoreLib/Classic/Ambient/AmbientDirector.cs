@@ -123,17 +123,37 @@ internal sealed class AmbientDirector : ReceiveActor {
 
         var stored = AmbientWizardCollection.LoadAll();
         var nextId = stored.Count == 0 ? AmbientWizardCollection.CharIdBase + 1 : stored.Max(r => r.CharId) + 1;
-        var sizes = WizardNameBank.CharacterTableSizes();
+        var sizes = WizardNameBank.ClassicCreationNameCounts();
         var tables = new NameTableSizes(sizes.FirstBoy, sizes.FirstGirl, sizes.Middle, sizes.Last);
+        Logger.Information("Ambient wizards: 2009 creation names {Boys} boy and {Girls} girl first names, {Middle} x {Last} last names.",
+            Logger.Args(sizes.FirstBoy, sizes.FirstGirl, sizes.Middle, sizes.Last));
         var cap = ClassicRuntime.IsActive ? ClassicRuntime.Rules.ClampLevel(MagicLevelsConfig.MaxLevel, MagicLevelsConfig.MaxLevel)
             : Math.Max(1, MagicLevelsConfig.MaxLevel);
         var created = new List<AmbientWizardRecord>();
+        var renamed = new List<AmbientWizardRecord>();
         var result = new List<(string, List<AmbientWizard>)>();
         var usedNames = new HashSet<uint>(stored.Select(r => r.NameKeys));
 
         foreach (var (zone, count) in zones) {
             var mine = stored.Where(r => string.Equals(r.HomeZone, zone, StringComparison.OrdinalIgnoreCase))
                 .OrderBy(r => r.CharId).Take(count).ToList();
+
+            // CLASSIC (2026-10-03): wizards made with later name parts get a 2009 creation-screen name; the character id
+            // (and so the friends who know them) stays.
+            foreach (var record in mine.Where(r => !tables.Allows(r.NameKeys, r.Female))) {
+                var renameSeed = (int) (record.CharId & 0x7FFFFFFF);
+                uint keys;
+                do {
+                    keys = AmbientIdentity.ClassicNameKeys(renameSeed++, record.Female, tables);
+                } while (!usedNames.Add(keys));
+
+                var gender = record.Female ? Imcodec.ObjectProperty.TypeCache.eGender.Female : Imcodec.ObjectProperty.TypeCache.eGender.Male;
+                Logger.Information("Ambient wizard {Old} renamed {New} (2009 creation names).", Logger.Args(
+                    WizardNameBank.GetEnglishName(record.NameKeys, gender), WizardNameBank.GetEnglishName(keys, gender)));
+                record.NameKeys = keys;
+                renamed.Add(record);
+            }
+
             var seed = StableHash(zone) * 1000;
             while (mine.Count < count) {
                 var identity = AmbientIdentity.Generate(seed++, zone, tables, AmbientIdentity.LevelsFor(zone, cap));
@@ -157,6 +177,10 @@ internal sealed class AmbientDirector : ReceiveActor {
             }
 
             result.Add((zone, wizards));
+        }
+
+        if (renamed.Count > 0) {
+            AmbientWizardCollection.SaveNow(renamed);
         }
 
         if (created.Count > 0) {

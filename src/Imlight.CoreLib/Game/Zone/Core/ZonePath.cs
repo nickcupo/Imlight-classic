@@ -48,6 +48,7 @@ using System.Collections.Generic;
 using System.Linq;
 using Akka.Actor;
 using Imlight.Common;
+using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;
 using Imlight.CoreLib.Shared.Resources;
@@ -179,14 +180,36 @@ public sealed class ZonePath : ZoneEntity {
     }
 
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_PATHSPAWNINTERVAL))]
-    private void ReceiveCreatureSpawnInterval(ZONE_102_PROTOCOL.MSG_PATHSPAWNINTERVAL message) 
-        => HandleCreatureSpawn(message.SpawnObject);
+    private void ReceiveCreatureSpawnInterval(ZONE_102_PROTOCOL.MSG_PATHSPAWNINTERVAL message) {
+        if (message.SpawnObject is not null && _deactivated.Contains((uint) message.SpawnObject.m_id.Full)) {
+            return; // CLASSIC: stopped by a ResSpawn with m_activate false.
+        }
+
+        HandleCreatureSpawn(message.SpawnObject);
+    }
 
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_ZONEPATHSPAWN))]
     private void ReceiveCreatureSpawn(ZONE_102_PROTOCOL.MSG_ZONEPATHSPAWN message) {
         var spawnObject = _creatures.FirstOrDefault(x => x.m_id == message.SpawnObjectID);
         if (spawnObject != null) {
+            _deactivated.Remove(message.SpawnObjectID); // CLASSIC: an activating ResSpawn starts a stopped spawner again.
             HandleCreatureSpawn(spawnObject);
+
+            // CLASSIC: an activated spawner fills to its m_maxNumberOfSpawns, as KingsIsle's spawners do. Stock Imlight
+            // spawned one creature: Battle of Evermore's SpawnMobs started 7 of its 13 invaders, short of the 10 kills.
+            for (var i = 1; message.Fill && ClassicQuestEngine.IsActive && i < spawnObject.m_maxNumberOfSpawns && CanSpawn(spawnObject); i++) {
+                HandleCreatureSpawn(spawnObject);
+            }
+        }
+    }
+
+    // CLASSIC: spawners a ResSpawn with m_activate false stopped (the boss death triggers of the MooShu Oni rooms).
+    private readonly HashSet<uint> _deactivated = [];
+
+    [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_ZONEPATHDEACTIVATE))]
+    private void ReceiveSpawnerDeactivate(ZONE_102_PROTOCOL.MSG_ZONEPATHDEACTIVATE message) {
+        if (_creatures.Any(x => x.m_id == message.SpawnObjectID)) {
+            _deactivated.Add(message.SpawnObjectID);
         }
     }
 

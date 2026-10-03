@@ -122,6 +122,12 @@ public sealed class HelpOffers {
         }
 
         var cleaned = new string([.. text.Trim().Where(c => char.IsLetter(c) || c == ' ' || c == '\'')]).Trim();
+
+        // "Please do not join this duel" (a menu phrase) is a no, whatever its first word.
+        var lower = cleaned.ToLowerInvariant();
+        if (lower.Contains("not join") || lower.Contains("don't join") || lower.Contains("dont join") || lower.Contains("no thank")) {
+            return HelpAnswerKind.No;
+        }
         while (cleaned.Contains("  ", StringComparison.Ordinal)) {
             cleaned = cleaned.Replace("  ", " ", StringComparison.Ordinal);
         }

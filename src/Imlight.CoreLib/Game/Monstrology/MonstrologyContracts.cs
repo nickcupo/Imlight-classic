@@ -36,6 +36,8 @@ internal static class MonstrologyContracts {
         ulong authenticatedOwner, ExtractionAward decision, IReadOnlyList<int> validatedThresholds) {
         if (sessionPolicy == null || !sessionPolicy.Allows(enabled) || authenticatedOwner == 0 || decision.OwnerId != authenticatedOwner)
             return MonstrologyResult.Rejected;
+        if (!MonstrologyCardCatalog.IsArc1Creature(decision.Creature)) // CLASSIC: Arc 1 creatures only.
+            return MonstrologyResult.Rejected;
         return sessionPolicy.WithPermission(enabled, () => repository.Transact(authenticatedOwner,
             state => MonstrologyRules.Award(state, decision, validatedThresholds)));
     }

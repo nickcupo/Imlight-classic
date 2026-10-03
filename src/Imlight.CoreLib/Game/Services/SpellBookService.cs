@@ -36,7 +36,9 @@
  * Last Updated: 3/18/2025
  */
 
+using System;
 using System.Linq;
+using Imlight.CoreLib.Shared.Resources;
 using Akka.Actor;
 using Imcodec.Cryptography;
 using Imcodec.MessageLayer.Generated;
@@ -171,6 +173,37 @@ internal class SpellbookService(SessionActor sessionActor) : MessageService(sess
             SpellID = message.SpellID,
             EnchantmentID = message.EnchantmentID
         });
+    }
+
+    /// <summary>
+    /// CLASSIC: deleting Treasure Cards. The r806919 deck window's delete (GUI_DeleteTreasureCardConfirmation) sends
+    /// MSG_REMOVETREASURESPELLFROMVAULT (SpellID, EnchantmentID, Quantity), never MSG_REMOVETREASURESPELLFROMBOOK, which
+    /// the client only receives. The server had no handler, so nothing was deleted. The SpellID is resolved as a
+    /// template id or as the spell-name hash the book uses; the answer is MSG_REMOVETREASURESPELLFROMBOOK with the
+    /// name hash, as the client's book keys its cards.
+    /// </summary>
+    [MessageHandler(typeof(WIZARD_12_PROTOCOL.MSG_REMOVETREASURESPELLFROMVAULT))]
+    private void ReceiveRemoveTreasureSpellFromVault(WIZARD_12_PROTOCOL.MSG_REMOVETREASURESPELLFROMVAULT message) {
+        var wizard = GetActiveWizard();
+        if (wizard is null) return;
+        var templateId = TreasureTemplateOf(message.SpellID);
+        var owned = templateId == 0 ? 0 : wizard.SpellbookBehavior.TreasureCardCount(templateId);
+        var count = Math.Clamp(message.Quantity, 1, Math.Max(1, owned));
+        Logger.Information("Treasure card delete: wizard {0} spell {1} -> template {2}, {3} of {4}",
+            Logger.Args(wizard.CharId.ToString(), message.SpellID.ToString(), templateId.ToString(), count.ToString(), owned.ToString()));
+        if (templateId == 0 || owned == 0) return;
+        for (var i = 0; i < count; i++) WizardData.Collections.WizardCollection.RemoveTreasureCard(wizard, templateId);
+        var name = (CoreObjectFactory.GetCoreTemplate(templateId) as SpellTemplate)?.m_name ?? "";
+        SendToSocket(new WIZARD_12_PROTOCOL.MSG_REMOVETREASURESPELLFROMBOOK {
+            SpellID = unchecked((int) StringHash.Compute(name)), EnchantmentID = message.EnchantmentID, Quantity = count,
+        });
+    }
+
+    /// <summary>A treasure card's template from a client spell id: a template id, or the spell-name hash.</summary>
+    internal static uint TreasureTemplateOf(int spellId) {
+        var id = unchecked((uint) spellId);
+        if (id != 0 && CoreObjectFactory.GetCoreTemplate(id) is SpellTemplate) return id;
+        return SpellFactory.GetTemplateIdByHash(id);
     }
 
     [MessageHandler(typeof(WIZARD2_53_PROTOCOL.MSG_UPDATEITEMSPELLEXCLUSIONLIST))]

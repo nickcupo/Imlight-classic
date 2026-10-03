@@ -376,7 +376,7 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
         _ownedMinionControl.NewRound();
         _ownedMinionFallbacks.Clear();
         _ownedMinionHeldAiMoves.Clear();
-        ResetMinionHand(sendTruePips: false);
+        ResetMinionHand();
         _ownedMinionEarlyFinishScheduled = false;
         _awaitingCombatMoves = true;
 
@@ -577,7 +577,7 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
         _awaitingCombatMoves = false;
         _ownedMinionEarlyFinishScheduledWas = _ownedMinionEarlyFinishScheduled;
         _ownedMinionEarlyFinishScheduled = false;
-        ResetMinionHand(sendTruePips: true);
+        ResetMinionHand();
         PrepareOwnedMinionExecution();
         Duel.m_duelPhase = kDuelPhase.kPhase_Execution;
         SendCombatPhase((byte) Duel.m_duelPhase);
@@ -1089,9 +1089,9 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
 
             var participantActor = circle.ParticipantActor;
             var msg = new DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_COMBATHAND {
-                DeckCount = (byte) circle.AvailableSpells,
-                TotalDeckCount = (ushort) circle.TotalSpells,
-                TreasureCardCount = (ushort) circle.VaultRemainingCount,
+                DeckCount = DeckCounter(circle.AvailableSpells),
+                TotalDeckCount = DeckCounter(circle.TotalSpells),
+                TreasureCardCount = DeckCounter((uint) circle.VaultRemainingCount),
                 ParticipantID = circle.ParticipantObject.m_globalID,
                 HandData = buffer,
             };
@@ -1099,6 +1099,12 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
             participantActor.Tell(msg);
         });
     }
+
+    /// <summary>
+    /// MSG_COMBATHAND's counters are USHRT; the client's GUI_DeckCounter shows DeckCount (CARDSREMAINING, the cards left
+    /// to draw) of TotalDeckCount (CARDSTOTAL, the whole deck). DeckCount was cast to a byte, which wrapped at 256.
+    /// </summary>
+    internal static ushort DeckCounter(uint count) => (ushort) Math.Min(count, ushort.MaxValue);
 
     internal void SendCurrentCombatHand(CombatDuelSubCircle circle) {
         // As-is, no draw or refill, so a discarded slot stays visibly open for the vault draw.
@@ -1114,9 +1120,9 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
         }
 
         var msg = new DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_COMBATHAND {
-            DeckCount = (byte) circle.AvailableSpells,
-            TotalDeckCount = (ushort) circle.TotalSpells,
-            TreasureCardCount = (ushort) circle.VaultRemainingCount,
+            DeckCount = DeckCounter(circle.AvailableSpells),
+            TotalDeckCount = DeckCounter(circle.TotalSpells),
+            TreasureCardCount = DeckCounter((uint) circle.VaultRemainingCount),
             ParticipantID = circle.ParticipantObject.m_globalID,
             HandData = buffer,
         };
@@ -1267,7 +1273,7 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
                     if (CoreObjectFactory.GetCoreTemplate(consumedId) is SpellTemplate template) {
                         caster.ParticipantActor.Tell(new WIZARD_12_PROTOCOL.MSG_REMOVETREASURESPELLFROMDECK {
                             SpellID = (int) StringHash.Compute(template.m_name), EnchantmentID = 0,
-                            DeckID = deckId, Success = 1, Destroy = 0,
+                            DeckID = deckId, Success = 1, Destroy = 1, // spent: not back into the client's book
                         });
                     }
                 }

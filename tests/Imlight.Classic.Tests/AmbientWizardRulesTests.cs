@@ -76,7 +76,7 @@ public sealed class AmbientWizardRulesTests {
 
     // ---- identity ------------------------------------------------------------------------------
 
-    private static readonly NameTableSizes s_tables = new(FirstBoy: 120, FirstGirl: 110, Middle: 60, Last: 40);
+    private static readonly NameTableSizes s_tables = new(FirstBoy: 145, FirstGirl: 131, Middle: 84, Last: 78);
 
     [Fact]
     public void SameSeedSameWizard() {
@@ -92,9 +92,10 @@ public sealed class AmbientWizardRulesTests {
             var id = AmbientIdentity.Generate(seed, "Krokotopia/KT_Hub", s_tables, (10, 22));
             var (first, middle, last) = ((int) (id.NameKeys >> 16) & 0xFF, (int) (id.NameKeys >> 8) & 0xFF, (int) id.NameKeys & 0xFF);
 
-            Assert.InRange(first, 1, (id.Look.Female ? s_tables.FirstGirl : s_tables.FirstBoy) - 1);
-            Assert.InRange(middle, 1, s_tables.Middle - 1);
-            Assert.InRange(last, 1, s_tables.Last - 1);
+            Assert.InRange(first, 0, (id.Look.Female ? s_tables.FirstGirl : s_tables.FirstBoy) - 1);
+            Assert.InRange(middle, 1, s_tables.Middle);
+            Assert.InRange(last, 1, s_tables.Last);
+            Assert.True(s_tables.Allows(id.NameKeys, id.Look.Female));
             Assert.InRange(id.Level, 10, 22);
             Assert.InRange(id.Look.HairModel, 0, 9);
             Assert.Equal(id.Look.HairModel, id.Look.HairColor / 10);
@@ -102,6 +103,21 @@ public sealed class AmbientWizardRulesTests {
             Assert.InRange(id.Look.Face, 0, 9);
             Assert.InRange(id.Look.ClothingColor, 0, 13);
             Assert.InRange(id.Look.TrimColor, 0, 13);
+        }
+    }
+
+    [Fact]
+    public void LaterNamePartsAreNotClassicAndRenamesAre() {
+        // "Torch" (last-name table index 229) came after 2009; 0 means no part, which the 2009 screen never allowed.
+        Assert.False(s_tables.Allows(5u << 16 | 3u << 8 | 229u, female: false));
+        Assert.False(s_tables.Allows(5u << 16 | 0u << 8 | 3u, female: false));
+        Assert.False(s_tables.Allows(140u << 16 | 3u << 8 | 3u, female: true)); // past the 131 girl names
+        Assert.True(s_tables.Allows(140u << 16 | 3u << 8 | 3u, female: false));
+
+        for (var seed = 0; seed < 300; seed++) {
+            var girl = AmbientIdentity.ClassicNameKeys(seed, female: true, s_tables);
+            Assert.True(s_tables.Allows(girl, female: true));
+            Assert.Equal(girl, AmbientIdentity.ClassicNameKeys(seed, female: true, s_tables));
         }
     }
 
@@ -239,6 +255,11 @@ public sealed class AmbientWizardRulesTests {
     [InlineData("no", HelpAnswerKind.No)]
     [InlineData("nah im good", HelpAnswerKind.No)]
     [InlineData("i got it", HelpAnswerKind.No)]
+    [InlineData("Yes!", HelpAnswerKind.Yes)]
+    [InlineData("Okay", HelpAnswerKind.Yes)]
+    [InlineData("Help!", HelpAnswerKind.Yes)]
+    [InlineData("Please do not join this duel.", HelpAnswerKind.No)]
+    [InlineData("No thanks!", HelpAnswerKind.No)]
     [InlineData("where is the bazaar", HelpAnswerKind.None)]
     [InlineData("", HelpAnswerKind.None)]
     public void AnswersAreReadCaseInsensitively(string text, HelpAnswerKind kind) => Assert.Equal(kind, HelpOffers.Classify(text));

@@ -80,8 +80,8 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
     private sealed record Later(AmbientWizard Wizard, Action<AmbientWizard> Action);
     private sealed record FriendAccepted(AmbientWizard Wizard, ulong Requester, Relationship Relationship, string Name);
     private sealed record Spot(Vector3 At, float FaceYaw, bool Npc);
+    private sealed record NavReady(NavGrid Grid);
 
-    private const float Speed = 230f;            // units a second, about a running wizard
     private const double TickSeconds = 0.3;
     private const float Arrive = 30f;
     private const float Neighbourhood = 2600f;   // how far a wizard walks in one go
@@ -94,7 +94,15 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
     private readonly CoreObjectSerializer _serializer = new(versionable: false, behaviors: SerializerFlags.None);
     private readonly Dictionary<ulong, AmbientDuelNotice> _duels = [];
     private readonly HashSet<ulong> _offeredDuels = [];
+
+    // CLASSIC (2026-10-03): what the zone's players heard lately (no line twice in their last twenty), who is here to
+    // hear, and when the zone may next talk unprompted: one idle line every few minutes for the whole zone, so most
+    // passers-by hear nothing.
+    private readonly LineHistory _heard = new();
+    private ulong[] _audience = [];
+    private DateTime _nextZoneLine;
     private IActorRef _zoneActor;
+    private NavGrid _nav;                        // CLASSIC (2026-10-03): where a wizard can walk; null until loaded
     private List<Spot> _spots;
     private List<Vector3> _mobNodes;
     private Vector3 _start;
@@ -120,6 +128,10 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
         Receive<AmbientInbox>(OnInbox);
         Receive<AmbientDuelNotice>(OnDuelNotice);
         Receive<FriendAccepted>(OnFriendAccepted);
+        Receive<NavReady>(ready => {
+            _nav = ready.Grid;
+            _spots = null; // re-made on the grid
+        });
         Receive<Status.Failure>(failure => Logger.Warning("Ambient wizards in {Zone}: {Error}",
             Logger.Args(_zone, failure.Cause?.GetBaseException().Message)));
     }
@@ -137,6 +149,12 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
         => Akka.Actor.Props.Create(() => new AmbientZone(zone, wizards, server));
 
     protected override void PreStart() {
+        var self = Self;
+        AmbientNav.ForZone(_zone).ContinueWith(task => {
+            if (task.IsCompletedSuccessfully && task.Result is { } grid) {
+                self.Tell(new NavReady(grid));
+            }
+        }, TaskScheduler.Default);
         var i = 0;
         foreach (var wizard in _wizards) {
             wizard.Zone = _zone;
@@ -201,6 +219,10 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
         var distance = 60 + _rng.NextDouble() * 180;
         wizard.Position = new Vector3(rsp.Location.X + (float) (Math.Cos(angle) * distance),
             rsp.Location.Y + (float) (Math.Sin(angle) * distance), rsp.Location.Z);
+        if (_nav?.Snap(Num(wizard.Position)) is { } ground) {
+            wizard.Position = new Vector3(ground.X, ground.Y, ground.Z); // on open floor, not in a wall or the air
+        }
+
         wizard.Yaw = (float) (_rng.NextDouble() * Math.PI * 2);
 
         var character = wizard.Wizard;
@@ -285,7 +307,8 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
         var now = DateTime.UtcNow;
         if (now >= _nextCensus) {
             _nextCensus = now.AddSeconds(5);
-            _realPlayers = OnlinePlayerCollection.GetPlayersInZone(_zone).Count(p => !AmbientWizards.IsAmbientChar(p.CharacterId));
+            _audience = [.. OnlinePlayerCollection.GetPlayersInZone(_zone).Select(p => p.CharacterId).Where(id => !AmbientWizards.IsAmbientChar(id))];
+            _realPlayers = _audience.Length;
             foreach (var wizard in _wizards) {
                 wizard.Offers.Expire(now);
             }
@@ -309,7 +332,9 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
             }
 
             if (wizard.Moving) {
-                Step(wizard, batch);
+                if (now >= wizard.PauseUntil) {
+                    Step(wizard, batch); // (else a short stop at a corner)
+                }
             }
             else if (now >= wizard.Until) {
                 Decide(wizard, now);
@@ -332,7 +357,10 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
             }
             else if (now >= wizard.NextIdleLine && AmbientWizards.Settings.Chat) {
                 wizard.NextIdleLine = now.AddSeconds(IdleGap(wizard));
-                if (wizard.Limiter.TryTake(now) && AmbientChatBrain.Idle(ChatFor(wizard, 0), wizard.Turn++ + wizard.Identity.Seed) is { } line) {
+                if (now >= _nextZoneLine && wizard.Activity is AmbientActivity.Idle or AmbientActivity.Walking
+                    && wizard.Limiter.TryTake(now)
+                    && AmbientChatBrain.Idle(ChatFor(wizard, 0), wizard.Turn++ + wizard.Identity.Seed) is { } line) {
+                    _nextZoneLine = now.AddSeconds(180 + _rng.Next(240));
                     AmbientChat.Say(wizard, line);
                 }
             }
@@ -348,9 +376,9 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
     }
 
     private double IdleGap(AmbientWizard wizard) => wizard.Identity.Temper switch {
-        AmbientTemper.Chatty => 60 + _rng.Next(60),
-        AmbientTemper.Friendly => 120 + _rng.Next(120),
-        _ => 300 + _rng.Next(300),
+        AmbientTemper.Chatty => 240 + _rng.Next(240),
+        AmbientTemper.Friendly => 480 + _rng.Next(480),
+        _ => 900 + _rng.Next(900),
     };
 
     private void Step(AmbientWizard wizard, List<IMessage> batch) {
@@ -359,14 +387,48 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
             return;
         }
 
-        var dx = target.X - wizard.Position.X;
-        var dy = target.Y - wizard.Position.Y;
-        var dz = target.Z - wizard.Position.Z;
-        var distance = MathF.Sqrt(dx * dx + dy * dy);
-        var step = (float) (Speed * TickSeconds);
-        wizard.Yaw = MathF.Atan2(dy, dx);
-        if (distance <= Math.Max(step, Arrive)) {
+        // CLASSIC (2026-10-03): a run along the route's straight legs at a player's run speed, facing the way it goes,
+        // feet on the floor (the grid's height under it), turning at each corner; the 300 ms tick is the move cadence.
+        var budget = (float) (AmbientNav.RunSpeed * TickSeconds);
+        var arrived = false;
+        while (budget > 0) {
+            var dx = target.X - wizard.Position.X;
+            var dy = target.Y - wizard.Position.Y;
+            var distance = MathF.Sqrt(dx * dx + dy * dy);
+            if (distance > 1) {
+                wizard.Yaw = MathF.Atan2(dy, dx);
+            }
+
+            if (distance > budget) {
+                var t = budget / distance;
+                var z = wizard.Position.Z + (target.Z - wizard.Position.Z) * t;
+                var at = new Vector3(wizard.Position.X + dx * t, wizard.Position.Y + dy * t, z);
+                wizard.Position = _nav?.FloorAt(new System.Numerics.Vector3(at.X, at.Y, at.Z)) is { } floor
+                    ? new Vector3(at.X, at.Y, floor) : at;
+                break;
+            }
+
             wizard.Position = target;
+            budget -= distance;
+            if (wizard.Route.Count == 0) {
+                arrived = true;
+                break;
+            }
+
+            target = wizard.Route.Dequeue();
+            wizard.Target = target;
+            if (_rng.NextDouble() < 0.08) {
+                // Now and then a corner is a short look around, as a person walking does.
+                wizard.PauseUntil = DateTime.UtcNow.AddMilliseconds(600 + _rng.Next(1200));
+                wizard.Wizard.Location = wizard.Position;
+                batch.Add(Move(wizard));
+                batch.Add(new GAME_5_PROTOCOL.MSG_MOVESTATE { GlobalID = wizard.Wizard.GameObjectID, NewState = 0 });
+                return;
+            }
+        }
+
+        if (arrived) {
+            wizard.Target = null;
             wizard.Moving = false;
             if (wizard.ArriveYaw is { } face) {
                 wizard.Yaw = face;
@@ -374,10 +436,6 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
             }
 
             Arrived(wizard);
-        }
-        else {
-            var t = step / distance;
-            wizard.Position = new Vector3(wizard.Position.X + dx * t, wizard.Position.Y + dy * t, wizard.Position.Z + dz * t);
         }
 
         wizard.Wizard.Location = wizard.Position;
@@ -447,8 +505,12 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
                 wizard.DuelSigil = ulong.MaxValue; // hunting
                 AmbientWizards.PermitJoin(wizard.Endpoint, 0); // a street mob may pull it into a fight of its own
                 Logger.Debug("Ambient wizard {Name} goes hunting in {Zone}.", Logger.Args(wizard.Name, _zone));
-                WalkTo(wizard, at, AmbientActivity.Walking);
-                return;
+                if (WalkTo(wizard, at, AmbientActivity.Walking)) {
+                    return;
+                }
+
+                wizard.DuelSigil = 0;
+                AmbientWizards.RevokeJoin(wizard.Endpoint);
             }
         }
 
@@ -457,10 +519,10 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
             var pool = npcs.Count > 0 && roll < 0.65 ? npcs : _spots.Where(s => Distance(s.At, wizard.Position) < Neighbourhood).ToList();
             if (pool.Count > 0) {
                 var spot = pool[_rng.Next(pool.Count)];
-                WalkTo(wizard, spot.At, spot.Npc ? AmbientActivity.Shopping : AmbientActivity.Walking);
-                wizard.ArriveYaw = spot.Npc ? spot.FaceYaw : null; // turn to the NPC on arrival
-
-                return;
+                if (WalkTo(wizard, spot.At, spot.Npc ? AmbientActivity.Shopping : AmbientActivity.Walking)) {
+                    wizard.ArriveYaw = spot.Npc ? spot.FaceYaw : null; // turn to the NPC on arrival
+                    return;
+                }
             }
         }
 
@@ -479,8 +541,11 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
         var at = friend.Location;
         if (Distance(at, wizard.Position) > 220) {
             var angle = _rng.NextDouble() * Math.PI * 2;
-            WalkTo(wizard, new Vector3(at.X + (float) Math.Cos(angle) * 120, at.Y + (float) Math.Sin(angle) * 120, at.Z),
-                AmbientActivity.Following);
+            if (!WalkTo(wizard, new Vector3(at.X + (float) Math.Cos(angle) * 120, at.Y + (float) Math.Sin(angle) * 120, at.Z),
+                    AmbientActivity.Following)) {
+                wizard.Activity = AmbientActivity.Following;
+                wizard.Until = now.AddSeconds(3);
+            }
         }
         else {
             wizard.Activity = AmbientActivity.Following;
@@ -490,12 +555,29 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
         return true;
     }
 
-    private void WalkTo(AmbientWizard wizard, Vector3 target, AmbientActivity activity) {
+    /// <summary>
+    /// CLASSIC (2026-10-03): starts a walk along the zone's walkable ground (NavGrid) to <paramref name="target"/>; false,
+    /// and no walk, when the grid is not loaded or no walk reaches it (a wizard never takes a straight line through walls).
+    /// </summary>
+    private bool WalkTo(AmbientWizard wizard, Vector3 target, AmbientActivity activity) {
         wizard.ArriveYaw = null;
-        wizard.Target = target;
+        wizard.Route.Clear();
+        if (_nav is null || !_nav.TryRoute(Num(wizard.Position), Num(target), out var waypoints) || waypoints.Count == 0) {
+            wizard.Target = null;
+            return false;
+        }
+
+        foreach (var point in waypoints) {
+            wizard.Route.Enqueue(new Vector3(point.X, point.Y, point.Z));
+        }
+
+        wizard.Target = wizard.Route.Dequeue();
         wizard.Activity = activity;
         wizard.Moving = true;
+        return true;
     }
+
+    private static System.Numerics.Vector3 Num(Vector3 v) => new(v.X, v.Y, v.Z);
 
     private Vector3? Nearby(List<Vector3> points, Vector3 from) {
         var near = points.Where(p => Distance(p, from) < Neighbourhood).ToList();
@@ -573,6 +655,12 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
                 break;
             case GAME_5_PROTOCOL.MSG_RADIALCHAT say:
                 Heard(wizard, say.SourceID, (byte[]) say.SourceName, AmbientChat.Text((byte[]) say.Message), whisper: false);
+                break;
+            case GAME_5_PROTOCOL.MSG_RADIALQUICKCHAT menu when AmbientQuickChat.TextOf(menu.MessageID) is { } phrase:
+                Heard(wizard, menu.SourceID, (byte[]) menu.SourceName, phrase, whisper: false, menuChat: true);
+                break;
+            case GAME_5_PROTOCOL.MSG_DIRECTEDQUICKCHAT menu when AmbientQuickChat.TextOf(menu.MessageID) is { } phrase:
+                Heard(wizard, Wizard.GetGameObjectId(menu.SourceID), (byte[]) menu.SourceName, phrase, whisper: true, menuChat: true);
                 break;
             case GAME_5_PROTOCOL.MSG_DIRECTEDCHAT text:
                 Heard(wizard, Wizard.GetGameObjectId(text.SourceID), (byte[]) text.SourceName, (string) text.Message ?? "", whisper: true);
@@ -687,7 +775,9 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
         wizard.Activity = AmbientActivity.Idle;
         wizard.Until = DateTime.UtcNow.AddSeconds(6 + _rng.Next(10));
         if (won && notice is not null && AmbientWizards.Settings.Chat && wizard.Limiter.TryTake(DateTime.UtcNow)) {
-            AmbientChat.Say(wizard, (wizard.Turn++ % 3) switch { 0 => "gg!", 1 => "nice one", _ => "that was fun" });
+            if (AmbientChatBrain.AfterWin(ChatFor(wizard, 0), wizard.Turn++) is { } line) {
+                AmbientChat.Say(wizard, line);
+            }
         }
     }
 
@@ -724,7 +814,8 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
     /// Called when the duel is announced and every few seconds while it runs and nobody has asked yet.
     /// </summary>
     private void TryOffer(AmbientDuelNotice notice) {
-        if (!AmbientWizards.Settings.Battles || notice.Pvp || notice.FreePlayerSlots <= 0 || notice.PlayerCharIds.Length == 0
+        // No chat, no offer: an ambient wizard never joins a real player's duel without asking first.
+        if (!AmbientWizards.Settings.Battles || !AmbientWizards.Settings.Chat || notice.Pvp || notice.FreePlayerSlots <= 0 || notice.PlayerCharIds.Length == 0
             || _offeredDuels.Contains(notice.SigilId)) {
             return;
         }
@@ -772,10 +863,13 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
             return;
         }
 
-        Say(wizard, player, AmbientChatBrain.HelpAnswered(true, wizard.Turn++));
+        Say(wizard, player, AmbientChatBrain.HelpAnswered(true, wizard.Turn++, ChatFor(wizard, player)));
         AmbientWizards.PermitJoin(wizard.Endpoint, notice.SigilId);
         wizard.DuelSigil = notice.SigilId;
-        WalkTo(wizard, notice.Location, AmbientActivity.Helping);
+        if (!WalkTo(wizard, notice.Location, AmbientActivity.Helping)) {
+            wizard.Activity = AmbientActivity.Helping; // no walk there: it waits, and the yes lapses after the wait
+            wizard.Moving = false;
+        }
         wizard.Until = DateTime.UtcNow.AddSeconds(25);
     }
 
@@ -784,9 +878,11 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
     private ChatContext ChatFor(AmbientWizard wizard, ulong speaker, (string Name, string Zone, string Quest) facts = default)
         => new(wizard.Name, wizard.Identity.School, wizard.Wizard.MagicSchoolBehavior.Level,
             AmbientKnowledge.ZoneName(_zone) ?? _zone, facts.Name, facts.Zone, facts.Quest,
-            speaker == 0 ? null : wizard.FriendOf(speaker), AmbientKnowledge.WhereIs, DateTime.UtcNow);
+            speaker == 0 ? null : wizard.FriendOf(speaker), AmbientKnowledge.WhereIs, DateTime.UtcNow,
+            ZoneKey: _zone, Hour: DateTime.Now.Hour, History: _heard,
+            Audience: speaker == 0 || _audience.Contains(speaker) ? _audience : [.. _audience, speaker]);
 
-    private void Heard(AmbientWizard wizard, ulong sourceGid, byte[] sourceName, string text, bool whisper) {
+    private void Heard(AmbientWizard wizard, ulong sourceGid, byte[] sourceName, string text, bool whisper, bool menuChat = false) {
         if (!Wizard.TryGetCharacterId(sourceGid, out var speaker) || AmbientWizards.IsAmbientChar(speaker) || !wizard.Present) {
             return;
         }
@@ -799,11 +895,12 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
         }
 
         if (answer.Kind == HelpAnswerKind.No) {
-            Say(wizard, speaker, AmbientChatBrain.HelpAnswered(false, wizard.Turn++));
+            Say(wizard, speaker, AmbientChatBrain.HelpAnswered(false, wizard.Turn++, ChatFor(wizard, speaker)));
             return;
         }
 
-        if (!AmbientWizards.Settings.Chat || !wizard.Limiter.TryTake(now, speaker)) {
+        // A menu phrase answers an offer (above) but is not talk to reply to.
+        if (menuChat || !AmbientWizards.Settings.Chat || !wizard.Limiter.TryTake(now, speaker)) {
             return;
         }
 

@@ -82,7 +82,8 @@ internal sealed partial class ZoneTriggerSupervisor {
         using var killed = KilledMonsterScope.Enter(message.KilledTemplateIds);
         var fires = _activation.Dispatch(_orderedTriggers, entry => entry.Actor, message.EventName, message.PlayerActor,
             listens: entry => entry.Trigger?.m_fireEvents?.Any(x => x == message.EventName) == true
-                && !(isKill && HasUndecodedRequirement(entry.Trigger.m_requirements)),
+                && !(isKill && HasUndecodedRequirement(entry.Trigger.m_requirements))
+                && VolumeArrival.Fires(message.ArrivedInside, HasTeleport(entry.Trigger)), // CLASSIC: arrival never teleports.
             meetsRequirements: entry => EvaluateRequirements(entry.Trigger, message)
                 && EvaluateTeleportRequirements(entry.Trigger, message),
             teleportsSomewhere: entry => HasTeleportDestination(entry.Trigger),
@@ -185,6 +186,9 @@ internal sealed partial class ZoneTriggerSupervisor {
     }
 
     private const string ENTER_ZONE_EVENT = "EnterZone";
+
+    private static bool HasTeleport(Trigger trigger)
+        => trigger.m_results?.m_results?.Any(result => result is ResTeleport) == true;
 
     private static bool HasTeleportDestination(Trigger trigger)
         => trigger.m_results?.m_results?.Any(result => result is ResTeleport teleport
