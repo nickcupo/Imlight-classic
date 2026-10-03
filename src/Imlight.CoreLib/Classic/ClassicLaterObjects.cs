@@ -20,50 +20,44 @@
  * ========================================================================
  *
  * PURPOSE:
- * Zone objects the r806919 zone data places that belong to later versions
- * of classic quests. The classic server does not spawn them.
+ * Zone objects the r806919 zone data places that belong to later versions of
+ * the game. The classic server does not spawn them. The list is data, loaded
+ * from the file the profile rule rules.later_objects names (classic-data/zones/
+ * later-objects.yaml); a profile without the rule hides nothing.
  *
  * USAGE EXAMPLE:
- * if (ClassicLaterObjects.Skips(objectInfo)) continue;   // ZoneObjectSupervisor
+ * if (ClassicLaterObjects.Skips(objectInfo, zone.ZoneName)) continue;   // ZoneObjectSupervisor
  *
  * NOTE:
- * WC-ST01-NPC05-B (1451483) is the 2019 Unicorn Way Private O'Ryan, an
- * undetectable NPC standing next to Private Connelly. The client's quest
- * helper pointed Saving Private O'Ryan's arrow at it instead of at
- * O'Ryan's house door (playtest 2026-09-28 #12). The classic O'Ryan
- * (WC-ST01-NPC05) is inside the house, WC_Unicorn_H1.
+ * The first entry was the 2019 Private O'Ryan (1451483, WC-ST01-NPC05-B)
+ * beside Private Connelly: the client's quest helper pointed Saving Private
+ * O'Ryan's arrow at it instead of at O'Ryan's house door (playtest 2026-09-28
+ * #12). The classic O'Ryan (WC-ST01-NPC05) is inside the house, WC_Unicorn_H1.
  *
  * Created by: Nick with Claude Code (claude-opus-5-5)
  * Version: KALI 1.0
  * Last Updated: 09/30/2026
  */
 
-using System.Collections.Frozen;
 using Imcodec.ObjectProperty.TypeCache;
 
 namespace Imlight.CoreLib.Classic;
 
 /// <summary>
-/// Zone objects from later versions of classic quests, which the classic server does not spawn.
+/// Zone objects from later versions of the game, which the classic server does not spawn.
 /// </summary>
 internal static class ClassicLaterObjects {
 
     /// <summary>
-    /// Template ids of the later objects.
+    /// True when the classic quest engine is active and <paramref name="objectInfo"/> places a later object in <paramref name="zoneName"/>.
     /// </summary>
-    internal static readonly FrozenSet<ulong> s_templates = FrozenSet.Create<ulong>(
-        1451483 // WC-ST01-NPC05-B: the 2019 Private O'Ryan on Unicorn Way.
-    );
+    internal static bool Skips(CoreObjectInfo objectInfo, string? zoneName)
+        => ClassicQuestEngine.IsActive && IsLater(objectInfo.m_templateID, zoneName);
 
     /// <summary>
-    /// True when the classic quest engine is active and <paramref name="objectInfo"/> places a later object.
+    /// True when <paramref name="templateId"/> is a later object in <paramref name="zoneName"/>.
     /// </summary>
-    internal static bool Skips(CoreObjectInfo objectInfo)
-        => ClassicQuestEngine.IsActive && IsLater(objectInfo.m_templateID);
-
-    /// <summary>
-    /// True when <paramref name="templateId"/> is a later object.
-    /// </summary>
-    internal static bool IsLater(ulong templateId) => s_templates.Contains(templateId);
+    internal static bool IsLater(ulong templateId, string? zoneName)
+        => ClassicProgression.LaterObjects.Hides(templateId, zoneName);
 
 }

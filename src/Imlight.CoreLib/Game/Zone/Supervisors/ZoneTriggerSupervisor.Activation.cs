@@ -82,12 +82,24 @@ internal sealed partial class ZoneTriggerSupervisor {
         using var killed = KilledMonsterScope.Enter(message.KilledTemplateIds);
         var fires = _activation.Dispatch(_orderedTriggers, entry => entry.Actor, message.EventName, message.PlayerActor,
             listens: entry => entry.Trigger?.m_fireEvents?.Any(x => x == message.EventName) == true
-                && !(isKill && HasUndecodedRequirement(entry.Trigger.m_requirements)),
+                && !(isKill && HasUndecodedRequirement(entry.Trigger.m_requirements))
+                && VolumeArrival.Fires(message.ArrivedInside, HasTeleport(entry.Trigger)), // CLASSIC: arrival never teleports.
             meetsRequirements: entry => EvaluateRequirements(entry.Trigger, message)
                 && EvaluateTeleportRequirements(entry.Trigger, message),
             teleportsSomewhere: entry => HasTeleportDestination(entry.Trigger),
             stateChanged: (name, armed) => Logger.Debug("Zone {Zone} trigger {Trigger} is {State} for {Player} by {Event}.",
                 Logger.Args(Zone.ZonePath, name, armed ? "armed" : "disarmed", message.PlayerActor?.Path.Name, message.EventName)));
+
+        QueueLegacyDoors(message.PlayerActor);
+        ZoneRef.Tell(new ZONE_102_PROTOCOL.MSG_ZONEBROADCAST {
+            Sender = message.PlayerActor, Targets = ZoneBroadcastTarget.Objects,
+            Messages = [new Imlight.CoreLib.Game.Zone.Components.DoorLightRefresh { Player = message.PlayerActor }],
+        });
+
+        if (fires.Count > 0) { // CLASSIC: which triggers an event fires (the Temple of Storms puzzle evidence).
+            Logger.Debug("Zone {Zone} event {Event} for {Player} fires {Triggers}.", Logger.Args(Zone.ZonePath, message.EventName,
+                message.PlayerActor?.Path.Name, string.Join(", ", fires.Select(fire => (string) fire.Trigger.Trigger?.m_triggerName))));
+        }
 
         foreach (var fire in fires) {
             fire.Trigger.Actor.Forward(new ZONE_102_PROTOCOL.MSG_POSTEVENT {
@@ -174,6 +186,9 @@ internal sealed partial class ZoneTriggerSupervisor {
     }
 
     private const string ENTER_ZONE_EVENT = "EnterZone";
+
+    private static bool HasTeleport(Trigger trigger)
+        => trigger.m_results?.m_results?.Any(result => result is ResTeleport) == true;
 
     private static bool HasTeleportDestination(Trigger trigger)
         => trigger.m_results?.m_results?.Any(result => result is ResTeleport teleport

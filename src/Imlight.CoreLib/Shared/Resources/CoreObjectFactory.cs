@@ -199,6 +199,30 @@ public class CoreObjectFactory : RootSingleResourceSingleton<CoreObjectFactory>,
     public static string GetTemplatePath(ulong id) // CLASSIC: classic spell records are keyed by template path.
         => TemplateLocations().TryGetValue(id, out var location) ? location.m_filename : null;
 
+    /// <summary>
+    /// CLASSIC: the id of the template at <paramref name="path"/> (e.g. <c>Spells/Fire Cat.xml</c>), or null.
+    /// </summary>
+    public static ulong? TryGetTemplateIdByPath(string path) {
+        if (string.IsNullOrEmpty(path)) {
+            return null;
+        }
+
+        var byPath = LazyInitializer.EnsureInitialized(ref s_templateIdsByPath, () => {
+            var map = new Dictionary<string, ulong>(StringComparer.OrdinalIgnoreCase);
+            foreach (var (id, location) in TemplateLocations()) {
+                if (location?.m_filename is { } file) {
+                    map.TryAdd(file, id);
+                }
+            }
+
+            return map;
+        });
+
+        return byPath.TryGetValue(path, out var found) ? found : null;
+    }
+
+    private static Dictionary<string, ulong> s_templateIdsByPath;
+
     private static Dictionary<ulong, TemplateLocation> TemplateLocations()
         => LazyInitializer.EnsureInitialized(ref s_templateLocations, IndexTemplateLocations);
 

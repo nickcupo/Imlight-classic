@@ -59,10 +59,15 @@ namespace Imlight.CoreLib.Shared.Networking;
 /// <summary>
 /// Represents a connected socket as a ReceiveActor.
 /// </summary>
-public sealed class SessionActor : ReceiveActor, IDisposable {
+public sealed partial class SessionActor : ReceiveActor, IDisposable {
+    private ZoneAttachContext _doorAttach;
+    internal ZoneAttachContext DoorAttach => Volatile.Read(ref _doorAttach);
+    internal void PublishDoorAttach(ZoneAttachContext context) => Volatile.Write(ref _doorAttach, context);
 
     private readonly byte _serviceRetryCount                 = ConfigurationManager.Settings["Advanced.SessionActorServiceRetryCount"].AsByte();
     private readonly byte _serviceTimeRangeRetryInSeconds    = ConfigurationManager.Settings["Advanced.SessionActorServiceRangeRetry"].AsByte();
+
+    internal Imlight.CoreLib.Game.Monstrology.MonstrologySessionPolicy MonstrologySession { get; } = new();
 
     public ushort SessionID                                  { get; }
     public uint OfferTime                                    { get; set; }
@@ -78,9 +83,14 @@ public sealed class SessionActor : ReceiveActor, IDisposable {
 
     public string Ip;
     public string RemoteIp;
+    // CLASSIC: the server address this client connected to (KingsIsle's launcher is sent URLs on it).
+    public string LocalIp;
 
     private readonly IActorRef _actorFactoryRef;
-    private readonly Dictionary<IActorRef, MessageService> _services;
+    // CLASSIC: filled by each service as it is constructed (RegisterService), on the service's thread.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<IActorRef, MessageService> _services;
+    // CLASSIC: the services in creation order, with their types, known at once.
+    private readonly List<(IActorRef Ref, Type Type)> _serviceOrder = [];
     private readonly Dictionary<Type, List<IActorRef>> _dispatchTable = [];
     private readonly Socket _socket;
     private readonly List<IMessage> _preInitMessages = new();
@@ -94,8 +104,9 @@ public sealed class SessionActor : ReceiveActor, IDisposable {
         this._socket = socket;
         this.Ip = socket.RemoteEndPoint.ToString();
         this.RemoteIp = socket.RemoteEndPoint.ToString().Split(':')[0];
+        this.LocalIp = Imlight.CoreLib.Classic.Launcher.LauncherPatchServer.AddressText(socket.LocalEndPoint); // CLASSIC
         this.SessionID = sessionId;
-        this._services = new Dictionary<IActorRef, MessageService>();
+        this._services = new System.Collections.Concurrent.ConcurrentDictionary<IActorRef, MessageService>();
         this.ServerRef = server;
 
         if (actorFactoryRef != null) {
@@ -238,6 +249,15 @@ public sealed class SessionActor : ReceiveActor, IDisposable {
     }
 
     /// <summary>
+    /// CLASSIC: a service of this session reports its instance when it is constructed (on its own thread).
+    /// </summary>
+    internal void RegisterService(IActorRef service, MessageService instance) {
+        if (service is not null && instance is not null && _services is not null) { // null only in a bare test double
+            _services[service] = instance;
+        }
+    }
+
+    /// <summary>
     /// Gets the actor reference for the zone.
     /// </summary>
     /// <returns>The actor reference for the zone, or null if the zone service is not available.</returns>
@@ -328,7 +348,7 @@ public sealed class SessionActor : ReceiveActor, IDisposable {
     protected override void PreStart() {
         // Ask the ActorFactory for this actor's message services.
         var msg = new SERVICE_101_PROTOCOL.MSG_QUERYUNLOADEDSERVICES();
-        var services = _actorFactoryRef
+        var services = _inProcessServices?.ToList() ?? _actorFactoryRef
             .Ask<SERVICE_101_PROTOCOL.MSG_SERVICESLIST>(msg)
             .Result
             .Services;
@@ -352,6 +372,16 @@ public sealed class SessionActor : ReceiveActor, IDisposable {
         Receive<SERVER_100_PROTOCOL.MSG_PING>(x => this.Ping = x.Ping);
         Receive<Exception>(ReceiveException);
         Receive<SERVER_100_PROTOCOL.MSG_RECEIVEDPACKET>(x => HandlePacket(x.Packet));
+
+        Receive<LegacyDoorOwnerObject>(ReceiveLegacyDoorOwnerObject);
+        Receive<LegacyDoorSocketBatch>(ReceiveLegacyDoorSocketBatch);
+
+        // CLASSIC: a batch of client messages (ambient wizards' moves): each goes to the socket, in order.
+        Receive<ZONE_102_PROTOCOL.MSG_CLIENTBATCH>(batch => {
+            foreach (var message in batch.Messages ?? []) {
+                SendToSocket(message);
+            }
+        });
 
         // Generic message handlers.
         Receive<IServerMessage>(HandleInternalTell);
@@ -394,16 +424,13 @@ public sealed class SessionActor : ReceiveActor, IDisposable {
             Logger.Verbose("New actor created for session {Id}: {Name}",
                 Logger.Args(SessionID, serviceName));
 
-            // We've created the service as a child actor. Problem is, we need to know the actual class
-            // identity to use it later. To do that, we'll ask the actor to identify itself.
-            var msg = new SERVICE_101_PROTOCOL.MSG_QUERYMESSAGESERVICEIDENTITY();
-            var identity = childRef.Ask<SERVICE_101_PROTOCOL.MSG_MESSAGESERVICEIDENTITY>(msg)
-                .Result
-                .Service;
-            _services.Add(childRef, identity);
+            // CLASSIC: the dispatch table comes from the service's type (the same table its instance reports through
+            // MSG_QUERYMESSAGESERVICEIDENTITY); the instance registers itself (RegisterService) when it is constructed.
+            // A blocking identity Ask per service held a pool thread for every service of every new connection.
+            _serviceOrder.Add((childRef, service));
 
             // Populate the dispatch table.
-            foreach (var msgType in identity.MessageHandlers.Keys) {
+            foreach (var msgType in MessageHandlerTable.HandlersOf(service).Keys) {
                 if (!_dispatchTable.TryGetValue(msgType, out var list)) {
                     list = [];
                     _dispatchTable[msgType] = list;
@@ -431,6 +458,10 @@ public sealed class SessionActor : ReceiveActor, IDisposable {
             return;
         }
 
+        // Apply session policy in packet order before forwarding to independently scheduled child services.
+        if (packet is EnhancedClassicProtocol.Hello enhancementHello)
+            MonstrologySession.Negotiate(enhancementHello.ProtocolVersion, enhancementHello.StrictClassic);
+
         if (_dispatchTable.TryGetValue(packet.GetType(), out var handlers)) {
             foreach (var handler in handlers) {
                 handler.Forward(packet);
@@ -444,9 +475,9 @@ public sealed class SessionActor : ReceiveActor, IDisposable {
     private void SendPreDisposeToServices() {
         // Iterate through each service and send them a pre-dispose message. This lets a service gracefully handle
         // the dispose in the case that it requires another service to still be active.
-        foreach (var (actorRef, type) in _services) {
+        foreach (var (actorRef, type) in _serviceOrder) {
             // If the service doesn't have a pre-dispose message handler, we'll just skip it.
-            if (!type.MessageHandlers.ContainsKey(typeof(SERVICE_101_PROTOCOL.MSG_PREDISPOSE))) {
+            if (!MessageHandlerTable.HandlersOf(type).ContainsKey(typeof(SERVICE_101_PROTOCOL.MSG_PREDISPOSE))) {
                 continue;
             }
 
@@ -462,7 +493,7 @@ public sealed class SessionActor : ReceiveActor, IDisposable {
 
     private void SendDisposeToServices() {
         // Iterate through our services and send them a dispose message.
-        foreach (var (actorRef, type) in _services) {
+        foreach (var (actorRef, _) in _serviceOrder) {
             actorRef.Tell(new SERVICE_101_PROTOCOL.MSG_DISPOSE());
         }
     }

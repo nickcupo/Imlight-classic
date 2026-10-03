@@ -120,7 +120,13 @@ public class Zone : ReceiveProtocolDispatcher, IWithTimers {
     /// </summary>
     /// <param name="zonePath">The path of the zone, formatted as it would be in the access pass.</param>
     /// <param name="dynamicZoneId">The dynamic zone ID of the zone.</param>
-    public Zone(string zonePath, uint dynamicZoneId) {
+    public Zone(string zonePath, uint dynamicZoneId) : this(zonePath, dynamicZoneId, 0) { }
+
+    /// <summary>
+    /// CLASSIC: an instanced zone (a dungeon) knows whose instance container holds it.
+    /// </summary>
+    public Zone(string zonePath, uint dynamicZoneId, ulong instanceOwnerId) {
+        this.InstanceOwnerId = instanceOwnerId;
         this.ZonePath = zonePath;
         this._dynamicZoneId = dynamicZoneId;
         this._isLoading = true;
@@ -152,6 +158,46 @@ public class Zone : ReceiveProtocolDispatcher, IWithTimers {
     public static Props Props(string zonePath, uint dynamicZoneId)
         => Akka.Actor.Props.Create(() => new Zone(zonePath, dynamicZoneId))
             .WithMailbox("akka.actor.mailbox.zone-priority");
+
+    // CLASSIC: an instanced zone, held by the instance container of instanceOwnerId.
+    public static Props Props(string zonePath, uint dynamicZoneId, ulong instanceOwnerId)
+        => Akka.Actor.Props.Create(() => new Zone(zonePath, dynamicZoneId, instanceOwnerId))
+            .WithMailbox("akka.actor.mailbox.zone-priority");
+
+    /// <summary>
+    /// CLASSIC: the character whose instance container holds this zone; 0 for a public zone.
+    /// </summary>
+    public ulong InstanceOwnerId { get; }
+
+    // CLASSIC: a party lost a fight here; once the zone is empty, the instance is dropped so the next entry is fresh.
+    private bool _resetWhenEmpty;
+
+    [MessageHandler(typeof(CLASSIC_FEATURES_PROTOCOL.MSG_INSTANCEPARTYLOST))]
+    private void ReceiveInstancePartyLost(CLASSIC_FEATURES_PROTOCOL.MSG_INSTANCEPARTYLOST message) {
+        if (InstanceOwnerId == 0) {
+            return;
+        }
+
+        _resetWhenEmpty = true;
+        Logger.Information("Zone {Zone} (instance of {Owner}): a party lost here; it resets once empty.",
+            Logger.Args(ZonePath, InstanceOwnerId));
+        DropIfEmptyAfterLoss();
+    }
+
+    private void DropIfEmptyAfterLoss() {
+        if (!_resetWhenEmpty || _playerCount > 0 || _isLoading) {
+            return;
+        }
+
+        _resetWhenEmpty = false;
+        Context.Parent.Tell(new CLASSIC_FEATURES_PROTOCOL.MSG_DROPSELF { ZoneName = ZonePath });
+    }
+
+    protected override void PostStop() {
+        Classic.ZoneDataDirectory.Remove(Self); // CLASSIC
+        Classic.ZoneObjectStates.Remove(Self); // CLASSIC: the instance's state objects (Temple of Storms obelisks).
+        base.PostStop();
+    }
 
     protected override void PreRestart(Exception reason, object message) {
         Logger.Error("Zone {ZoneName} restarts for: {Exception}", Logger.Args(ZoneName, reason));
@@ -188,6 +234,24 @@ public class Zone : ReceiveProtocolDispatcher, IWithTimers {
         Context.Stop(Self);
     }
 
+    // CLASSIC: the PERF log's mailbox probe ([Classic] PerfLogSeconds): a timer message stamped with when it is due.
+    protected override void PreStart() {
+        base.PreStart();
+        if (Classic.PerfMonitor.Enabled) {
+            SchedulePerfProbe();
+        }
+    }
+
+    private void SchedulePerfProbe()
+        => Timers.StartSingleTimer("perf-probe", new Classic.PerfMonitor.ZoneProbe(System.Diagnostics.Stopwatch.GetTimestamp()
+            + (long) (Classic.PerfMonitor.ZoneProbeInterval.TotalSeconds * System.Diagnostics.Stopwatch.Frequency)), Classic.PerfMonitor.ZoneProbeInterval);
+
+    [MessageHandler(typeof(Classic.PerfMonitor.ZoneProbe))]
+    private void ReceivePerfProbe(Classic.PerfMonitor.ZoneProbe probe) {
+        Classic.PerfMonitor.ZoneProbeHandled(probe, (Context as Akka.Actor.ActorCell)?.Mailbox.MessageQueue.Count ?? 0);
+        SchedulePerfProbe();
+    }
+
     #region Handlers
 
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_ZONETRANSFER))]
@@ -214,7 +278,7 @@ public class Zone : ReceiveProtocolDispatcher, IWithTimers {
         
         // Send response to confirm player was added
         var response = new ZONE_102_PROTOCOL.MSG_ADDPLAYERRSP {
-            WizardGameObject = message.PlayerObject
+            WizardGameObject = message.PlayerObject, AttachGeneration = message.AttachGeneration, ZoneActorRef = Self
         };
         Sender.Tell(response);
     }
@@ -247,6 +311,7 @@ public class Zone : ReceiveProtocolDispatcher, IWithTimers {
         _players.Remove(message.PlayerActor);
         ReleaseObjectIdentifier(message.MobileId);
         Sender.Tell(new ZONE_102_PROTOCOL.MSG_REMOVEPLAYERRSP());
+        DropIfEmptyAfterLoss(); // CLASSIC
     }
 
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_PLAYERMOVE))]
@@ -320,6 +385,7 @@ public class Zone : ReceiveProtocolDispatcher, IWithTimers {
 
         _zoneLoadTimer.Restart();
         ZoneData = message.ZoneData;
+        Classic.ZoneDataDirectory.Set(Self, ZoneData, message.NodeData); // CLASSIC: sessions read it without an Ask.
 
         // Inform each supervisor of the loaded zone data. They are expected to give a reply
         // to inform the zone that they have loaded their data.
@@ -499,7 +565,7 @@ public class Zone : ReceiveProtocolDispatcher, IWithTimers {
                 
                 // Send response to confirm player was added
                 var response = new ZONE_102_PROTOCOL.MSG_ADDPLAYERRSP {
-                    WizardGameObject = addPlayer.PlayerObject
+                    WizardGameObject = addPlayer.PlayerObject, AttachGeneration = addPlayer.AttachGeneration, ZoneActorRef = Self
                 };
                 playerActor.Tell(response);
             }

@@ -74,7 +74,7 @@ internal static class ClassicQuestSpawns {
             .Where(spawner => spawner is not null)
             .Select(spawner => new SpawnerInfo(
                 (uint) spawner.m_id.Full,
-                spawner.m_active,
+                RunsOnItsOwn(spawner),
                 (spawner.m_spawnList ?? [])
                     .Where(item => item?.m_objectInfo is not null)
                     .Select(item => (uint) item.m_objectInfo.m_templateID.Full)
@@ -94,6 +94,15 @@ internal static class ClassicQuestSpawns {
 
         return new ZoneQuestSpawns(DormantSpawners.Find(spawners, started), DormantSpawners.Placed(spawners, statics));
     }
+
+    /// <summary>
+    /// CLASSIC: whether a spawner runs without a quest. Besides m_active, a spawner gated by a global registry
+    /// entry (m_globalDynamic with requirements, such as Hallowe'en's ghosts on HalloweenSpawner1) runs while
+    /// the entry's requirements hold; the zone only hands the supervisor spawners whose requirements hold.
+    /// </summary>
+    /// <param name="spawner">The spawner.</param>
+    internal static bool RunsOnItsOwn(SpawnObject spawner)
+        => spawner is not null && (spawner.m_active || (ClassicQuestEngine.IsActive && spawner.m_globalDynamic && spawner.m_globalDynamicReqs is not null));
 
     /// <summary>
     /// Whether one of the wizard's active goals talks to or fights the template.

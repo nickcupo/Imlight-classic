@@ -215,7 +215,9 @@ public sealed record DropRule(ImmutableDictionary<MobKind, double> Expected, int
     /// <summary>
     /// Rolls every entry of a list on its own, in random order, and keeps at most <see cref="MaxPerMob"/> hits.
     /// </summary>
-    public ImmutableArray<ulong> Roll(ImmutableArray<DropEntry> entries, MobKind kind, int listed, bool tallied, Random random) {
+    /// <param name="multiplier">CLASSIC: [Classic] DropRateMultiplier; each chance is multiplied, at most 100%.</param>
+    public ImmutableArray<ulong> Roll(ImmutableArray<DropEntry> entries, MobKind kind, int listed, bool tallied, Random random,
+                                      double multiplier = 1.0) {
         if (entries.IsDefaultOrEmpty || MaxPerMob <= 0) {
             return [];
         }
@@ -228,7 +230,7 @@ public sealed record DropRule(ImmutableDictionary<MobKind, double> Expected, int
                 break;
             }
 
-            if (random.NextDouble() < ChanceOf(entry, kind, listed, tallied)) {
+            if (random.NextDouble() < Math.Min(1.0, ChanceOf(entry, kind, listed, tallied) * Math.Max(0, multiplier))) {
                 hits.Add(entry.Template);
             }
         }
@@ -353,7 +355,8 @@ public sealed class MobRewardRules {
     /// </summary>
     /// <param name="mob">The defeated mob.</param>
     /// <param name="random">The random source.</param>
-    public MobLoot Roll(MobInfo mob, Random random) {
+    /// <param name="dropMultiplier">CLASSIC: [Classic] DropRateMultiplier (2009: 1).</param>
+    public MobLoot Roll(MobInfo mob, Random random, double dropMultiplier = 1.0) {
         var gold = GoldFor(mob).Roll(random);
         var documented = Find(mob.TemplateId);
 
@@ -362,18 +365,18 @@ public sealed class MobRewardRules {
 
         var items = documented is null
             ? []
-            : ItemDrops.Roll(documented.Items, mob.Kind, documented.ListedItems, Tallied(documented.Items), random);
+            : ItemDrops.Roll(documented.Items, mob.Kind, documented.ListedItems, Tallied(documented.Items), random, dropMultiplier);
 
         var cards = documented is { TreasureCards.IsEmpty: false }
-            ? TreasureCardDrops.Roll(documented.TreasureCards, mob.Kind, documented.TreasureCards.Length, Tallied(documented.TreasureCards), random)
+            ? TreasureCardDrops.Roll(documented.TreasureCards, mob.Kind, documented.TreasureCards.Length, Tallied(documented.TreasureCards), random, dropMultiplier)
             : TreasureCardFallback.TryGetValue(mob.TemplateId, out var cardFallback)
-                ? TreasureCardDrops.Roll(cardFallback, mob.Kind, cardFallback.Length, tallied: false, random)
+                ? TreasureCardDrops.Roll(cardFallback, mob.Kind, cardFallback.Length, tallied: false, random, dropMultiplier)
                 : [];
 
         var reagentTemplates = documented is { Reagents.IsEmpty: false }
-            ? ReagentDrops.Roll(documented.Reagents, mob.Kind, documented.Reagents.Length, Tallied(documented.Reagents), random)
+            ? ReagentDrops.Roll(documented.Reagents, mob.Kind, documented.Reagents.Length, Tallied(documented.Reagents), random, dropMultiplier)
             : ReagentFallback.TryGetValue(mob.TemplateId, out var reagentFallback)
-                ? ReagentDrops.Roll(reagentFallback, mob.Kind, reagentFallback.Length, tallied: false, random)
+                ? ReagentDrops.Roll(reagentFallback, mob.Kind, reagentFallback.Length, tallied: false, random, dropMultiplier)
                 : [];
         var reagents = reagentTemplates.Select(template => new ReagentDrop(template, ReagentDrops.Quantity.Roll(random)))
             .ToImmutableArray();

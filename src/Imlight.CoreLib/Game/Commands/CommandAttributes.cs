@@ -35,6 +35,14 @@ internal sealed class AliasAttribute(params string[] aliases) : Attribute {
 
 }
 
+// CLASSIC: a one-line description shown by ".<group> help".
+[AttributeUsage(AttributeTargets.Method, Inherited = false, AllowMultiple = false)]
+internal sealed class HelpAttribute(string text) : Attribute {
+
+    public string Text { get; } = text;
+
+}
+
 [AttributeUsage(AttributeTargets.Method, Inherited = false, AllowMultiple = false)]
 internal sealed class AuthRequiredAttribute(AuthLevel level) : Attribute {
 

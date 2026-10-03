@@ -42,6 +42,8 @@
 
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
+using System.Linq;
 using Akka.Actor;
 using Imcodec.CoreObject;
 using Imcodec.IO;
@@ -51,9 +53,11 @@ using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Classic.Rules;
 using Imlight.Common;
 using Imlight.CoreLib.Classic;
+using Imlight.CoreLib.Classic.MinionHelper;
 using Imlight.CoreLib.Game.DropTables;
 using Imlight.CoreLib.Game.Combat;
 using Imlight.CoreLib.Shared.Items;
+using Imlight.CoreLib.Shared.Behaviors;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;
 using Imlight.CoreLib.Shared.Resources;
@@ -65,8 +69,14 @@ namespace Imlight.CoreLib.Game.Services;
 
 internal class CombatService(SessionActor sessionActor) : MessageService(sessionActor) {
 
-    private const uint NO_AGGRO_EFFECT_STRINGID = 1618528611;
-    private const uint NO_AGGRO_EFFECT_DURATION_IN_SECONDS = 3;
+    private const uint NO_AGGRO_EFFECT_STRINGID = 1618528611; // StringHash("PostCombatEffect")
+    // CLASSIC: [Classic] PostCombatGraceSeconds (default 5): how long after a duel monsters leave the wizard alone and
+    // the wizard does not join fights by walking into them. The 2009 value is unsourced (GAP_ANALYSIS C9).
+    private static readonly uint NO_AGGRO_EFFECT_DURATION_IN_SECONDS = GraceSeconds();
+
+    private static uint GraceSeconds()
+        => uint.TryParse(ConfigurationManager.Settings["Classic.PostCombatGraceSeconds"].AsString(), out var seconds)
+            && seconds is > 0 and <= 60 ? seconds : 5;
 
     private readonly CoreObjectSerializer _effectSerializer = new(
         behaviors: SerializerFlags.None
@@ -86,6 +96,7 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
     protected override void OnDispose() {
         var message = new GAME_5_PROTOCOL.MSG_CLIENT_DISCONNECT();
         _currentDuelActor?.Tell(message, SessionActor.ActorRef);
+        MinionHelperHub.Shared.UnbindSession(_helperAccountId, SessionActor.ActorRef); // CLASSIC: Minion Helper.
     }
 
     // CLASSIC: the Crown Shop's henchman hire goes to the duel this player is in; outside a duel it fails at once.
@@ -104,6 +115,7 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
     [MessageHandler(typeof(COMBAT_106_PROTOCOL.MSG_ACTORADDEDTODUEL))]
     private void RecieveDuelAdd(COMBAT_106_PROTOCOL.MSG_ACTORADDEDTODUEL message) {
         _currentDuelActor = message.DuelActor;
+        TellDuelAboutHelper(); // CLASSIC: a Myth owner with a Minion Helper chooses their minions' moves.
 
         if (_cheatInstantCinematics) {
             _currentDuelActor.Tell(new COMBAT_106_PROTOCOL.MSG_CHEATINSTANTCINEMATICS {
@@ -137,11 +149,62 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
     private void ReceiveCombatDefeat(COMBAT_106_PROTOCOL.MSG_COMBATDEFEAT message) {
         _currentDuelActor = null; // CLASSIC: the duel is over for us; a later logout must not flee it again.
         GetActiveWizard().IsInDuel = false;
+        PushHelperIdle();
         EquipMountSubtle();
+
+        // CLASSIC: a defeated wizard comes back with 1 health, which the hub's zone healing (m_healingPerMinute, 20%
+        // a minute in the world hubs) refills; at 0 the next fight was lost at once. A flee keeps its health.
+        var wizard = GetActiveWizard();
+        if (wizard.GameStats.m_currentHitpoints <= 0) {
+            wizard.UpdateHealth(1);
+            Logger.Debug("{Wizard} was defeated; back with 1 health.", Logger.Args(wizard.CharId));
+        }
 
         // We've fled or have been defeated in this duel. Send us back to the world hub.
         var hubMsg = new ZONE_102_PROTOCOL.MSG_SENDTOHUB();
         TellOtherServices(hubMsg);
+    }
+
+    // CLASSIC: an open PvP fight ended, or this wizard left the circle: no rewards, no penalty, no trip home. A defeated
+    // wizard keeps 1 health, which regenerates.
+    [MessageHandler(typeof(CLASSIC_FEATURES_PROTOCOL.MSG_PVPRELEASE))]
+    private void ReceivePvpRelease(CLASSIC_FEATURES_PROTOCOL.MSG_PVPRELEASE message) {
+        _currentDuelActor = null;
+        var wizard = GetActiveWizard();
+        if (wizard is null) {
+            return;
+        }
+
+        wizard.IsInDuel = false;
+        if (wizard.GameStats.m_currentHitpoints <= 0) {
+            wizard.UpdateHealth(1);
+            SendToSocket(new WIZARD_12_PROTOCOL.MSG_UPDATEHEALTH {
+                CharacterID = wizard.GameObjectID,
+                NewHealth = 1,
+                NewHealthMax = wizard.GameStats.m_baseHitpoints,
+                DisplayDiff = 0,
+            });
+        }
+
+        SetNoAggroGrace();
+        Timers.StartSingleTimer("NoAggroGraceOver", new COMBAT_106_PROTOCOL.MSG_NOAGGROGRACEOVER(),
+            TimeSpan.FromSeconds(NO_AGGRO_EFFECT_DURATION_IN_SECONDS));
+        if (message.Fought) {
+            InformGameClient(message.Won ? "Your side won the duel!" : "Your side lost the duel.");
+        }
+    }
+
+    // CLASSIC: ".pvp ready" / ".pvp leave" go to the open PvP circle this wizard sits in.
+    [MessageHandler(typeof(CLASSIC_FEATURES_PROTOCOL.MSG_PVPCOMMAND))]
+    private void ReceivePvpCommand(CLASSIC_FEATURES_PROTOCOL.MSG_PVPCOMMAND message) {
+        if (_currentDuelActor is null) {
+            InformGameClient("You are not in an open PvP circle.");
+
+            return;
+        }
+
+        message.Actor = SessionActor.ActorRef;
+        _currentDuelActor.Tell(message, SessionActor.ActorRef);
     }
 
     [MessageHandler(typeof(COMBAT_106_PROTOCOL.MSG_COMBATWIN))]
@@ -150,6 +213,7 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
         // (a second "Duel ended" and a MSG_SENDTOHUB).
         _currentDuelActor = null;
         GetActiveWizard().IsInDuel = false;
+        PushHelperIdle();
         EquipMount();
         SetNoAggroGrace();
 
@@ -204,11 +268,13 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
 
         var random = Random.Shared;
         foreach (var templateId in defeatedMobTemplateIds ?? []) {
+            AddHolidayDrops(rules, templateId, result, random); // CLASSIC: classic-data/holidays boss drops in season
+
             if (ClassicMobInfo.Of(templateId) is not { } mob) {
                 continue;
             }
 
-            var loot = rules.Roll(mob, random);
+            var loot = rules.Roll(mob, random, ClassicSettings.DropRateMultiplier); // CLASSIC: dashboard switch
             result.GoldAmount += loot.Gold;
             foreach (var item in loot.Items) {
                 if (CoreObjectFactory.GetCoreTemplate(item) is not null) {
@@ -238,6 +304,29 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
         LootGranter.GrantAndDisplay(SessionActor.ActorRef, GetActiveWizard(), result);
 
         return result.GoldAmount;
+    }
+
+    // CLASSIC: while a holiday event runs, its bosses also roll their 2009 drops (classic-data/holidays), each list at
+    // the 2009 boss rate for a list that long (MobRewardRules), times [Classic] DropRateMultiplier.
+    private static void AddHolidayDrops(MobRewardRules rules, ulong templateId, DropTableResult result, Random random) {
+        if (ClassicHolidays.DropsFor(templateId) is not { } drops) {
+            return;
+        }
+
+        var multiplier = ClassicSettings.DropRateMultiplier;
+        var gear = drops.Items.Select(item => new DropEntry(item, null)).ToImmutableArray();
+        foreach (var item in rules.ItemDrops.Roll(gear, MobKind.Boss, gear.Length, tallied: false, random, multiplier)) {
+            if (CoreObjectFactory.GetCoreTemplate(item) is not null) {
+                result.Items.Add(new DropItemResult { ItemId = item.ToString(), ItemName = string.Empty, Quantity = 1 });
+            }
+        }
+
+        var cards = drops.TreasureCards.Select(card => new DropEntry(card, null)).ToImmutableArray();
+        foreach (var card in rules.TreasureCardDrops.Roll(cards, MobKind.Boss, cards.Length, tallied: false, random, multiplier)) {
+            if (card <= uint.MaxValue && CoreObjectFactory.GetCoreTemplate(card) is SpellTemplate) {
+                result.TreasureCards.Add((uint) card);
+            }
+        }
     }
 
     // Returns the gold granted.
@@ -317,6 +406,155 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
             : "Spell fizzling enabled for your duels.");
     }
 
+    private bool _minionControlNegotiated;
+
+    [MessageHandler(typeof(EnhancedClassicProtocol.Hello))]
+    private void ReceiveEnhancementHello(EnhancedClassicProtocol.Hello message) {
+        // Monstrology is stock by default; strict/unsupported Hello withdraws its session permission.
+        Imlight.CoreLib.Game.Monstrology.MonstrologySessionPolicy.Bind(GetActiveWizard(), SessionActor.MonstrologySession);
+        // Extensions are silent until the client opts in. Unsupported versions never unlock control.
+        _minionControlNegotiated = message.ProtocolVersion == EnhancedClassicProtocol.Version
+            && !message.StrictClassic && EnhancedGameplaySettings.Enabled;
+        if (!_minionControlNegotiated) _currentDuelActor?.Tell(new COMBAT_106_PROTOCOL.MSG_OWNEDMINIONDISABLE {
+            OwnerActor = SessionActor.ActorRef
+        }, Self);
+        var wizard = GetActiveWizard();
+        var myth = wizard?.MagicSchoolBehavior?.MagicSchool == MagicSchool.Myth;
+        SendToSocket(new EnhancedClassicProtocol.Capabilities {
+            Flags = (_minionControlNegotiated && myth ? 1u : 0u)
+                | SessionActor.MonstrologySession.Advertise(Imlight.CoreLib.Game.Monstrology.MonstrologyService.Enabled)
+        });
+    }
+
+    [MessageHandler(typeof(EnhancedClassicProtocol.MinionRequest))]
+    private void ReceiveOwnedMinionRequest(EnhancedClassicProtocol.MinionRequest message) {
+        if (!_minionControlNegotiated || !EnhancedGameplaySettings.Enabled || _currentDuelActor == null) {
+            if (_minionControlNegotiated) SendToSocket(new EnhancedClassicProtocol.MinionState {
+                Payload = System.Text.Json.JsonSerializer.Serialize(new {
+                    message.DuelID, message.Round, message.MinionID, message.RequestID,
+                    Accepted = false, Status = "Unavailable", Snapshots = Array.Empty<object>()
+                })
+            });
+            return;
+        }
+        _currentDuelActor.Tell(new COMBAT_106_PROTOCOL.MSG_OWNEDMINIONREQUEST {
+            OwnerActor = SessionActor.ActorRef,
+            DuelID = message.DuelID, Round = message.Round, MinionID = message.MinionID,
+            RequestID = message.RequestID, Query = message.Query, MoveType = message.MoveType,
+            SpellSelection = message.SpellSelection, SpellTarget = message.SpellTarget
+        }, Self);
+    }
+
+    [MessageHandler(typeof(COMBAT_106_PROTOCOL.MSG_OWNEDMINIONRESPONSE))]
+    private void ReceiveOwnedMinionResponse(COMBAT_106_PROTOCOL.MSG_OWNEDMINIONRESPONSE message) {
+        if (message.OwnerActor != SessionActor.ActorRef) return;
+        if (message.HelperView is not null && _helperAccountId != 0) {
+            MinionHelperHub.Shared.Push(_helperAccountId, message.HelperView); // CLASSIC: Minion Helper.
+        }
+        if (!_minionControlNegotiated || !EnhancedGameplaySettings.Enabled) return;
+        var payload = System.Text.Json.JsonSerializer.Serialize(new {
+                message.DuelID, message.Round, message.MinionID, message.RequestID,
+                message.Accepted, Status = message.Status.ToString(),
+                Snapshots = System.Linq.Enumerable.Select(message.Snapshots, snapshot => new {
+                    snapshot.OwnerID, snapshot.MinionID, snapshot.Slot, snapshot.Team, snapshot.Health,
+                    snapshot.GenericPips, snapshot.PowerPips, snapshot.HandData, snapshot.ParticipantData,
+                    snapshot.HasOrder, snapshot.MoveType, snapshot.SpellSelection, snapshot.SpellTarget
+                })
+            });
+        if (System.Text.Encoding.UTF8.GetByteCount(payload) > EnhancedClassicProtocol.MaximumPayloadBytes) {
+            payload = System.Text.Json.JsonSerializer.Serialize(new {
+                message.DuelID, message.Round, message.MinionID, message.RequestID,
+                Accepted = false, Status = "SnapshotUnavailable", Snapshots = Array.Empty<object>()
+            });
+        }
+        SendToSocket(new EnhancedClassicProtocol.MinionState { Payload = payload });
+    }
+
+    // CLASSIC: the Minion Helper (Classic/MinionHelper). The account's helper links to this session while the wizard
+    // is in the world; while it is linked and its switch is on, a Myth wizard chooses their minions' moves in duels.
+    private ulong _helperAccountId;
+    private bool _helperLinked;
+    private bool _helperControl = true;
+
+    [MessageHandler(typeof(SERVICE_101_PROTOCOL.MSG_ATTACHCOMPLETE))]
+    private void ReceiveAttachCompleteForHelper(SERVICE_101_PROTOCOL.MSG_ATTACHCOMPLETE message) {
+        var account = GetActiveAccount();
+        if (account is null || account.AccountId == 0) return;
+        _helperAccountId = account.AccountId;
+        MinionHelperHub.Shared.BindSession(_helperAccountId, SessionActor.ActorRef);
+    }
+
+    [MessageHandler(typeof(COMBAT_106_PROTOCOL.MSG_MINIONHELPERLINK))]
+    private void ReceiveMinionHelperLink(COMBAT_106_PROTOCOL.MSG_MINIONHELPERLINK message) {
+        _helperLinked = message.Connected && EnhancedGameplaySettings.Enabled;
+        if (_helperLinked) {
+            if (_currentDuelActor is null) PushHelperIdle();
+            else TellDuelAboutHelper();
+        } else if (_currentDuelActor is not null && !_minionControlNegotiated) {
+            _currentDuelActor.Tell(new COMBAT_106_PROTOCOL.MSG_OWNEDMINIONDISABLE { OwnerActor = SessionActor.ActorRef }, Self);
+        }
+    }
+
+    [MessageHandler(typeof(COMBAT_106_PROTOCOL.MSG_MINIONHELPERCONTROL))]
+    private void ReceiveMinionHelperControl(COMBAT_106_PROTOCOL.MSG_MINIONHELPERCONTROL message) {
+        _helperControl = message.Enabled;
+        if (_currentDuelActor is null) {
+            PushHelperIdle();
+        } else if (_helperControl) {
+            TellDuelAboutHelper();
+        } else {
+            _currentDuelActor.Tell(new COMBAT_106_PROTOCOL.MSG_OWNEDMINIONDISABLE { OwnerActor = SessionActor.ActorRef }, Self);
+        }
+    }
+
+    [MessageHandler(typeof(COMBAT_106_PROTOCOL.MSG_MINIONHELPERORDER))]
+    private void ReceiveMinionHelperOrder(COMBAT_106_PROTOCOL.MSG_MINIONHELPERORDER message) {
+        if (!_helperLinked || !EnhancedGameplaySettings.Enabled || _currentDuelActor is null) {
+            if (message.RequestID != 0) {
+                MinionHelperHub.Shared.Push(_helperAccountId, System.Text.Json.JsonSerializer.Serialize(new {
+                    op = "ack", request = message.RequestID, accepted = false, status = "NotInDuel" }));
+            }
+            PushHelperIdle();
+            return;
+        }
+
+        if (message.Query) {
+            TellDuelAboutHelper();
+            return;
+        }
+
+        if (!_helperControl) {
+            MinionHelperHub.Shared.Push(_helperAccountId, System.Text.Json.JsonSerializer.Serialize(new {
+                op = "ack", request = message.RequestID, accepted = false, status = "ControlOff" }));
+            return;
+        }
+
+        _currentDuelActor.Tell(new COMBAT_106_PROTOCOL.MSG_OWNEDMINIONREQUEST {
+            OwnerActor = SessionActor.ActorRef,
+            DuelID = message.DuelID, Round = message.Round, MinionID = message.MinionID,
+            RequestID = message.RequestID, Query = false, MoveType = message.MoveType,
+            SpellSelection = message.SpellSelection, SpellTarget = message.SpellTarget
+        }, Self);
+    }
+
+    private void TellDuelAboutHelper() {
+        if (!_helperLinked || _currentDuelActor is null || !EnhancedGameplaySettings.Enabled) return;
+        _currentDuelActor.Tell(new COMBAT_106_PROTOCOL.MSG_OWNEDMINIONOPTIN {
+            OwnerActor = SessionActor.ActorRef, Enable = _helperControl
+        }, Self);
+    }
+
+    private void PushHelperIdle() {
+        if (!_helperLinked || _helperAccountId == 0) return;
+        var wizard = GetActiveWizard();
+        MinionHelperHub.Shared.Push(_helperAccountId, System.Text.Json.JsonSerializer.Serialize(new {
+            op = "state", phase = "idle",
+            wizard = wizard?.PlayerNameBehavior?.GetWizardName() ?? "",
+            myth = wizard?.MagicSchoolBehavior?.MagicSchool == MagicSchool.Myth,
+            controlling = _helperControl && EnhancedGameplaySettings.Enabled,
+        }));
+    }
+
     [MessageHandler(typeof(DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_COMBATMOVE))]
     private void ReceiveCombatMove(DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_COMBATMOVE message) {
         if (_currentDuelActor == null) {
@@ -337,7 +575,8 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
             MoveType = message.MoveType,
             SpellSelection = message.SpellSelection,
             SpellTarget = target,
-            TimeLeft = message.TimeLeft
+            TimeLeft = message.TimeLeft,
+            RawSpellTarget = message.SpellTarget,
         };
     }
 
@@ -527,9 +766,16 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
         }
     }
 
+    /// <summary>
+    /// CLASSIC: the post-combat grace: the client's "PostCombatEffect" (GameEffectData/WizardEffects.xml: category
+    /// PostCombat, AddTranslucentEffect / RemoveTranslucentEffect, public) makes the wizard translucent. The effect is
+    /// looked up by name, so it carries no override name (the old "NoAggro" override named no template, and the
+    /// client dropped the effect: no fade). It is public, so everyone in the zone sees the wizard fade, as retail did.
+    /// </summary>
     private void SetNoAggroGrace() {
         var wizard = GetActiveWizard();
         var charObjId = GetActiveGameObject().m_globalID;
+        RemoveNoAggroEffect(); // a second duel inside the grace: one effect at a time
         var effectInternalId = wizard.GameEffects.Count + 1;
 
         var epoch = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
@@ -539,22 +785,23 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
             m_effectNameID = NO_AGGRO_EFFECT_STRINGID,
             m_internalID = effectInternalId,
             m_endTime = (uint) endTime,
-            m_overrideName = "NoAggro"
         };
 
         wizard.GameEffects.Add(effect);
         wizard.IsInCombatGrace = true;
 
-        if (!_effectSerializer.Serialize(effect, PropertyFlags.Prop_Transmit, out var effectSerializedData)) {
+        // The client reads MSG_ADDEFFECT with Transmit | AuthorityTransmit (GameClient::MSG_AddEffect).
+        if (!_effectSerializer.Serialize(effect, PropertyFlags.Prop_Transmit | PropertyFlags.Prop_AuthorityTransmit,
+                out var effectSerializedData)) {
             Logger.Error("Failed to serialize effect {0}", Logger.Args(effect.m_effectNameID));
 
             return;
         }
 
-        SendToSocket(new GAME_5_PROTOCOL.MSG_ADDEFFECT() {
+        ZoneBroadcast(new GAME_5_PROTOCOL.MSG_ADDEFFECT() {
             GameObjectID = charObjId,
             EffectData = effectSerializedData
-        });
+        }, isSelfless: false);
     }
 
     private void RemoveNoAggroEffect() {
@@ -569,11 +816,11 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
         wizard.GameEffects.Remove(effect);
         wizard.IsInCombatGrace = false;
 
-        SendToSocket(new GAME_5_PROTOCOL.MSG_REMOVEEFFECT() {
+        ZoneBroadcast(new GAME_5_PROTOCOL.MSG_REMOVEEFFECT() {
             GameObjectID = charObjId,
             EffectNameID = effect.m_effectNameID,
             InternalID = effect.m_internalID,
-        });
+        }, isSelfless: false);
     }
 
 }

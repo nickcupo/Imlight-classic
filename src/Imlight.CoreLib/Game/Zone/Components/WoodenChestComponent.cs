@@ -98,6 +98,8 @@ internal sealed class WoodenChestComponent(ZoneEntity entity) : ZoneEntityCompon
         var goldAmount = Random.Shared.Next(10, 101);
 
         SendLoot(playerActor, goldAmount);
+        // CLASSIC: [Classic] GoldMultiplier.
+        goldAmount = Classic.ClassicSettings.Scale(goldAmount, Classic.ClassicSettings.GoldMultiplier);
         UpdateGold(playerActor, playerCharacter, goldAmount);
         PlaySound(playerActor);
         TriggerChestAnimation();

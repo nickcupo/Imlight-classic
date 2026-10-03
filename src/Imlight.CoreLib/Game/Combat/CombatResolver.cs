@@ -89,6 +89,7 @@ public class QueuedCombatAction {
 public class CombatResolver(Duel duel, CombatDuelSubCircle[] actorSubCircles) {
     
     private const int SPELL_FIZZLE_TIME = 4;
+    private const float SPELL_FIZZLE_FAIL_TIME = 3.0f; // the failed casting sign and smoke after the summon
     private const int SPELL_PASS_TIME = 1;
     private const float SPELL_CAST_TIME = 5.0f;
     private const float HANGING_EFFECT_CONSUME_TIME = 1.0f;
@@ -153,6 +154,10 @@ public class CombatResolver(Duel duel, CombatDuelSubCircle[] actorSubCircles) {
                     Logger.Args(_duel.m_duelID.Full, caster.SlotIndex, spell.m_templateID));
                 return;
             }
+        }
+
+        if (spell != null && !caster._duelActor.AllowsMonstrologyCast(caster, spell, spellTemplate)) {
+            type = CombatMoveType.Pass; spell = null; spellTemplate = null; target = null;
         }
 
         var queuedAction = new QueuedCombatAction {
@@ -282,22 +287,25 @@ public class CombatResolver(Duel duel, CombatDuelSubCircle[] actorSubCircles) {
                     continue;
                 }
 
-                // Determine if this spell hits or fizzles.
-                var spellHits = SpellHits(action.SpellCaster, action.Spell);
-                if (!spellHits) {
-                    cinematicTime += HandleFizzleAction(action, combatActionList);
+                // Recheck under the session lock through effects AND costs. Strict Hello may have arrived after queuing.
+                if (!action.SpellCaster._duelActor.RunMonstrologyCast(action.SpellCaster, action.Spell, action.SpellTemplate, () => {
+                    // Determine if this spell hits or fizzles.
+                    var spellHits = SpellHits(action.SpellCaster, action.Spell);
+                    if (!spellHits) {
+                        cinematicTime += HandleFizzleAction(action, combatActionList);
 
-                    // Increase pips used counter by 1, even if the spell fizzled.
-                    // CLASSIC: under the profile's mob reward rules a fizzled card counts as the rules say.
-                    action.SpellCaster._usedPipsForExperienceGain += ClassicProgression.MobRewards is { } rewards
-                        ? rewards.CombatXp.PipsForFizzle(action.Spell.m_pipCost.m_spellRank, CombatActionResolver.IsXPipSpell(action.Spell))
-                        : 1;
-                }
-                else {
-                    // Record when this caster's cinematic begins so a summoned minion appears with its cast.
-                    action.SpellCaster._duelActor.CurrentActionCinematicOffsetSeconds = cinematicTime;
-                    cinematicTime += HandleSuccessfulAction(action, combatActionList);
-                }
+                        // Increase pips used counter by 1, even if the spell fizzled.
+                        // CLASSIC: under the profile's mob reward rules a fizzled card counts as the rules say.
+                        action.SpellCaster._usedPipsForExperienceGain += ClassicProgression.MobRewards is { } rewards
+                            ? rewards.CombatXp.PipsForFizzle(action.Spell.m_pipCost.m_spellRank, CombatActionResolver.IsXPipSpell(action.Spell))
+                            : 1;
+                    }
+                    else {
+                        // Record when this caster's cinematic begins so a summoned minion appears with its cast.
+                        action.SpellCaster._duelActor.CurrentActionCinematicOffsetSeconds = cinematicTime;
+                        cinematicTime += HandleSuccessfulAction(action, combatActionList);
+                    }
+                })) cinematicTime += HandlePassAction(action, combatActionList);
             }
             finally {
                 if (beguiled) {
@@ -342,13 +350,29 @@ public class CombatResolver(Duel duel, CombatDuelSubCircle[] actorSubCircles) {
         Logger.Debug("Duel {0} | Slot {1} | Spell fizzled.",
             Logger.Args(_duel.m_duelID.Full, action.SpellCaster.SlotIndex));
 
-        return SPELL_FIZZLE_TIME;
+        return GetFizzleCinematicTime(action);
+    }
+
+    /// <summary>
+    /// CLASSIC: a fizzle plays the spell's Summon stage, the cast and the failed casting sign with its smoke. A flat 4 s
+    /// was shorter than that for creature spells (NA Wraith: Summon 2 s), so when a minion fizzled last in the round
+    /// the next phase cut its cinematic off (owner client log 2026-10-03 11:13:33: the smoke camera and
+    /// kPhase_Resolution in the same second) and the owner saw nothing happen.
+    /// </summary>
+    private static float GetFizzleCinematicTime(QueuedCombatAction action) {
+        if (action.Spell is null) return SPELL_FIZZLE_TIME;
+        var name = SpellFactory.GetBaseSpellName(action.Spell.m_templateID);
+        if (string.IsNullOrEmpty(name)) return SPELL_FIZZLE_TIME;
+        var summon = SpellCinematics.GetSpellSummonTime(name);
+        return Math.Max(SPELL_FIZZLE_TIME, summon + SPELL_FIZZLE_FAIL_TIME);
     }
 
     private float HandleSuccessfulAction(QueuedCombatAction action, CombatActionListObj combatActionList) {
         var cinematicTime = 0.0f;
         var combatAction = InitializeCombatAction(action);
+        var extractionBefore = action.SpellCaster._duelActor.BeginMonstrologyCast(action);
         var spellWorthCasting = CombatActionResolver.ProcessedQueuedCombatAction(action, ref combatAction, ref cinematicTime);
+        action.SpellCaster._duelActor.ObserveMonstrologyCast(action, extractionBefore);
 
         LogCombatAction(action, combatAction, spellWorthCasting);
 
@@ -393,7 +417,9 @@ public class CombatResolver(Duel duel, CombatDuelSubCircle[] actorSubCircles) {
             // We don't need to calculate stats from gear because the initial application already did that.
 
             cinematicTime += HANGING_EFFECT_CONSUME_TIME * wards.Count;
+            var healthBeforeTick = caster.ParticipantGameStats.m_currentHitpoints;
             caster.DamageParticipant(damage);
+            caster._duelActor.ObserveMonstrologyDot(caster, effect, healthBeforeTick);
             if (ClassicRuntime.IsActive) {
                 foreach (var ward in wards.Where(w => w.m_paramPerRound <= 0)) caster._hangingEffects.Remove(ward);
             }
@@ -557,9 +583,8 @@ public class CombatResolver(Duel duel, CombatDuelSubCircle[] actorSubCircles) {
         if (action.m_spell.m_treasureCard) {
             var consumedTemplateId = caster.ConsumeFromVault(action.m_spell);
             if (consumedTemplateId != 0 && caster._wizard != null) {
-                // Persist the removal from the player's treasure card book.
-                caster._wizard.SpellbookBehavior.RemoveTreasureCard(consumedTemplateId);
-                WizardCollection.RemoveTreasureCard(caster._wizard, consumedTemplateId);
+                // CLASSIC: the card came from the deck's Treasure Cards (the vault), which already left the book when the
+                // wizard put it in the deck (Wizard.AddTreasureCardToDeck). Taking a book copy as well spent two cards.
 
                 // Also remove from the equipped deck's spell list so it doesn't
                 // reappear when the player re-opens their deck after combat.
@@ -578,7 +603,9 @@ public class CombatResolver(Duel duel, CombatDuelSubCircle[] actorSubCircles) {
                                 EnchantmentID = 0,
                                 DeckID = deckSlot.ItemId.Value,
                                 Success = 1,
-                                Destroy = 0
+                                // CLASSIC: Destroy=1. With 0 the client puts the spent card back in its book (stock
+                                // WizardClientModules::MSG_RemoveTreasureSpellFromDeck), a copy the server no longer has.
+                                Destroy = 1
                             }, ActorRefs.NoSender);
                     }
                 }

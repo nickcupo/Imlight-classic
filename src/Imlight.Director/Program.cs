@@ -112,6 +112,9 @@ internal static class Program {
         );
         Logger.Information("Imlight configuration loaded.");
 
+        // CLASSIC: thread pool headroom for handlers that still block (see ClassicStartup.ConfigureThreadPool).
+        ClassicStartup.ConfigureThreadPool();
+
         // CLASSIC: the rules profile loads before any resource or server reads it; a broken profile stops the boot.
         if (!ClassicStartup.Initialize()) {
             Environment.ExitCode = 1;
@@ -131,6 +134,8 @@ internal static class Program {
         }
         Logger.Information("Akka.NET system created.");
         s_imlightSystem = system;
+        // CLASSIC: optional PERF log lines (handler times, mailbox waits, starvation, GC).
+        ClassicStartup.StartPerfMonitor(system);
 
         // =============================================================
         // RESOURCES
@@ -139,6 +144,9 @@ internal static class Program {
         // missing resources may be downloaded from the patch server as needed.
         var task = StartPatchServer();
         task.Wait();
+
+        // CLASSIC: the patch server KingsIsle's own launcher talks to ([Classic] LauncherPatchPort; off when empty).
+        Imlight.CoreLib.Classic.Launcher.LauncherPatchServer.Start(s_imlightSystem);
 
         // Load resources. Record the time it takes to load resources.
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
@@ -163,6 +171,10 @@ internal static class Program {
         CreateEmbeddedDatabaseAccounts();
 
         OnlinePlayerCollection.Clear();
+
+        // CLASSIC: broadcasts, safe restarts and the admin dashboard ([Classic] AdminDashboardPort).
+        Imlight.CoreLib.Classic.Admin.ServerAdmin.Initialize(s_imlightSystem);
+        Imlight.CoreLib.Classic.Admin.AdminDashboard.Start();
 
         // Keep program busy with a while loop.
         Logger.Information("Imlight may now be connected to.");

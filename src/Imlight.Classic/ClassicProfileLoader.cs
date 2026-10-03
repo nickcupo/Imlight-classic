@@ -62,7 +62,7 @@ public static class ClassicProfileLoader {
     private static readonly string[] s_inheritedKeys = ["cutoff", "level_cap", "worlds", "features", "rules", "world_unlocks"];
     internal static readonly FrozenSet<string> s_worldUnlockKeys = FrozenSet.Create(StringComparer.Ordinal, "any_of", "source", "notes");
     private static readonly FrozenSet<string> s_ruleKeys = FrozenSet.Create(StringComparer.Ordinal,
-        "accuracy_table", "xp_table", "mob_rewards", "badges", "quest_cards", "treasure_prices", "mob_stats", "crown_shop", "power_pips_from_rank", "dragonspyre_difficulty", "tutorial",
+        "accuracy_table", "xp_table", "mob_rewards", "badges", "quest_cards", "treasure_prices", "mob_stats", "crown_shop", "later_objects", "creature_decks", "power_pips_from_rank", "dragonspyre_difficulty", "tutorial",
         "teleport_stones");
 
     /// <summary>
@@ -376,7 +376,7 @@ public static class ClassicProfileLoader {
         foreach (var entry in rules.Entries) {
             var path = YamlTree.Join("rules", entry.Key);
             switch (entry.Key) {
-                case "accuracy_table" or "xp_table" or "mob_rewards" or "badges" or "quest_cards" or "treasure_prices" or "mob_stats" or "crown_shop":
+                case "accuracy_table" or "xp_table" or "mob_rewards" or "badges" or "quest_cards" or "treasure_prices" or "mob_stats" or "crown_shop" or "later_objects" or "creature_decks":
                     _ = diagnostics.ReadString(entry.Value, path);
                     break;
                 case "power_pips_from_rank":
@@ -430,6 +430,8 @@ public static class ClassicProfileLoader {
                 TreasurePrices = ScalarOf(rules, "treasure_prices"),
                 MobStats = ScalarOf(rules, "mob_stats"),
                 CrownShop = ScalarOf(rules, "crown_shop"),
+                LaterObjects = ScalarOf(rules, "later_objects"),
+                CreatureDecks = ScalarOf(rules, "creature_decks"), // CLASSIC
                 PowerPipsFromRank = ScalarOf(rules, "power_pips_from_rank"),
                 DragonspyreDifficulty = ScalarOf(rules, "dragonspyre_difficulty"),
                 Tutorial = ScalarOf(rules, "tutorial"),

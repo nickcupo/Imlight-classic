@@ -12,13 +12,34 @@
   <ItemGroup>
     <_PrivateTypes Include="../../submodule/Imcodec/src/Imcodec.ObjectProperty/GeneratorInput/*.json" />
     <_PrivateMessages Include="../../submodule/Imcodec/src/Imcodec.MessageLayer/GeneratorInput/*Messages*.xml" />
+    <ServerIntegrationTest Include="AmbientNavDataTests.cs" />
     <ServerIntegrationTest Include="ArcFinalReviewTests.cs" />
+    <ServerIntegrationTest Include="EnhancedProtocolTests.cs" />
+    <ServerIntegrationTest Include="ExcludedEnemyDespawnTests.cs" />
     <ServerIntegrationTest Include="BadgeRulesTests.cs" />
     <ServerIntegrationTest Include="C6ServerGapTests.cs" />
     <ServerIntegrationTest Include="ClassicCinematicTests.cs" />
     <ServerIntegrationTest Include="ClassicDeckRegressionTests.cs" />
     <ServerIntegrationTest Include="ClassicEnchantmentPacketTests.cs" />
     <ServerIntegrationTest Include="ClassicMinionOwnershipTests.cs" />
+    <ServerIntegrationTest Include="OwnedMinionControlTests.cs" />
+    <ServerIntegrationTest Include="OwnedMinionDuelTests.cs" />
+    <ServerIntegrationTest Include="MinionHelperTests.cs" />
+    <ServerIntegrationTest Include="MonstrologyConcurrencyTests.cs" />
+    <ServerIntegrationTest Include="ClassicDialogCameraTests.cs" />
+    <ServerIntegrationTest Include="ClassicLaterObjectsTests.cs" />
+    <ServerIntegrationTest Include="CrownShopCatalogTests.cs" />
+    <ServerIntegrationTest Include="GoldenBattleTests.cs" />
+    <ServerIntegrationTest Include="QuestOfferOrderTests.cs" />
+    <ServerIntegrationTest Include="ClassicZoneWadsTests.cs" />
+    <ServerIntegrationTest Include="MonstrologyTests.cs" />
+    <ServerIntegrationTest Include="MonstrologyMetadataTests.cs" />
+    <ServerIntegrationTest Include="MonstrologyTomeCodecTests.cs" />
+    <ServerIntegrationTest Include="MonstrologyTransactionTests.cs" />
+    <ServerIntegrationTest Include="MonstrologyPendingExtractionTests.cs" />
+    <ServerIntegrationTest Include="MonstrologySessionPolicyTests.cs" />
+    <ServerIntegrationTest Include="MonstrologyCastGuardTests.cs" />
+    <ServerIntegrationTest Include="MonstrologyRewardsTests.cs" />
     <ServerIntegrationTest Include="ClassicMinionAITargetTests.cs" />
     <ServerIntegrationTest Include="CraftingProtocolEvidenceTests.cs" />
     <ServerIntegrationTest Include="ClassicUtilityCombatTests.cs" />
@@ -29,7 +50,14 @@
     <ServerIntegrationTest Include="SpellMechanicsTests.cs" />
     <ServerIntegrationTest Include="TcpListenerLifecycleTests.cs" />
     <ServerIntegrationTest Include="TriggerObjectResultTests.cs" />
+    <ServerIntegrationTest Include="DoorLightRuntimeTests.cs" />
+    <ServerIntegrationTest Include="LegacyDoorRuntimeTests.cs" />
+    <ServerIntegrationTest Include="LegacyDoorOrderingTests.cs" />
     <ServerIntegrationTest Include="ZoneMarkerLifecycleTests.cs" />
+    <ServerIntegrationTest Include="CombatRejoinTests.cs" />
+    <ServerIntegrationTest Include="ServerAdminTests.cs" />
+    <ServerIntegrationTest Include="PerfMonitorTests.cs" />
+    <ServerIntegrationTest Include="AmbientWizardRuntimeTests.cs" />
   </ItemGroup>
   <PropertyGroup>
     <_TypeInputPath>$(MSBuildThisFileDirectory)../../submodule/Imcodec/src/Imcodec.ObjectProperty/GeneratorInput</_TypeInputPath>

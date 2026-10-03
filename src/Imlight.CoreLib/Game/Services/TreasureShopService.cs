@@ -86,30 +86,8 @@ internal class TreasureShopService(SessionActor sessionActor) : MessageService(s
         var playerWizard = GetActiveWizard();
         var goldCost = vendorComponent.GetSpellPrice(message.TreasureCardID);
 
-        // Handle quantity — multiply cost by quantity.
+        // Resolve delivery before any wallet mutation.
         var quantity = Math.Max(1, message.Quantity);
-        var totalCost = goldCost * quantity;
-
-        // Check if the user can afford the purchase.
-        if (playerWizard.GameStats.m_currentGold < totalCost) {
-            Logger.Warning("Player could not afford treasure card {0} (cost: {1}, gold: {2})",
-                Logger.Args(message.TreasureCardID, totalCost, playerWizard.GameStats.m_currentGold));
-
-            var denyMsg = new WIZARD_12_PROTOCOL.MSG_TREASUREBUYCONFIRM { Failure = 1 };
-            SendToSocket(denyMsg);
-
-            return;
-        }
-
-        // Deduct gold.
-        playerWizard.RemoveGold(totalCost);
-
-        // Inform the game client that the player's gold has been updated.
-        var goldUpdateMsg = new WIZARD_12_PROTOCOL.MSG_UPDATEGOLD {
-            Gold = playerWizard.GameStats.m_currentGold,
-            MaxGold = playerWizard.GameStats.m_baseGoldPouch
-        };
-        SendToSocket(goldUpdateMsg);
 
         // Resolve the spell template ID from the spell hash for persistence.
         var spellName = vendorComponent.GetSpellName(message.TreasureCardID);
@@ -124,19 +102,28 @@ internal class TreasureShopService(SessionActor sessionActor) : MessageService(s
             return;
         }
 
-        var spellTemplateId = spell.m_templateID;
+        bool purchased;
+        try {
+            purchased = WizardCollection.TryPurchaseTreasureCards(playerWizard, spell.m_templateID, quantity, goldCost);
+        } catch (Exception) {
+            SendToSocket(new WIZARD_12_PROTOCOL.MSG_TREASUREBUYCONFIRM { Failure = 1 });
+            return;
+        }
+        if (!purchased) {
+            SendToSocket(new WIZARD_12_PROTOCOL.MSG_TREASUREBUYCONFIRM { Failure = 1 });
+            return;
+        }
 
-        // Add the treasure card to the player's treasure book for each quantity.
+        SendToSocket(new WIZARD_12_PROTOCOL.MSG_UPDATEGOLD {
+            Gold = playerWizard.GameStats.m_currentGold,
+            MaxGold = playerWizard.GameStats.m_baseGoldPouch
+        });
+        // Notify only after debit and all copies are committed together.
         for (var i = 0; i < quantity; i++) {
-            var addSpellMsg = new WIZARD_12_PROTOCOL.MSG_ADDTREASURESPELLTOBOOK {
+            SendToSocket(new WIZARD_12_PROTOCOL.MSG_ADDTREASURESPELLTOBOOK {
                 SpellID = (int) message.TreasureCardID,
                 EnchantmentID = 0,
-            };
-            SendToSocket(addSpellMsg);
-
-            // Persist the treasure card in the wizard's database record.
-            playerWizard.SpellbookBehavior.AddTreasureCard(spellTemplateId);
-            WizardCollection.AddTreasureCard(playerWizard, spellTemplateId);
+            });
         }
 
         // Confirm the purchase to the client.

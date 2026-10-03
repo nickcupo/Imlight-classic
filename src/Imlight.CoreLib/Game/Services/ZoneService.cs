@@ -46,6 +46,7 @@ using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Classic;
+using Imlight.Classic.Quests;
 using Imlight.Common;
 using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.Game.Sigils;
@@ -69,6 +70,7 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
     private const string ENTER_ZONE_EVENT_NAME = "EnterZone";
 
     public IActorRef ZoneActor;
+    private long _attachGeneration;
 
     private readonly TimeSpan _zoneRemovalWaitTime = TimeSpan.FromSeconds(ZONE_REMOVAL_WAIT_TIME_IN_SECONDS);
     private readonly bool _randomBackflips
@@ -94,6 +96,7 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
         => Akka.Actor.Props.Create(() => new ZoneService(parentActor));
 
     protected override void OnPreDispose() {
+        SessionActor.PublishDoorAttach(null);
         var gameObj = GetActiveGameObject();
         if (gameObj is null) {
             base.OnPreDispose();
@@ -112,7 +115,9 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
         }
 
         // If the zone reference is not null, we'll tell the zone to remove the player.
+        SessionActor.PublishDoorAttach(null);
         ZoneActor?.Tell(new ZONE_102_PROTOCOL.MSG_REMOVEPLAYER() {
+            AttachGeneration = _attachGeneration,
             PlayerActor = SessionActor.ActorRef,
             GlobalId = globalId,
             MobileId = gameObj.m_nMobileID,
@@ -200,6 +205,7 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
             // If we're not sending this message to the client, it means the zone is being loaded
             // for MSG_ATTACH. In which case, the client is already prepared for the zone transfer.
             SetZone(zoneDetails.ZoneActorRef);
+            SessionActor.PublishDoorAttach(null);
             _currentDynamicZoneId = zoneDetails.DynamicZoneId;
         }
 
@@ -345,10 +351,10 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
     private void ReceiveGoHome(WIZARD_12_PROTOCOL.MSG_GOHOME message) {
         // this teleports the wizard to the world hub, NOT their home/dorm. for that you want MSG_GOTODORM. goofy ahh naming scheme
         var wizard = GetActiveWizard();
-        // CLASSIC: go home through the classic zone map (ClassicMode and Housing belong to Wizard City),
-        // to the fallback world's hub when the wizard has not unlocked this world (the Grizzleheim preview),
-        // and refuse a closed hub before the effects play.
-        var hub = ClassicGate.HubFor(wizard.Zone, new WizardProgress(wizard));
+        // CLASSIC: go home through the classic zone map (ClassicMode and Housing belong to Wizard City), to the hub of
+        // the world the wizard is in (unlocking a world only adds it to the world list; owner 2026-10-01), and refuse a
+        // closed hub before the effects play.
+        var hub = ClassicGate.HubFor(wizard.Zone);
         if (hub is null || !ClassicGate.AllowsZone(hub.Value.Zone, wizard.CharId, InformGameClient)) {
             return;
         }
@@ -468,13 +474,15 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
             throw new NullReferenceException(nameof(ZoneActor));
         }
 
+        message.AttachGeneration = ++_attachGeneration;
+        SessionActor.PublishDoorAttach(new(GetActiveWizard().Zone, ZoneActor, _attachGeneration, message.PlayerObject.m_globalID));
         ZoneActor.Forward(message);
     }
 
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_ADDPLAYERRSP))]
     private void ReceiveAddPlayerRsp(ZONE_102_PROTOCOL.MSG_ADDPLAYERRSP message) {
         // I've just been added to a zone. I need to spawn myself for all the other players.
-        SpawnMyself();
+        SpawnMyself(message.ZoneActorRef, message.AttachGeneration);
 
         // Dismount in no-mount zones, re-equip on leaving (EquipmentService owns the reconcile).
         SessionActor.ActorRef.Tell(new ZONE_102_PROTOCOL.MSG_ENFORCEINTERIORMOUNT());
@@ -581,9 +589,10 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
         var wizard = GetActiveWizard();
         var zoneName = wizard.Zone;
 
-        // CLASSIC: the hub comes from the classic zone map (the fallback world's hub for a world the wizard has
-        // not unlocked); without a profile this is the stock lookup.
-        var worldHubMap = ClassicGate.HubFor(zoneName, new WizardProgress(wizard));
+        // CLASSIC: the hub of the world the wizard is in, from the classic zone map, whether or not the wizard has
+        // unlocked that world (owner 2026-10-01: a defeat sends you to that world's commons); without a profile this
+        // is the stock lookup.
+        var worldHubMap = ClassicGate.HubFor(zoneName);
         if (worldHubMap is null) {
             Logger.Error("Could not find world hub mapping for zone {0}",
                 Logger.Args(zoneName));
@@ -802,21 +811,37 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
 
     private void DoZoneTransfer() {
         // Remove the player from their current zone. We're awaiting a reply so the zone can properly clean up
-        // before we continue on potentially a different thread.
+        // before we continue. CLASSIC: the reply comes back as a message (ZoneRemovedForTransfer) instead of blocking
+        // this actor and a pool thread on .Result for up to 8 s during every zone change.
         try {
+            SessionActor.PublishDoorAttach(null);
             var removePlayerMsg = new ZONE_102_PROTOCOL.MSG_REMOVEPLAYER() {
+                AttachGeneration = _attachGeneration,
                 PlayerActor = SessionActor.ActorRef,
                 GlobalId = GetActiveGameObject().m_globalID,
                 IsPlayerStillConnected = true,
                 MobileId = GetActiveGameObject().m_nMobileID
             };
-            _ = ZoneActor.Ask<ZONE_102_PROTOCOL.MSG_REMOVEPLAYERRSP>(removePlayerMsg, _zoneRemovalWaitTime).Result;
+            ZoneActor.Ask<ZONE_102_PROTOCOL.MSG_REMOVEPLAYERRSP>(removePlayerMsg, _zoneRemovalWaitTime)
+                .PipeTo(Self, success: _ => new ZoneRemovedForTransfer(true), failure: _ => new ZoneRemovedForTransfer(false));
+        }
+        catch {
+            Self.Tell(new ZoneRemovedForTransfer(false));
+        }
+    }
+
+    /// <summary>CLASSIC: the zone's answer to DoZoneTransfer's MSG_REMOVEPLAYER, or its timeout.</summary>
+    internal sealed record ZoneRemovedForTransfer(bool Removed);
+
+    [MessageHandler(typeof(ZoneRemovedForTransfer))]
+    private void ReceiveZoneRemovedForTransfer(ZoneRemovedForTransfer message) {
+        if (message.Removed) {
             _removedForTransfer = true; // CLASSIC
 
             // Remove the player from the online player collection.
             OnlinePlayerCollection.RemoveOnlinePlayer(SessionActor.SessionID);
         }
-        catch {
+        else {
             Logger.Warning("Zone removal timeout of {0} seconds exceeded.", Logger.Args(ZONE_REMOVAL_WAIT_TIME_IN_SECONDS));
         }
 
@@ -895,8 +920,19 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
         ReceiveZoneBroadcast(broadcastMsg);
     }
 
-    private void SpawnMyself() {
+    internal static bool UsesLegacyDoorOrdering(string zone)
+        => ClassicQuestEngine.IsActive && LegacyDoorBindings.ForZone(zone).Count != 0;
+
+    internal static ZONE_102_PROTOCOL.MSG_ZONEBROADCAST PlayerSpawnBroadcast(GAME_5_PROTOCOL.MSG_NEWOBJECT player, bool ordered, IActorRef owner)
+        => new() { Message = player, Selfless = true, Sender = ordered ? owner : null };
+
+    private void SpawnMyself(IActorRef actor, long generation) {
         var wizard = GetActiveWizard();
+        var ordered = UsesLegacyDoorOrdering(wizard.Zone);
+        var attach = SessionActor.DoorAttach;
+        if (ordered && (attach is null || attach.Actor != actor || attach.Actor != ZoneActor
+            || attach.Generation != generation || attach.Owner != wizard.GameObjectID
+            || !string.Equals(attach.Zone, wizard.Zone, StringComparison.OrdinalIgnoreCase))) return;
         var properGameObj = WizardObjectLoader.GetPlayerGameObject(wizard);
 
         var flags = PropertyFlags.Prop_Public | PropertyFlags.Prop_Transmit | PropertyFlags.Prop_AuthorityTransmit;
@@ -910,9 +946,12 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
         var addMsg = new GAME_5_PROTOCOL.MSG_NEWOBJECT {
             Data = gameObjData,
         };
-        var broadcastMsg = new ZONE_102_PROTOCOL.MSG_ZONEBROADCAST {
-            Message = addMsg
-        };
+        var broadcastMsg = PlayerSpawnBroadcast(addMsg, ordered, SessionActor.ActorRef);
+        if (ordered) {
+            SessionActor.ActorRef.Tell(new LegacyDoorOwnerObject(attach, properGameObj.m_globalID, addMsg), Self);
+            // Peers still receive the player; the owner must receive only the
+            // marked object above, otherwise another spawn can reset its lamps.
+        }
 
         ZoneActor.Tell(broadcastMsg);
     }

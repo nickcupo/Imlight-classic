@@ -74,6 +74,8 @@ internal sealed class PathMovementComponent(ZoneEntity entity) : ZoneEntityCompo
     private NodeObject _currentNode;
     private int _currentChainDirection;
     private bool _receivedPathDetails;
+    private bool _hasNoPath; // CLASSIC: told there is no path to walk; the creature stands still.
+    private NodeObject _approachNode; // CLASSIC: placed off its path, a walker first goes to the nearest node.
     private uint _pathDetailsFailureCount;
     private DateTime _lastMoveTime;
     private Vector3 _lastStartLocation;
@@ -140,22 +142,39 @@ internal sealed class PathMovementComponent(ZoneEntity entity) : ZoneEntityCompo
 
     public void Stop() => Stopped = true;
 
+    // CLASSIC: a creature back from a duel it did not lose walks its path again (CombatCreatureAIComponent).
+    public void Resume() => Stopped = false;
+
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_PATHDETAILS))]
     private void ReceivePathDetails(ZONE_102_PROTOCOL.MSG_PATHDETAILS message) {
+        if (message.NodeObjects is null || message.NodeObjects.Count == 0) {
+            // CLASSIC: nothing to walk (the zone's data has no path for this placed walker). Stand still, quietly.
+            _hasNoPath = true;
+            Timers.Cancel(CREATURE_SPAWN_INTERVAL_LOCK);
+            Logger.Debug("Creature {0} in zone {1} has no path to walk and stands still.",
+                Logger.Args(Entity.ActiveGameObject.m_debugName, Entity.Zone.ZoneName));
+
+            return;
+        }
+
+        var wasStill = _hasNoPath;
+        _hasNoPath = false;
         _receivedPathDetails = true;
 
         // Ensure that the nodes are ordered as per their ID
         _nodes = [.. message.NodeObjects.OrderBy(node => Convert.ToUInt32(node.m_id))];
 
-        // The ZonePath spawned us at one of the nodes, and our location is currently set to it.
-        // Find the node that has the same location as us and set it as the current node.
+        // A spawned creature is set at one of the nodes: find the node that has the same location as us and set it as
+        // the current node. CLASSIC: a placed creature (the Marleybone cops) stands near its path rather than on it;
+        // its first move is to the nearest node.
         _currentNode = _nodes.FirstOrDefault(node => node.m_location == Entity.ActiveGameObject.m_location);
         _lastStartLocation = Entity.ActiveGameObject.m_location;
         if (_currentNode is null) {
-            Logger.Error(
-                "Creature {0} in zone {1} was spawned at an unknown location.",
-                Logger.Args(Entity.ActiveGameObject.m_debugName, Entity.Zone.ZoneName)
-            );
+            _approachNode = PlacedWalkerPaths.Nearest(_nodes, Entity.ActiveGameObject.m_location);
+        }
+
+        if (wasStill) {
+            RestartMoveInterval(INITIAL_MOVEMENT_DELAY_MINIMUM_IN_MS);
         }
     }
 
@@ -234,7 +253,7 @@ internal sealed class PathMovementComponent(ZoneEntity entity) : ZoneEntityCompo
 
     private NodeObject GetNextNode() {
         if (_currentNode is null) {
-            return _nodes.First();
+            return _approachNode ?? _nodes.First();
         }
 
         // If the path type is chain, we move node1 -> node2 -> node3 -> node2 -> node1.
@@ -340,12 +359,17 @@ internal sealed class PathMovementComponent(ZoneEntity entity) : ZoneEntityCompo
     }
 
     private bool CheckPathDetails() {
+        if (_hasNoPath) {
+            return false;
+        }
+
         if (!_receivedPathDetails) {
             _pathDetailsFailureCount++;
 
             if (_pathDetailsFailureCount > PATH_DETAILS_FAILURE_COUNT_MAXIMUM) {
-                Logger.Error(
-                    "Creature {0} in zone {1} tried moving but still has not received path details after {2} seconds.",
+                // CLASSIC: a walker nothing told its path stands still; it used to log an error and delete itself.
+                _hasNoPath = true;
+                Logger.Debug("Creature {0} in zone {1} has no path details after {2} seconds and stands still.",
                     Logger.Args(
                         Entity.ActiveGameObject.m_debugName,
                         Entity.Zone.ZoneName,
@@ -353,8 +377,6 @@ internal sealed class PathMovementComponent(ZoneEntity entity) : ZoneEntityCompo
                     )
                 );
 
-                Entity.DeleteObject();
-                
                 return false;
             }
 

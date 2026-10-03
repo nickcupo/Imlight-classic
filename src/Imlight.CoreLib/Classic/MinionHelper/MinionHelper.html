@@ -1,0 +1,317 @@
+<!doctype html>
+<!--
+  Minion Helper (CLASSIC). Served by the game server on [Classic] MinionHelperPort; talks to it over a WebSocket
+  (/ws) with the JSON-line protocol in MinionHelperListener.cs. A Myth wizard picks their minion's card and target
+  here each round; the server checks every order. No outside resources: the page works offline on a LAN.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Minion Helper</title>
+<style>
+  :root {
+    --bg: #1b1622; --panel: #261f30; --panel2: #2f2639; --text: #efe7d6; --dim: #a99d8a; --gold: #e2b65b;
+    --ok: #7fcf7a; --bad: #e57a6b; --line: #43384f; --sel: #f2d488;
+    --Fire: #e0603a; --Ice: #7fc4e8; --Storm: #a77de0; --Myth: #d9b13f; --Life: #6fc06a; --Death: #9a9a9a;
+    --Balance: #c98a4a; --Star: #f0e070; --Sun: #f5a742; --Moon: #a7b4f0; --Shadow: #6b5a8a;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text); font: 13px/1.35 -apple-system, "Segoe UI", system-ui, sans-serif; }
+  body { padding: 10px 12px 14px; min-width: 300px; }
+  header { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+  header h1 { font-size: 14px; margin: 0; color: var(--gold); letter-spacing: .3px; flex: 1; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--bad); flex: none; }
+  .dot.on { background: var(--ok); }
+  .who { color: var(--dim); font-size: 12px; }
+  .box { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px; margin-bottom: 8px; }
+  .muted { color: var(--dim); }
+  .row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .grow { flex: 1; }
+  button { font: inherit; color: var(--text); background: var(--panel2); border: 1px solid var(--line); border-radius: 6px;
+           padding: 5px 9px; cursor: pointer; }
+  button:hover:not(:disabled) { border-color: var(--gold); }
+  button:disabled { opacity: .45; cursor: default; }
+  button.primary { background: #4a3a1c; border-color: var(--gold); }
+  input { font: inherit; color: var(--text); background: #120f17; border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; }
+  .timer { font-variant-numeric: tabular-nums; font-weight: 600; color: var(--gold); }
+  .timer.low { color: var(--bad); }
+  .minion-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px; }
+  .minion-head b { font-size: 14px; }
+  .bar { height: 5px; background: #120f17; border-radius: 3px; overflow: hidden; margin-top: 3px; }
+  .bar i { display: block; height: 100%; background: var(--ok); }
+  .pips { color: var(--gold); }
+  .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: 6px; margin: 6px 0; }
+  .card { text-align: left; padding: 6px 7px 6px 9px; position: relative; min-height: 48px; }
+  .card::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; border-radius: 6px 0 0 6px; background: var(--school, var(--line)); }
+  .card .n { font-weight: 600; display: block; }
+  .card .m { color: var(--dim); font-size: 11px; }
+  .card.sel { border-color: var(--sel); box-shadow: 0 0 0 1px var(--sel) inset; }
+  .card .why { color: var(--bad); font-size: 11px; }
+  .card .k { position: absolute; right: 5px; top: 4px; color: var(--dim); font-size: 10px; }
+  .targets { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 6px; }
+  .target { text-align: left; }
+  .target.enemy { border-color: #6a3a35; }
+  .target.ally { border-color: #35603a; }
+  .target small { color: var(--dim); }
+  .order { margin-top: 6px; padding: 6px 8px; border-radius: 6px; background: #1e2a1d; border: 1px solid #35603a; }
+  .order.wait { background: #2b2516; border-color: #6b5a2a; }
+  .order.none { background: #2a1d1d; border-color: #6a3a35; }
+  .status { min-height: 18px; margin-top: 6px; font-size: 12px; }
+  .status.bad { color: var(--bad); }
+  .status.ok { color: var(--ok); }
+  .switch { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; user-select: none; }
+  .hint { font-size: 11px; color: var(--dim); margin-top: 6px; }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<header>
+  <span class="dot" id="dot" title="connection"></span>
+  <h1>Minion Helper</h1>
+  <span class="who" id="who"></span>
+</header>
+
+<section class="box hidden" id="pair">
+  <div style="margin-bottom:6px">In the game, type <b>.minions</b> in chat. Type the code it shows here.</div>
+  <div class="row">
+    <input id="code" inputmode="numeric" autocomplete="off" placeholder="123 456" maxlength="7" style="width:110px">
+    <button class="primary" id="pairBtn">Pair</button>
+  </div>
+  <div class="status bad" id="pairStatus"></div>
+</section>
+
+<section class="box hidden" id="main">
+  <div class="row">
+    <div class="grow" id="phase">Connecting…</div>
+    <span class="timer" id="timer"></span>
+  </div>
+  <div class="row" style="margin-top:6px">
+    <label class="switch"><input type="checkbox" id="control" checked> Control my minions</label>
+  </div>
+  <div class="hint" id="note"></div>
+</section>
+
+<div id="minions"></div>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const TOKEN_KEY = "w101c.minionHelper.token";
+let ws = null, state = null, connected = false, paired = false;
+let request = Math.floor(Date.now() / 1000) % 100000 * 10;   // grows; the server wants each request id bigger than the last
+let pending = null;            // {request, minion, text}
+let selected = {};             // minion id -> card index
+let lastStatus = {};           // minion id -> {text, bad}
+let deadline = 0;              // Date.now() ms when planning ends (from the server's secondsLeft)
+let pingTimer = null, retry = 0;
+
+const STATUS = {
+  Accepted: "Done.", InvalidDuel: "That duel is over.", InvalidRound: "That round is over; choose again.",
+  NotPlanning: "Too late for this round.", InvalidOwner: "You can't choose now.", NotMyth: "Only Myth wizards choose their minions' moves.",
+  NotOwnedMinion: "That minion is gone.", NotOptedIn: "Turn on \"Control my minions\" first.", InvalidMove: "That move isn't allowed.",
+  InvalidCard: "That card can't be cast.", InsufficientPips: "Not enough pips.", InvalidTarget: "That target isn't allowed.",
+  RequestReplay: "Already sent.", SnapshotUnavailable: "The server couldn't read the minion's hand.", UnsupportedSummon: "That minion can't be controlled.",
+  Disabled: "Minion control is off on this server.", NotInDuel: "You're not in a duel.", ControlOff: "\"Control my minions\" is off.", Offline: "Your wizard isn't in the game.",
+};
+
+function connect() {
+  const scheme = location.protocol === "https:" ? "wss" : "ws";
+  ws = new WebSocket(`${scheme}://${location.host}/ws`);
+  ws.onopen = () => {
+    connected = true; retry = 0; $("dot").classList.add("on");
+    const token = load();
+    if (token) send({ op: "hello", version: 1, token }); else showPair();
+    clearInterval(pingTimer); pingTimer = setInterval(() => send({ op: "ping" }), 15000);
+  };
+  ws.onmessage = ev => { try { handle(JSON.parse(ev.data)); } catch (e) { console.error(e); } };
+  ws.onclose = () => {
+    connected = false; paired = false; $("dot").classList.remove("on"); clearInterval(pingTimer);
+    $("phase").textContent = "Reconnecting to the server…"; pending = null; render();
+    setTimeout(connect, Math.min(10000, 1000 * Math.pow(2, retry++)));
+  };
+}
+
+function send(obj) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj)); }
+function load() { try { return localStorage.getItem(TOKEN_KEY); } catch (e) { return null; } }
+function save(token) { try { localStorage.setItem(TOKEN_KEY, token); } catch (e) { /* private window: pair again next time */ } }
+function forget() { try { localStorage.removeItem(TOKEN_KEY); } catch (e) { } }
+
+function showPair(message) {
+  $("pair").classList.remove("hidden"); $("main").classList.add("hidden"); $("minions").innerHTML = "";
+  $("pairStatus").textContent = message || ""; $("code").focus();
+}
+
+function handle(m) {
+  switch (m.op) {
+    case "paired": save(m.token); break;
+    case "welcome": paired = true; $("pair").classList.add("hidden"); $("main").classList.remove("hidden"); send({ op: "refresh" }); break;
+    case "error":
+      if (m.reason === "unpaired") { forget(); showPair("This helper isn't paired yet."); }
+      else if (!paired) showPair(m.reason);
+      else setNote(m.reason);
+      break;
+    case "ack":
+      if (pending && m.request === pending.request) {
+        lastStatus[pending.minion] = { text: STATUS[m.status] || m.status, bad: true }; pending = null;
+      } else if (m.request) setNote(STATUS[m.status] || m.status);
+      render();
+      break;
+    case "state": onState(m); break;
+  }
+}
+
+function onState(s) {
+  const round = state && state.duel === s.duel ? state.round : null;
+  if (round !== s.round || !state || state.duel !== s.duel) { selected = {}; lastStatus = {}; }
+  if (s.request && pending && s.request === pending.request) {
+    lastStatus[pending.minion] = s.accepted ? { text: pending.text, bad: false } : { text: STATUS[s.status] || s.status, bad: true };
+    pending = null;
+  }
+  if (s.phase === "planning") deadline = Date.now() + (s.secondsLeft || 0) * 1000;
+  state = s; render();
+}
+
+function setNote(text) { $("note").textContent = text || ""; }
+
+function render() {
+  const s = state;
+  if (!s || !paired) return;
+  $("who").textContent = s.wizard || "";
+  $("control").checked = !!s.controlling;
+  $("control").disabled = !connected;
+  const phases = { idle: "Not in a duel.", offline: "Your wizard isn't in the game.", waiting: "Waiting for the round…",
+                   planning: "Choose your minion's move.", execution: "The round is playing.", resolution: "The round is ending…" };
+  $("phase").textContent = phases[s.phase] || s.phase;
+  setNote(s.myth === false ? "Only Myth wizards choose their minions' moves; your minions use their own AI." :
+          s.phase === "planning" && s.controlling && !(s.minions || []).length ? "No minion of yours is in this duel." :
+          s.controlling ? "" : "Your minions use their own AI. Turn on \"Control my minions\" to choose for them.");
+  tick();
+  const box = $("minions"); box.innerHTML = "";
+  if (!s.minions || s.phase === "idle" || s.phase === "offline") return;
+  const names = {}; for (const c of s.combatants || []) names[c.slot] = c;
+  s.minions.forEach((m, i) => box.appendChild(minionBox(s, m, names, i)));
+}
+
+function minionBox(s, m, names, which) {
+  const planning = s.phase === "planning" && s.controlling;
+  const div = document.createElement("section"); div.className = "box";
+  const hp = m.maxHealth ? Math.max(0, Math.min(100, 100 * m.health / m.maxHealth)) : 0;
+  div.innerHTML = `<div class="minion-head"><b>${esc(m.name)}</b><span class="muted">${esc(m.school)}</span>
+    <span class="grow"></span><span>${m.health}/${m.maxHealth}</span><span class="pips">${m.pips}${m.powerPips ? "+" + m.powerPips + "P" : ""} pips</span></div>
+    <div class="bar"><i style="width:${hp}%"></i></div>`;
+  if (m.stunned) div.insertAdjacentHTML("beforeend", `<div class="status bad">Stunned this round.</div>`);
+
+  const cards = document.createElement("div"); cards.className = "cards";
+  m.hand.forEach(c => {
+    const b = document.createElement("button");
+    b.className = "card" + (selected[m.id] === c.index ? " sel" : "");
+    b.style.setProperty("--school", `var(--${c.school}, var(--line))`);
+    b.disabled = !planning || !c.castable || !!pending;
+    b.innerHTML = `<span class="k">${which === 0 && c.index < 9 ? c.index + 1 : ""}</span><span class="n">${esc(c.name)}</span>
+      <span class="m">${c.xPips ? "X" : c.pips} pip${!c.xPips && c.pips === 1 ? "" : "s"} · ${c.accuracy}%${c.treasure ? " · TC" : ""}${c.enchant ? " · " + esc(c.enchant) : ""}</span>
+      ${!c.castable && c.reason ? `<span class="why">${esc(c.reason)}</span>` : ""}`;
+    b.title = c.castable ? (c.untargeted && !c.targets.length ? "Cast" : "Choose a target") : c.reason;
+    b.onclick = () => pickCard(s, m, c, names);
+    cards.appendChild(b);
+  });
+  div.appendChild(cards);
+
+  const sel = m.hand.find(c => c.index === selected[m.id]);
+  if (planning && sel && sel.targets.length) {
+    const t = document.createElement("div"); t.className = "targets";
+    const order = [...sel.targets].sort((a, b) => (names[a]?.side === "enemy" ? 0 : 1) - (names[b]?.side === "enemy" ? 0 : 1) || a - b);
+    order.forEach(slot => {
+      const c = names[slot] || { name: "Slot " + (slot + 1), side: "enemy", health: 0, maxHealth: 0 };
+      const b = document.createElement("button");
+      b.className = "target " + c.side;
+      b.disabled = !!pending;
+      b.innerHTML = `${esc(c.name)}${c.you ? " (you)" : ""}<br><small>${c.health}/${c.maxHealth}${c.minion ? " · minion" : ""}</small>`;
+      b.onclick = () => sendOrder(s, m, "cast", sel.index, slot, `${m.name} casts ${sel.name} on ${c.name}.`);
+      t.appendChild(b);
+    });
+    if (sel.untargeted) {
+      const b = document.createElement("button"); b.textContent = "Cast with no target"; b.disabled = !!pending;
+      b.onclick = () => sendOrder(s, m, "cast", sel.index, -1, `${m.name} casts ${sel.name}.`);
+      t.appendChild(b);
+    }
+    div.appendChild(t);
+  }
+
+  const row = document.createElement("div"); row.className = "row"; row.style.marginTop = "8px";
+  const add = (label, fn, title) => { const b = document.createElement("button"); b.textContent = label; b.title = title || ""; b.disabled = !planning || !!pending; b.onclick = fn; row.appendChild(b); };
+  add("Pass", () => sendOrder(s, m, "pass", 0, -1, `${m.name} passes.`));
+  add("Let it choose", () => sendOrder(s, m, "ai", 0, -1, `${m.name} chooses for itself.`), "The minion's own AI picks this round");
+  if (m.order) add("Change", () => sendOrder(s, m, "undo", 0, -1, "Choose again."), "Take back this round's order");
+  div.appendChild(row);
+
+  const o = document.createElement("div");
+  if (pending && pending.minion === m.id) { o.className = "order wait"; o.textContent = "Sending…"; }
+  else if (m.order) { o.className = "order"; o.textContent = "✓ " + describe(m, m.order, names); }
+  else if (planning) { o.className = "order none"; o.textContent = "No move chosen yet. When time runs out, the minion chooses for itself."; }
+  if (o.className) div.appendChild(o);
+  const st = lastStatus[m.id];
+  if (st && st.bad) div.insertAdjacentHTML("beforeend", `<div class="status bad">${esc(st.text)}</div>`);
+  return div;
+}
+
+function describe(m, o, names) {
+  if (o.move === "pass") return `${m.name} passes.`;
+  if (o.move === "ai") return `${m.name} chooses for itself.`;
+  const card = m.hand.find(c => c.index === o.card);
+  const name = card ? card.name : "a card";
+  return o.target >= 0 && names[o.target] ? `${m.name} casts ${name} on ${names[o.target].name}.` : `${m.name} casts ${name}.`;
+}
+
+function pickCard(s, m, c, names) {
+  if (!c.castable || pending) return;
+  if (!c.targets.length) { sendOrder(s, m, "cast", c.index, -1, `${m.name} casts ${c.name}.`); return; }
+  if (c.targets.length === 1 && !c.untargeted && names[c.targets[0]] && names[c.targets[0]].side === "enemy" &&
+      (s.combatants || []).filter(x => x.side === "enemy" && x.alive).length === 1) {
+    const t = names[c.targets[0]];
+    sendOrder(s, m, "cast", c.index, c.targets[0], `${m.name} casts ${c.name} on ${t.name}.`); return;
+  }
+  selected[m.id] = selected[m.id] === c.index ? undefined : c.index; render();
+}
+
+function sendOrder(s, m, move, card, target, text) {
+  if (pending || !connected) return;
+  request += 1;
+  pending = { request, minion: m.id, text };
+  delete lastStatus[m.id]; selected[m.id] = undefined;
+  send({ op: "order", duel: s.duel, round: s.round, minion: m.id, request, move, card, target });
+  render();
+  // The server always answers; if it does not, ask for the state again rather than leave the buttons locked.
+  const mine = request;
+  setTimeout(() => { if (pending && pending.request === mine) { pending = null; send({ op: "refresh" }); render(); } }, 4000);
+}
+
+function tick() {
+  const el = $("timer");
+  if (!state || state.phase !== "planning") { el.textContent = ""; return; }
+  const left = Math.max(0, Math.round((deadline - Date.now()) / 1000));
+  el.textContent = left + "s"; el.classList.toggle("low", left <= 8);
+}
+setInterval(tick, 500);
+
+function esc(t) { return String(t ?? "").replace(/[&<>"]/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch])); }
+
+$("pairBtn").onclick = () => {
+  const code = $("code").value.replace(/\D/g, "");
+  if (code.length !== 6) { $("pairStatus").textContent = "The code has six digits."; return; }
+  $("pairStatus").textContent = ""; send({ op: "pair", code });
+};
+$("code").addEventListener("keydown", e => { if (e.key === "Enter") $("pairBtn").click(); });
+$("control").onchange = e => send({ op: "control", enabled: e.target.checked });
+document.addEventListener("keydown", e => {
+  if (e.target.tagName === "INPUT" || !state || state.phase !== "planning" || !state.minions || !state.minions.length) return;
+  const m = state.minions[0];
+  if (e.key >= "1" && e.key <= "9") {
+    const c = m.hand.find(x => x.index === Number(e.key) - 1);
+    if (c) { const names = {}; for (const x of state.combatants || []) names[x.slot] = x; pickCard(state, m, c, names); }
+  } else if (e.key === "Escape") { selected = {}; render(); }
+});
+connect();
+</script>
+</body>
+</html>

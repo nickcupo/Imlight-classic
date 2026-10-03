@@ -32,6 +32,12 @@
         <ProjectReference Include="..\..\submodule\Imcodec\src\Imcodec.ObjectProperty\Imcodec.ObjectProperty.csproj" />
         <ProjectReference Include="..\..\submodule\Imcodec\src\Imcodec.CoreObject\Imcodec.CoreObject.csproj" />
         <ProjectReference Include="..\..\submodule\Imcodec\src\Imcodec.Wad\Imcodec.Wad.csproj" />
+        <ProjectReference Include="..\..\submodule\Imcodec\src\Imcodec.BCD\Imcodec.BCD.csproj" />
     </ItemGroup>
+
+  <ItemGroup>
+    <!-- CLASSIC: the Minion Helper page, served by Classic/MinionHelper/MinionHelperListener.cs. -->
+    <EmbeddedResource Include="Classic\MinionHelper\MinionHelper.html" LogicalName="MinionHelper.html" />
+  </ItemGroup>
 
 </Project>

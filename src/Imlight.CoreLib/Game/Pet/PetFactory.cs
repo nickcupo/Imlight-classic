@@ -105,6 +105,11 @@ public class PetFactory : RootDirectoryResourceSingleton<PetFactory>, IMemoryStr
             ]
         };
 
+        // CLASSIC: a hatched pet starts with its template's stats, maximums and talent pool (PetProgress).
+        if (preHatch) {
+            PetProgress.EnsureInitialized(pet);
+        }
+
         return pet;
     }
 
@@ -249,7 +254,7 @@ public class PetFactory : RootDirectoryResourceSingleton<PetFactory>, IMemoryStr
         };
     }
 
-    private static PetItemBehaviorTemplate GetPetItemBehaviorTemplate(uint templateId) {
+    internal static PetItemBehaviorTemplate GetPetItemBehaviorTemplate(uint templateId) { // CLASSIC: also read by PetProgress.
         var template = s_petTemplates.GetValueOrDefault(templateId)
             ?? CoreObjectFactory.GetCoreTemplate(templateId) as GameObjectTemplate;
 

@@ -129,18 +129,17 @@ internal class SpellCinematics : RootDirectoryResourceSingleton<SpellCinematics>
             return 0.0f;
         }
 
-        // Search the acts of the template to find type `ActCinematicStageTemplate`.
-        // We don't need to check for a certain act because all of them have the same duration anyways.
+        // CLASSIC: the longest act. Creature cinematics have several (NA Ghost: Act 3.33 s, Act2 3.67 s, Act3 4.67 s)
+        // and the client picks one (it played Act3 for NA Ghost-01); the first one's length cut the rest of the round
+        // short. Player spells have one act, so nothing changes for them.
+        var longest = 0.0f;
         foreach (var act in cinematicTemplate.m_stages) {
-            if (act is ActCinematicStageTemplate actCinematicStageTemplate) {
-                return actCinematicStageTemplate.m_duration;
-            }
-            else if (act.m_name == "Act") {
-                return act.m_duration;
+            if (act is ActCinematicStageTemplate || (act.m_name?.ToString().StartsWith("Act") ?? false)) {
+                longest = System.Math.Max(longest, act.m_duration);
             }
         }
 
-        return 0.0f;
+        return longest;
     }
 
     /// <summary>

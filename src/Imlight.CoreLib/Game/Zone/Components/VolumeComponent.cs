@@ -39,6 +39,7 @@
 using Akka.Actor;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
+using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.Game.Zone.Core;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;
@@ -63,8 +64,11 @@ internal sealed class VolumeComponent(ZoneEntity entity) : ZoneEntityComponent(e
     public override void OnPlayerJoin(CoreObject playerObj, IActorRef playerActor, Wizard playerWizard) {
         // If the player spawned within the volume, add them to the list of players in range but
         // do not send any events.
-        if (_volume != null && IsInRadius(playerObj, _volume.m_radius) && !_playersInRange.ContainsKey(playerObj)) {
+        if (_volume != null && InVolume(playerObj) && !_playersInRange.ContainsKey(playerObj)) {
             _playersInRange.Add(playerObj, playerActor);
+            if (ClassicQuestEngine.IsActive) {
+                _arrivedInside.Add(playerObj); // CLASSIC: its enter events post on the wizard's first move (OnPlayerMove).
+            }
 
             // A player can log in standing inside a quest-proximity volume.
             NotifyProximityGoals(playerObj, playerActor, playerWizard);
@@ -75,25 +79,41 @@ internal sealed class VolumeComponent(ZoneEntity entity) : ZoneEntityComponent(e
     public override void OnPlayerLeave(IActorRef playerActor, ulong id) {
         foreach (var key in _playersInRange.Where(x => x.Value.Equals(playerActor)).Select(x => x.Key).ToList()) {
             _playersInRange.Remove(key);
+            _arrivedInside.Remove(key);
         }
     }
+
+    // CLASSIC: wizards who arrived inside this volume and have not moved yet. Their first move inside posts the enter
+    // events once (ArrivedInside, so no teleport fires): the Jade Palace's Jade Oni volume is the arrival spot itself,
+    // and Air Apparent's Sesshu volume (MS_Plague2_T5) holds the landing. Stock Imlight never posted them.
+    private readonly HashSet<CoreObject> _arrivedInside = new(ReferenceEqualityComparer.Instance);
 
     public override void OnPlayerMove(CoreObject playerObj, IActorRef playerActor, Wizard playerWizard) {
         if (_volume == null) {
             return;
         }
 
+        if (_arrivedInside.Remove(playerObj) && IsInRadius(playerObj, _volume.m_radius)) {
+            PostEnterEvents(playerObj, playerActor, arrivedInside: true); // CLASSIC
+        }
+
         // Check if the player is now in range of the object.
-        if (IsInRadius(playerObj, _volume.m_radius) && !_playersInRange.ContainsKey(playerObj)) {
+        if (InVolume(playerObj) && !_playersInRange.ContainsKey(playerObj)) {
             // If the player is in range, trigger the enter events.
             OnProximityEnter(playerObj, playerActor, playerWizard);
             _playersInRange.Add(playerObj, playerActor);
-        } else if (!IsInRadius(playerObj, _volume.m_radius) && _playersInRange.ContainsKey(playerObj)) {
+        } else if (!InVolume(playerObj) && _playersInRange.ContainsKey(playerObj)) {
             // If the player is out of range, trigger the exit events.
             OnProximityExit(playerObj, playerActor);
             _playersInRange.Remove(playerObj);
         }
     }
+
+    // CLASSIC: box volumes (m_primitiveType "Box", radius 0) never fired: only the radius was tested. KingsIsle's box is
+    // axis-aligned about the volume's position: width along X, length along Y, height (the float in unknown_int) along Z.
+    private bool InVolume(CoreObject playerObj)
+        => VolumeBounds.Contains(_volume, Entity.ActiveGameObject.m_location.X, Entity.ActiveGameObject.m_location.Y,
+            Entity.ActiveGameObject.m_location.Z, playerObj.m_location.X, playerObj.m_location.Y, playerObj.m_location.Z);
 
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_VOLUMEDETAILS))]
     private void ReceiveVolumeDetails(ZONE_102_PROTOCOL.MSG_VOLUMEDETAILS message) {
@@ -133,19 +153,22 @@ internal sealed class VolumeComponent(ZoneEntity entity) : ZoneEntityComponent(e
             Logger.Args(_volume.m_volumeName, Entity.Zone?.ZonePath, string.Join(", ", _volume.m_enterEvents ?? []),
                 playerActor?.Path.Name));
 
-        foreach (var enterEvent in _volume.m_enterEvents) {
-            var postEventMsg = new ZONE_102_PROTOCOL.MSG_POSTEVENT {
-                EventName = enterEvent,
-                PlayerActor = playerActor,
-                PlayerGameObject = playerObj
-            };
-
-            Entity.ZoneRef.Tell(postEventMsg);
-        }
+        PostEnterEvents(playerObj, playerActor, arrivedInside: false);
 
         // Quest proximity goals are tied to the volume by name; if the player has one of
         // this volume's goals active, tell their quest service to complete it.
         NotifyProximityGoals(playerObj, playerActor, playerWizard);
+    }
+
+    private void PostEnterEvents(CoreObject playerObj, IActorRef playerActor, bool arrivedInside) {
+        foreach (var enterEvent in _volume.m_enterEvents ?? []) {
+            Entity.ZoneRef.Tell(new ZONE_102_PROTOCOL.MSG_POSTEVENT {
+                EventName = enterEvent,
+                PlayerActor = playerActor,
+                PlayerGameObject = playerObj,
+                ArrivedInside = arrivedInside, // CLASSIC
+            });
+        }
     }
 
     private void NotifyProximityGoals(CoreObject playerObj, IActorRef playerActor, Wizard playerWizard) {
@@ -182,6 +205,27 @@ internal sealed class VolumeComponent(ZoneEntity entity) : ZoneEntityComponent(e
 
             Entity.ZoneRef.Tell(postEventMsg);
         }
+    }
+
+}
+
+/// <summary>CLASSIC: whether a point is inside a client volume (sphere by radius, or axis-aligned box).</summary>
+internal static class VolumeBounds {
+
+    public static bool Contains(Volume volume, float cx, float cy, float cz, float px, float py, float pz) {
+        if (string.Equals(volume.m_primitiveType.ToString(), "Box", System.StringComparison.OrdinalIgnoreCase)
+            && volume.m_radius <= 0f && volume.m_length > 0f && volume.m_width > 0f) {
+            var height = System.BitConverter.Int32BitsToSingle(volume.unknown_int);
+            var zOk = !(height > 0f && height < 1e6f) || System.Math.Abs(pz - cz) <= height / 2f;
+
+            return zOk && System.Math.Abs(px - cx) <= volume.m_width / 2f && System.Math.Abs(py - cy) <= volume.m_length / 2f;
+        }
+
+        var dx = px - cx;
+        var dy = py - cy;
+        var dz = pz - cz;
+
+        return dx * dx + dy * dy + dz * dz <= volume.m_radius * volume.m_radius;
     }
 
 }

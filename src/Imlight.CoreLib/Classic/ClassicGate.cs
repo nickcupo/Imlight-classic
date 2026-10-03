@@ -67,6 +67,17 @@ internal static class ClassicGate {
     /// <returns>The decision.</returns>
     internal static ZoneDecision Decide(string zone) {
         var decision = ClassicRuntime.Rules.IsZoneAllowed(zone);
+
+        // CLASSIC: a holiday event's zones (the Hallowe'en Towers) are open only while the event runs.
+        if (decision.Allowed && ClassicHolidays.IsZoneOutOfSeason(zone, out var eventName)) {
+            decision = decision with {
+                Allowed = false,
+                Reason = $"holiday event {eventName} is not running (classic-data/holidays)",
+                PlayerMessage = $"The {eventName} event is over. Come back next year!",
+                RuleSource = "classic-data/holidays",
+            };
+        }
+
         AuditIfAllowedAndVerbose(decision);
 
         return decision;
@@ -193,7 +204,8 @@ internal static class ClassicGate {
             return (zone, location);
         }
 
-        var decision = ClassicRuntime.Rules.IsZoneAllowed(zone);
+        // CLASSIC: Decide, so a holiday zone out of season (a wizard who logged out in the Hallowe'en Towers) falls back too.
+        var decision = Decide(zone);
         if (decision.Allowed) {
             return (zone, location);
         }

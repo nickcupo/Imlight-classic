@@ -69,6 +69,9 @@ public static class ClassicStartup {
 
     private static string? s_classicDataRoot;
 
+    /// <summary>The classic-data directory the profile came from, or null without a profile.</summary>
+    public static string? ClassicDataRoot => s_classicDataRoot;
+
     /// <summary>
     /// Loads the configured profile and zone map into <see cref="ClassicRuntime"/>.
     /// </summary>
@@ -111,6 +114,13 @@ public static class ClassicStartup {
                 }
             }
 
+            // CLASSIC: owner extras beyond the profile's era, switched in [Classic] (the Pet Pavilion, May 2010).
+            var petPavilion = new HashSet<string>(StringComparer.Ordinal) {
+                ClassicFeatures.PetsLeveling, ClassicFeatures.PetsHatching, ClassicFeatures.PetsTalents, ClassicFeatures.PetsEnergy,
+            };
+            IReadOnlySet<string> none = new HashSet<string>();
+            rules.OwnerExtraFeatures = () => ClassicSettings.PetPavilion ? petPavilion : none;
+
             ClassicRuntime.Initialize(rules, new LoggerAuditSink(), auditVerbose);
             s_classicDataRoot = classicDataRoot;
 
@@ -143,6 +153,35 @@ public static class ClassicStartup {
             return false;
         }
     }
+
+    /// <summary>
+    /// CLASSIC: raises the thread pool's minimum worker threads to [Classic] MinWorkerThreads (default 64; 0 keeps the
+    /// .NET default of one per core). Actors run on the .NET thread pool, and many handlers still block a thread on a
+    /// database call or an Ask. With four cores the pool started with four threads and added about one a second once
+    /// they were all blocked, so a burst of blocking work (logins, duel ends, saves) stalled every zone and session for
+    /// seconds (2026-10-01 load test: 20 s mailbox waits, dropped clients). Threads up to the minimum start at once.
+    /// </summary>
+    public static void ConfigureThreadPool() {
+        var wanted = ConfigurationManager.Settings["Classic.MinWorkerThreads"].AsString().Trim() is { Length: > 0 } text
+            && int.TryParse(text, out var configured) ? configured : 64;
+        System.Threading.ThreadPool.GetMinThreads(out var workers, out var io);
+        if (wanted <= workers) {
+            Logger.Information("Thread pool minimum left at {Workers} worker threads.", Logger.Args(workers));
+
+            return;
+        }
+
+        System.Threading.ThreadPool.SetMinThreads(wanted, Math.Max(io, wanted / 4));
+        Logger.Information("Thread pool minimum raised from {Old} to {New} worker threads ([Classic] MinWorkerThreads).",
+            Logger.Args(workers, wanted));
+    }
+
+    /// <summary>
+    /// CLASSIC: starts the PERF log when [Classic] PerfLogSeconds is positive (see <see cref="PerfMonitor"/>).
+    /// </summary>
+    /// <param name="system">The server's actor system.</param>
+    public static void StartPerfMonitor(Akka.Actor.ActorSystem system)
+        => PerfMonitor.Start(system, ConfigurationManager.Settings["Classic.PerfLogSeconds"].AsInt(0));
 
     /// <summary>
     /// Checks the active profile against the loaded client resources. Only warns; read the startup log.
@@ -245,6 +284,8 @@ public static class ClassicStartup {
             ("rules.treasure_prices", rules.Profile.Rules.TreasurePrices), // CLASSIC
             ("rules.mob_stats", rules.Profile.Rules.MobStats), // CLASSIC
             ("rules.crown_shop", rules.Profile.Rules.CrownShop), // CLASSIC
+            ("rules.later_objects", rules.Profile.Rules.LaterObjects), // CLASSIC
+            ("rules.creature_decks", rules.Profile.Rules.CreatureDecks), // CLASSIC
         };
         foreach (var (key, relativePath) in tables) {
             if (relativePath is null || File.Exists(Path.Combine(s_classicDataRoot, relativePath))) {

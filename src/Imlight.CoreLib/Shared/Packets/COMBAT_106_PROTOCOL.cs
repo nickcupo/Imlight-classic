@@ -118,6 +118,8 @@ public sealed class COMBAT_106_PROTOCOL : IServerProtocol {
         public byte SpellSelection;
         public uint SpellTarget;
         public int TimeLeft;
+        // CLASSIC: the client's SpellTarget before the bit-mask decoding (a stock enchant names a hand card).
+        public uint RawSpellTarget;
 
     }
 
@@ -273,6 +275,142 @@ public sealed class COMBAT_106_PROTOCOL : IServerProtocol {
         public uint CreatureTid;
         public bool Success;
 
+    }
+
+    internal enum OwnedMinionStatus : byte {
+        Accepted = 0,
+        InvalidDuel = 1,
+        InvalidRound = 2,
+        NotPlanning = 3,
+        InvalidOwner = 4,
+        NotMyth = 5,
+        NotOwnedMinion = 6,
+        NotOptedIn = 7,
+        InvalidMove = 8,
+        InvalidCard = 9,
+        InsufficientPips = 10,
+        InvalidTarget = 11,
+        RequestReplay = 12,
+        SnapshotUnavailable = 13,
+        UnsupportedSummon = 14,
+        Disabled = 15,
+    }
+
+    internal sealed class OwnedMinionSnapshot {
+        public ulong OwnerID;
+        public ulong MinionID;
+        public byte Slot;
+        public byte Team;
+        public int Health;
+        public byte GenericPips;
+        public byte PowerPips;
+        public byte[] HandData = [];
+        public byte[] ParticipantData = [];
+        public bool HasOrder;
+        public byte MoveType;
+        public byte SpellSelection;
+        public uint SpellTarget;
+    }
+
+    internal sealed class MSG_OWNEDMINIONREQUEST : IServerMessage {
+        public byte MessageOrder => 28;
+        public byte ServiceID => 106;
+
+        // Only the authenticated service supplies OwnerActor; it is never a wire field.
+        public IActorRef OwnerActor;
+        public ulong DuelID;
+        public int Round;
+        public ulong MinionID;
+        public uint RequestID;
+        public byte MoveType;
+        public byte SpellSelection;
+        public uint SpellTarget;
+        public bool Query;
+    }
+
+    internal sealed class MSG_OWNEDMINIONRESPONSE : IServerMessage {
+        public byte MessageOrder => 29;
+        public byte ServiceID => 106;
+
+        public IActorRef OwnerActor;
+        public ulong DuelID;
+        public int Round;
+        public ulong MinionID;
+        public uint RequestID;
+        public bool Accepted;
+        public OwnedMinionStatus Status;
+        public OwnedMinionSnapshot[] Snapshots = [];
+        // CLASSIC: the same state in plain words (names, castable cards, legal targets) for the Minion Helper.
+        public string HelperView;
+    }
+
+    internal sealed class MSG_OWNEDMINIONDISABLE : IServerMessage {
+        public byte MessageOrder => 30;
+        public byte ServiceID => 106;
+        public IActorRef OwnerActor;
+    }
+
+    /// <summary>
+    /// CLASSIC: the move type of a Minion Helper order that hands this round back to the minion's own AI. It counts
+    /// as the owner's order (the round need not wait for one) and never reaches the wire.
+    /// </summary>
+    internal const byte OwnedMinionAiMove = 0x20;
+
+    /// <summary>CLASSIC: the hub tells a session its account's Minion Helper connected (true) or left (false).</summary>
+    internal sealed class MSG_MINIONHELPERLINK : IServerMessage {
+        public byte MessageOrder => 32;
+        public byte ServiceID => 106;
+        public bool Connected;
+    }
+
+    /// <summary>CLASSIC: an order or a refresh from the account's Minion Helper, for the session's combat service.</summary>
+    internal sealed class MSG_MINIONHELPERORDER : IServerMessage {
+        public byte MessageOrder => 33;
+        public byte ServiceID => 106;
+        public ulong DuelID;
+        public int Round;
+        public ulong MinionID;
+        public uint RequestID;
+        public byte MoveType;
+        public byte SpellSelection;
+        public uint SpellTarget;
+        public bool Query;
+    }
+
+    /// <summary>CLASSIC: the Minion Helper's "control my minions" switch.</summary>
+    internal sealed class MSG_MINIONHELPERCONTROL : IServerMessage {
+        public byte MessageOrder => 34;
+        public byte ServiceID => 106;
+        public bool Enabled;
+    }
+
+    /// <summary>
+    /// CLASSIC: asks a duel for the owner's current state, and with Enable, to let this owner choose their minions'
+    /// moves for the rest of the duel (any phase). Only the authenticated session supplies OwnerActor.
+    /// </summary>
+    internal sealed class MSG_OWNEDMINIONOPTIN : IServerMessage {
+        public byte MessageOrder => 35;
+        public byte ServiceID => 106;
+        public IActorRef OwnerActor;
+        public bool Enable;
+    }
+
+    /// <summary>
+    /// CLASSIC: a short beat after a Myth wizard's pick, deal their next minion's hand (CombatDuelComponent.MinionHand.cs).
+    /// Internal timer message, never on the wire.
+    /// </summary>
+    internal sealed class MSG_MINIONHANDDEAL : IServerMessage {
+        public byte MessageOrder => 36;
+        public byte ServiceID => 106;
+        public CoreObject Owner;
+        public int Ticket;
+    }
+
+    // Internal roaming rejection, never a combat death or a wire message.
+    internal sealed class MSG_REJECTEDROAMINGCREATURE : IServerMessage {
+        public byte MessageOrder => 31;
+        public byte ServiceID => 106;
+        public CoreObject ExpectedCreature;
     }
 
 }

@@ -312,6 +312,7 @@ public class ZONE_102_PROTOCOL : IServerProtocol {
     /// added to the zone.
     /// </summary>
     public class MSG_ADDPLAYER : IServerMessage {
+        public long AttachGeneration;
 
         public byte MessageOrder { get; } = 14;
         public byte ServiceID { get; } = 102;
@@ -327,11 +328,13 @@ public class ZONE_102_PROTOCOL : IServerProtocol {
     /// Called by a <see cref="Zone"/> to a <see cref="ZoneService"/> to indicate that the player has been added to the zone.
     /// </summary>
     public class MSG_ADDPLAYERRSP : IServerMessage {
+        public long AttachGeneration;
 
         public byte MessageOrder { get; } = 15;
         public byte ServiceID { get; } = 102;
 
         public CoreObject WizardGameObject;
+        public IActorRef ZoneActorRef;
 
     }
 
@@ -339,6 +342,7 @@ public class ZONE_102_PROTOCOL : IServerProtocol {
     /// Called by a <see cref="ZoneService"/> to a <see cref="Zone"/> to indicate that the player needs to be removed from the zone.
     /// </summary>
     public class MSG_REMOVEPLAYER : IServerMessage {
+        public long AttachGeneration;
 
         public byte MessageOrder { get; } = 16;
         public byte ServiceID { get; } = 102;
@@ -556,6 +560,12 @@ public class ZONE_102_PROTOCOL : IServerProtocol {
         /// </summary>
         public ulong[] KilledTemplateIds;
 
+        /// <summary>
+        /// CLASSIC: a volume's enter event for a wizard who arrived inside the volume (posted on their first move there).
+        /// Triggers that teleport do not fire on it, so a landing spot inside an exit volume never bounces the wizard.
+        /// </summary>
+        public bool ArrivedInside;
+
     }
 
     /// <summary>
@@ -742,6 +752,21 @@ public class ZONE_102_PROTOCOL : IServerProtocol {
         public byte ServiceID { get; } = 102;
 
         public uint SpawnObjectID;
+
+        /// <summary>CLASSIC: a zone trigger's activating ResSpawn: the spawner fills to its m_maxNumberOfSpawns.</summary>
+        public bool Fill;
+    }
+
+    /// <summary>
+    /// CLASSIC: a ResSpawn with m_activate false: the spawner stops spawning until a ResSpawn activates it again (a boss's
+    /// death trigger, so Ideyoshi and Kagemoosha do not come back beside the Oni they turned into).
+    /// </summary>
+    public sealed class MSG_ZONEPATHDEACTIVATE : IServerMessage {
+
+        public byte MessageOrder { get; } = 121;
+        public byte ServiceID { get; } = 102;
+
+        public uint SpawnObjectID;
     }
 
     public sealed class MSG_MODIFYTRIGGEROBJECT : IServerMessage {
@@ -919,6 +944,19 @@ public class ZONE_102_PROTOCOL : IServerProtocol {
     /// the given player in its aggro radius, e.g. for <c>ResInitiateCombat</c>. Any number of
     /// creatures may reply; the first reply wins.
     /// </summary>
+    /// <summary>
+    /// CLASSIC: several client messages for each player in one zone broadcast (ambient wizards' moves of one tick); a
+    /// session writes each to its socket in order.
+    /// </summary>
+    public sealed class MSG_CLIENTBATCH : IServerMessage {
+
+        public byte MessageOrder { get; } = 120;
+        public byte ServiceID { get; } = 102;
+
+        public IMessage[] Messages;
+
+    }
+
     public sealed class MSG_QUERYNEARESTDUELTARGET : IServerMessage {
 
         public byte MessageOrder { get; } = 57;

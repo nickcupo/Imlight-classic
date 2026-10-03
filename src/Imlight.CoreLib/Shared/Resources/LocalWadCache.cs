@@ -69,6 +69,11 @@ internal static class LocalWadCache {
     private static readonly string s_path = ConfigurationManager.Settings["Patch Server.LocalWadCachePath"];
     private static bool s_hasInitialized;
 
+    // CLASSIC: one caller at a time. Every call opens its own LiteDatabase on the same file, and LiteDB corrupts a file
+    // that two instances in one process write or read at once ("LiteDB ENSURE: page type must be data page"); zones
+    // loading in parallel (ambient wizards, several players changing zones) did exactly that.
+    private static readonly object s_dbLock = new();
+
     static LocalWadCache() => Initialize();
 
     public static void Initialize() {
@@ -95,82 +100,90 @@ internal static class LocalWadCache {
     }
 
     internal static Archive GetCachedWad(string wadName) {
-        wadName = SanitizeWadName(wadName);
-        using var db = new LiteDatabase(s_path);
-        var fs = db.GetStorage<FileDefinition>();
+        lock (s_dbLock) {
+            wadName = SanitizeWadName(wadName);
+            using var db = new LiteDatabase(s_path);
+            var fs = db.GetStorage<FileDefinition>();
 
-        var file = fs.Find(f => f.Filename == wadName)
-            .FirstOrDefault();
+            var file = fs.Find(f => f.Filename == wadName)
+                .FirstOrDefault();
 
-        if (file is null) {
-            Logger.Warning("LocalCache does not contain a file definition for {FileName}!", 
-                Logger.Args(wadName));
+            if (file is null) {
+                Logger.Warning("LocalCache does not contain a file definition for {FileName}!", 
+                    Logger.Args(wadName));
 
-            return null;
+                return null;
+            }
+
+            // The LiteDB stream is file IO and very slow.
+            // Instead, copy the stream to a memory stream.
+            var liteDbStream = fs.OpenRead(file.Id);
+            var fileStream = new MemoryStream();
+            liteDbStream.CopyTo(fileStream);
+            fileStream.Seek(0, SeekOrigin.Begin);
+
+            return file is null 
+                ? null 
+                : ArchiveParser.Parse(fileStream);
         }
-
-        // The LiteDB stream is file IO and very slow.
-        // Instead, copy the stream to a memory stream.
-        var liteDbStream = fs.OpenRead(file.Id);
-        var fileStream = new MemoryStream();
-        liteDbStream.CopyTo(fileStream);
-        fileStream.Seek(0, SeekOrigin.Begin);
-
-        return file is null 
-            ? null 
-            : ArchiveParser.Parse(fileStream);
     }
 
     internal static List<FileDefinition> GetAllCachedFiles() {
-        using var db = new LiteDatabase(s_path);
-        var fs = db.GetStorage<FileDefinition>();
+        lock (s_dbLock) {
+            using var db = new LiteDatabase(s_path);
+            var fs = db.GetStorage<FileDefinition>();
 
-        var allFiles = fs.FindAll();
+            var allFiles = fs.FindAll();
 
-        return [.. allFiles.Select(file => file.Id)];
+            return [.. allFiles.Select(file => file.Id)];
+        }
     }
 
     internal static void CacheWad(string fileName, Archive wad) {
-        fileName = SanitizeWadName(fileName);
-        using var db = new LiteDatabase(s_path);
-        var fs = db.GetStorage<FileDefinition>();
+        lock (s_dbLock) {
+            fileName = SanitizeWadName(fileName);
+            using var db = new LiteDatabase(s_path);
+            var fs = db.GetStorage<FileDefinition>();
 
-        // Search to see if this file exists. If it does, we'll warn the user
-        // but we will overwrite the file regardless.
-        var file = fs.Find(f => f.Filename == fileName)
-            .FirstOrDefault();
-        if (file is not null) {
-            Logger.Warning("LocalCache already contains a file definition for {FileName}! " +
-                        $"File will be overwritten.", Logger.Args(fileName));
+            // Search to see if this file exists. If it does, we'll warn the user
+            // but we will overwrite the file regardless.
+            var file = fs.Find(f => f.Filename == fileName)
+                .FirstOrDefault();
+            if (file is not null) {
+                Logger.Warning("LocalCache already contains a file definition for {FileName}! " +
+                            $"File will be overwritten.", Logger.Args(fileName));
+            }
+
+            // Create a new FileDefinition. Create a new byte array from the content stream.
+            var wadCrc = GetWadCrc(wad);
+            var def = new FileDefinition {
+                Filename = fileName,
+                Size = wad.Size(),
+                Crc = wadCrc,
+            };
+
+            var contentStream = wad.GetData();
+            fs.Upload(def, fileName, contentStream);
         }
-
-        // Create a new FileDefinition. Create a new byte array from the content stream.
-        var wadCrc = GetWadCrc(wad);
-        var def = new FileDefinition {
-            Filename = fileName,
-            Size = wad.Size(),
-            Crc = wadCrc,
-        };
-
-        var contentStream = wad.GetData();
-        fs.Upload(def, fileName, contentStream);
     }
 
     internal static void DeleteWad(string fileName) {
-        fileName = SanitizeWadName(fileName);
-        using var db = new LiteDatabase(s_path);
-        var fs = db.GetStorage<FileDefinition>();
+        lock (s_dbLock) {
+            fileName = SanitizeWadName(fileName);
+            using var db = new LiteDatabase(s_path);
+            var fs = db.GetStorage<FileDefinition>();
 
-        var file = fs.Find(f => f.Filename == fileName)
-            .FirstOrDefault();
+            var file = fs.Find(f => f.Filename == fileName)
+                .FirstOrDefault();
 
-        if (file is not null) {
-            fs.Delete(file.Id);
+            if (file is not null) {
+                fs.Delete(file.Id);
 
-            return;
+                return;
+            }
+
+            Logger.Warning("LocalCache tried to delete a file {FileName} it did not contain!", Logger.Args(fileName));
         }
-
-        Logger.Warning("LocalCache tried to delete a file {FileName} it did not contain!", Logger.Args(fileName));
     }
 
     private static void UpdateCache() {

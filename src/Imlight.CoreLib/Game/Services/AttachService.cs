@@ -159,6 +159,9 @@ internal class AttachService(SessionActor sessionActor) : MessageService(session
 
             // Misc
             ShowSubscriberIcon = 0,
+            // CLASSIC: members pay the full Crowns price. Left at 0, the client offered every non-member a
+            // "Members Pay 0" price in the Crown Shop; at 100 it shows no members' price at all.
+            SubscriberCrownsPricePercent = 100,
             TestServer = 1
         };
 
@@ -201,7 +204,7 @@ internal class AttachService(SessionActor sessionActor) : MessageService(session
                                                    "Centaur",
                                                    SessionActor.ActorRef));
 
-        TellOtherServices(new SERVICE_101_PROTOCOL.MSG_ATTACHCOMPLETE());
+        TellOtherServices(new SERVICE_101_PROTOCOL.MSG_ATTACHCOMPLETE { AttachGeneration = addPlayerResponse.AttachGeneration, ZoneActorRef = addPlayerResponse.ZoneActorRef });
 
         // Attach succeeded — remove the fallback registration so stale entries
         // don't accumulate on the GameServer.
@@ -285,7 +288,8 @@ internal class AttachService(SessionActor sessionActor) : MessageService(session
             DestinationZone = zoneName,
             DestinationLocation = location,
             SendToClient = false,
-            OwnerCharId = _wizard.CharId,
+            // CLASSIC: a wizard who dropped mid-fight logs back in to the instance that holds their seat.
+            OwnerCharId = Classic.ActiveDuels.InstanceOwnerForLogin(_wizard.CharId, zoneName, DateTime.UtcNow),
         };
 
         return AskOtherService<ZONE_102_PROTOCOL.MSG_ZONETRANSFERRSP>(zoneMsg);

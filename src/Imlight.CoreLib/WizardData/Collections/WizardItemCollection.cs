@@ -281,6 +281,34 @@ public static class WizardItemCollection {
         => CoreObjectFactory.FindBehaviorInstance<ClientTimedItemBehavior>(item, out var timed)
             && timed.m_expireTime != 0 && timed.m_expireTime <= now.ToUnixTimeSeconds();
 
+    /// <summary>
+    /// CLASSIC: saves a pet item's growth (its ClientPetItemBehavior: level, experience, stats, talents) onto the stored copy.
+    /// </summary>
+    public static bool SavePetGrowth(WizClientObjectItem item) {
+        if (!CoreObjectFactory.FindBehaviorInstance<ClientPetItemBehavior>(item, out var live)) {
+            return false;
+        }
+
+        using var session = s_store.OpenSession();
+        var stored = session.Query<WizClientObjectItem>(collectionName: CollectionName)
+            .FirstOrDefault(x => x.m_globalID == item.m_globalID && x.m_characterId == item.m_characterId);
+        if (stored?.m_inactiveBehaviors is null) {
+            return false;
+        }
+
+        var index = stored.m_inactiveBehaviors.FindIndex(b => b is ClientPetItemBehavior);
+        if (index < 0) {
+            stored.m_inactiveBehaviors.Add(live);
+        }
+        else {
+            stored.m_inactiveBehaviors[index] = live;
+        }
+
+        session.SaveChanges();
+
+        return true;
+    }
+
     public static bool ApplyPetName(WizClientObjectItem item, uint nameKeys) {
         using var session = s_store.OpenSession();
 

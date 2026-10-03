@@ -83,6 +83,20 @@ public sealed class Arc1EngineFollowUpTests {
     }
 
     [Fact]
+    public void BountyTemplateReferenceCountsEachDefeatedMonster() {
+        // CLASSIC: Face Your Fate's goal names "GH-Bear-Scout-1-R3.AdjRef"; the Troubled Warrior template's own
+        // adjectives are only Bear and Undead, so the adjective match alone never credited it.
+        string[] goal = ["GH-Bear-Scout-1-R3.AdjRef"];
+
+        Assert.Equal(2, KilledMonster.CountTemplateReferences(goal, ["GH-Bear-Scout-1-R3", "gh-bear-scout-1-r3"]));
+        Assert.Equal(1, KilledMonster.CountTemplateReferences(goal, ["GH-Bear-Scout-1-R3", "GH-Bear-Warrior-4-GHBoss-R4"]));
+        Assert.Equal(0, KilledMonster.CountTemplateReferences(["Bear"], ["GH-Bear-Scout-1-R3"]));
+        Assert.Equal(0, KilledMonster.CountTemplateReferences([".AdjRef"], ["", null]));
+        Assert.Equal(0, KilledMonster.CountTemplateReferences(null, ["GH-Bear-Scout-1-R3"]));
+        Assert.Equal(1, KilledMonster.CountTemplateReferences(["A.AdjRef", "A.AdjRef"], ["A"]));
+    }
+
+    [Fact]
     public void CollectedObjectIsGoneOnlyForItsCollector() {
         var crate = new CollectedObject<ulong>(TimeSpan.FromSeconds(30));
         var now = new DateTime(2026, 9, 27, 12, 0, 0, DateTimeKind.Utc);

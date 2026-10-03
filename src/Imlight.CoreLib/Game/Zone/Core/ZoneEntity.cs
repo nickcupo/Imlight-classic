@@ -97,6 +97,7 @@ public class ZoneEntity(
     private readonly List<ZoneEntityComponent> _componentOrder = [];
 
     internal IActorRef CurrentSender => Sender;
+    internal ActorSelection SelectZoneChild(string name) => Context.ActorSelection(ZoneRef.Path.Child(name));
 
     /// <summary>
     /// Gets a list of components of the specified type.
@@ -252,6 +253,15 @@ public class ZoneEntity(
         ChangeState(message.StateName);
     }
 
+    /// <summary>
+    /// CLASSIC: a state object clicked into <paramref name="restState"/>; the zone sees <paramref name="shownState"/>
+    /// (its transition state, which ends in the rest state), and later arrivals see the rest state.
+    /// </summary>
+    internal void SetClassicObjectState(string restState, string shownState) {
+        TriggerObjectState = restState;
+        ChangeState(string.IsNullOrEmpty(shownState) ? restState : shownState);
+    }
+
     #region Message Handlers
 
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_ZONEOBJECTLOADBEGIN))]
@@ -327,6 +337,12 @@ public class ZoneEntity(
                     Logger.Args(componentType.Name, template?.GetType().Name ?? "?", (ex.InnerException ?? ex).Message));
             }
         }
+    }
+
+    // CLASSIC: a creature that is gone is no longer read by duels.
+    protected override void PostStop() {
+        Classic.CreatureStatsDirectory.Remove(Self);
+        base.PostStop();
     }
 
     /// <summary>

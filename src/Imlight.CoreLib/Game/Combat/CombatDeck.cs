@@ -58,6 +58,9 @@ internal class CombatDeck {
     internal int VaultTotalCount => (int) _treasureVault.Sum(s => s.Quantity);
     internal int VaultRemainingCount => (int) _treasureVaultUsed.Sum(s => s.Quantity);
     internal int TreasureCardsInHand { get; private set; }
+    // CLASSIC: a creature's deck lists each spell once with 9999 copies (CombatCreatureDeckComponent): it never runs out.
+    internal bool IsEndless => _spellData.Any(s => s.Quantity >= 9999);
+    internal int DistinctCardCount => _spellData.Count;
 
     private readonly List<CombatDeckSpellData> _spellData;
     private readonly List<CombatDeckSpellData> _treasureVault;
@@ -121,6 +124,17 @@ internal class CombatDeck {
         }
     }
 
+    // CLASSIC: the entry holding the copy at position <paramref name="copy"/> (0 <= copy < RemainingCardCount).
+    private int WeightedIndex(int copy) {
+        for (var i = 0; i < _usedUpSpellData.Count; i++) {
+            copy -= (int) _usedUpSpellData[i].Quantity;
+            if (copy < 0) {
+                return i;
+            }
+        }
+        return _usedUpSpellData.Count - 1;
+    }
+
     /// <summary>
     /// Gets a new hand of spells, discarding any used or discarded cards.
     /// </summary>
@@ -155,7 +169,9 @@ internal class CombatDeck {
                 break; // No more spells available.
             }
 
-            var randomIndex = _rng.Next(0, _usedUpSpellData.Count);
+            // CLASSIC: every remaining copy is equally likely (a spell with 4 copies left comes up 4 times as often as one
+            // with 1); this drew each distinct spell equally, whatever its count.
+            var randomIndex = WeightedIndex(_rng.Next(0, RemainingCardCount));
             var spellData = _usedUpSpellData[randomIndex];
             var spellTemplateId = spellData.TemplateId;
 
@@ -239,12 +255,9 @@ internal class CombatDeck {
             return null;
         }
 
-        // Player must have more total cards available than hand size to draw from vault.
-        // This prevents drawing from the sideboard when the regular deck still has cards.
-        var totalAvailableCards = RemainingCardCount + VaultRemainingCount + LastGivenHand.Count;
-        if (totalAvailableCards <= _handSize) {
-            return null;
-        }
+        // CLASSIC: a treasure card can be drawn whenever the hand has room and the deck still holds treasure cards, as on
+        // live. The rule here required more cards in all than a full hand, so a small deck (six cards and one treasure
+        // card) could never draw.
 
         var randomIndex = _rng.Next(0, _treasureVaultUsed.Count);
         var vaultData = _treasureVaultUsed[randomIndex];

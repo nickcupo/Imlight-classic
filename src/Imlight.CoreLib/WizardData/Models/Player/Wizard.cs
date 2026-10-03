@@ -199,6 +199,37 @@ public class Wizard {
         DynamodCollection.AddDynamodSet(DynamodSet);
     }
 
+    /// <summary>
+    /// CLASSIC: an ambient wizard (Classic/Ambient): built like a new character but never written to the database (no
+    /// DynamodSet row; WizardCollection ignores its character id). Its friends come from BuddyRelationshipCollection.
+    /// </summary>
+    internal static Wizard CreateAmbient(ulong charId, MagicSchool school, WizardCharacterBehavior avatar, uint nameIndices,
+                                         byte level, string zone) {
+        var wizard = new Wizard {
+            CharId = charId,
+            Zone = zone,
+            World = 1,
+            LastLoginTime = (uint) DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+            WizardAvatar = avatar,
+        };
+        wizard.InitializeDefaultEquipment();
+        wizard.InitializePlayerName(nameIndices);
+        wizard.InitializeMagicSchoolBehavior(school, level);
+        wizard.InitializeSpellbookBehavior();
+        wizard.InitializeMountOwnerBehavior();
+        wizard.InitializeWizardGameStats(school, level);
+        wizard.InitializeDefaultPetSnackBehavior();
+        wizard.InitializePetOwnerBehavior();
+        wizard.InitializeDefaultInventory();
+        wizard.InitializeAlchemyBehavior();
+        wizard.ObjectStateBehavior = new ServerObjectStateBehavior("PlayerMobileStates");
+        wizard.QuestBehavior = new ServerQuestBehavior();
+        wizard.FriendsBehavior = new ServerFriendBehavior();
+        wizard.DynamodSet = new DynamodSet(charId);
+
+        return wizard;
+    }
+
     public WizClientObject GetInitializedGameObject()
         => HasInitializedGameObject ? GameObject : null;
 
@@ -333,24 +364,11 @@ public class Wizard {
         WizardCollection.UpdateCharacterGameStats(this);
     }
 
-    public void AddGold(int gold) {
-        if (GameStats.m_currentGold + gold > GameStats.m_baseGoldPouch) {
-            GameStats.m_currentGold = GameStats.m_baseGoldPouch; // Do not exceed gold pouch.
-        }
-        else {
-            GameStats.m_currentGold += gold;
-        }
+    public void AddGold(int gold)
+        => WizardCollection.ChangeGold(this, gold, capToPouch: true);
 
-        // Persistent save.
-        WizardCollection.UpdateCharacterGameStats(this);
-    }
-
-    public void RemoveGold(int gold) {
-        GameStats.m_currentGold -= gold;
-
-        // Persistent save.
-        WizardCollection.UpdateCharacterGameStats(this);
-    }
+    public void RemoveGold(int gold)
+        => WizardCollection.ChangeGold(this, -(long) gold, capToPouch: false);
 
     public void UpdateHealth(int newHealth) {
         GameStats.m_currentHitpoints = newHealth;
@@ -446,9 +464,19 @@ public class Wizard {
         // The pet factory owns the pet's behavior state, so this skips the template
         // re-initialization that AddItemToInventory does.
         pet = PetFactory.CreateHatchedPet(CharId, templateId);
+
+        return AddPetToInventory(pet);
+    }
+
+    /// <summary>
+    /// CLASSIC: adds a pet PetFactory made (bought, hatched or granted) without re-initializing its behaviors from the template.
+    /// </summary>
+    public bool AddPetToInventory(WizClientObjectItem pet) {
         if (pet is null) {
             return false;
         }
+
+        pet.m_characterId = (GID) CharId;
 
         if (!InventoryBehavior.AddItem(pet)) {
             Logger.Warning("Could not add pet {0} to player {1}'s inventory.",
@@ -800,7 +828,17 @@ public class Wizard {
             return false;
         }
 
-        var spellList = deckBehavior.m_spellList ?? [];
+        var spellList = deckBehavior.m_spellList ??= [];
+        // CLASSIC: the stock client's own deck check (Classic/ClassicDeckRules.cs) for a deck in the backpack too.
+        if (Classic.ClassicDeckRules.DeckTemplateOf((uint) item.m_templateID) is { } deckTemplate) {
+            var refusal = Classic.ClassicDeckRules.CanAdd(deckTemplate, spellList, spellTemplateId,
+                id => CoreObjectFactory.GetCoreTemplate(id) as SpellTemplate);
+            if (refusal != Classic.DeckAddRefusal.None) {
+                Logger.Debug("Deck add of spell {0} to deck {1} refused: {2}.", Logger.Args(spellTemplateId, deckId, refusal.ToString()));
+                return false;
+            }
+        }
+
         var spellDeckData = spellList.FirstOrDefault(s => s.m_templateID == spellTemplateId);
         if (spellDeckData is null) {
             // It may not be included yet. We'll add another entry.
@@ -901,7 +939,6 @@ public class Wizard {
         }
 
         // Consume one copy from the treasure card book.
-        SpellbookBehavior.RemoveTreasureCard(spellTemplateId);
         WizardCollection.RemoveTreasureCard(this, spellTemplateId);
 
         return true;
@@ -924,7 +961,6 @@ public class Wizard {
 
         if (!destroy) {
             // Return the card to the treasure book.
-            SpellbookBehavior.AddTreasureCard(spellTemplateId);
             WizardCollection.AddTreasureCard(this, spellTemplateId);
         }
 

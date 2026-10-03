@@ -23,6 +23,7 @@ using Imcodec.ObjectProperty.TypeCache;
 using Imcodec.Types;
 using Imlight.Common;
 using Imlight.CoreLib.Classic;
+using Imlight.CoreLib.Game.Zone.Core;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;
 using Imlight.CoreLib.Shared.Resources;
@@ -42,10 +43,11 @@ internal sealed class ZoneObjectSupervisor(Core.Zone zone) : ZoneEntitySuperviso
     public override void ReceiveZoneLoadResults(ZONE_102_PROTOCOL.MSG_ZONELOADRESULTS message) {
         // We only care about the ZoneData section of the message.
         var zoneData = message.ZoneData;
+        var walkerPaths = new PlacedWalkerPaths(message.PathData, message.NodeData); // CLASSIC
 
         // Initialize any objects found within the zone data.
         foreach (var objectInfo in zoneData.m_objectList) {
-            if (!IsObjectEligibleForSpawn(objectInfo)) {
+            if (!IsObjectEligibleForSpawn(objectInfo, zone.ZoneName)) {
                 continue;
             }
 
@@ -71,13 +73,33 @@ internal sealed class ZoneObjectSupervisor(Core.Zone zone) : ZoneEntitySuperviso
                 RegisterCriticalObject(coreObject.m_globalID);
             }
 
-            CreateEntityActor(coreObject, template, objectInfo);
+            var entityActor = CreateEntityActor(coreObject, template, objectInfo);
+            TellPlacedWalkerItsPath(entityActor, template, objectInfo, walkerPaths);
         }
 
         ReportLoadedWhenEntitiesLoad();
     }
 
-    private static bool IsObjectEligibleForSpawn(CoreObjectInfo objectInfo) {
+    // CLASSIC: a walker placed in the zone (the Marleybone cops) names its path in its template's PathBehavior; only
+    // ZonePath told spawned walkers their nodes, so placed ones timed out and were deleted. A walker with no usable
+    // path (no id, or an id the zone's path data lacks) is told so and stands still.
+    private void TellPlacedWalkerItsPath(IActorRef entityActor, CoreTemplate template, CoreObjectInfo objectInfo,
+                                         PlacedWalkerPaths walkerPaths) {
+        if (!Components.PathMovementComponent.ShouldAttachToEntity(template)) {
+            return;
+        }
+
+        var pathId = ((GameObjectTemplate) template).m_behaviors.OfType<PathBehaviorTemplate>().First().m_pathID.Full;
+        var nodes = walkerPaths.NodesOf(pathId);
+        if (nodes.Count == 0) {
+            Logger.Debug("Zone {Zone} walker {Name} has no usable path data (path id {PathId}); it stands still.",
+                Logger.Args(zone.ZoneName, objectInfo.m_zoneTag, pathId));
+        }
+
+        entityActor.Tell(new ZONE_102_PROTOCOL.MSG_PATHDETAILS { NodeObjects = nodes });
+    }
+
+    private static bool IsObjectEligibleForSpawn(CoreObjectInfo objectInfo, string? zoneName) {
         if (objectInfo is null) {
             return false;
         }
@@ -93,7 +115,7 @@ internal sealed class ZoneObjectSupervisor(Core.Zone zone) : ZoneEntitySuperviso
         }
 
         // CLASSIC: objects from later versions of classic quests are not spawned.
-        if (ClassicLaterObjects.Skips(objectInfo)) {
+        if (ClassicLaterObjects.Skips(objectInfo, zoneName)) {
             return false;
         }
 

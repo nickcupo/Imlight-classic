@@ -16,6 +16,7 @@
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
+using System;
 using System.Linq;
 using System.Reflection;
 using System.Text;
@@ -45,7 +46,7 @@ internal abstract class CommandProtocol {
         this.Context = context;
 
         if (commandName is "help" or "?" or "" or null && !string.IsNullOrEmpty(Group)) {
-            InformClientHelp();
+            InformClientHelp(parameters.Length > 0 ? parameters[0]?.ToString() : null);
             return true;
         }
 
@@ -114,11 +115,9 @@ internal abstract class CommandProtocol {
         }
     }
 
+    // CLASSIC: a reply is a chat line; only important ones (help pages) are a popup. Never a "!" alert.
     protected void InformSenderClient(string reason, bool isImportant = false)
-        => Context.SessionActor.Tell(new EXTENDEDBASE_2_PROTOCOL.MSG_SERVERMESSAGE {
-            Message = reason,
-            Modal = (byte) (isImportant ? 1 : 0)
-        });
+        => Context.SessionActor.Tell(Classic.ClassicChat.Notice(reason, isImportant));
 
     private void InitiateHandlers() {
         _hasInitiated = true;
@@ -145,42 +144,51 @@ internal abstract class CommandProtocol {
     private void InformClientOfProperParameterCount(string commandName, ParameterInfo[] methodParameters) {
         // Write the usage of this command.
         var properUsageStr = new StringBuilder();
-        properUsageStr.Append(commandName);
-        properUsageStr.Append("<color;1C1EC4>");
+        properUsageStr.Append($".{Group} {commandName}");
 
         foreach (var parameter in methodParameters) {
-            properUsageStr.Append(" (");
+            properUsageStr.Append(" <");
             properUsageStr.Append(parameter.Name);
 
             if (parameter.GetCustomAttribute<RemainderAttribute>() != null) {
                 properUsageStr.Append("...");
             }
 
-            properUsageStr.Append(')');
+            properUsageStr.Append('>');
         }
 
         // Inform the invoker of improper usage. Point and laugh!
         InformSenderClient($"Proper usage: {properUsageStr}");
     }
 
-    private void InformClientHelp() {
-        var sb = new StringBuilder()
-            .AppendLine("Available commands:");
+    private const int HelpNamesPerLine = 6;
 
-        var seenCommands = new HashSet<MethodInfo>();
-        foreach (var command in _commandMethods) {
-            // If we've already seen this command, skip it.
-            if (!seenCommands.Add(command.Value)) {
-                continue;
-            }
-
-            var commandAttribute = command.Value.GetCustomAttribute<CommandAttribute>();
-
-            // Get all the parameters for this command. Put a '$' in front of each parameter name.
-            var parameterStr = string.Join(" ", command.Value.GetParameters().Select(x => $"${x.Name}"));
-
-            sb.AppendLine($"{Group} {commandAttribute.Name} {parameterStr}");
+    private void InformClientHelp(string? commandName) {
+        // CLASSIC: the whole list in one window ran off the screen. ".mod help" lists the names, a few per line;
+        // ".mod help gold" shows one command's usage and description.
+        string Usage(MethodInfo method) {
+            var parameters = string.Concat(method.GetParameters().Select(p => $" <{p.Name}>"));
+            var help = method.GetCustomAttribute<HelpAttribute>()?.Text;
+            return $".{Group} {method.GetCustomAttribute<CommandAttribute>()!.Name}{parameters}" + (help is null ? "" : $"\n{help}");
         }
+
+        if (!string.IsNullOrWhiteSpace(commandName)) {
+            InformSenderClient(_commandMethods.TryGetValue(commandName.ToLower(), out var method)
+                ? Usage(method)
+                : $"There is no .{Group} {commandName} command. Type .{Group} help for the list.", true);
+            return;
+        }
+
+        var names = _commandMethods.Values.Distinct()
+            .Select(method => method.GetCustomAttribute<CommandAttribute>()!.Name)
+            .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        var sb = new StringBuilder().AppendLine($".{Group} commands:");
+        for (var i = 0; i < names.Count; i += HelpNamesPerLine) {
+            sb.AppendLine(string.Join(",  ", names.Skip(i).Take(HelpNamesPerLine)));
+        }
+        sb.Append($"Type .{Group} help <command> for how to use one.");
 
         InformSenderClient(sb.ToString(), true);
     }

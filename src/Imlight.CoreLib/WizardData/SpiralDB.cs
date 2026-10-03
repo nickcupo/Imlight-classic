@@ -204,6 +204,28 @@ public static partial class SpiralDB {
         return dropTable;
     }
 
+    /// <summary>
+    /// CLASSIC: adds or replaces one NPC's shop stock (the holiday vendors of classic-data/holidays).
+    /// </summary>
+    public static void RegisterNpcInventory(NPCInventory inventory) => s_npcInventories[inventory.TemplateID] = inventory;
+
+    /// <summary>
+    /// CLASSIC: sets global registry entries (the holiday events of classic-data/holidays). Readers on other threads see
+    /// either the old or the new values: the dictionary is replaced, never changed in place.
+    /// </summary>
+    public static void SetGlobalRegistryValues(IReadOnlyDictionary<string, float> values) {
+        lock (s_globalRegistryWriteLock) {
+            var next = new Dictionary<string, float>(s_globalRegistry.GlobalRegistryValues);
+            foreach (var (name, value) in values) {
+                next[name] = value;
+            }
+
+            s_globalRegistry.GlobalRegistryValues = next;
+        }
+    }
+
+    private static readonly object s_globalRegistryWriteLock = new();
+
     public static bool TryGetNpcInventory(ulong templateID, out NPCInventory npcInventory)
         => s_npcInventories.TryGetValue(templateID, out npcInventory);
 

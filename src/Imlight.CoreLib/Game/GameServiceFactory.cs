@@ -67,8 +67,10 @@ public class GameServiceFactory : ServiceFactory {
         typeof(DynaModService),
         typeof(CantripService),
         typeof(CrownShopService), // CLASSIC
+        typeof(Imlight.CoreLib.Game.Monstrology.MonstrologyService),
         typeof(TrainService),
         typeof(PetService),
+        typeof(PetGameService), // CLASSIC: Pet Pavilion pet games and training.
         typeof(MinigameService),
         typeof(FriendsService),
         typeof(TutorialService),

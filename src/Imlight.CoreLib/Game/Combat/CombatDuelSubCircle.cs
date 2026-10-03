@@ -150,10 +150,21 @@ public class CombatDuelSubCircle {
                 return ClassicRuntime.IsActive ? _minionTeam : CombatTeam.Player;
             }
 
+            // CLASSIC: in an open PvP circle the wizards on the first half (slots 0-3) are the other team.
+            if (PvpTeam is { } pvpTeam) {
+                return pvpTeam;
+            }
+
             return ParticipantObject.m_templateID == 1 ? CombatTeam.Player : CombatTeam.Monster;
         }
     }
     internal bool IsAlive => ParticipantGameStats?.m_currentHitpoints > 0;
+
+    /// <summary>CLASSIC: the open PvP team of this slot (slots 0-3 Monster, 4-7 Player), or null outside PvP.</summary>
+    internal CombatTeam? PvpTeam { get; set; }
+
+    /// <summary>CLASSIC: a wizard (a player's or an ambient wizard's seat), not a creature or minion.</summary>
+    internal bool IsWizard => ParticipantObject?.m_templateID == 1 && !IsSummonedMinion;
 
     /// <summary>
     /// Beguile (kMindControl): the number of this combatant's next actions taken for the other side.
@@ -222,7 +233,43 @@ public class CombatDuelSubCircle {
         return this.CombatParticipant;
     }
 
+    // CLASSIC: combat rejoin. A wizard whose client dropped keeps the seat for a while (ClassicSettings
+    // CombatRejoinSeconds): the seat has no actor, passes every round, and their next login takes it back.
+    internal bool Disconnected { get; private set; }
+    internal ulong HeldCharacterId { get; private set; }
+    internal DateTime DisconnectedAtUtc { get; private set; }
+
+    internal void HoldSeat(DateTime nowUtc) {
+        HeldCharacterId = _wizard?.CharId ?? 0;
+        Disconnected = true;
+        DisconnectedAtUtc = nowUtc;
+        ParticipantActor = ActorRefs.Nobody;
+    }
+
+    internal void RejoinSeat(IActorRef actor, CoreObject participantObject, Wizard wizard) {
+        var previous = ParticipantObject;
+        ParticipantActor = actor;
+        ParticipantObject = participantObject;
+        _wizard = wizard;
+        ParticipantGameStats = wizard.GameStats;
+        if (CombatParticipant is not null) {
+            CombatParticipant.m_playerHealth = wizard.GameStats.m_currentHitpoints;
+        }
+
+        Disconnected = false;
+        HeldCharacterId = 0;
+
+        // Minions summoned by this wizard name the old object as their owner.
+        foreach (var circle in _duelActor.SubCircles.Where(circle => circle is not null && circle != this)) {
+            if (ReferenceEquals(circle._minionOwnerObject, previous)) {
+                circle._minionOwnerObject = participantObject;
+            }
+        }
+    }
+
     internal void RemoveParticipant() {
+        Disconnected = false;
+        HeldCharacterId = 0;
         ParticipantActor = null;
         ParticipantObject = null;
         CombatParticipant = null;
@@ -504,11 +551,14 @@ public class CombatDuelSubCircle {
 
     private void InitializePlayerSubCircle() {
         // todo: this method is a mess.
-        var queryCharacterMsg = new CHARACTER_103_PROTOCOL.MSG_QUERYACTIVEWIZARD();
-        _wizard = ParticipantActor
-            .Ask<CHARACTER_103_PROTOCOL.MSG_CHARACTER>(queryCharacterMsg, PlayerQuery.Timeout) // CLASSIC: timeout
-            .Result
-            .Wizard;
+        // CLASSIC: the session's pushed wizard when it has one; else the (blocking) question as before.
+        if (!ActiveWizardDirectory.TryGet(ParticipantActor, out _wizard, out _)) {
+            var queryCharacterMsg = new CHARACTER_103_PROTOCOL.MSG_QUERYACTIVEWIZARD();
+            _wizard = ParticipantActor
+                .Ask<CHARACTER_103_PROTOCOL.MSG_CHARACTER>(queryCharacterMsg, PlayerQuery.Timeout) // CLASSIC: timeout
+                .Result
+                .Wizard;
+        }
 
         // Dyanmic symbols start at 9 for players.
         var dynamicSymbol = (DynamicSigilSymbol) (SlotIndex + 9);
@@ -532,6 +582,10 @@ public class CombatDuelSubCircle {
                     && _wizard.SpellbookBehavior.LearnedSpellTemplateIds is { Count: > 0 }
                     && !_wizard.SpellbookBehavior.LearnedSpellTemplateIds.Contains(spell.m_templateID)) {
                     isTreasureCard = true;
+                }
+
+                if (isTreasureCard && !Monstrology.MonstrologyCardCatalog.IsUsableCard(spell.m_templateID)) {
+                    continue; // CLASSIC: a later world's Monstrology card (Monstrology is Arc 1 only).
                 }
 
                 if (isTreasureCard) {
@@ -586,7 +640,7 @@ public class CombatDuelSubCircle {
             m_isPlayer = true,
             m_zoneID = _duelActor.SigilId,
             m_isMonster = 0,
-            m_teamID = 0,
+            m_teamID = (int) (PvpTeam ?? CombatTeam.Player), // CLASSIC: open PvP seats wizards on both teams
             m_primaryMagicSchoolID = (int) _wizard.MagicSchoolBehavior.MagicSchool,
             m_pipCount = DetermineStartingPips(),
             m_pipRoundRates = new(),
@@ -597,8 +651,11 @@ public class CombatDuelSubCircle {
             // The client's crit sim reads the participant level from m_mobLevel (it zeroes its
             // crit chance below the level threshold when this is missing).
             m_mobLevel = ParticipantGameStats.Level,
-            m_myTeamTurn = _duelActor.Duel.m_firstTeamToAct == 0,
+            m_myTeamTurn = _duelActor.Duel.m_firstTeamToAct == (int) (PvpTeam ?? CombatTeam.Player),
             m_pGameStats = combatStats,
+            // CLASSIC: no shadow-pip meter (Shadow magic is 2012). The client's combatant control shows it only when
+            // m_pGameStats.m_shadowPipMax > 0 and this is false (r806919 0x14078bab3 -> 0x142035a30).
+            m_shadowSpellsDisabled = true,
             m_pPlayDeck = new PlayDeck(),
             m_subcircle = SlotIndex,
             m_dynamicSymbol = dynamicSymbol,
@@ -611,10 +668,11 @@ public class CombatDuelSubCircle {
     }
 
     private void InitializeCreatureSubCircle(bool asMinion = false, int minionOwnerSubCircle = 0) {
-        var queryGameStatsMsg = new COMBAT_106_PROTOCOL.MSG_QUERYCREATURESTATS();
-        var creatureStats = ParticipantActor
-            .Ask<COMBAT_106_PROTOCOL.MSG_CREATURESTATS>(queryGameStatsMsg, PlayerQuery.Timeout) // CLASSIC: timeout
-            .Result;
+        // CLASSIC: a started creature's stats from the directory; one still starting is asked (blocking) as before.
+        var creatureStats = CreatureStatsDirectory.TryGet(ParticipantActor)
+            ?? ParticipantActor
+                .Ask<COMBAT_106_PROTOCOL.MSG_CREATURESTATS>(new COMBAT_106_PROTOCOL.MSG_QUERYCREATURESTATS(), PlayerQuery.Timeout) // CLASSIC: timeout
+                .Result;
 
         // Dynamic symbols start 1-4 for creatures.
         var dynamicSymbol = (DynamicSigilSymbol) (SlotIndex + 1);
@@ -653,6 +711,7 @@ public class CombatDuelSubCircle {
             m_maxPlayerHealth = creatureStats.GameStats.m_baseHitpoints,
             m_myTeamTurn = _duelActor.Duel.m_firstTeamToAct == (asMinion && ClassicRuntime.IsActive ? (int) _minionTeam : 1),
             m_pGameStats = creatureStats.GameStats.GetCombatGameStats(),
+            m_shadowSpellsDisabled = true, // CLASSIC: no shadow-pip meter; see the player's
             m_mobLevel = creatureStats.CombatLevel,
 
             m_minionStartingHealth = asMinion ? creatureStats.GameStats.m_currentHitpoints : 0,

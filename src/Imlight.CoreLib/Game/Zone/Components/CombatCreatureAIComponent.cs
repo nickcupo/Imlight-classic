@@ -236,6 +236,15 @@ internal sealed class CombatCreatureAIComponent(ZoneEntity entity) : ZoneEntityC
         }
     }
 
+    [MessageHandler(typeof(COMBAT_106_PROTOCOL.MSG_REJECTEDROAMINGCREATURE))]
+    private void ReceiveRoamingRejection(COMBAT_106_PROTOCOL.MSG_REJECTEDROAMINGCREATURE message) {
+        // Admission by another sigil wins over a delayed rejection from this movement broadcast.
+        if (_isInDuel || _sentFinalKill || message.ExpectedCreature is null
+            || !ReferenceEquals(message.ExpectedCreature, Entity.ActiveGameObject)) return;
+        _sentFinalKill = true;
+        Entity.DeleteObject();
+    }
+
     [MessageHandler(typeof(COMBAT_106_PROTOCOL.MSG_COMBATDEATH))]
     private void ReceiveCombatDeath(COMBAT_106_PROTOCOL.MSG_COMBATDEATH message) {
         if (_sentFinalKill || !_isInDuel) {
@@ -270,6 +279,33 @@ internal sealed class CombatCreatureAIComponent(ZoneEntity entity) : ZoneEntityC
         _sentFinalKill = true;
         var delay = TimeSpan.FromMilliseconds(COMBAT_DEATH_ANIMATION_IN_MS);
         Timers.StartSingleTimer("FinalKill", new COMBAT_106_PROTOCOL.MSG_COMBATDEATH(), delay);
+    }
+
+    // CLASSIC: the duel ended without this creature's defeat (the wizards lost, fled or dropped for good). It leaves
+    // the duel at full health and goes back to its path, so it can be fought again; a summoned minion is removed.
+    [MessageHandler(typeof(CLASSIC_FEATURES_PROTOCOL.MSG_COMBATRESET))]
+    private void ReceiveCombatReset(CLASSIC_FEATURES_PROTOCOL.MSG_COMBATRESET message) {
+        if (_sentFinalKill) {
+            return;
+        }
+
+        if (_currentSubCircle?.IsSummonedMinion == true || Entity.IsCombatOnlyMinion) {
+            _sentFinalKill = true;
+            Entity.DeleteObject();
+
+            return;
+        }
+
+        _isInDuel = false;
+        _currentDuelComponent = null;
+        _currentSubCircle = null;
+        _roundHand = null;
+        _hateTable.Clear();
+        if (_stats?.Stats is { } stats) {
+            stats.m_currentHitpoints = stats.m_baseHitpoints;
+        }
+
+        _pathMovementComponent?.Resume();
     }
 
     private void DetermineAttitude() {
