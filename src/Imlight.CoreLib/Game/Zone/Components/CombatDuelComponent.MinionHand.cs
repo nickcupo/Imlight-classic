@@ -45,8 +45,8 @@
  * minion's hand is dealt; "Change" in that beat is still the wizard's own.
  *
  * The stock client is told only what it already handles every round:
- * MSG_COMBATHAND (for its own participant), MSG_SHOWCOMBATUI and
- * MSG_SETPLANNINGPHASETIMER. No chat line: a chat
+ * MSG_COMBATPIPS (flag-neutral steps), MSG_COMBATHAND (for its own participant),
+ * MSG_SHOWCOMBATUI and MSG_SETPLANNINGPHASETIMER. No chat line: a chat
  * line under the minion's name froze the client (the name is not a packed
  * name), and MSG_SERVERMESSAGE stacks "!" alerts.
  *
@@ -147,6 +147,7 @@ internal sealed partial class CombatDuelComponent {
             if (message.MoveType == (byte) CombatMoveType.ChangeMind) {
                 stage.PendingTicket = 0;
                 stage.Current = null;
+                RestoreOwnerPips(owner); // the wizard re-picks with their own pips
                 return false;
             }
 
@@ -267,6 +268,7 @@ internal sealed partial class CombatDuelComponent {
 
         // Every minion has its move: show the wizard's own pips again and every chosen card over its caster.
         stage.PendingTicket = 0;
+        RestoreOwnerPips(owner);
         if (CombatResolver.GetQueuedAction(owner) is { } own) {
             SendCombatMoveSelection(owner.ParticipantObject.m_globalID, own.Spell is null ? (byte) CombatMoveType.Pass : (byte) CombatMoveType.Attack,
                 own.Spell, (byte) (own.SelectedTarget?.SlotIndex ?? 0));
@@ -345,9 +347,8 @@ internal sealed partial class CombatDuelComponent {
     /// <summary>
     /// Deals the minion's hand into the wizard's card window and reopens the pick. The deck counter
     /// (GUI_DeckCounter: CARDSREMAINING = DeckCount, CARDSTOTAL = TotalDeckCount) shows the minion's own deck.
-    /// The pip display keeps the wizard's own pips: the stock client plays its "gained a pip" notice whenever a
-    /// participant's pips go up in MSG_COMBATPIPS (ClientDuelManager::MSG_CombatPips), and retail never put a
-    /// minion's pips there. The minion's pips are checked on its pick (ValidateOwnedMinionOrder).
+    /// The window greys the minion's cards by the minion's pips (ShowPipsTo, flag-neutral; see below), and the
+    /// minion's pick is still checked against its own pips (ValidateOwnedMinionOrder).
     /// </summary>
     private void PresentMinionHand(CombatDuelSubCircle owner, CombatDuelSubCircle minion) {
         if (owner.ParticipantActor is null || minion._combatDeck is null) return;
@@ -356,6 +357,8 @@ internal sealed partial class CombatDuelComponent {
             return;
         }
 
+        // First the pips the card window greys by, then the hand (the window evaluates its cards when the hand arrives).
+        ShowPipsTo(owner, MinionPipsForOwnerWindow(owner, minion));
         owner.ParticipantActor.Tell(new DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_COMBATHAND {
             // A creature's deck is endless (each spell 9999 times, so the counter read 65535 of 65535): it shows the
             // number of different cards the minion can be dealt, the same on both sides, as it never runs down.
@@ -384,6 +387,7 @@ internal sealed partial class CombatDuelComponent {
     /// <summary>The wizard is leaving the stage (fled, removed): their minions go back to the AI for this round.</summary>
     private void EndMinionHand(CombatDuelSubCircle owner) {
         _minionHandStages.Remove(owner.ParticipantObject);
+        RestoreOwnerPips(owner);
     }
 
     /// <summary>A minion left mid-planning: move its owner's stage on if it was that minion's turn.</summary>
@@ -401,6 +405,97 @@ internal sealed partial class CombatDuelComponent {
         }
     }
 
-    /// <summary>Planning ended or a new round began: no stage carries over.</summary>
-    private void ResetMinionHand() => _minionHandStages.Clear();
+    /// <summary>
+    /// Planning ended or a new round began: no stage carries over, and every wizard client still showing a minion's
+    /// pips gets its own back (flag-neutral) before the next real pip broadcast, which then changes nothing for it.
+    /// </summary>
+    private void ResetMinionHand() {
+        foreach (var owner in SubCircles.Where(circle => circle is not null && _minionHandShownPips.ContainsKey(circle.ParticipantObject)).ToList()) {
+            RestoreOwnerPips(owner);
+        }
+
+        _minionHandShownPips.Clear();
+        _minionHandStages.Clear();
+    }
+
+    // ---- The minion's pips in the wizard's card window -------------------------------------------------------------
+    //
+    // r806919 facts (Wizard_1_610 client):
+    // * The card window greys a card by CombatParticipant::CanCastSpell (0x14202ae70) on the WIZARD's own participant
+    //   (the planning window's combatant control, CombatPlanningPhaseWindow+0x410 -> +0x760; the log line
+    //   "CanCastSpell ID(<wizard>)"), which reads that participant's m_pipCount (+0x98). The only planning-time
+    //   channel for m_pipCount is MSG_COMBATPIPS.
+    // * ClientDuelManager::MSG_CombatPips (0x1420d6130) diffs each entry against the participant's current pips:
+    //   a generic increase sets +0x288 = gain, +0x28c = 0, +0x290 = 0; a power increase (checked after it) sets
+    //   +0x28c = 1, +0x290 = gain, +0x288 = 0; +0x294 = shadow increased. A message without an increase leaves them.
+    // * The combat-message cinematic code (0x1402d3ad0, "CombatMessages_PipGained"/"_PowerPipGained") shows them at
+    //   the participant's next cinematic event: the generic notice when +0x288 > 1 (or the event itself is a pip
+    //   gain), the power notice when +0x28c is set; then it clears all of them.
+    // So the window shows the minion's pips and the wizard's again through MSG_COMBATPIPS steps whose last increase
+    // is exactly one generic pip with the power count unchanged: that leaves +0x288 = 1, +0x28c = 0, which shows
+    // nothing (the state a stock one-pip round gain leaves), whatever the steps before it did.
+
+    private readonly Dictionary<CoreObject, (byte Generic, byte Power)> _minionHandShownPips = new(ReferenceEqualityComparer.Instance);
+
+    /// <summary>
+    /// The pips the wizard's window greys the minion's cards by. The client counts a power pip as two only for the
+    /// caster's school (here the wizard's); a minion of the wizard's school shows its own pips, any other minion its
+    /// value for its own school as plain pips (power pips counted twice), at most seven (no 2009 card costs more).
+    /// </summary>
+    internal static (byte Generic, byte Power) MinionPipsForOwnerWindow(CombatDuelSubCircle owner, CombatDuelSubCircle minion) {
+        var pips = minion.CombatParticipant.m_pipCount;
+        if (minion.CombatParticipant.m_primaryMagicSchoolID == owner.CombatParticipant.m_primaryMagicSchoolID) {
+            return (pips.m_genericPips, pips.m_powerPips);
+        }
+
+        return ((byte) Math.Min(MAX_SHOWN_PIPS, pips.m_genericPips + 2 * pips.m_powerPips), 0);
+    }
+
+    private const int MAX_SHOWN_PIPS = 7;
+
+    /// <summary>The MSG_COMBATPIPS values that take the wizard's entry from <paramref name="from"/> to <paramref name="to"/> flag-neutrally.</summary>
+    internal static List<(byte Generic, byte Power)> FlagNeutralPipSteps((byte Generic, byte Power) from, (byte Generic, byte Power) to) {
+        var steps = new List<(byte Generic, byte Power)>();
+        if (from == to) return steps; // nothing changes: no message, no flags
+        var below = ((byte) Math.Max(to.Generic - 1, 0), to.Power);
+        if (below != from) steps.Add(below);
+        steps.Add(((byte) (below.Item1 + 1), to.Power)); // the last increase: one generic pip, power unchanged
+        if (to.Generic == 0) steps.Add(to);              // and back down to none (a decrease sets nothing)
+        return steps;
+    }
+
+    private (byte Generic, byte Power) RealPips(CombatDuelSubCircle circle)
+        => (circle.CombatParticipant.m_pipCount.m_genericPips, circle.CombatParticipant.m_pipCount.m_powerPips);
+
+    private void ShowPipsTo(CombatDuelSubCircle owner, (byte Generic, byte Power) target) {
+        if (owner.ParticipantActor is null || owner.CombatParticipant?.m_pipCount is null) return;
+        var shown = _minionHandShownPips.TryGetValue(owner.ParticipantObject, out var s) ? s : RealPips(owner);
+        foreach (var step in FlagNeutralPipSteps(shown, target)) SendOwnerPipsStep(owner, step);
+        if (target == RealPips(owner)) _minionHandShownPips.Remove(owner.ParticipantObject);
+        else _minionHandShownPips[owner.ParticipantObject] = target;
+    }
+
+    private void RestoreOwnerPips(CombatDuelSubCircle owner) {
+        if (owner is null || !_minionHandShownPips.ContainsKey(owner.ParticipantObject)) return;
+        ShowPipsTo(owner, RealPips(owner));
+    }
+
+    /// <summary>MSG_COMBATPIPS for the wizard's client only: every entry real, the wizard's own one <paramref name="own"/>.</summary>
+    private void SendOwnerPipsStep(CombatDuelSubCircle owner, (byte Generic, byte Power) own) {
+        var pips = new CombatPipListObj { m_pipList = [], m_duelID = SigilId };
+        EnactActionOnSubCircles(circle => {
+            if (!circle.AddedToDuel || !circle.IsAlive) return;
+            var mine = ReferenceEquals(circle, owner);
+            pips.m_pipList.Add(new ParticipantPipData {
+                m_acq = 1,
+                m_partID = (GID) circle.ParticipantObject.m_globalID,
+                m_pips = new PipCount {
+                    m_genericPips = mine ? own.Generic : circle.CombatParticipant.m_pipCount.m_genericPips,
+                    m_powerPips = mine ? own.Power : circle.CombatParticipant.m_pipCount.m_powerPips,
+                },
+            });
+        });
+        if (!_serializer.Serialize(pips, _combatParticipantStatFlags, out var buffer)) return;
+        owner.ParticipantActor.Tell(new DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_COMBATPIPS { DuelID = SigilId, PipData = buffer });
+    }
 }
