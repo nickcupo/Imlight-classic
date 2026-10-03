@@ -653,6 +653,9 @@ public class CombatDuelSubCircle {
             m_mobLevel = ParticipantGameStats.Level,
             m_myTeamTurn = _duelActor.Duel.m_firstTeamToAct == (int) (PvpTeam ?? CombatTeam.Player),
             m_pGameStats = combatStats,
+            // CLASSIC: no shadow-pip meter (Shadow magic is 2012). The client's combatant control shows it only when
+            // m_pGameStats.m_shadowPipMax > 0 and this is false (r806919 0x14078bab3 -> 0x142035a30).
+            m_shadowSpellsDisabled = true,
             m_pPlayDeck = new PlayDeck(),
             m_subcircle = SlotIndex,
             m_dynamicSymbol = dynamicSymbol,
@@ -708,6 +711,7 @@ public class CombatDuelSubCircle {
             m_maxPlayerHealth = creatureStats.GameStats.m_baseHitpoints,
             m_myTeamTurn = _duelActor.Duel.m_firstTeamToAct == (asMinion && ClassicRuntime.IsActive ? (int) _minionTeam : 1),
             m_pGameStats = creatureStats.GameStats.GetCombatGameStats(),
+            m_shadowSpellsDisabled = true, // CLASSIC: no shadow-pip meter; see the player's
             m_mobLevel = creatureStats.CombatLevel,
 
             m_minionStartingHealth = asMinion ? creatureStats.GameStats.m_currentHitpoints : 0,

@@ -394,7 +394,8 @@ public sealed class OwnedMinionDuelTests : IDisposable {
         var serializer = new ObjectSerializer(Versionable: false, Behaviors: SerializerFlags.None);
         Assert.True(serializer.Deserialize<Hand>(hand.HandData, (PropertyFlags) 5, out var decoded));
         Assert.Equal(Tid, Assert.IsType<Hand>(decoded).m_spellList.Single().m_templateID);
-        Assert.Single(sent.OfType<Imcodec.MessageLayer.Generated.DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_COMBATPIPS>());
+        // The wizard's own pips stay: the stock client announces any pip increase as a gained pip.
+        Assert.Empty(sent.OfType<Imcodec.MessageLayer.Generated.DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_COMBATPIPS>());
         Assert.Single(sent.OfType<Imcodec.MessageLayer.Generated.DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_SHOWCOMBATUI>());
         Assert.Single(sent.OfType<Imcodec.MessageLayer.Generated.DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_SETPLANNINGPHASETIMER>());
         // No chat cue: a chat line under the creature's plain-text name froze the client.
@@ -506,6 +507,38 @@ public sealed class OwnedMinionDuelTests : IDisposable {
         var stages = (System.Collections.IDictionary) typeof(CombatDuelComponent).GetField("_minionHandStages", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(_duel)!;
         var stage = stages[_owner.ParticipantObject];
         return stage is null ? 0 : (int) stage.GetType().GetField("PendingTicket", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(stage)!;
+    }
+
+    [Fact]
+    public void TheMinionsHandShowsTheMinionsDeckCountsAndItsDiscardWorks() {
+        _minion._combatDeck = new CombatDeck([new CombatDeckSpellData { TemplateId = Tid, Quantity = 5 }], [], 7);
+        _minion._combatDeck.AddCardToHand(_spell);
+        var second = new Spell { m_templateID = Tid, m_magicSchoolID = (uint) MagicSchool.Myth, m_pipCost = new SpellRank { m_spellRank = 2 } };
+        _minion._combatDeck.AddCardToHand(second);
+        var inbox = HandOn();
+        OwnerMove(CombatMoveType.Pass);
+        var hand = Assert.Single(Drain(inbox, 4).OfType<Imcodec.MessageLayer.Generated.DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_COMBATHAND>());
+        Assert.Equal(5, hand.DeckCount);
+        Assert.Equal(5, hand.TotalDeckCount);
+        Assert.Equal(0, hand.TreasureCardCount);
+
+        OwnerMove(CombatMoveType.Discard, card: 0);
+        var after = Assert.Single(Drain(inbox, 1).OfType<Imcodec.MessageLayer.Generated.DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_COMBATHAND>());
+        Assert.Equal(_owner.ParticipantObject.m_globalID.Full, (ulong) after.ParticipantID);
+        Assert.Equal(new[] { second }, _minion._combatDeck.LastGivenHand);
+        Assert.True(StageActive()); // still the minion's pick
+    }
+
+    [Fact]
+    public void AnEndlessCreatureDeckShowsItsDifferentCardsOnTheCounter() {
+        _minion._combatDeck = new CombatDeck([new CombatDeckSpellData { TemplateId = Tid, Quantity = 9999 },
+            new CombatDeckSpellData { TemplateId = Tid - 1, Quantity = 9999 }], [], 7);
+        _minion._combatDeck.AddCardToHand(_spell);
+        var inbox = HandOn();
+        OwnerMove(CombatMoveType.Pass);
+        var hand = Assert.Single(Drain(inbox, 4).OfType<Imcodec.MessageLayer.Generated.DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_COMBATHAND>());
+        Assert.Equal(2, hand.DeckCount);
+        Assert.Equal(2, hand.TotalDeckCount);
     }
 
     [Fact]
