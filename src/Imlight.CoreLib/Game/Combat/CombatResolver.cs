@@ -588,7 +588,9 @@ public class CombatResolver(Duel duel, CombatDuelSubCircle[] actorSubCircles) {
                                 EnchantmentID = 0,
                                 DeckID = deckSlot.ItemId.Value,
                                 Success = 1,
-                                Destroy = 0
+                                // CLASSIC: Destroy=1. With 0 the client puts the spent card back in its book (stock
+                                // WizardClientModules::MSG_RemoveTreasureSpellFromDeck), a copy the server no longer has.
+                                Destroy = 1
                             }, ActorRefs.NoSender);
                     }
                 }
