@@ -357,8 +357,10 @@ internal sealed partial class CombatDuelComponent {
         }
 
         owner.ParticipantActor.Tell(new DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_COMBATHAND {
-            DeckCount = DeckCounter(minion.AvailableSpells),
-            TotalDeckCount = DeckCounter(minion.TotalSpells),
+            // A creature's deck is endless (each spell 9999 times, so the counter read 65535 of 65535): it shows the
+            // number of different cards the minion can be dealt, the same on both sides, as it never runs down.
+            DeckCount = minion._combatDeck.IsEndless ? DeckCounter((uint) minion._combatDeck.DistinctCardCount) : DeckCounter(minion.AvailableSpells),
+            TotalDeckCount = minion._combatDeck.IsEndless ? DeckCounter((uint) minion._combatDeck.DistinctCardCount) : DeckCounter(minion.TotalSpells),
             TreasureCardCount = 0, // a minion has no treasure cards
             ParticipantID = owner.ParticipantObject.m_globalID,
             HandData = hand,

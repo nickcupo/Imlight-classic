@@ -530,6 +530,18 @@ public sealed class OwnedMinionDuelTests : IDisposable {
     }
 
     [Fact]
+    public void AnEndlessCreatureDeckShowsItsDifferentCardsOnTheCounter() {
+        _minion._combatDeck = new CombatDeck([new CombatDeckSpellData { TemplateId = Tid, Quantity = 9999 },
+            new CombatDeckSpellData { TemplateId = Tid - 1, Quantity = 9999 }], [], 7);
+        _minion._combatDeck.AddCardToHand(_spell);
+        var inbox = HandOn();
+        OwnerMove(CombatMoveType.Pass);
+        var hand = Assert.Single(Drain(inbox, 4).OfType<Imcodec.MessageLayer.Generated.DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_COMBATHAND>());
+        Assert.Equal(2, hand.DeckCount);
+        Assert.Equal(2, hand.TotalDeckCount);
+    }
+
+    [Fact]
     public void ATreasureCardDrawWhileTheMinionsHandShowsIsRefused() {
         var inbox = HandOn();
         OwnerMove(CombatMoveType.Pass);
