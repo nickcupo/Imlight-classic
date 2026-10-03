@@ -31,6 +31,8 @@
  *
  * Replies are deterministic: the template is picked from the line, the
  * speaker and a turn counter, never from a clock or a random generator.
+ * The lines live in AmbientLines, which also skips any template the
+ * listeners heard in their last twenty (2026-10-03).
  * Every reply passes IsClean (2009 tone: short, plain words, no links,
  * no numbers beyond levels) and AmbientChatLimiter keeps the wizard from
  * spamming.
@@ -72,10 +74,15 @@ public sealed record FriendMemory(ulong CharId, string Name, string? LastZone = 
 /// <param name="Friend">What it remembers of the speaker, when they are friends.</param>
 /// <param name="WhereIs">Server data lookup: a place or character name to where it is, or null.</param>
 /// <param name="Now">The current time (UTC), for "last time" remarks.</param>
+/// <param name="ZoneKey">The zone's internal name (WizardCity/WC_Hub), for zone tips.</param>
+/// <param name="Hour">The server's local hour (0..23) for "good morning", or -1.</param>
+/// <param name="History">What the listeners heard lately (AmbientLines), or null for no memory.</param>
+/// <param name="Audience">The players who will hear the line.</param>
 public sealed record ChatContext(string MyName, AmbientSchool School, int Level, string ZoneName,
                                  string? SpeakerName = null, string? SpeakerZone = null, string? SpeakerQuest = null,
                                  FriendMemory? Friend = null, Func<string, string?>? WhereIs = null,
-                                 DateTime Now = default) {
+                                 DateTime Now = default, string? ZoneKey = null, int Hour = -1,
+                                 LineHistory? History = null, IReadOnlyList<ulong>? Audience = null) {
 
     public string MyFirstName => MyName.Split(' ', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? MyName;
 
@@ -92,35 +99,27 @@ public static class AmbientChatBrain {
 
     private const RegexOptions Options = RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled;
 
-    private static readonly string[] s_greetings = ["hi {0}!", "hey {0}", "hello {0}!", "hiya {0}", "oh hi {0}!"];
-    private static readonly string[] s_friendGreetings = ["{0}! good to see you again", "hey {0}! :)", "hi {0}! whats up?"];
-    private static readonly string[] s_thanks = ["np!", "no problem", "anytime!", "you're welcome"];
-    private static readonly string[] s_bye = ["bye!", "cya later", "see you around!", "bye {0}!"];
-    private static readonly string[] s_fallbackDirect = ["lol", "cool", "hmm idk", "oh nice", "haha", "yeah", "i see"];
-    private static readonly string[] s_howAreYou = ["good! just questing", "pretty good, you?", "great! leveling up", "tired lol, been fighting all day"];
-
     private static readonly Rule[] s_rules = [
         new("level", new(@"\b(what|wat|wut)\s*(level|lvl|lv)\b|\b(level|lvl)\s*\?|\bhow high\b|\bur level\b|\byour level\b", Options),
-            (_, c, t) => Pick(["i'm level {1}", "level {1}!", "{1}, almost {2}"], t, c.SpeakerFirstName ?? "", c.Level, c.Level + 1)),
+            (_, c, t) => AmbientLines.Choose(AmbientLines.Level, t, c)),
         new("school", new(@"\b(what|wat|which)\s+school\b|\bur school\b|\byour school\b", Options),
-            (_, c, t) => Pick(["{1}! best school", "i'm a {1} wizard", "{1} :)"], t, "", SchoolName(c.School))),
+            (_, c, t) => AmbientLines.Choose(AmbientLines.School, t, c)),
         new("duel", new(@"\b(duel|pvp|fight me|1v1|arena)\b", Options),
-            (_, c, t) => Pick(["maybe later, i'm questing", "sure, ask me for a practice match at the arena", "lol i'd lose", "after this quest!"], t)),
+            (_, c, t) => AmbientLines.Choose(AmbientLines.Duel, t, c)),
         new("where", new(@"\bwhere\s+(is|are|r|can i find|do i find)\s+(?:the\s+)?(?<what>[a-z' ]{3,40})", Options),
             (m, c, t) => WhereReply(m.Groups["what"].Value, c, t)),
         new("help", new(@"\b(can|could|will)\s+(you|u)\s+help\b|\bneed\s+help\b|\bhelp\s+me\b|\bhelp\s+pls\b|\bhelp\s+plz\b", Options),
-            (_, c, t) => Pick(["sure, where are you?", "i can help! start a fight and i'll ask to join", "ok! what do you need?"], t)),
+            (_, c, t) => AmbientLines.Choose(AmbientLines.Help, t, c)),
         new("friend", new(@"\b(friend me|add me|be my friend|be friends|friend request)\b", Options),
-            (_, c, t) => Pick(["sure! send me a request", "ok! add me :)", "yeah sure"], t)),
+            (_, c, t) => AmbientLines.Choose(AmbientLines.Friend, t, c)),
         new("thanks", new(@"\b(thanks|thank you|thx|ty|tyvm)\b", Options),
-            (_, c, t) => Pick(s_thanks, t, c.SpeakerFirstName ?? "")),
+            (_, c, t) => AmbientLines.Choose(AmbientLines.Thanks, t, c)),
         new("bye", new(@"\b(bye|cya|see ya|gtg|got to go|g2g|later)\b", Options),
-            (_, c, t) => Pick(s_bye, t, c.SpeakerFirstName ?? "")),
+            (_, c, t) => AmbientLines.Choose(AmbientLines.Bye, t, c)),
         new("how", new(@"\bhow\s+(are|r)\s+(you|u)\b|\bhow'?s it going\b|\bsup\b|\bwhat'?s up\b", Options),
-            (_, c, t) => Pick(s_howAreYou, t)),
+            (_, c, t) => AmbientLines.Choose(AmbientLines.HowAreYou, t, c)),
         new("quest", new(@"\b(what|which)\s+quest\b|\bwhat are you doing\b|\bwhat r u doing\b|\bwhatcha doing\b", Options),
-            (_, c, t) => Pick(["just {1} stuff", "helping out in {2}", "hunting in {2}", "working on my {1} spells"], t, "",
-                SchoolName(c.School).ToLowerInvariant(), c.ZoneName)),
+            (_, c, t) => AmbientLines.Choose(AmbientLines.Doing, t, c)),
         new("greet", new(@"^\s*(hi|hello|hey|hiya|yo|heya|howdy|greetings)\b", Options),
             (_, c, t) => Greeting(c, t)),
     ];
@@ -151,23 +150,19 @@ public static class AmbientChatBrain {
             }
         }
 
-        var fallback = Pick(s_fallbackDirect, seed);
-        return IsClean(fallback) ? fallback : null;
+        return AmbientLines.Choose(AmbientLines.Fallback, seed, context);
     }
 
     /// <summary>
-    /// A line an idle wizard says on its own now and then: about where it is, its friend nearby, or nothing.
+    /// A line an idle wizard says on its own now and then (AmbientLines.Idle), or null when the listeners heard every
+    /// fitting line lately.
     /// </summary>
-    public static string? Idle(ChatContext context, int turn) {
-        string[] lines = [
-            "anyone want to quest?", "lf group", "this place is busy today", "need anything from the shops?",
-            "almost level {1}!", "{2} is so pretty", "anyone seen my pet?", "brb", "hi everyone",
-            "{3} spells are the best", "lol", "where's a good place to level?",
-        ];
-        var line = Pick(lines, turn, "", context.Level + 1, context.ZoneName, SchoolName(context.School));
+    public static string? Idle(ChatContext context, int turn)
+        => AmbientLines.Choose(AmbientLines.Idle(context), turn, context, quietIfHeard: true);
 
-        return IsClean(line) ? line : null;
-    }
+    /// <summary>What a wizard says after a battle won with a player.</summary>
+    public static string? AfterWin(ChatContext context, int turn)
+        => AmbientLines.Choose(AmbientLines.AfterWin, turn, context, quietIfHeard: true);
 
     /// <summary>A greeting for a friend who just showed up, now and then recalling last time.</summary>
     public static string? GreetFriend(ChatContext context, int turn) {
@@ -177,9 +172,7 @@ public static class AmbientChatBrain {
 
         var first = friend.Name.Split(' ', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? friend.Name;
         var recall = Recall(friend, context, turn);
-        var line = recall ?? Pick(s_friendGreetings, turn, first);
-
-        return IsClean(line) ? line : null;
+        return recall ?? AmbientLines.Choose(AmbientLines.FriendGreetings, turn, context);
     }
 
     /// <summary>A remark on the friend's zone or quest, as a buddy would make on seeing them.</summary>
@@ -189,11 +182,13 @@ public static class AmbientChatBrain {
         }
 
         if (!string.IsNullOrEmpty(context.SpeakerQuest) && turn % 2 == 0) {
-            return Clean(Pick(["how's {1} going?", "still on {1}?", "need help with {1}?"], turn, "", context.SpeakerQuest));
+            return AmbientLines.Choose(["how's {quest} going?", "still on {quest}?", "need help with {quest}?", "{quest} is a fun one",
+                "almost done with {quest}?"], turn, context, new Dictionary<string, string> { ["quest"] = context.SpeakerQuest });
         }
 
         if (!string.IsNullOrEmpty(context.SpeakerZone)) {
-            return Clean(Pick(["you're in {1}? cool", "how is {1}?", "i'll be in {1} later"], turn, "", context.SpeakerZone));
+            return AmbientLines.Choose(["you're in {where}? cool", "how is {where}?", "i'll be in {where} later", "ooh, {where}!",
+                "say hi to {where} for me lol"], turn, context, new Dictionary<string, string> { ["where"] = context.SpeakerZone });
         }
 
         return null;
@@ -201,13 +196,14 @@ public static class AmbientChatBrain {
 
     /// <summary>"Need a hand?" and friends: the help offer before joining a battle.</summary>
     public static string HelpOffer(ChatContext context, int turn)
-        => Pick(context.Friend is not null
-            ? ["need a hand {0}?", "{0}, want help?", "want me to join {0}?"]
-            : ["need a hand?", "want some help?", "need help with that fight?"], turn, context.SpeakerFirstName ?? "");
+        => (context.Friend is not null ? AmbientLines.Choose(AmbientLines.HelpOfferFriend, turn, context) : null)
+           ?? AmbientLines.Choose(AmbientLines.HelpOffer, turn, context) ?? "need a hand?";
 
     /// <summary>The reply to a yes (joining) or no.</summary>
-    public static string HelpAnswered(bool yes, int turn)
-        => yes ? Pick(["on my way!", "coming!", "ok!"], turn) : Pick(["ok, good luck!", "np, have fun", "ok!"], turn);
+    public static string HelpAnswered(bool yes, int turn, ChatContext? context = null) {
+        context ??= new ChatContext("", AmbientSchool.Balance, 1, "");
+        return AmbientLines.Choose(yes ? AmbientLines.Joining : AmbientLines.NotJoining, turn, context) ?? "ok!";
+    }
 
     /// <summary>
     /// True for a line fit to send: short, letters, digits, spaces and plain punctuation only, no links, no long digit
@@ -262,29 +258,17 @@ public static class AmbientChatBrain {
         }
 
         if (context.WhereIs?.Invoke(subject) is { Length: > 0 } where) {
-            return Clean(Pick(["{1} is in {2}", "try {2}", "{2}, i think"], turn, "", Title(subject), where));
+            return AmbientLines.Choose(AmbientLines.WhereKnown, turn, context,
+                new Dictionary<string, string> { ["what"] = Title(subject), ["where"] = where });
         }
 
-        return Clean(Pick(["hmm not sure, ask an npc", "idk, sorry", "i forget where that is"], turn));
+        return AmbientLines.Choose(AmbientLines.WhereUnknown, turn, context);
     }
 
-    private static string? Greeting(ChatContext context, int turn) {
-        var who = context.SpeakerFirstName ?? "";
-        if (context.Friend is not null) {
-            return GreetFriend(context, turn);
-        }
-
-        return Clean(Pick(s_greetings, turn, who).Replace("  ", " ").Replace(" !", "!"));
-    }
+    private static string? Greeting(ChatContext context, int turn)
+        => context.Friend is not null ? GreetFriend(context, turn) : AmbientLines.Choose(AmbientLines.Greetings, turn, context);
 
     private static string? Clean(string line) => IsClean(line) ? line : null;
-
-    private static string Pick(IReadOnlyList<string> templates, int turn, params object[] args) {
-        var template = templates[(int) ((uint) turn % (uint) templates.Count)];
-        var text = args.Length == 0 ? template : string.Format(System.Globalization.CultureInfo.InvariantCulture, template, args);
-
-        return Regex.Replace(text, @"\s+([!?,])", "$1").Replace("  ", " ").Trim();
-    }
 
     private static string Title(string text)
         => string.Join(' ', text.Split(' ', StringSplitOptions.RemoveEmptyEntries)

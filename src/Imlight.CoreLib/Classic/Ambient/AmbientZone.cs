@@ -94,6 +94,13 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
     private readonly CoreObjectSerializer _serializer = new(versionable: false, behaviors: SerializerFlags.None);
     private readonly Dictionary<ulong, AmbientDuelNotice> _duels = [];
     private readonly HashSet<ulong> _offeredDuels = [];
+
+    // CLASSIC (2026-10-03): what the zone's players heard lately (no line twice in their last twenty), who is here to
+    // hear, and when the zone may next talk unprompted: one idle line every few minutes for the whole zone, so most
+    // passers-by hear nothing.
+    private readonly LineHistory _heard = new();
+    private ulong[] _audience = [];
+    private DateTime _nextZoneLine;
     private IActorRef _zoneActor;
     private List<Spot> _spots;
     private List<Vector3> _mobNodes;
@@ -285,7 +292,8 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
         var now = DateTime.UtcNow;
         if (now >= _nextCensus) {
             _nextCensus = now.AddSeconds(5);
-            _realPlayers = OnlinePlayerCollection.GetPlayersInZone(_zone).Count(p => !AmbientWizards.IsAmbientChar(p.CharacterId));
+            _audience = [.. OnlinePlayerCollection.GetPlayersInZone(_zone).Select(p => p.CharacterId).Where(id => !AmbientWizards.IsAmbientChar(id))];
+            _realPlayers = _audience.Length;
             foreach (var wizard in _wizards) {
                 wizard.Offers.Expire(now);
             }
@@ -332,7 +340,10 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
             }
             else if (now >= wizard.NextIdleLine && AmbientWizards.Settings.Chat) {
                 wizard.NextIdleLine = now.AddSeconds(IdleGap(wizard));
-                if (wizard.Limiter.TryTake(now) && AmbientChatBrain.Idle(ChatFor(wizard, 0), wizard.Turn++ + wizard.Identity.Seed) is { } line) {
+                if (now >= _nextZoneLine && wizard.Activity is AmbientActivity.Idle or AmbientActivity.Walking
+                    && wizard.Limiter.TryTake(now)
+                    && AmbientChatBrain.Idle(ChatFor(wizard, 0), wizard.Turn++ + wizard.Identity.Seed) is { } line) {
+                    _nextZoneLine = now.AddSeconds(180 + _rng.Next(240));
                     AmbientChat.Say(wizard, line);
                 }
             }
@@ -348,9 +359,9 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
     }
 
     private double IdleGap(AmbientWizard wizard) => wizard.Identity.Temper switch {
-        AmbientTemper.Chatty => 60 + _rng.Next(60),
-        AmbientTemper.Friendly => 120 + _rng.Next(120),
-        _ => 300 + _rng.Next(300),
+        AmbientTemper.Chatty => 240 + _rng.Next(240),
+        AmbientTemper.Friendly => 480 + _rng.Next(480),
+        _ => 900 + _rng.Next(900),
     };
 
     private void Step(AmbientWizard wizard, List<IMessage> batch) {
@@ -693,7 +704,9 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
         wizard.Activity = AmbientActivity.Idle;
         wizard.Until = DateTime.UtcNow.AddSeconds(6 + _rng.Next(10));
         if (won && notice is not null && AmbientWizards.Settings.Chat && wizard.Limiter.TryTake(DateTime.UtcNow)) {
-            AmbientChat.Say(wizard, (wizard.Turn++ % 3) switch { 0 => "gg!", 1 => "nice one", _ => "that was fun" });
+            if (AmbientChatBrain.AfterWin(ChatFor(wizard, 0), wizard.Turn++) is { } line) {
+                AmbientChat.Say(wizard, line);
+            }
         }
     }
 
@@ -779,7 +792,7 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
             return;
         }
 
-        Say(wizard, player, AmbientChatBrain.HelpAnswered(true, wizard.Turn++));
+        Say(wizard, player, AmbientChatBrain.HelpAnswered(true, wizard.Turn++, ChatFor(wizard, player)));
         AmbientWizards.PermitJoin(wizard.Endpoint, notice.SigilId);
         wizard.DuelSigil = notice.SigilId;
         WalkTo(wizard, notice.Location, AmbientActivity.Helping);
@@ -791,7 +804,9 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
     private ChatContext ChatFor(AmbientWizard wizard, ulong speaker, (string Name, string Zone, string Quest) facts = default)
         => new(wizard.Name, wizard.Identity.School, wizard.Wizard.MagicSchoolBehavior.Level,
             AmbientKnowledge.ZoneName(_zone) ?? _zone, facts.Name, facts.Zone, facts.Quest,
-            speaker == 0 ? null : wizard.FriendOf(speaker), AmbientKnowledge.WhereIs, DateTime.UtcNow);
+            speaker == 0 ? null : wizard.FriendOf(speaker), AmbientKnowledge.WhereIs, DateTime.UtcNow,
+            ZoneKey: _zone, Hour: DateTime.Now.Hour, History: _heard,
+            Audience: speaker == 0 || _audience.Contains(speaker) ? _audience : [.. _audience, speaker]);
 
     private void Heard(AmbientWizard wizard, ulong sourceGid, byte[] sourceName, string text, bool whisper, bool menuChat = false) {
         if (!Wizard.TryGetCharacterId(sourceGid, out var speaker) || AmbientWizards.IsAmbientChar(speaker) || !wizard.Present) {
@@ -806,7 +821,7 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
         }
 
         if (answer.Kind == HelpAnswerKind.No) {
-            Say(wizard, speaker, AmbientChatBrain.HelpAnswered(false, wizard.Turn++));
+            Say(wizard, speaker, AmbientChatBrain.HelpAnswered(false, wizard.Turn++, ChatFor(wizard, speaker)));
             return;
         }
 
