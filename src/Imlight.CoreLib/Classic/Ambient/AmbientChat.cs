@@ -50,6 +50,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using Akka.Actor;
 using Imcodec.MessageLayer.Generated;
+using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
 using Imlight.CoreLib.Shared.Resources;
 using Imlight.CoreLib.Shared.Utilities;
@@ -266,3 +267,58 @@ internal static class AmbientKnowledge {
         => Regex.Replace((text ?? "").ToLowerInvariant().Replace("the ", ""), @"[^a-z' ]", "").Trim();
 
 }
+
+/// <summary>
+/// CLASSIC (2026-10-03): the text of a menu (quick) chat phrase by its chat id, from the client's own menu
+/// (Root.wad:QuickChat.xml, QuickChatEntry m_chatID / m_text / m_label) with the words from the QuickChat locale
+/// table. Players often answer an ambient wizard's "need a hand?" with the menu's "Yes!", which reaches it as
+/// MSG_RADIALQUICKCHAT (or MSG_DIRECTEDQUICKCHAT) with only that id.
+/// </summary>
+internal static class AmbientQuickChat {
+
+    private static Dictionary<uint, string> s_text;
+
+    /// <summary>The English phrase for a menu chat id, or null.</summary>
+    internal static string TextOf(uint chatId) {
+        var table = s_text ??= Load();
+        return table.TryGetValue(chatId, out var text) ? text : null;
+    }
+
+    private static Dictionary<uint, string> Load() {
+        var table = new Dictionary<uint, string>();
+        try {
+            var root = RootArchiveLoader.GetFile<QuickChatEntry>("QuickChat.xml");
+            Walk(root, table);
+            Logger.Information("Ambient wizards read {Count} menu chat phrases.", Logger.Args(table.Count));
+        }
+        catch (Exception ex) {
+            Logger.Warning("Ambient wizards could not read the menu chat phrases: {Error}", Logger.Args(ex.Message));
+        }
+
+        return table;
+    }
+
+    private static void Walk(QuickChatEntry entry, Dictionary<uint, string> table) {
+        if (entry is null) {
+            return;
+        }
+
+        if (entry.m_chatID != 0) {
+            var key = entry.m_text.ToString() is { Length: > 0 } text ? text : entry.m_label.ToString();
+            var english = Locale.GetEnglishName("QuickChat", key);
+            if (string.IsNullOrEmpty(english)) {
+                english = Locale.GetEnglishName(key);
+            }
+
+            if (!string.IsNullOrWhiteSpace(english)) {
+                table.TryAdd(entry.m_chatID, english.Trim());
+            }
+        }
+
+        foreach (var child in entry.m_childEntries ?? []) {
+            Walk(child, table);
+        }
+    }
+
+}
+

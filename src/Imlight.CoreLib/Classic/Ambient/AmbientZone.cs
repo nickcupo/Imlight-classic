@@ -574,6 +574,12 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
             case GAME_5_PROTOCOL.MSG_RADIALCHAT say:
                 Heard(wizard, say.SourceID, (byte[]) say.SourceName, AmbientChat.Text((byte[]) say.Message), whisper: false);
                 break;
+            case GAME_5_PROTOCOL.MSG_RADIALQUICKCHAT menu when AmbientQuickChat.TextOf(menu.MessageID) is { } phrase:
+                Heard(wizard, menu.SourceID, (byte[]) menu.SourceName, phrase, whisper: false, menuChat: true);
+                break;
+            case GAME_5_PROTOCOL.MSG_DIRECTEDQUICKCHAT menu when AmbientQuickChat.TextOf(menu.MessageID) is { } phrase:
+                Heard(wizard, Wizard.GetGameObjectId(menu.SourceID), (byte[]) menu.SourceName, phrase, whisper: true, menuChat: true);
+                break;
             case GAME_5_PROTOCOL.MSG_DIRECTEDCHAT text:
                 Heard(wizard, Wizard.GetGameObjectId(text.SourceID), (byte[]) text.SourceName, (string) text.Message ?? "", whisper: true);
                 break;
@@ -787,7 +793,7 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
             AmbientKnowledge.ZoneName(_zone) ?? _zone, facts.Name, facts.Zone, facts.Quest,
             speaker == 0 ? null : wizard.FriendOf(speaker), AmbientKnowledge.WhereIs, DateTime.UtcNow);
 
-    private void Heard(AmbientWizard wizard, ulong sourceGid, byte[] sourceName, string text, bool whisper) {
+    private void Heard(AmbientWizard wizard, ulong sourceGid, byte[] sourceName, string text, bool whisper, bool menuChat = false) {
         if (!Wizard.TryGetCharacterId(sourceGid, out var speaker) || AmbientWizards.IsAmbientChar(speaker) || !wizard.Present) {
             return;
         }
@@ -804,7 +810,8 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
             return;
         }
 
-        if (!AmbientWizards.Settings.Chat || !wizard.Limiter.TryTake(now, speaker)) {
+        // A menu phrase answers an offer (above) but is not talk to reply to.
+        if (menuChat || !AmbientWizards.Settings.Chat || !wizard.Limiter.TryTake(now, speaker)) {
             return;
         }
 

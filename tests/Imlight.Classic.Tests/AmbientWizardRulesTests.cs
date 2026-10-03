@@ -239,6 +239,11 @@ public sealed class AmbientWizardRulesTests {
     [InlineData("no", HelpAnswerKind.No)]
     [InlineData("nah im good", HelpAnswerKind.No)]
     [InlineData("i got it", HelpAnswerKind.No)]
+    [InlineData("Yes!", HelpAnswerKind.Yes)]
+    [InlineData("Okay", HelpAnswerKind.Yes)]
+    [InlineData("Help!", HelpAnswerKind.Yes)]
+    [InlineData("Please do not join this duel.", HelpAnswerKind.No)]
+    [InlineData("No thanks!", HelpAnswerKind.No)]
     [InlineData("where is the bazaar", HelpAnswerKind.None)]
     [InlineData("", HelpAnswerKind.None)]
     public void AnswersAreReadCaseInsensitively(string text, HelpAnswerKind kind) => Assert.Equal(kind, HelpOffers.Classify(text));
