@@ -630,6 +630,19 @@ public sealed class OwnedMinionDuelTests : IDisposable {
     }
 
     [Fact]
+    public void ANewRoundWithEmptyCirclesResetsTheMinionHandWithoutThrowing() {
+        // Rig mp1: an empty circle's null participant object as a dictionary key stopped every duel's MSG_NEWROUND.
+        Assert.Contains(_duel.SubCircles, circle => circle is not null && circle.ParticipantObject is null);
+        _owner.CombatParticipant.m_pipCount = new PipCount { m_genericPips = 1, m_powerPips = 0 };
+        _minion.CombatParticipant.m_pipCount = new PipCount { m_genericPips = 3, m_powerPips = 0 };
+        var inbox = HandOn();
+        OwnerMove(CombatMoveType.Pass); // the minion's pips are now shown
+        Drain(inbox, 5);
+        typeof(CombatDuelComponent).GetMethod("ResetMinionHand", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(_duel, null);
+        Assert.False(StageActive());
+    }
+
+    [Fact]
     public void AMinionOfAnotherSchoolShowsItsSchoolValueAsPlainPips() {
         _minion.CombatParticipant.m_primaryMagicSchoolID = (int) MagicSchool.Death;
         _minion.CombatParticipant.m_pipCount = new PipCount { m_genericPips = 1, m_powerPips = 2 };

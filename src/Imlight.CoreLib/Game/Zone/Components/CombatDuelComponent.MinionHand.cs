@@ -410,7 +410,8 @@ internal sealed partial class CombatDuelComponent {
     /// pips gets its own back (flag-neutral) before the next real pip broadcast, which then changes nothing for it.
     /// </summary>
     private void ResetMinionHand() {
-        foreach (var owner in SubCircles.Where(circle => circle is not null && _minionHandShownPips.ContainsKey(circle.ParticipantObject)).ToList()) {
+        // An empty circle has no participant object (a null key threw here and stopped every duel's new round).
+        foreach (var owner in SubCircles.Where(circle => circle?.ParticipantObject is { } who && _minionHandShownPips.ContainsKey(who)).ToList()) {
             RestoreOwnerPips(owner);
         }
 
@@ -476,7 +477,7 @@ internal sealed partial class CombatDuelComponent {
     }
 
     private void RestoreOwnerPips(CombatDuelSubCircle owner) {
-        if (owner is null || !_minionHandShownPips.ContainsKey(owner.ParticipantObject)) return;
+        if (owner?.ParticipantObject is not { } who || !_minionHandShownPips.ContainsKey(who)) return;
         ShowPipsTo(owner, RealPips(owner));
     }
 
