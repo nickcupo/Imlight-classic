@@ -167,7 +167,11 @@ internal sealed partial class InteractDungeonSigilComponent(ZoneEntity entity)
     // CLASSIC: the sigil's own m_requirements (a MinigameSigilInfo list: the quest that opens its dungeon), read the
     // KingsIsle way when the classic quest rules are on. Stock Imlight never checked them.
     private bool MeetsRequirements(IActorRef playerActor, CoreObject playerObj, Wizard wizard) {
-        var requirements = SigilInfo?.m_requirements;
+        // CLASSIC: a classic travel entry that carries requirements replaces the sigil's own (a hand decision with
+        // 2009 evidence: the 2014 River Village's ToTower2Part2 asks for a quest Woo Ping gives inside that tower).
+        var travel = TravelRequirements();
+        var requirements = Imlight.Classic.Travel.SigilRequirements.Choose(SigilInfo?.m_requirements, travel,
+            travel?.m_requirements is { Count: > 0 });
         if (!ClassicQuestEngine.IsActive || requirements?.m_requirements is not { Count: > 0 }) {
             return true;
         }
@@ -179,6 +183,17 @@ internal sealed partial class InteractDungeonSigilComponent(ZoneEntity entity)
         return RequirementDispatcher.EvaluateRequirements(
             requirements: requirements,
             context: new QuestRequirementContext(requirements, playerActor, playerObj, wizard));
+    }
+
+    // CLASSIC: the requirements the zone's travel entry for this sigil carries, or null.
+    private RequirementList TravelRequirements() {
+        if (!ClassicQuestEngine.IsActive || SigilInfo is null || Entity.Zone?.ZonePath is not { Length: > 0 } zonePath) {
+            return null;
+        }
+
+        var teleport = MatchEntranceTeleport(SigilInfo.m_zoneTag2.ToString() ?? "", ZoneDataCollection.GetZoneData(zonePath));
+
+        return teleport?.Teleport?.m_requirements as RequirementList;
     }
 
     private sealed record ResolvedSigil(string DestinationZone, string DestinationLoc);
