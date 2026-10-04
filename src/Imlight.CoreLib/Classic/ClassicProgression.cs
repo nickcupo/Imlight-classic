@@ -57,6 +57,7 @@ namespace Imlight.CoreLib.Classic;
 public static class ClassicProgression {
 
     private static volatile XpTable? s_xpTable;
+    private static volatile HealthTable? s_healthTable; // CLASSIC
     private static volatile MobRewardRules? s_mobRewards;
     private static volatile BadgeRules? s_badges;
     private static volatile QuestCardRewards? s_questCards;
@@ -70,6 +71,11 @@ public static class ClassicProgression {
     /// The profile's XP table, or null for the client's curve.
     /// </summary>
     public static XpTable? XpTable => s_xpTable;
+
+    /// <summary>
+    /// The profile's base health per level and school, or null for the client's. CLASSIC.
+    /// </summary>
+    public static HealthTable? HealthTable => s_healthTable;
 
     /// <summary>
     /// The profile's combat XP, gold and drop rules, or null for stock Imlight.
@@ -122,6 +128,12 @@ public static class ClassicProgression {
             s_xpTable = XpTableLoader.Load(Path.Combine(classicDataRoot, xp));
             Logger.Information("Classic XP table {Table}: levels 1-{MaxLevel}, {Total} XP to reach level {MaxLevel}.",
                 Logger.Args(s_xpTable.Id, s_xpTable.MaxLevel, s_xpTable.XpToReach(s_xpTable.MaxLevel)!.Value, s_xpTable.MaxLevel));
+        }
+
+        if (profile.Rules.PlayerHealth is { } health && File.Exists(Path.Combine(classicDataRoot, health))) {
+            s_healthTable = HealthTableLoader.Load(Path.Combine(classicDataRoot, health)); // CLASSIC
+            Logger.Information("Classic health table {Table}: base health for levels 1-{MaxLevel} of {Schools} schools.",
+                Logger.Args(s_healthTable.Id, s_healthTable.MaxLevel, s_healthTable.BySchool.Count));
         }
 
         if (profile.Rules.MobRewards is { } mob && File.Exists(Path.Combine(classicDataRoot, mob))) {

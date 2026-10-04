@@ -62,7 +62,7 @@ public static class ClassicProfileLoader {
     private static readonly string[] s_inheritedKeys = ["cutoff", "level_cap", "worlds", "features", "rules", "world_unlocks"];
     internal static readonly FrozenSet<string> s_worldUnlockKeys = FrozenSet.Create(StringComparer.Ordinal, "any_of", "source", "notes");
     private static readonly FrozenSet<string> s_ruleKeys = FrozenSet.Create(StringComparer.Ordinal,
-        "accuracy_table", "xp_table", "mob_rewards", "badges", "quest_cards", "treasure_prices", "mob_stats", "crown_shop", "later_objects", "creature_decks", "power_pips_from_rank", "dragonspyre_difficulty", "tutorial",
+        "accuracy_table", "xp_table", "player_health", "mob_rewards", "badges", "quest_cards", "treasure_prices", "mob_stats", "crown_shop", "later_objects", "creature_decks", "power_pips_from_rank", "dragonspyre_difficulty", "tutorial",
         "teleport_stones");
 
     /// <summary>
@@ -376,7 +376,7 @@ public static class ClassicProfileLoader {
         foreach (var entry in rules.Entries) {
             var path = YamlTree.Join("rules", entry.Key);
             switch (entry.Key) {
-                case "accuracy_table" or "xp_table" or "mob_rewards" or "badges" or "quest_cards" or "treasure_prices" or "mob_stats" or "crown_shop" or "later_objects" or "creature_decks":
+                case "accuracy_table" or "xp_table" or "player_health" or "mob_rewards" or "badges" or "quest_cards" or "treasure_prices" or "mob_stats" or "crown_shop" or "later_objects" or "creature_decks":
                     _ = diagnostics.ReadString(entry.Value, path);
                     break;
                 case "power_pips_from_rank":
@@ -424,6 +424,7 @@ public static class ClassicProfileLoader {
             Rules = rules is null ? ProfileRules.None : new ProfileRules {
                 AccuracyTable = ScalarOf(rules, "accuracy_table"),
                 XpTable = ScalarOf(rules, "xp_table"),
+                PlayerHealth = ScalarOf(rules, "player_health"), // CLASSIC
                 MobRewards = ScalarOf(rules, "mob_rewards"),
                 Badges = ScalarOf(rules, "badges"),
                 QuestCards = ScalarOf(rules, "quest_cards"),

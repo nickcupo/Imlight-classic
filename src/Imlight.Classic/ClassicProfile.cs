@@ -139,6 +139,11 @@ public sealed class ProfileRules {
     public string? XpTable { get; init; }
 
     /// <summary>
+    /// Path under classic-data of the base health per level and school, if any. CLASSIC.
+    /// </summary>
+    public string? PlayerHealth { get; init; }
+
+    /// <summary>
     /// Path under classic-data of the mob reward rules (combat XP, gold, drops), if any.
     /// </summary>
     public string? MobRewards { get; init; }
