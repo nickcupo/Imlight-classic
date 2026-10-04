@@ -142,4 +142,27 @@ internal sealed class CLASSIC_FEATURES_PROTOCOL : IServerProtocol {
 
     }
 
+    /// <summary>
+    /// CLASSIC: a sigil run's instance zone has been empty for its whole lifetime (30 minutes in 2009); the zone sends
+    /// this to itself and then asks its container to drop it.
+    /// </summary>
+    public sealed class MSG_EMPTYRUNEXPIRED : IServerMessage {
+
+        public byte MessageOrder { get; } = 9;
+        public byte ServiceID { get; } = 110;
+
+    }
+
+    /// <summary>
+    /// CLASSIC: a sigil run's instance container holds no zone any more; the game world forgets and stops it.
+    /// </summary>
+    public sealed class MSG_RUNCONTAINEREMPTY : IServerMessage {
+
+        public byte MessageOrder { get; } = 10;
+        public byte ServiceID { get; } = 110;
+
+        public ulong OwnerId;
+
+    }
+
 }

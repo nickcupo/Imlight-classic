@@ -78,6 +78,7 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
     private bool _isTransferQueued;
     private bool _removedForTransfer; // CLASSIC: DoZoneTransfer removed the player from ZoneActor
     private uint _currentDynamicZoneId;
+    private ulong _currentInstanceOwner; // CLASSIC: the instance (owner or sigil run) this session's zone belongs to
 
     private const string SIGIL_ENTER_TIMER_KEY = "sigilenter";
     private const float SIGIL_COUNTDOWN_SECONDS = 10.0f;
@@ -180,11 +181,19 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
             return;
         }
 
+        // CLASSIC: a door or trigger inside an instance leads to the same instance's zones (Classic.GroupInstances).
+        if (ClassicRuntime.IsActive) {
+            message.OwnerCharId = GroupInstances.OwnerForTransfer(message.OwnerCharId, message.KeepInstance,
+                _currentInstanceOwner);
+        }
+
         // Sending the server transfer request to the server will allocate and load the zone.
         var zoneDetails = AskServer<ZONE_102_PROTOCOL.MSG_ZONETRANSFERRSP>(message);
         if (message.SendToClient && zoneDetails.ErrorCode == 0) {
             // Check if the destination zone is the same as the current zone. If so, just teleport the player.
-            if (message.DestinationZone == GetActiveWizard().Zone) {
+            // CLASSIC: only when it is the same copy of the zone; another instance of it is a real zone change.
+            if (message.DestinationZone == GetActiveWizard().Zone
+                    && (!ClassicRuntime.IsActive || ZoneActor is null || Equals(zoneDetails.ZoneActorRef, ZoneActor))) {
                 // CLASSIC: the zone resolves named locations such as a hub's "Start"; was message.DestinationLocation.
                 DoTeleport(new Imcodec.Math.Vector4(zoneDetails.Location, zoneDetails.Orientation));
 
@@ -195,7 +204,18 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
                 return;
             }
 
+            // CLASSIC: the attach after the client's zone change joins the instance that answered (a sigil group's
+            // run, a friend's dungeon), not the wizard's own.
+            if (ClassicRuntime.IsActive && GetActiveWizard() is { } traveller) {
+                GroupInstances.QueueEntry(traveller.CharId, message.DestinationZone, zoneDetails.InstanceOwnerId,
+                    DateTime.UtcNow);
+            }
+
             ReadyClientForZoneTransfer(message);
+        }
+        else if (zoneDetails.ErrorCode == StringHash.Compute(GroupInstances.FullInstanceError)) {
+            // CLASSIC: 2009's refusal of a teleport into a full instance.
+            InformGameClient(GroupInstances.FullInstanceMessage, true);
         }
         else if (zoneDetails.ErrorCode != 0) {
             // The server has returned an error code. This means the zone transfer failed.
@@ -207,6 +227,7 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
             SetZone(zoneDetails.ZoneActorRef);
             SessionActor.PublishDoorAttach(null);
             _currentDynamicZoneId = zoneDetails.DynamicZoneId;
+            _currentInstanceOwner = zoneDetails.InstanceOwnerId; // CLASSIC
         }
 
         Sender.Tell(zoneDetails);
@@ -249,8 +270,10 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
 
         SnapPlayerToSigilFace(message);
 
+        // CLASSIC: a wizard joining a sigil group gets the time left on the group's countdown.
+        var countdown = message.CountdownSeconds > 0 ? message.CountdownSeconds : SIGIL_COUNTDOWN_SECONDS;
         SendToSocket(new WIZARD_12_PROTOCOL.MSG_MINIGAMETIMERSTART {
-            Time = SIGIL_COUNTDOWN_SECONDS,
+            Time = (float) countdown,
             SigilGID = message.SigilGID,
             Teleport = 0,
         });
@@ -258,7 +281,7 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
         Timers.StartSingleTimer(
             SIGIL_ENTER_TIMER_KEY,
             new ZONE_102_PROTOCOL.MSG_SIGILENTER(),
-            TimeSpan.FromSeconds(SIGIL_COUNTDOWN_SECONDS));
+            TimeSpan.FromSeconds(countdown));
 
         Logger.Information("Dungeon sigil countdown started -> '{0}'",
             Logger.Args(message.DestinationZone));
@@ -292,16 +315,18 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
         var entry = _activeSigilEntry;
         _activeSigilEntry = null;
 
+        // CLASSIC: a sigil run is a new instance shared by the wizards who used the sigil together.
+        var owner = entry.RunId != 0 ? entry.RunId : wizard.CharId;
         Logger.Information("Entering dungeon instance '{0}' (owner {1})",
-            Logger.Args(entry.DestinationZone, wizard.CharId));
+            Logger.Args(entry.DestinationZone, owner));
 
         var tpMsg = new ZONE_102_PROTOCOL.MSG_ZONETRANSFER {
             DestinationZone = entry.DestinationZone,
             DestinationLocation = entry.DestinationLoc,
             SendToClient = true,
             IsPrivate = true,
-            OwnerCharId = wizard.CharId,
-            ResetInstance = true,
+            OwnerCharId = owner,
+            ResetInstance = entry.RunId == 0, // CLASSIC: a run's instance is new already
         };
 
         SendTeleportEffects();
@@ -1154,7 +1179,7 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
             return false;
         }
 
-        var slot = playerSlots[0];
+        var slot = playerSlots[Math.Max(0, entry.Slot) % playerSlots.Count]; // CLASSIC: the n-th wizard's face
         var pad = Util.GetVectorFromCompactString(entry.SigilLoc);
 
         double sigilRotation = pad.W;

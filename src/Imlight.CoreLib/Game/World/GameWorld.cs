@@ -129,6 +129,19 @@ public class GameWorld : ReceiveProtocolDispatcher, IWithTimers {
         }
     }
 
+    // CLASSIC: a sigil run's instance container has dropped its last zone; forget and stop it.
+    [MessageHandler(typeof(CLASSIC_FEATURES_PROTOCOL.MSG_RUNCONTAINEREMPTY))]
+    private void ReceiveRunContainerEmpty(CLASSIC_FEATURES_PROTOCOL.MSG_RUNCONTAINEREMPTY message) {
+        if (!_instanceContainers.TryGetValue(message.OwnerId, out var container) || !container.Equals(Sender)) {
+            return;
+        }
+
+        _instanceContainers.Remove(message.OwnerId);
+        Classic.GroupInstances.EndRun(message.OwnerId);
+        Context.Stop(container);
+        Logger.Information("Game world forgets the empty instance container of sigil run {0}.", Logger.Args(message.OwnerId));
+    }
+
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_ZONELOADTIMER))]
     private void ReceiveZoneTimerEnd(ZONE_102_PROTOCOL.MSG_ZONELOADTIMER message) {
         // If the timer is reached, the zone did not load within the timeout.
@@ -192,6 +205,10 @@ public class GameWorld : ReceiveProtocolDispatcher, IWithTimers {
         var isInstancedZone = wasPrivateRequest
                            || message.ZoneData.m_nHardLimit <= HARD_LIMIT_INSTANCE_THRESHHOLD;
         if (isInstancedZone) {
+            Logger.Information("Game world loaded instance zone {0} for {1} (hard limit {2}{3}).",
+                Logger.Args(zonePath, ownerId, message.ZoneData.m_nHardLimit,
+                    Classic.GroupInstances.IsRun(ownerId) ? ", sigil run" : "")); // CLASSIC
+
             // Create a new instance container for this zone, if one does not already exist.
             if (!_instanceContainers.TryGetValue(ownerId, out var instanceContainer)) {
                 instanceContainer = CreateInstanceContainer(ownerId);

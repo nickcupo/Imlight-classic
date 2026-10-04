@@ -611,6 +611,18 @@ public class ZONE_102_PROTOCOL : IServerProtocol {
         /// </summary>
         public bool ResetInstance;
 
+        /// <summary>
+        /// CLASSIC: a door or trigger: inside an instance it leads to the same instance's zones (a group stays
+        /// together through a multi-zone dungeon), whatever <see cref="OwnerCharId"/> says.
+        /// </summary>
+        public bool KeepInstance;
+
+        /// <summary>
+        /// CLASSIC: joining someone else's instance (teleport to a friend): the zone refuses it when the instance
+        /// is full (2009: "Your friend is in a full instance").
+        /// </summary>
+        public bool RefuseWhenFull;
+
     }
 
     /// <summary>
@@ -630,6 +642,12 @@ public class ZONE_102_PROTOCOL : IServerProtocol {
         public uint ErrorCode;
         public string ErrorMessage;
         public List<GID> CriticalObjects;
+
+        /// <summary>CLASSIC: the instance (owner or sigil run) of the zone that answered; 0 for a public zone.</summary>
+        public ulong InstanceOwnerId;
+
+        /// <summary>CLASSIC: the answering zone's hard player limit (m_nHardLimit).</summary>
+        public int ZoneHardLimit;
 
     }
 
@@ -1021,6 +1039,15 @@ public class ZONE_102_PROTOCOL : IServerProtocol {
 
         /// <summary>The arrival position inside the instance, "X,Y,Z,heading".</summary>
         public string DestinationLoc;
+
+        /// <summary>CLASSIC: the sigil run (the group's shared instance); 0 = the wizard's own instance.</summary>
+        public ulong RunId;
+
+        /// <summary>CLASSIC: the face slot on the pad (the n-th wizard of the group).</summary>
+        public int Slot;
+
+        /// <summary>CLASSIC: seconds left on the group's countdown; 0 = the full countdown.</summary>
+        public double CountdownSeconds;
 
     }
 

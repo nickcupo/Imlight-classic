@@ -580,18 +580,29 @@ internal class FriendsService(SessionActor sessionActor) : MessageService(sessio
         // Query for the target's Wizard so that we may get their X/Y/Z coordinates. CLASSIC: the answer comes back as a
         // message (GoToPlayerAnswer) instead of blocking this actor and a pool thread on .Result.
         var zone = onlinePlayer.CurrentZone;
+
+        // CLASSIC: a friend in a dungeon is reached in their instance (a sigil group's run or the dungeon's owner), and
+        // not when it already holds four wizards (2009: "Your friend is in a full instance"; Classic.GroupInstances).
+        var instanceOwner = ClassicRuntime.IsActive ? onlinePlayer.InstanceOwnerId : 0;
+        if (instanceOwner != 0 && GroupInstances.IsFull(GroupInstances.CountIn(OnlinePlayerCollection.GetOnlinePlayers(),
+                p => p.CurrentZone, p => p.InstanceOwnerId, zone, instanceOwner), onlinePlayer.ZoneHardLimit)) {
+            InformGameClient(GroupInstances.FullInstanceMessage, true);
+
+            return;
+        }
+
         Context.ActorSelection(onlinePlayer.ActorPath)
             .Ask<CHARACTER_103_PROTOCOL.MSG_CHARACTER>(
                 message: new CHARACTER_103_PROTOCOL.MSG_QUERYACTIVEWIZARD(),
                 timeout: TimeSpan.FromSeconds(QUERY_TELEPORT_WIZARD_TIMEOUT_IN_SECONDS)
             )
-            .PipeTo(Self, success: rsp => new GoToPlayerAnswer(targetID, zone, rsp),
-                failure: ex => new GoToPlayerAnswer(targetID, zone, null, ex));
+            .PipeTo(Self, success: rsp => new GoToPlayerAnswer(targetID, zone, rsp, InstanceOwner: instanceOwner),
+                failure: ex => new GoToPlayerAnswer(targetID, zone, null, ex, instanceOwner));
     }
 
     /// <summary>CLASSIC: the target's answer to a teleport-to-friend question.</summary>
     internal sealed record GoToPlayerAnswer(ulong TargetId, string Zone, CHARACTER_103_PROTOCOL.MSG_CHARACTER Answer,
-                                            Exception Error = null);
+                                            Exception Error = null, ulong InstanceOwner = 0);
 
     [MessageHandler(typeof(GoToPlayerAnswer))]
     private void ReceiveGoToPlayerAnswer(GoToPlayerAnswer answer) {
@@ -615,11 +626,15 @@ internal class FriendsService(SessionActor sessionActor) : MessageService(sessio
 
             var coordinates = Util.GetCompactStringFromVector((Vector4) queryResult.Wizard.Location);
 
+            // CLASSIC: into the friend's instance, never a public copy, and refused if it filled up meanwhile.
+            var inInstance = answer.InstanceOwner != 0;
             Teleport(
                 destinationZone: answer.Zone,
                 destinationLocation: coordinates,
                 doTeleportEffects: true,
-                ownerCharId: answer.TargetId
+                makePrivate: inInstance,
+                ownerCharId: inInstance ? answer.InstanceOwner : answer.TargetId,
+                refuseWhenFull: inInstance
             );
         } else {
             Logger.Error("Failed to query the target wizard for teleportation.");

@@ -68,6 +68,8 @@ internal class AttachService(SessionActor sessionActor) : MessageService(session
     private Wizard _wizard;
     private GAME_5_PROTOCOL.MSG_LOGINCOMPLETE _loginCompleteMessage;
     private bool _attachReceived;
+    private ulong _instanceOwnerId; // CLASSIC: the instance the attach joined (Classic.GroupInstances)
+    private int _zoneHardLimit; // CLASSIC
 
     protected static Props Props(SessionActor parentActor)
         => Akka.Actor.Props.Create(() => new AttachService(parentActor));
@@ -91,6 +93,9 @@ internal class AttachService(SessionActor sessionActor) : MessageService(session
 
             return;
         }
+
+        _instanceOwnerId = zoneDetails.InstanceOwnerId; // CLASSIC
+        _zoneHardLimit = zoneDetails.ZoneHardLimit; // CLASSIC
 
         // Set the character's location and zone to the ones given in the message.
         _wizard.SetZone(message.ZoneName, zoneDetails.ZoneDisplayName);
@@ -288,8 +293,9 @@ internal class AttachService(SessionActor sessionActor) : MessageService(session
             DestinationZone = zoneName,
             DestinationLocation = location,
             SendToClient = false,
-            // CLASSIC: a wizard who dropped mid-fight logs back in to the instance that holds their seat.
-            OwnerCharId = Classic.ActiveDuels.InstanceOwnerForLogin(_wizard.CharId, zoneName, DateTime.UtcNow),
+            // CLASSIC: a wizard who dropped mid-fight logs back in to the instance that holds their seat, and a wizard
+            // on the way into someone else's instance (a sigil group, a friend's dungeon) attaches to that instance.
+            OwnerCharId = Classic.GroupInstances.OwnerForAttach(_wizard.CharId, zoneName, DateTime.UtcNow),
         };
 
         return AskOtherService<ZONE_102_PROTOCOL.MSG_ZONETRANSFERRSP>(zoneMsg);
@@ -320,6 +326,8 @@ internal class AttachService(SessionActor sessionActor) : MessageService(session
             CurrentZone = zoneName,
             CurrentRealm = realmName,
             ActorPath = playerActor.Path.ToString(),
+            InstanceOwnerId = _instanceOwnerId, // CLASSIC
+            ZoneHardLimit = _zoneHardLimit, // CLASSIC
         };
 
         OnlinePlayerCollection.AddOnlinePlayer(onlinePlayerRef);

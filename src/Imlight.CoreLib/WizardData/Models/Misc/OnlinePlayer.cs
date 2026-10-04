@@ -28,4 +28,10 @@ public class OnlinePlayer {
     public string CurrentRealm;
     public string ActorPath;
 
+    /// <summary>CLASSIC: the instance (owner or sigil run) of the zone the player is in; 0 for a public zone.</summary>
+    public ulong InstanceOwnerId;
+
+    /// <summary>CLASSIC: the hard player limit of the zone the player is in.</summary>
+    public int ZoneHardLimit;
+
 }

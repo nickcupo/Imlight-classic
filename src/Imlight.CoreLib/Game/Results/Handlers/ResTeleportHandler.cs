@@ -55,7 +55,8 @@ internal sealed class ResTeleportHandler : BaseResultHandler<ResTeleport> {
             DestinationZone = Result.m_destinationZone,
             DestinationLocation = Result.m_destinationLoc,
             SendToClient = true,
-            OwnerCharId = playerObj.m_characterId
+            OwnerCharId = playerObj.m_characterId,
+            KeepInstance = true, // CLASSIC: a trigger inside an instance leads to the same instance (Classic.GroupInstances)
         };
 
         context.GetPlayerRef().Tell(msg);

@@ -282,7 +282,8 @@ internal abstract class MessageService(SessionActor sessionActor) : ReceiveProto
                             bool doTeleportEffects = true,
                             bool makePrivate = false,
                             ulong ownerCharId = 0,
-                            string destinationLocation = "") {
+                            string destinationLocation = "",
+                            bool refuseWhenFull = false) {
         // CLASSIC: refuse a closed destination before any teleport effects play.
         if (!ClassicGate.AllowsZone(destinationZone, GetActiveWizard()?.CharId, InformGameClient)) {
             return;
@@ -303,7 +304,8 @@ internal abstract class MessageService(SessionActor sessionActor) : ReceiveProto
                 DestinationZone = destinationZone,
                 DestinationLocation = location,
                 MakePrivate = makePrivate,
-                OwnerCharId = ownerId
+                OwnerCharId = ownerId,
+                RefuseWhenFull = refuseWhenFull, // CLASSIC
             };
             Timers.StartSingleTimer("teleport-delay", delayMsg, TimeSpan.FromSeconds(2));
 
@@ -311,22 +313,23 @@ internal abstract class MessageService(SessionActor sessionActor) : ReceiveProto
         }
 
         // No effects — transfer immediately.
-        DoTeleport(destinationZone, location, makePrivate, ownerId);
+        DoTeleport(destinationZone, location, makePrivate, ownerId, refuseWhenFull);
     }
 
     [MessageHandler(typeof(SERVICE_101_PROTOCOL.MSG_TELEPORT_DELAY))]
     protected void OnTeleportDelay(SERVICE_101_PROTOCOL.MSG_TELEPORT_DELAY msg) {
-        DoTeleport(msg.DestinationZone, msg.DestinationLocation, msg.MakePrivate, msg.OwnerCharId);
+        DoTeleport(msg.DestinationZone, msg.DestinationLocation, msg.MakePrivate, msg.OwnerCharId, msg.RefuseWhenFull);
     }
 
     private void DoTeleport(string destinationZone, string destinationLocation,
-                            bool makePrivate, ulong ownerCharId) {
+                            bool makePrivate, ulong ownerCharId, bool refuseWhenFull = false) {
         var zoneTransfer = new ZONE_102_PROTOCOL.MSG_ZONETRANSFER {
             DestinationLocation = destinationLocation,
             DestinationZone = destinationZone,
             SendToClient = true,
             IsPrivate = makePrivate,
-            OwnerCharId = ownerCharId
+            OwnerCharId = ownerCharId,
+            RefuseWhenFull = refuseWhenFull, // CLASSIC
         };
         TellOtherServices(zoneTransfer);
     }
