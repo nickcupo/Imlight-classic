@@ -616,7 +616,10 @@ public class CombatResolver(Duel duel, CombatDuelSubCircle[] actorSubCircles) {
         }
 
         // Deduce the players mana by the rank of the spell.
-        caster.DeductMana(action.m_spell.m_pipCost.m_spellRank);
+        // CLASSIC: not in a PvP duel; the 2009 arena cost no mana (OpenPvpRules.CastingCostsMana).
+        if (Imlight.Classic.Pvp.OpenPvpRules.CastingCostsMana(caster._duelActor.Duel?.m_bPVP == true, ClassicRuntime.IsActive)) {
+            caster.DeductMana(action.m_spell.m_pipCost.m_spellRank);
+        }
 
         // X-pip spells spend what they used (same GetXPipCost that chose the tier).
         if (CombatActionResolver.IsXPipSpell(action.m_spell)) {

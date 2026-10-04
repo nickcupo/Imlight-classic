@@ -120,6 +120,14 @@ public static class OpenPvpRules {
         return OpenPvpStart.CountDown;
     }
 
+    /// <summary>
+    /// Whether casting costs the wizard mana. 2009: "You will not lose mana when dueling in the duel arena" (wiki
+    /// Health_and_Mana oldid 41879, 2009-09-13), so a classic PvP duel spends none; every other duel spends a mana per pip.
+    /// </summary>
+    /// <param name="pvpDuel">The duel is a PvP duel (m_bPVP).</param>
+    /// <param name="classicRules">A classic profile is active.</param>
+    public static bool CastingCostsMana(bool pvpDuel, bool classicRules) => !(pvpDuel && classicRules);
+
 }
 
 /// <summary>
