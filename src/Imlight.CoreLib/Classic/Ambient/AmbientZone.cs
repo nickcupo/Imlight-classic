@@ -24,10 +24,13 @@
  *   - Arrival: each wizard enters like a player (zone transfer, then
  *     MSG_ADDPLAYER from its endpoint), a few seconds apart, and spawns
  *     itself for every real player there and every later arrival.
- *   - Movement: one timer for the whole zone (every 300 ms). Each walking
- *     wizard takes a step at running speed; all the steps of a tick go to
- *     the zone as one MSG_CLIENTBATCH, which each session writes to its
- *     socket: one zone message per tick, however many wizards walk.
+ *   - Movement: a walk is a route of straight legs (NavGrid). The client
+ *     gets one MSG_SERVERMOVE per leg, to its far corner, and runs the
+ *     mobile there at a player's speed (AmbientWalk); a timer per wizard
+ *     starts the next leg when it gets there. One timer for the whole zone
+ *     (every 300 ms) keeps each walker's spot along its leg and starts new
+ *     walks; the moves of a tick go to the zone as one MSG_CLIENTBATCH,
+ *     which each session writes to its socket.
  *   - Behaviour: walk to an NPC and stand at it (shops), wander between
  *     the zone's named locations, follow a friend who is here, hunt street
  *     mobs (Unicorn Way and other streets), offer help at real players'
@@ -43,7 +46,7 @@
  *
  * Created by: Nick with Claude Code (claude-opus-5-5)
  * Version: KALI 1.0
- * Last Updated: 10/01/2026
+ * Last Updated: 10/04/2026
  */
 
 using System;
@@ -78,14 +81,16 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
     private sealed record Tick;
     private sealed record Enter(ulong CharId);
     private sealed record Later(AmbientWizard Wizard, Action<AmbientWizard> Action);
+    private sealed record LegEnd(AmbientWizard Wizard, int LegId);
     private sealed record FriendAccepted(AmbientWizard Wizard, ulong Requester, Relationship Relationship, string Name);
     private sealed record Spot(Vector3 At, float FaceYaw, bool Npc);
     private sealed record NavReady(NavGrid Grid);
 
     private const double TickSeconds = 0.3;
+    private static readonly TimeSpan CornerLead = TimeSpan.FromMilliseconds(50);
     private const float Arrive = 30f;
     private const float Neighbourhood = 2600f;   // how far a wizard walks in one go
-    private const float HelpRange = 9000f;       // how far away a duel draws an offer (about 40 s at a run)
+    private const float HelpRange = 9000f;       // how far away a duel draws an offer (about 15 s at a run)
 
     private readonly string _zone;
     private readonly IActorRef _server;
@@ -119,6 +124,7 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
         _rng = new Random(StableSeed(zone));
 
         Receive<Tick>(_ => OnTick());
+        Receive<LegEnd>(OnLegEnd);
         Receive<Enter>(OnEnter);
         Receive<Later>(later => {
             if (_wizards.Contains(later.Wizard)) {
@@ -264,7 +270,7 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
         }
 
         wizard.Present = false;
-        wizard.Moving = false;
+        Drop(wizard);
         OnlinePlayerCollection.RemoveVirtualOnlinePlayer(wizard.CharId);
         wizard.ZoneActor?.Tell(new ZONE_102_PROTOCOL.MSG_REMOVEPLAYER {
             PlayerActor = wizard.Endpoint, GlobalId = wizard.Wizard.GameObjectID,
@@ -280,6 +286,7 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
 
     /// <summary>Spawns the wizard for one player (<paramref name="player"/>), or for every player in the zone (null).</summary>
     private void SpawnFor(AmbientWizard wizard, IActorRef player) {
+        Advance(wizard, DateTime.UtcNow);
         var character = wizard.Wizard;
         character.Location = wizard.Position;
         character.Orientation = new Vector3(0, 0, AmbientWizards.ClientYaw(wizard.Yaw));
@@ -293,6 +300,10 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
         var spawn = new GAME_5_PROTOCOL.MSG_NEWOBJECT { Data = data };
         if (player is not null) {
             player.Tell(spawn);
+            if (wizard.Leg is not null && wizard.Target is { } corner) {
+                player.Tell(Move(wizard, corner)); // mid-run: where the run goes, or it stands until the next corner
+            }
+
             return;
         }
 
@@ -332,8 +343,11 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
             }
 
             if (wizard.Moving) {
-                if (now >= wizard.PauseUntil) {
-                    Step(wizard, batch); // (else a short stop at a corner)
+                if (wizard.Leg is not null) {
+                    Advance(wizard, now); // its spot along the run; the leg's timer turns the corner
+                }
+                else if (now >= wizard.PauseUntil) {
+                    StartLeg(wizard, now, batch); // (else a short stop at a corner)
                 }
             }
             else if (now >= wizard.Until) {
@@ -342,10 +356,11 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
 
             if (wizard.DuelSigil == ulong.MaxValue && wizard.Activity == AmbientActivity.Walking && now >= wizard.NextLook
                 && _zoneActor is not null) {
-                // Hunting (one hunter a zone): every second, walking the path or waiting on it, fish a move to the zone as
+                // Hunting (one hunter a zone): every tick (a player fishes every 250 ms; at 600 units a second a
+                // one-second look could run past a mob), walking the path or waiting on it, fish a move to the zone as
                 // a player's MoveService does, so a street mob whose aggro range covers this spot starts a duel with it (its
                 // permit for a fight of its own is set). Static duelists answer the duel-target question instead.
-                wizard.NextLook = now.AddSeconds(1);
+                wizard.NextLook = now.AddSeconds(TickSeconds * 0.9);
                 wizard.Wizard.IsInCombatGrace = false;
                 Fish(wizard);
                 _zoneActor.Tell(new ZONE_102_PROTOCOL.MSG_QUERYNEARESTDUELTARGET { PlayerGameObject = wizard.Wizard.GameObject },
@@ -366,6 +381,11 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
             }
         }
 
+        Send(batch);
+    }
+
+    /// <summary>Moves for the zone's players, as one MSG_CLIENTBATCH (nothing when no real player is here).</summary>
+    private void Send(List<IMessage> batch) {
         if (batch.Count > 0 && _zoneActor is not null && _realPlayers > 0) {
             _zoneActor.Tell(new ZONE_102_PROTOCOL.MSG_ZONEBROADCAST {
                 Messages = [new ZONE_102_PROTOCOL.MSG_CLIENTBATCH { Messages = [.. batch] }],
@@ -381,63 +401,91 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
         _ => 900 + _rng.Next(900),
     };
 
-    private void Step(AmbientWizard wizard, List<IMessage> batch) {
-        if (wizard.Target is not { } target) {
-            wizard.Moving = false;
+    /// <summary>
+    /// CLASSIC (2026-10-04): starts the run to Target: one MSG_SERVERMOVE to the leg's far corner (the client runs the
+    /// mobile there at a player's speed) and a timer for when the wizard gets there. Before, a 69-unit step went out
+    /// every 300 ms at 230 units a second; the client, running at 600, did each in 115 ms and stood the rest.
+    /// </summary>
+    private void StartLeg(AmbientWizard wizard, DateTime now, List<IMessage> batch) {
+        while (true) {
+            if (wizard.Target is not { } next) {
+                wizard.Moving = false;
+                return;
+            }
+
+            if (Distance(wizard.Position, next) > 1) {
+                break;
+            }
+
+            wizard.Position = next; // a corner on the spot
+            if (wizard.Route.Count == 0) {
+                Finish(wizard, batch);
+                return;
+            }
+
+            wizard.Target = wizard.Route.Dequeue();
+        }
+
+        var target = wizard.Target.Value;
+        var leg = WalkLeg.Begin(Num(wizard.Position), Num(target), now, AmbientNav.RunSpeed);
+        wizard.Leg = leg;
+        wizard.LegId++;
+        wizard.Yaw = leg.Heading;
+        wizard.Wizard.Location = wizard.Position;
+        wizard.Wizard.Orientation = new Vector3(0, 0, AmbientWizards.ClientYaw(wizard.Yaw));
+        // At a corner, the next leg goes out a moment early so a late timer or the hop to the client does not leave the
+        // mobile standing at the corner for a frame or two (it cuts the corner by about CornerLead x 600 = 30 units).
+        var due = leg.End - now - (wizard.Route.Count > 0 ? CornerLead : TimeSpan.Zero);
+        Timers.StartSingleTimer($"leg-{wizard.CharId}", new LegEnd(wizard, wizard.LegId), due > TimeSpan.Zero ? due : TimeSpan.Zero);
+        batch.Add(Move(wizard, target));
+    }
+
+    /// <summary>The wizard got to the end of a run: the next one starts at once (the client is there now), or it stops.</summary>
+    private void OnLegEnd(LegEnd end) {
+        var wizard = end.Wizard;
+        if (wizard.Leg is null || wizard.LegId != end.LegId || !wizard.Present || !wizard.Moving
+            || wizard.Activity is AmbientActivity.Fighting or AmbientActivity.Sparring or AmbientActivity.Away) {
             return;
         }
 
-        // CLASSIC (2026-10-03): a run along the route's straight legs at a player's run speed, facing the way it goes,
-        // feet on the floor (the grid's height under it), turning at each corner; the 300 ms tick is the move cadence.
-        var budget = (float) (AmbientNav.RunSpeed * TickSeconds);
-        var arrived = false;
-        while (budget > 0) {
-            var dx = target.X - wizard.Position.X;
-            var dy = target.Y - wizard.Position.Y;
-            var distance = MathF.Sqrt(dx * dx + dy * dy);
-            if (distance > 1) {
-                wizard.Yaw = MathF.Atan2(dy, dx);
-            }
+        var now = DateTime.UtcNow;
+        wizard.Leg = null;
+        if (wizard.Target is { } corner) {
+            wizard.Position = corner;
+        }
 
-            if (distance > budget) {
-                var t = budget / distance;
-                var z = wizard.Position.Z + (target.Z - wizard.Position.Z) * t;
-                var at = new Vector3(wizard.Position.X + dx * t, wizard.Position.Y + dy * t, z);
-                wizard.Position = _nav?.FloorAt(new System.Numerics.Vector3(at.X, at.Y, at.Z)) is { } floor
-                    ? new Vector3(at.X, at.Y, floor) : at;
-                break;
-            }
-
-            wizard.Position = target;
-            budget -= distance;
-            if (wizard.Route.Count == 0) {
-                arrived = true;
-                break;
-            }
-
-            target = wizard.Route.Dequeue();
-            wizard.Target = target;
+        var batch = new List<IMessage>();
+        if (wizard.Route.Count == 0) {
+            Finish(wizard, batch);
+        }
+        else {
+            wizard.Target = wizard.Route.Dequeue();
             if (_rng.NextDouble() < 0.08) {
                 // Now and then a corner is a short look around, as a person walking does.
-                wizard.PauseUntil = DateTime.UtcNow.AddMilliseconds(600 + _rng.Next(1200));
+                wizard.PauseUntil = now.AddMilliseconds(600 + _rng.Next(1200));
                 wizard.Wizard.Location = wizard.Position;
                 batch.Add(Move(wizard));
                 batch.Add(new GAME_5_PROTOCOL.MSG_MOVESTATE { GlobalID = wizard.Wizard.GameObjectID, NewState = 0 });
-                return;
+            }
+            else {
+                StartLeg(wizard, now, batch);
             }
         }
 
-        if (arrived) {
-            wizard.Target = null;
-            wizard.Moving = false;
-            if (wizard.ArriveYaw is { } face) {
-                wizard.Yaw = face;
-                wizard.ArriveYaw = null;
-            }
+        Send(batch);
+    }
 
-            Arrived(wizard);
+    /// <summary>The walk is over: face the way it arrives to, stop, and see what the place is for.</summary>
+    private void Finish(AmbientWizard wizard, List<IMessage> batch) {
+        wizard.Leg = null;
+        wizard.Target = null;
+        wizard.Moving = false;
+        if (wizard.ArriveYaw is { } face) {
+            wizard.Yaw = face;
+            wizard.ArriveYaw = null;
         }
 
+        Arrived(wizard);
         wizard.Wizard.Location = wizard.Position;
         wizard.Wizard.Orientation = new Vector3(0, 0, AmbientWizards.ClientYaw(wizard.Yaw));
         batch.Add(Move(wizard));
@@ -446,14 +494,46 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
         }
     }
 
-    /// <summary>MSG_SERVERMOVE as MoveService relays a client's move: position over 4, yaw as a packed byte.</summary>
-    internal static GAME_5_PROTOCOL.MSG_SERVERMOVE Move(AmbientWizard wizard) {
+    /// <summary>The wizard's spot along its run at <paramref name="now"/> (feet on the grid's floor).</summary>
+    private void Advance(AmbientWizard wizard, DateTime now) {
+        if (wizard.Leg is not { } leg) {
+            return;
+        }
+
+        var at = leg.At(now);
+        wizard.Position = _nav?.FloorAt(at) is { } floor ? new Vector3(at.X, at.Y, floor) : new Vector3(at.X, at.Y, at.Z);
+        wizard.Wizard.Location = wizard.Position;
+    }
+
+    /// <summary>Forgets the run under way (its timer is ignored) without telling the client: a duel or leaving moves it.</summary>
+    private static void Drop(AmbientWizard wizard) {
+        wizard.Leg = null;
+        wizard.LegId++;
+        wizard.Moving = false;
+    }
+
+    /// <summary>Stops the wizard where it is now; mid-run, the client is told (it would run on to the corner).</summary>
+    private void Halt(AmbientWizard wizard) {
+        var running = wizard.Leg is not null;
+        Advance(wizard, DateTime.UtcNow);
+        Drop(wizard);
+        if (running) {
+            Send([Move(wizard), new GAME_5_PROTOCOL.MSG_MOVESTATE { GlobalID = wizard.Wizard.GameObjectID, NewState = 0 }]);
+        }
+    }
+
+    /// <summary>
+    /// MSG_SERVERMOVE as MoveService relays a client's move: position over 4, yaw as a packed byte. The position is
+    /// <paramref name="at"/> (a run's far corner) or the wizard's own.
+    /// </summary>
+    internal static GAME_5_PROTOCOL.MSG_SERVERMOVE Move(AmbientWizard wizard, Vector3? at = null) {
         var degrees = AmbientWizards.ClientYaw(wizard.Yaw) * 180f / MathF.PI; // CLASSIC: the client's clockwise yaw
         degrees = ((degrees % 360f) + 360f) % 360f;
+        var spot = at ?? wizard.Position;
         return new GAME_5_PROTOCOL.MSG_SERVERMOVE {
-            LocationX = unchecked((ushort) (short) MathF.Round(wizard.Position.X / 4)),
-            LocationY = unchecked((ushort) (short) MathF.Round(wizard.Position.Y / 4)),
-            LocationZ = unchecked((ushort) (short) MathF.Round(wizard.Position.Z / 4)),
+            LocationX = unchecked((ushort) (short) MathF.Round(spot.X / 4)),
+            LocationY = unchecked((ushort) (short) MathF.Round(spot.Y / 4)),
+            LocationZ = unchecked((ushort) (short) MathF.Round(spot.Z / 4)),
             Direction = (byte) Math.Clamp(MathF.Round(degrees / (360f / byte.MaxValue) / 1.035f), 0, 255),
             MobileID = wizard.Wizard.GameObject.m_nMobileID,
         };
@@ -562,8 +642,19 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
     private bool WalkTo(AmbientWizard wizard, Vector3 target, AmbientActivity activity) {
         wizard.ArriveYaw = null;
         wizard.Route.Clear();
+        if (wizard.Leg is not null) {
+            // A new walk from mid-run: from here (the next tick sends its first leg).
+            Advance(wizard, DateTime.UtcNow);
+            wizard.Leg = null;
+            wizard.LegId++;
+        }
+
         if (_nav is null || !_nav.TryRoute(Num(wizard.Position), Num(target), out var waypoints) || waypoints.Count == 0) {
             wizard.Target = null;
+            if (wizard.Moving) {
+                Halt(wizard); // no walk there: stop here, not at the old run's corner
+            }
+
             return false;
         }
 
@@ -643,6 +734,7 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
                 break;
             case ZONE_102_PROTOCOL.MSG_PLAYERADDEDTOZONE added when wizard.Present && added.PlayerActor is not null:
                 if (!AmbientWizards.IsAmbient(added.PlayerActor)) {
+                    _realPlayers = Math.Max(_realPlayers, 1); // its moves go out from now, not from the next census
                     SpawnFor(wizard, added.PlayerActor);
                     if (ActiveWizardDirectory.TryGet(added.PlayerActor, out var arrival, out _)) {
                         FriendArrived(wizard, arrival);
@@ -701,7 +793,7 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
         Logger.Debug("Ambient wizard {Name} starts a street fight.", Logger.Args(wizard.Name));
         wizard.DuelSigil = 0;
         if (wizard.Moving) {
-            wizard.Moving = false; // stop where the mob noticed it
+            Halt(wizard); // stop where the mob noticed it
         }
 
         AmbientWizards.PermitJoin(wizard.Endpoint, 0); // its own fight with a creature
@@ -718,7 +810,7 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
     private void InDuel(AmbientWizard wizard, COMBAT_106_PROTOCOL.MSG_ACTORADDEDTODUEL added) {
         wizard.Activity = AmbientWizards.IsSparringIn(wizard.Endpoint, added.Duel?.SigilId ?? 0)
             ? AmbientActivity.Sparring : AmbientActivity.Fighting;
-        wizard.Moving = false;
+        Drop(wizard); // the seat below is where it goes
         wizard.DuelSigil = added.Duel?.SigilId ?? 0;
         wizard.Wizard.IsInDuel = true;
         wizard.Position = added.SlotPosition;
@@ -792,7 +884,7 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
         }
 
         wizard.Activity = AmbientActivity.Sparring;
-        wizard.Moving = false;
+        Halt(wizard);
         wizard.DuelSigil = sigil;
     }
 
@@ -868,7 +960,7 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
         wizard.DuelSigil = notice.SigilId;
         if (!WalkTo(wizard, notice.Location, AmbientActivity.Helping)) {
             wizard.Activity = AmbientActivity.Helping; // no walk there: it waits, and the yes lapses after the wait
-            wizard.Moving = false;
+            Halt(wizard);
         }
         wizard.Until = DateTime.UtcNow.AddSeconds(25);
     }

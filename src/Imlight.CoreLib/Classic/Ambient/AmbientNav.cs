@@ -31,7 +31,7 @@
  *
  * Created by: Nick with Claude Code (claude-opus-5-5)
  * Version: KALI 1.0
- * Last Updated: 10/03/2026
+ * Last Updated: 10/04/2026
  */
 
 using System;
@@ -60,11 +60,27 @@ internal static class AmbientNav {
         => s_grids.GetOrAdd(zone, z => new Lazy<Task<NavGrid>>(() => Task.Run(() => Load(z)))).Value;
 
     /// <summary>
-    /// How fast an ambient wizard runs, in units a second. The 2009 data has no player run speed to read (the player
-    /// template's BasicMobileBehavior carries none; the client keeps it), so this is the server's long-standing estimate
-    /// of a running wizard until it is measured from a real client's moves.
+    /// How fast an ambient wizard runs, in units a second: the speed the official client runs any player's mobile at,
+    /// from the player template's (template 1, PlayerObject) PathMovementBehavior, 600 in the r806919 data. CLASSIC
+    /// (2026-10-04): was 230, a guess; the client ran each 300 ms step in 115 ms and stood still the rest (the owner:
+    /// "like someone is tapping the forward key"). See AmbientWalk.
     /// </summary>
-    internal const float RunSpeed = 230f;
+    internal static float RunSpeed => s_runSpeed.Value;
+
+    private static readonly Lazy<float> s_runSpeed = new(() => {
+        try {
+            if (CoreObjectFactory.GetCoreTemplate(1) is Imcodec.ObjectProperty.TypeCache.GameObjectTemplate template
+                && template.m_behaviors?.OfType<Imcodec.ObjectProperty.TypeCache.PathMovementBehaviorTemplate>().FirstOrDefault()
+                    is { } path) {
+                return AmbientPace.FromTemplate(path.m_movementSpeed, path.m_movementScale);
+            }
+        }
+        catch (Exception) {
+            // No template data (tests, a bare install): the r806919 value.
+        }
+
+        return AmbientPace.ClientRunSpeed;
+    });
 
     private static NavGrid Load(string zone) {
         try {
