@@ -3,6 +3,13 @@
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <TargetFramework>net10.0</TargetFramework>
+    <!-- CLASSIC: measured 2026-10-04 (playbot-reports/server-perf.md, 16 bots + 32 ambient wizards, 4 cores): workstation
+         concurrent GC paused at most 6.9 ms at a time with the smallest heap; Server GC (with or without
+         GCConserveMemory) cut total pause time but its single pauses reached 38-42 ms and it used 0.5-1 GB more.
+         Spelled out so a runtime default change cannot switch it silently. -->
+    <ServerGarbageCollection>false</ServerGarbageCollection>
+    <ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>
+    <TieredPGO>true</TieredPGO>
   </PropertyGroup>
 
   <ItemGroup>
