@@ -278,14 +278,15 @@ internal sealed class MinigameProcess : Process {
 
     private int GetScoreFromGenericIMessage(IMessage message) {
         try {
-            var scoreField = message.GetType().GetField("score",
-                System.Reflection.BindingFlags.Public |
-                System.Reflection.BindingFlags.NonPublic |
-                System.Reflection.BindingFlags.Instance);
+            const System.Reflection.BindingFlags flags = System.Reflection.BindingFlags.Public
+                | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
 
-            return scoreField != null
-                ? (int) scoreField.GetValue(message)
-                : -1;
+            // CLASSIC: the generated DML messages carry "score" as a property, so the field lookup alone found nothing
+            // and every finished game counted as a leaderboard query (no rewards; rig-trade p2, 2026-10-04).
+            var type = message.GetType();
+            var value = type.GetProperty("score", flags)?.GetValue(message) ?? type.GetField("score", flags)?.GetValue(message);
+
+            return value is int score ? score : -1;
         }
         catch (Exception ex) {
             Logger.Error("{0} {1} failed to get score: {2}",
