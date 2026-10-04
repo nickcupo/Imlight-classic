@@ -46,7 +46,8 @@ internal sealed class ZoneObjectSupervisor(Core.Zone zone) : ZoneEntitySuperviso
         var walkerPaths = new PlacedWalkerPaths(message.PathData, message.NodeData); // CLASSIC
 
         // Initialize any objects found within the zone data.
-        foreach (var objectInfo in zoneData.m_objectList) {
+        // CLASSIC: plus the NPCs that stood in this zone in 2009 but that the later data places elsewhere.
+        foreach (var objectInfo in zoneData.m_objectList.Concat(ClassicMovedObjects.MovedInto(zone.ZoneName))) {
             if (!IsObjectEligibleForSpawn(objectInfo, zone.ZoneName)) {
                 continue;
             }
@@ -116,6 +117,11 @@ internal sealed class ZoneObjectSupervisor(Core.Zone zone) : ZoneEntitySuperviso
 
         // CLASSIC: objects from later versions of classic quests are not spawned.
         if (ClassicLaterObjects.Skips(objectInfo, zoneName)) {
+            return false;
+        }
+
+        // CLASSIC: NPCs that stood elsewhere in 2009 are placed in their 2009 zone instead (ClassicMovedObjects).
+        if (ClassicMovedObjects.MovedAway(objectInfo, zoneName)) {
             return false;
         }
 

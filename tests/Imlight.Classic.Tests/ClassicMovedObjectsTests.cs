@@ -1,0 +1,31 @@
+using Imlight.CoreLib.Classic;
+using Xunit;
+
+namespace Imlight.Classic.Tests;
+
+public sealed class ClassicMovedObjectsTests {
+
+    [Fact]
+    public void MrLincolnLeavesRavenwoodForGolemCourt() {
+        Assert.True(ClassicMovedObjects.IsMovedAway(39088, "WizardCity/WC_Ravenwood"));
+        Assert.False(ClassicMovedObjects.IsMovedAway(39088, "WizardCity/WC_Golem_Tower"));
+        Assert.False(ClassicMovedObjects.IsMovedAway(39088, "WizardCity/WC_Ravenwood_Teleporter"));
+        Assert.False(ClassicMovedObjects.IsMovedAway(1451483, "WizardCity/WC_Ravenwood"));
+
+        var placed = Assert.Single(ClassicMovedObjects.PlacementsFor("WizardCity/WC_Golem_Tower"));
+        Assert.Equal(39088UL, (ulong) placed.m_templateID);
+        Assert.Equal(312.0146f, placed.m_location.X);
+        Assert.Equal(1.0f, placed.m_fScale);
+        Assert.Empty(ClassicMovedObjects.PlacementsFor("WizardCity/WC_Ravenwood"));
+    }
+
+    [Fact]
+    public void NothingMovesWhenTheClassicQuestEngineIsOff() {
+        if (ClassicQuestEngine.IsActive) {
+            return;
+        }
+
+        Assert.Empty(ClassicMovedObjects.MovedInto("WizardCity/WC_Golem_Tower"));
+    }
+
+}
