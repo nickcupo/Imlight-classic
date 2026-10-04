@@ -114,11 +114,13 @@ public sealed class ClassicSettingsStore {
             "Multiplies each item, Treasure Card and reagent drop chance (each chance is capped at 100%, and a mob still "
             + "drops at most its 2009 number of items). 2009: 1.", 0, 100),
         new(ClassicSettingKeys.BackpackSize, ClassicSettingKind.Int, "0", "Quality of life",
-            "Backpack slots in all. 0 uses Character.MaxInventoryItems. (The 2009 backpack held eight of each kind of "
-            + "equipment, wiki \"Vendors and Banking\" oldid 4921; this server counts one total.) Applies at the next login.",
+            "Backpack slots in all. 0 uses the classic 150 (owner ruling 2026-10-04), or Character.MaxInventoryItems "
+            + "without a classic profile. (The 2009 backpack held eight of each kind of equipment, wiki \"Vendors and "
+            + "Banking\" oldid 4921; this server counts one total.) Applies at the next login.",
             0, 1000),
         new(ClassicSettingKeys.BankSize, ClassicSettingKind.Int, "100", "Quality of life",
-            "Bank slots (2009: 100, wiki oldid 4921). This server has no bank service yet, so it has no effect.",
+            "Bank slots of each wizard's dorm bank (2009: 100, wiki oldid 4921). 0 also means 100. The shared bank "
+            + "keeps 100. Applies at the next login.",
             0, 1000),
         new(ClassicSettingKeys.SpellAnimationSpeed, ClassicSettingKind.Double, "1", "Quality of life",
             "How fast the server moves on after spell animations (2 waits half as long). The client must also play "

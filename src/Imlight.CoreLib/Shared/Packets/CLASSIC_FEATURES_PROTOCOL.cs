@@ -165,4 +165,21 @@ internal sealed class CLASSIC_FEATURES_PROTOCOL : IServerProtocol {
 
     }
 
+    /// <summary>
+    /// CLASSIC: the wizard used the dorm bank chest; the session's BankService loads the shared bank and opens the
+    /// bank window (InteractBankComponent runs on the zone actor, which must not wait on the database).
+    /// </summary>
+    public sealed class MSG_BANKOPEN : IServerMessage {
+
+        public byte MessageOrder { get; } = 11;
+        public byte ServiceID { get; } = 110;
+
+        /// <summary>The bank chest's global id (MSG_OPENBANK.GlobalID).</summary>
+        public ulong BankObjectId;
+
+        /// <summary>The zone the chest is in; the bank closes when the wizard leaves it.</summary>
+        public string Zone;
+
+    }
+
 }

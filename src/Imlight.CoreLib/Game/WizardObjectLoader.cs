@@ -59,6 +59,7 @@ public static class WizardObjectLoader {
         SetPetSnackBehavior(clientObject, ref character);
         SetPetOwnerBehavior(clientObject, ref character);
         SetAlchemyBehavior(clientObject, ref character);
+        SetStorageBehavior(clientObject, character); // CLASSIC
 
         return clientObject;
     }
@@ -88,6 +89,21 @@ public static class WizardObjectLoader {
         else {
             throw new Exception("Behavior ClientWizInventoryBehavior not found!");
         }
+    }
+
+    /// <summary>
+    /// CLASSIC: the dorm bank's items and the bank and shared bank sizes (ClientWizStorageBehavior). The shared bank's
+    /// items are sent when the bank opens (BankService).
+    /// </summary>
+    public static void SetStorageBehavior(WizClientObject clientObject, Wizard character) {
+        if (!CoreObjectFactory.FindBehaviorInstance<ClientWizStorageBehavior>(clientObject, out var storageBehavior)) {
+            return; // a template without WizardStorageBehavior has no bank
+        }
+
+        var idx = clientObject.m_inactiveBehaviors.IndexOf(storageBehavior);
+        var client = (character.StorageBehavior ??= new()).GetClientBehaviorInstance();
+        client.m_behaviorTemplateNameID = storageBehavior.m_behaviorTemplateNameID;
+        clientObject.m_inactiveBehaviors[idx] = client;
     }
 
     public static void SetEquipmentBehavior(WizClientObject clientObject, Wizard character) {

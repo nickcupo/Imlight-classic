@@ -113,6 +113,7 @@ public class Wizard {
     public WizardCharacterBehavior WizardAvatar { get; set; }
     public ServerWizPlayerNameBehavior PlayerNameBehavior { get; set; }
     public ServerWizInventoryBehavior InventoryBehavior { get; set; }
+    public ServerWizStorageBehavior StorageBehavior { get; set; } = new(); // CLASSIC: the dorm bank (BankService)
     public ServerWizEquipmentBehavior EquipmentBehavior { get; set; }
     public ServerMagicSchoolBehavior MagicSchoolBehavior { get; set; }
     public ServerWizSpellbookBehavior SpellbookBehavior { get; set; }
