@@ -76,6 +76,7 @@ public class GameServiceFactory : ServiceFactory {
         typeof(TutorialService),
         typeof(QuestService),
         typeof(PotionService),
+        typeof(TradeService), // CLASSIC: treasure card trading between friends (2009).
         typeof(TreasureShopService),
         typeof(ClassicCinematicService), // CLASSIC
         typeof(BadgeService), // CLASSIC
