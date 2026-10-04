@@ -45,6 +45,7 @@ using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Classic;
 using Imlight.Common;
+using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.Game.Combat;
 using Imlight.CoreLib.Game.Spells;
 using Imlight.CoreLib.Game.Zone.Core;
@@ -103,6 +104,8 @@ internal sealed class CombatCreatureAIComponent(ZoneEntity entity) : ZoneEntityC
         => template is GameObjectTemplate gameObjectTemplate
         && gameObjectTemplate.m_behaviors.Any(x => x is NPCBehaviorTemplate)
         && gameObjectTemplate.m_behaviors.Any(x => x is DuelistBehaviorTemplate);
+
+    private DateTime _bornUtc = DateTime.UtcNow; // CLASSIC: RoamingRejection
 
     public override void OnStart() {
         // Optional for a summoned minion, which must not roam or trip the sigil's OnCreatureMove.
@@ -241,6 +244,15 @@ internal sealed class CombatCreatureAIComponent(ZoneEntity entity) : ZoneEntityC
         // Admission by another sigil wins over a delayed rejection from this movement broadcast.
         if (_isInDuel || _sentFinalKill || message.ExpectedCreature is null
             || !ReferenceEquals(message.ExpectedCreature, Entity.ActiveGameObject)) return;
+        // CLASSIC: a creature that has only just spawned inside the full circle stays out of the fight where it stands
+        // (RoamingRejection); deleting it at once left a copy in the client every spawn interval.
+        if (ClassicQuestEngine.IsActive && !Imlight.Classic.Quests.RoamingRejection.Despawns(DateTime.UtcNow - _bornUtc)) {
+            Logger.Debug("{Creature} spawned inside a full duel circle; it stays out of the duel.",
+                Logger.Args(Entity.ActiveGameObject?.m_debugName));
+
+            return;
+        }
+
         _sentFinalKill = true;
         Entity.DeleteObject();
     }
