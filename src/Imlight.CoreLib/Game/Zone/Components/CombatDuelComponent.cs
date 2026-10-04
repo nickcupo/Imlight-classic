@@ -972,6 +972,10 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
 
         AssignParticipantToSubCircle(subCircle, participantActor, participantObject);
         PublishActiveDuel(); // CLASSIC
+        // CLASSIC: a wizard walking into a duel that waits for dropped wizards gets it going again (zombie duel fix).
+        if (isPlayer && _isActive) {
+            ResumeIfNoLongerWaiting();
+        }
 
         Logger.Debug("Duel {0} | Slot {1} | Participant {2} joined",
             Logger.Args(Duel.m_duelID.Full, subCircle.SlotIndex, participantObject.m_debugName));

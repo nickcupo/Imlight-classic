@@ -114,6 +114,29 @@ internal sealed partial class CombatDuelComponent {
     }
 
     /// <summary>
+    /// True (and the wait is over) when the duel was waiting for dropped wizards but a connected wizard is now seated:
+    /// one who walked into the circle. Without this the duel kept waiting with the newcomer stuck in it, and every
+    /// newcomer who gave up and logged out added another held seat (the "zombie duel").
+    /// </summary>
+    private bool TakeResumeAfterWaiting() {
+        if (!_waitingForRejoin || ShouldWaitForRejoin()) {
+            return false;
+        }
+
+        _waitingForRejoin = false;
+
+        return true;
+    }
+
+    /// <summary>Starts the next round of a waiting duel that a connected wizard has joined.</summary>
+    private void ResumeIfNoLongerWaiting() {
+        if (TakeResumeAfterWaiting()) {
+            Logger.Information("Duel {0} | a wizard joined; play resumes.", Logger.Args(Duel.m_duelID.Full));
+            Self.Tell(new COMBAT_106_PROTOCOL.MSG_NEWROUND());
+        }
+    }
+
+    /// <summary>
     /// Puts a wizard who logged back in into the seat held for them. Returns false when no seat is held for them.
     /// </summary>
     private bool TryRejoin(CoreObject playerObj, IActorRef playerActor, Wizard playerWizard) {
@@ -216,8 +239,7 @@ internal sealed partial class CombatDuelComponent {
         else if (AlivePlayerCount == 0) {
             EndDuel();
         }
-        else if (_waitingForRejoin && !ShouldWaitForRejoin()) {
-            _waitingForRejoin = false;
+        else if (TakeResumeAfterWaiting()) {
             Self.Tell(new COMBAT_106_PROTOCOL.MSG_NEWROUND());
         }
         else {
