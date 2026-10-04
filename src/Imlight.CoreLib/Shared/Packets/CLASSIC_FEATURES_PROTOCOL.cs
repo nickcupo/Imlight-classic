@@ -165,4 +165,16 @@ internal sealed class CLASSIC_FEATURES_PROTOCOL : IServerProtocol {
 
     }
 
+    /// <summary>
+    /// CLASSIC: QuestService has queued the held quests for the socket (its MSG_PRELOGIN work); AttachService sends
+    /// MSG_LOGINCOMPLETE on this instead of waiting a fixed 500 ms. The quest messages were told to the session before
+    /// this one, so they still reach the client first.
+    /// </summary>
+    public sealed class MSG_PRELOGINREADY : IServerMessage {
+
+        public byte MessageOrder { get; } = 11;
+        public byte ServiceID { get; } = 110;
+
+    }
+
 }

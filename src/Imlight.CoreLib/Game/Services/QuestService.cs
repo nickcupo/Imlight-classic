@@ -74,6 +74,17 @@ internal partial class QuestService(SessionActor sessionActor) : MessageService(
 
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_PRELOGIN))]
     private void ReceiveSendQuests(ZONE_102_PROTOCOL.MSG_PRELOGIN message) {
+        try {
+            SendHeldQuests();
+        }
+        finally {
+            // CLASSIC: told after the quest messages (same sender, same session mailbox), so AttachService's
+            // MSG_LOGINCOMPLETE still reaches the client after them.
+            TellOtherServices(new CLASSIC_FEATURES_PROTOCOL.MSG_PRELOGINREADY());
+        }
+    }
+
+    private void SendHeldQuests() {
         var wizard = GetActiveWizard();
         foreach (var qInstance in wizard.QuestBehavior.CurrentQuestInstances) {
             var qTemplate = QuestTemplateCollection.GetQuestByName(qInstance.QuestName);
