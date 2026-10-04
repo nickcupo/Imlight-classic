@@ -57,6 +57,7 @@ public static class ClassicSettings {
     public static double GoldMultiplier => Store.Double(ClassicSettingKeys.GoldMultiplier);
     public static double DropRateMultiplier => Store.Double(ClassicSettingKeys.DropRateMultiplier);
     public static int BackpackSize => Store.Int(ClassicSettingKeys.BackpackSize);
+    public static int BankSize => Store.Int(ClassicSettingKeys.BankSize); // CLASSIC: the dorm bank (BankService)
     public static double SpellAnimationSpeed => Store.Double(ClassicSettingKeys.SpellAnimationSpeed);
     public static bool TeleportToFriendAnywhere => Store.Bool(ClassicSettingKeys.TeleportToFriendAnywhere);
     public static int CombatRejoinSeconds => Store.Int(ClassicSettingKeys.CombatRejoinSeconds);

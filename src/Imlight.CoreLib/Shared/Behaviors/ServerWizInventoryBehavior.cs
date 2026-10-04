@@ -34,18 +34,24 @@ public class ServerWizInventoryBehavior : IClientBehaviorProvider<ClientWizInven
 
     private static int s_iniMaxItemsAllowed = ConfigurationManager.Settings["Character.MaxInventoryItems"].AsInt();
 
-    // CLASSIC: [Classic] BackpackSize (dashboard switch) overrides Character.MaxInventoryItems when set above 0.
+    // CLASSIC: [Classic] BackpackSize (dashboard switch) overrides the backpack size when set above 0. Otherwise a
+    // classic profile's backpack holds 150 items (owner ruling 2026-10-04; Imlight.Classic.Inventory.Banking), and
+    // a server without one keeps Character.MaxInventoryItems.
     private static int s_maxItemsAllowed {
-        get => Classic.ClassicSettings.BackpackSize is > 0 and var size ? size : s_iniMaxItemsAllowed;
+        get => Classic.ClassicSettings.BackpackSize is > 0 and var size ? size
+            : Imlight.Classic.ClassicRuntime.IsInitialized && Imlight.Classic.ClassicRuntime.IsActive ? Imlight.Classic.Inventory.Banking.ClassicBackpackSize : s_iniMaxItemsAllowed;
         set => s_iniMaxItemsAllowed = value;
     }
+
+    /// <summary>CLASSIC: the backpack's size in effect.</summary>
+    [JsonIgnore] public static int MaxItemsAllowed => s_maxItemsAllowed;
     private static readonly int s_maxJewelsAllowed = ConfigurationManager.Settings["Character.MaxJewelsAllowed"].AsInt();
     private static readonly int s_maxItemsAllowedFallback = 20;
     private static readonly Lock s_writeLock = new(); // CLASSIC: static, so it is never serialized.
 
     public List<ulong> InventoryItemIds { get; set; }
 
-    // CLASSIC: true when the backpack holds as many items as the ini allows (Character.MaxInventoryItems).
+    // CLASSIC: true when the backpack holds as many items as it may (MaxItemsAllowed).
     [JsonIgnore] public bool IsFull => s_maxItemsAllowed > 0 && Items is not null && Items.Count >= s_maxItemsAllowed;
 
     [JsonIgnore] public CopyOnWriteList<WizClientObjectItem> Items { get; set; } // CLASSIC: other services' actors read it while one of them writes.

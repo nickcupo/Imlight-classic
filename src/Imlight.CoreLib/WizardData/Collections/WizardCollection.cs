@@ -334,6 +334,7 @@ public static class WizardCollection {
         UpdateCharacter(wizard.CharId, existingCharacter => {
             existingCharacter.InventoryBehavior = wizard.InventoryBehavior;
             existingCharacter.EquipmentBehavior = wizard.EquipmentBehavior;
+            existingCharacter.StorageBehavior = wizard.StorageBehavior; // CLASSIC: the dorm bank
             existingCharacter.PetSnackBehavior = wizard.PetSnackBehavior;
             existingCharacter.AlchemyBehavior = wizard.AlchemyBehavior;
         });
@@ -574,6 +575,15 @@ public static class WizardCollection {
             .Where(i => wizard.InventoryBehavior.InventoryItemIds
             .Contains(i.m_globalID))
         ];
+
+        // CLASSIC: the dorm bank keeps its items under the wizard's id too (BankService); older characters have none.
+        wizard.StorageBehavior ??= new();
+        wizard.StorageBehavior.BankItemIds ??= [];
+        if (expired.Count > 0) {
+            wizard.StorageBehavior.BankItemIds = [.. wizard.StorageBehavior.BankItemIds.Where(id => !expired.Contains(id))];
+        }
+        var bankIds = wizard.StorageBehavior.BankItemIds.ToHashSet();
+        wizard.StorageBehavior.Items = [.. items.Where(i => bankIds.Contains(i.m_globalID))];
 
         // Load the character's equipment.
         // The equipped items are stored as global IDs in the character's EquipmentBehavior.

@@ -76,6 +76,7 @@ public class GameServiceFactory : ServiceFactory {
         typeof(TutorialService),
         typeof(QuestService),
         typeof(PotionService),
+        typeof(BankService), // CLASSIC: the dorm bank and shared bank.
         typeof(TreasureShopService),
         typeof(ClassicCinematicService), // CLASSIC
         typeof(BadgeService), // CLASSIC
