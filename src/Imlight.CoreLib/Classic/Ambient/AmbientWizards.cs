@@ -97,6 +97,13 @@ internal sealed class AmbientWizard {
     /// <summary>CLASSIC (2026-10-03): the turns still ahead on the current walk (NavGrid), Target being the next.</summary>
     public Queue<Vector3> Route { get; } = new();
 
+    /// <summary>
+    /// CLASSIC (2026-10-04): the straight run under way (to Target), or null between runs. The client was sent its far
+    /// end once; <see cref="LegId"/> tells the leg's end timer from a later leg's.
+    /// </summary>
+    public WalkLeg? Leg { get; set; }
+    public int LegId { get; set; }
+
     /// <summary>A short stop at a corner of the walk, until then.</summary>
     public DateTime PauseUntil { get; set; }
     public DateTime Until { get; set; }
