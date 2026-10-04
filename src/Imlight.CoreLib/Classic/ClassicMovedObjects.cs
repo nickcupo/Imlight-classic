@@ -29,9 +29,14 @@
  * Mr. Lincoln (WC-GTW-Registrar, 39088) stood in Golem Court in 2009
  * (https://wizard101.fandom.com/wiki/Mr._Lincoln?oldid=55150, 2009-12-28,
  * "Location: Golem Court"); the July 2019 new-player update moved him to
- * Ravenwood. r806919's Golem Court has no spot of his, so he takes the one of
- * Annie Shutterbug (WC-HUB-NPC14, 1452022), a later NPC the classic server
- * hides (zones/later-objects.yaml), so the spot is walkable and free.
+ * Ravenwood. His spot is his own Golem Court placement in the 2014 client
+ * (Wizard_1_240 WizardCity-WC_Golem_Tower.wad gamedata.bin: template 39088,
+ * "WC-GTW-Registrar instance", object 79441, DYNAMIC_SERVER, at (324.0142,
+ * 515.9117, 30.01953), yaw 1.661999), free in r806919's Golem Court (the
+ * nearest object there, Annie Shutterbug, is 92 units away and hidden).
+ *
+ * Zones are matched by path (Zone.ZonePath); Zone.ZoneName is the display key
+ * (WizardZone_Ravenwood) once the zone data is loaded.
  */
 
 using System.Collections.Generic;
@@ -55,7 +60,7 @@ internal static class ClassicMovedObjects {
 
     internal static readonly ImmutableArray<Move> Moves = [
         new(39088, "WC-GTW-Registrar instance", "WizardCity/WC_Ravenwood", "WizardCity/WC_Golem_Tower",
-            new Vector3(312.0146f, 424.4895f, 30.21804f), 0.8896183f),
+            new Vector3(324.0142f, 515.9117f, 30.01953f), 1.661999f),
     ];
 
     /// <summary>

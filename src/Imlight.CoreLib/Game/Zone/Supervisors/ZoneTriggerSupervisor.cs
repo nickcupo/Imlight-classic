@@ -61,6 +61,9 @@ internal sealed partial class ZoneTriggerSupervisor(Core.Zone zone) : ZoneEntity
                 Logger.Warning("Zone {Zone}: {Count} trigger(s) could not be read and were skipped.", Logger.Args(Zone.ZoneName, unreadable));
             }
             ApplyStoneDiscovery(replacedTriggers); // CLASSIC
+            if (ClassicQuestEngine.IsActive) { // CLASSIC: the Commons exits open at magic level 2, as in the 2014 client.
+                ClassicCommonsExits.Apply(Zone.ZonePath, replacedTriggers);
+            }
             if (ClassicQuestEngine.IsActive) { // CLASSIC: the state objects the triggers listen to (InteractStateObjectComponent).
                 ZoneObjectStates.SetListenedTags(ZoneRef, Imlight.Classic.Quests.ObjectStateRules.ListenedTags(replacedTriggers
                     .SelectMany(t => (t.m_fireEvents ?? []).Concat(t.m_activateEvents ?? []))

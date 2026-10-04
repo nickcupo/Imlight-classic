@@ -47,8 +47,10 @@ internal sealed class ZoneObjectSupervisor(Core.Zone zone) : ZoneEntitySuperviso
 
         // Initialize any objects found within the zone data.
         // CLASSIC: plus the NPCs that stood in this zone in 2009 but that the later data places elsewhere.
-        foreach (var objectInfo in zoneData.m_objectList.Concat(ClassicMovedObjects.MovedInto(zone.ZoneName))) {
-            if (!IsObjectEligibleForSpawn(objectInfo, zone.ZoneName)) {
+        // CLASSIC: by the zone path ("WizardCity/WC_Ravenwood"); ZoneName is the display key ("WizardZone_Ravenwood")
+        // once the zone data is in, so Mr. Lincoln stayed in Ravenwood and never reached Golem Court.
+        foreach (var objectInfo in zoneData.m_objectList.Concat(ClassicMovedObjects.MovedInto(zone.ZonePath))) {
+            if (!IsObjectEligibleForSpawn(objectInfo, zone.ZonePath)) {
                 continue;
             }
 
