@@ -88,6 +88,7 @@ public static class ClassicSettingKeys {
     public const string TeleportToFriendAnywhere = "TeleportToFriendAnywhere";
     public const string CombatRejoinSeconds = "CombatRejoinSeconds";
     public const string RestartMaxWaitMinutes = "RestartMaxWaitMinutes";
+    public const string ZoneTransferDelayMs = "ZoneTransferDelayMs";
     public const string HolidayEvents = "HolidayEvents";
     public const string HolidayDateOverride = "HolidayDateOverride";
     public const string BazaarStocked = "BazaarStocked";
@@ -130,6 +131,10 @@ public sealed class ClassicSettingsStore {
             + "fight has dropped, it waits. 0 removes them at once, as a flee.", 0, 1800),
         new(ClassicSettingKeys.RestartMaxWaitMinutes, ClassicSettingKind.Int, "10", "Reliability",
             "A safe restart waits until no one is in a fight, but never longer than this after the warning ends.", 0, 120),
+        new(ClassicSettingKeys.ZoneTransferDelayMs, ClassicSettingKind.Int, "250", "Performance",
+            "Milliseconds between the old zone letting a wizard go and the server transfer to the new zone (upstream "
+            + "waited 1000 \"so the client can finish tearing down zone objects\"; the removals reach the client first "
+            + "either way). Raise it back to 1000 if zone changes misbehave.", 0, 5000),
         new(ClassicSettingKeys.HolidayEvents, ClassicSettingKind.Bool, "true", "Events",
             "Run the 2009 holiday events (classic-data/holidays) on their real calendar dates."),
         new(ClassicSettingKeys.HolidayDateOverride, ClassicSettingKind.Int, "0", "Events",

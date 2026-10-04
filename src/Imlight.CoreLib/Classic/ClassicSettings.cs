@@ -61,6 +61,7 @@ public static class ClassicSettings {
     public static bool TeleportToFriendAnywhere => Store.Bool(ClassicSettingKeys.TeleportToFriendAnywhere);
     public static int CombatRejoinSeconds => Store.Int(ClassicSettingKeys.CombatRejoinSeconds);
     public static int RestartMaxWaitMinutes => Store.Int(ClassicSettingKeys.RestartMaxWaitMinutes);
+    public static int ZoneTransferDelayMs => Store.Int(ClassicSettingKeys.ZoneTransferDelayMs);
     public static bool HolidayEvents => Store.Bool(ClassicSettingKeys.HolidayEvents);
     public static int HolidayDateOverride => Store.Int(ClassicSettingKeys.HolidayDateOverride);
     public static bool BazaarStocked => Store.Bool(ClassicSettingKeys.BazaarStocked);

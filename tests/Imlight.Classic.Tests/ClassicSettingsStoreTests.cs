@@ -61,6 +61,15 @@ public sealed class ClassicSettingsStoreTests : IDisposable {
     }
 
     [Fact]
+    public void ZoneTransferDelayDefaultsTo250AndAcceptsTheUpstreamSecond() {
+        var store = new ClassicSettingsStore(_ => null, null);
+        Assert.Equal(250, store.Int(ClassicSettingKeys.ZoneTransferDelayMs));
+
+        var ini = new Dictionary<string, string> { [ClassicSettingKeys.ZoneTransferDelayMs] = "1000" };
+        Assert.Equal(1000, new ClassicSettingsStore(key => ini.GetValueOrDefault(key), null).Int(ClassicSettingKeys.ZoneTransferDelayMs));
+    }
+
+    [Fact]
     public void IniValueBeatsDefaultAndOverrideBeatsIni() {
         var ini = new Dictionary<string, string> { [ClassicSettingKeys.XpMultiplier] = "2" };
         var store = new ClassicSettingsStore(key => ini.GetValueOrDefault(key), _path);
