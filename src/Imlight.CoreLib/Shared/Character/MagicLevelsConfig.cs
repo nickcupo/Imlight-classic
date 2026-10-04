@@ -261,6 +261,7 @@ internal class MagicLevelsConfig : RootSingleResourceSingleton<MagicLevelsConfig
                 counter++;
             }
 
+            ApplyClassicHealth(key, val); // CLASSIC: the profile's base health replaces the client's for its levels.
             s_playerLevelConfig.Add(key, val);
         }
 
@@ -290,6 +291,27 @@ internal class MagicLevelsConfig : RootSingleResourceSingleton<MagicLevelsConfig
         Logger.Information("Classic XP table {Table} applied to levels 1-{MaxLevel}: {Count} level totals differ from the client{Detail}.",
             Logger.Args(table.Id, table.MaxLevel, differences.Count,
                 differences.Count == 0 ? "" : ": " + string.Join(", ", differences.Select(d => $"L{d.Level} {d.Client}->{d.Classic}"))));
+    }
+
+    // CLASSIC: writes the profile's base health (rules.player_health) into one school's level table. Levels past the
+    // table, and the schools it does not list (Shadow, Moon, ...), keep the client's values.
+    private static void ApplyClassicHealth(string className, List<MagicLevelInfo> classLevels) {
+        if (ClassicProgression.HealthTable is not { } table || classLevels is null) {
+            return;
+        }
+
+        var changed = 0;
+        for (var level = 1; level < classLevels.Count; level++) {
+            if (table.HealthOf(className, level) is { } health && classLevels[level].m_hitpoints != health) {
+                classLevels[level].m_hitpoints = health;
+                changed++;
+            }
+        }
+
+        if (changed > 0) {
+            Logger.Information("Classic health table {Table}: {School} base health set for {Count} levels.",
+                Logger.Args(table.Id, className, changed));
+        }
     }
 
     public void DisposeStream()

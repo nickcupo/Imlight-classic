@@ -102,7 +102,7 @@ public sealed class SchemaDriftTests {
         Assert.Equal(EnumValues(rules.GetProperty("dragonspyre_difficulty")), ClassicSchema.DragonspyreDifficulties.ToArray());
         Assert.Equal(EnumValues(rules.GetProperty("tutorial")), ClassicSchema.Tutorials.ToArray());
         Assert.Equal(EnumValues(rules.GetProperty("teleport_stones")), ClassicSchema.TeleportStoneRules.ToArray());
-        Assert.Equal(new[] { "accuracy_table", "xp_table", "mob_rewards", "badges", "quest_cards", "treasure_prices", "mob_stats", "crown_shop", "later_objects", "creature_decks", "power_pips_from_rank",
+        Assert.Equal(new[] { "accuracy_table", "xp_table", "player_health", "mob_rewards", "badges", "quest_cards", "treasure_prices", "mob_stats", "crown_shop", "later_objects", "creature_decks", "power_pips_from_rank",
                              "dragonspyre_difficulty", "tutorial", "teleport_stones" },
             rules.EnumerateObject().Select(rule => rule.Name).ToArray());
     }

@@ -57,6 +57,14 @@ public sealed class OpenPvpTests {
     public void FightStartsWhenBothSidesAreThere(int s0, int s1, int ready, bool over, OpenPvpStart expected)
         => Assert.Equal(expected, OpenPvpRules.Decide(s0, s1, ready, over));
 
+    [Theory]
+    [InlineData(true, true, false)]   // classic arena duel: no mana (wiki Health_and_Mana oldid 41879)
+    [InlineData(false, true, true)]
+    [InlineData(true, false, true)]   // stock Imlight keeps its behaviour
+    [InlineData(false, false, true)]
+    public void OnlyAClassicPvpDuelIsFreeOfMana(bool pvp, bool classic, bool costs)
+        => Assert.Equal(costs, OpenPvpRules.CastingCostsMana(pvp, classic));
+
     [Fact]
     public void RealCirclesLoad() {
         var config = OpenPvpLoader.Load(Path.Combine(ClassicDataFixture.Root, "pvp", "open-pvp-2009.yaml"));
