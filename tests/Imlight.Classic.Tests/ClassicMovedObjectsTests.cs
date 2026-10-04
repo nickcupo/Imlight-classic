@@ -20,6 +20,20 @@ public sealed class ClassicMovedObjectsTests {
     }
 
     [Fact]
+    public void RolandSilverheartLeavesTheArenaForUnicornWay() {
+        Assert.True(ClassicMovedObjects.IsMovedAway(164327, "WizardCity/WC_Duel_Arena"));
+        Assert.False(ClassicMovedObjects.IsMovedAway(164327, "WizardCity/WC_Streets/WC_Unicorn"));
+
+        var placed = Assert.Single(ClassicMovedObjects.PlacementsFor("WizardCity/WC_Streets/WC_Unicorn"));
+        Assert.Equal(164327UL, (ulong) placed.m_templateID);
+        Assert.Equal("WC-ARENA-FURNITURE instance", placed.m_zoneTag);
+        Assert.Equal(2687.48f, placed.m_location.X);
+        Assert.Equal(2.224037f, placed.m_orientation.Z);
+        Assert.Equal(Imcodec.ObjectProperty.TypeCache.LoadingType.DYNAMIC_SERVER, placed.m_loadingType);
+        Assert.Empty(ClassicMovedObjects.PlacementsFor("WizardCity/WC_Duel_Arena"));
+    }
+
+    [Fact]
     public void NothingMovesWhenTheClassicQuestEngineIsOff() {
         if (ClassicQuestEngine.IsActive) {
             return;
