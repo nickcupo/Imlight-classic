@@ -202,8 +202,11 @@ public class GameWorld : ReceiveProtocolDispatcher, IWithTimers {
         //     entry); WITHOUT this, a dungeon whose hard limit is > the raid threshold loads as a shared
         //     PUBLIC zone, so two independent owners collapse into one copy;
         //   - its hard limit is small enough to be an instance (normal dungeons).
+        // CLASSIC: the open PvP arena (classic-data/pvp) is one shared zone, whatever its hard limit (the 2014
+        // Wizard City Arena has 12): wizards meet there to duel, so it is never a per-player copy.
         var isInstancedZone = wasPrivateRequest
-                           || message.ZoneData.m_nHardLimit <= HARD_LIMIT_INSTANCE_THRESHHOLD;
+                           || (message.ZoneData.m_nHardLimit <= HARD_LIMIT_INSTANCE_THRESHHOLD
+                               && !Classic.ClassicPvp.IsOpenPvpZone(zonePath));
         if (isInstancedZone) {
             Logger.Information("Game world loaded instance zone {0} for {1} (hard limit {2}{3}).",
                 Logger.Args(zonePath, ownerId, message.ZoneData.m_nHardLimit,

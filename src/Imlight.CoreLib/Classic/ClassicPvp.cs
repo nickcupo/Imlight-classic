@@ -131,6 +131,13 @@ public static class ClassicPvp {
         }
     }
 
+    /// <summary>
+    /// True when <paramref name="zone"/> is the open PvP arena: a shared zone, never a per-player instance (2009: wizards
+    /// walked into the Wizard City Arena together and took sides in its duel circle).
+    /// </summary>
+    public static bool IsOpenPvpZone(string? zone)
+        => Enabled && zone is not null && string.Equals(zone, s_config!.Zone, StringComparison.OrdinalIgnoreCase);
+
     /// <summary>True when the circle tagged <paramref name="tag"/> in <paramref name="zone"/> is an open PvP circle.</summary>
     public static bool IsPvpCircle(string? zone, string? tag)
         => Enabled && zone is not null && tag is not null && string.Equals(zone, s_config!.Zone, StringComparison.OrdinalIgnoreCase)
