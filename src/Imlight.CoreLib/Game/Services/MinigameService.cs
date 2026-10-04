@@ -37,6 +37,8 @@
  */
 
 using System;
+using System.Collections.Generic;
+using System.IO;
 using System.Text;
 using Akka.Actor;
 using Imcodec.IO;
@@ -127,13 +129,15 @@ internal class MinigameService(SessionActor sessionActor) : MessageService(sessi
 
         // Our message serializer doesn't quite support that yet, so we'll be using a shortcut:
         // Add the magic header and body manually, then send it to the message serializer.
-        var messageRaw = message.Message;
-        var messageRawBytes = Encoding.UTF8.GetBytes(messageRaw);
+        // CLASSIC: the message's own bytes. Through a string (UTF-8) every byte from 0x80 up was mangled, so a score
+        // such as 250 (0xFA) broke the decode and closed the player's session (rig-trade p1, 2026-10-04).
+        byte[] messageRawBytes = message.Message;
+        messageRawBytes ??= [];
         var writer = new BitWriter();
 
         // Write the magic header and the length of the message. +8 is the size of the header.
         writer.WriteUInt16(MAGIC_HEADER);
-        writer.WriteUInt16((ushort) (messageRaw.Length + 8));
+        writer.WriteUInt16((ushort) (messageRawBytes.Length + 8));
 
         // Write the body.
         writer.WriteUInt8(0);  // IsControl
@@ -144,7 +148,13 @@ internal class MinigameService(SessionActor sessionActor) : MessageService(sessi
         writer.WriteBytes(messageRawBytes);
 
         // Deserialize using the MessageSerializer.
-        var deserializedMsg = MessageEncoder.Decode(writer.GetData());
+        IReadOnlyCollection<IMessage> deserializedMsg;
+        try {
+            deserializedMsg = MessageEncoder.Decode(writer.GetData());
+        }
+        catch (Exception ex) when (ex is EndOfStreamException or ArgumentException or InvalidOperationException) {
+            deserializedMsg = null; // CLASSIC: a malformed process message is dropped, not fatal to the session.
+        }
 
         if (deserializedMsg == null || deserializedMsg.Count <= 0) {
             var hexStringRaw = BitConverter.ToString(messageRawBytes).Replace("-", " ");

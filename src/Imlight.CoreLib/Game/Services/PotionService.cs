@@ -174,8 +174,11 @@ internal class PotionService(SessionActor sessionActor) : MessageService(session
             Logger.Args(wizard.CharId, potionsToFill, cost, level, perPotion, charge, newCharge, max));
     }
 
+    // CLASSIC: under a profile with potion rules, Hilda Brewer charges the 2009 price (rules/potions-2009.yaml: ten
+    // gold a level, 100 to 500); otherwise the stock level bands.
     private static int PotionCostPerBottle(int level)
-        => level < 11 ? 100
+        => Imlight.CoreLib.Classic.ClassicProgression.Potions is { } potions ? potions.ShopPrice(level)
+         : level < 11 ? 100
          : level < 21 ? level * 10
          : level < 31 ? level * 15
          : level < 41 ? level * 20

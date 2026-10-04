@@ -184,6 +184,16 @@ public sealed class ProfileRules {
     public string? CreatureDecks { get; init; }
 
     /// <summary>
+    /// Path under classic-data of the potion flask rules (minigame fill, Hilda Brewer's prices), if any. CLASSIC.
+    /// </summary>
+    public string? Potions { get; init; }
+
+    /// <summary>
+    /// Path under classic-data of the Second Chance chests (October 2009), if any; null in a profile that switches them off. CLASSIC.
+    /// </summary>
+    public string? SecondChance { get; init; }
+
+    /// <summary>
     /// The rank from which power pips appear; null when unset or set to null.
     /// </summary>
     public string? PowerPipsFromRank { get; init; }

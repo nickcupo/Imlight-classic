@@ -66,6 +66,8 @@ public static class ClassicProgression {
     private static volatile CrownShopCatalog? s_crownShop; // CLASSIC
     private static volatile LaterObjects s_laterObjects = LaterObjects.Empty; // CLASSIC
     private static volatile CreatureDecks s_creatureDecks = CreatureDecks.Empty; // CLASSIC
+    private static volatile PotionRules? s_potions; // CLASSIC
+    private static volatile SecondChanceRules? s_secondChance; // CLASSIC
 
     /// <summary>
     /// The profile's XP table, or null for the client's curve.
@@ -116,6 +118,22 @@ public static class ClassicProgression {
     /// The decks creatures of the era cast, by creature template; empty when the profile names no file. CLASSIC.
     /// </summary>
     public static CreatureDecks CreatureDecks => s_creatureDecks;
+
+    /// <summary>
+    /// The profile's potion flask rules, or null for stock Imlight (no minigame fill, level-band shop prices). CLASSIC.
+    /// </summary>
+    public static PotionRules? Potions => s_potions;
+
+    /// <summary>
+    /// The profile's Second Chance chests, or null for none. CLASSIC.
+    /// </summary>
+    public static SecondChanceRules? SecondChance => s_secondChance;
+
+    /// <summary>CLASSIC: test hook.</summary>
+    internal static void UseForTests(PotionRules? potions, SecondChanceRules? secondChance) {
+        s_potions = potions;
+        s_secondChance = secondChance;
+    }
 
     /// <summary>
     /// Loads the tables a restricted profile names.
@@ -177,6 +195,18 @@ public static class ClassicProgression {
             s_creatureDecks = CreatureDecksLoader.Load(Path.Combine(classicDataRoot, creatureDecks)); // CLASSIC
             Logger.Information("Classic creature decks {Table}: own spell lists for {Count} creature templates.",
                 Logger.Args(s_creatureDecks.Id, s_creatureDecks.Count));
+        }
+
+        if (profile.Rules.Potions is { } potions && File.Exists(Path.Combine(classicDataRoot, potions))) {
+            s_potions = PotionRulesLoader.Load(Path.Combine(classicDataRoot, potions)); // CLASSIC
+            Logger.Information("Classic potions {Table}: minigames pay {Mana} x max mana, overflow fills flasks; shop {Per} gold a level, {Min}-{Max}.",
+                Logger.Args(s_potions.Id, s_potions.MinigameManaReward, s_potions.PricePerLevel, s_potions.MinPrice, s_potions.MaxPrice));
+        }
+
+        if (profile.Rules.SecondChance is { } secondChance && File.Exists(Path.Combine(classicDataRoot, secondChance))) {
+            s_secondChance = SecondChanceRulesLoader.Load(Path.Combine(classicDataRoot, secondChance)); // CLASSIC
+            Logger.Information("Classic Second Chance {Table}: {Count} chests, {First} Crowns +{Step} a use, {Uses} uses a day.",
+                Logger.Args(s_secondChance.Id, s_secondChance.Chests.Length, s_secondChance.FirstCost, s_secondChance.CostStep, s_secondChance.DailyUses));
         }
 
         if (profile.Rules.CrownShop is { } crownShop && File.Exists(Path.Combine(classicDataRoot, crownShop))) {

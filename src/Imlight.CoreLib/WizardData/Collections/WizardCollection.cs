@@ -101,6 +101,78 @@ public static class WizardCollection {
         });
     }
 
+    // CLASSIC: two wizards' lanes for one atomic write (a treasure card trade). Lanes are taken in index order, so two
+    // trades never deadlock, and nothing else ever holds two lanes.
+    private static T WithWriteLanes<T>(ulong firstCharId, ulong secondCharId, Func<T> write) {
+        var a = (int) (firstCharId & WriteLaneMask);
+        var b = (int) (secondCharId & WriteLaneMask);
+        if (a == b) {
+            return WithWriteLane(firstCharId, write);
+        }
+
+        if (s_heldWriteLane is { } heldLane) {
+            throw new InvalidOperationException($"Cannot acquire wizard lanes {a} and {b} while holding wizard lane {heldLane}.");
+        }
+
+        var (low, high) = a < b ? (a, b) : (b, a);
+        lock (s_writeLanes[low]) {
+            lock (s_writeLanes[high]) {
+                s_heldWriteLane = low;
+                try {
+                    return write();
+                }
+                finally {
+                    s_heldWriteLane = null;
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// CLASSIC: swaps treasure cards between two wizards in one save: <paramref name="firstGives"/> leave the first
+    /// wizard's book for the second's, <paramref name="secondGives"/> the other way. Every card is checked against the
+    /// saved books (not the live caches), so a card spent, deleted or put in a deck after it was offered fails the
+    /// whole trade; nothing is changed unless both books are saved together.
+    /// </summary>
+    /// <returns>True if the trade was saved and both live books now show it.</returns>
+    internal static bool CommitTreasureCardTrade(Wizard first, IReadOnlyList<uint> firstGives,
+        Wizard second, IReadOnlyList<uint> secondGives,
+        Func<IDocumentSession> openSession = null, Func<IDocumentSession, ulong, Wizard> loadWizard = null) {
+        if (first is null || second is null || first.CharId == second.CharId
+            || Classic.Ambient.AmbientWizards.IsAmbientChar(first.CharId) || Classic.Ambient.AmbientWizards.IsAmbientChar(second.CharId)) {
+            return false;
+        }
+
+        return WithWriteLanes(first.CharId, second.CharId, () => {
+            using var session = openSession is null ? s_store.OpenSession() : openSession();
+            session.Advanced.OptimisticConcurrencyMode = OptimisticConcurrencyMode.Writes;
+            var a = loadWizard is null ? GetCharacterByCharId(session, first.CharId) : loadWizard(session, first.CharId);
+            var b = loadWizard is null ? GetCharacterByCharId(session, second.CharId) : loadWizard(session, second.CharId);
+            if (a is null || b is null || !HasCards(a, firstGives) || !HasCards(b, secondGives)) {
+                return false;
+            }
+
+            foreach (var card in firstGives) {
+                a.SpellbookBehavior.RemoveTreasureCard(card);
+                b.SpellbookBehavior.AddTreasureCard(card);
+            }
+
+            foreach (var card in secondGives) {
+                b.SpellbookBehavior.RemoveTreasureCard(card);
+                a.SpellbookBehavior.AddTreasureCard(card);
+            }
+
+            session.SaveChanges();
+            PublishTreasureCards(first, a);
+            PublishTreasureCards(second, b);
+
+            return true;
+        });
+
+        static bool HasCards(Wizard wizard, IReadOnlyList<uint> cards)
+            => cards.GroupBy(card => card).All(group => wizard.SpellbookBehavior.TreasureCardCount(group.Key) >= group.Count());
+    }
+
     internal static bool TryPurchaseTreasureCards(Wizard liveWizard, uint templateId, int quantity, int unitPrice,
         Func<IDocumentSession> openSession = null, Func<IDocumentSession, ulong, Wizard> loadWizard = null) {
         var total = (long) quantity * unitPrice;

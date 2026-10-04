@@ -225,6 +225,7 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
             TimeSpan.FromSeconds(NO_AGGRO_EFFECT_DURATION_IN_SECONDS));
 
         ClassicBadges.MobsDefeated(GetActiveWizard(), message.MobTemplateIds, SendToSocket); // CLASSIC: kill badges.
+        RecordSecondChanceWin(message.MobTemplateIds); // CLASSIC: opens a beaten boss's Second Chance chest.
 
         // CLASSIC: under the profile's mob reward rules, XP per pip, gold and drops come from classic-data
         // and show in one loot popup; SpiralDB mob loot (none for Arc 1) still rolls after it.
@@ -248,6 +249,16 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
         GrantMobCrowns(GrantMobLoot(message.MobTemplateIds));
     }
 
+    // CLASSIC: the bosses this wizard beat here open their Second Chance chests (October 2009).
+    private void RecordSecondChanceWin(ulong[] mobTemplateIds) {
+        if (ClassicProgression.SecondChance is null || mobTemplateIds is not { Length: > 0 } || GetActiveWizard() is not { } wizard) {
+            return;
+        }
+
+        var instance = WizardData.Collections.OnlinePlayerCollection.GetOnlinePlayer(wizard.CharId)?.InstanceOwnerId ?? 0;
+        Game.SecondChance.SecondChanceChests.Instance.RecordWin(wizard.CharId, wizard.Zone, instance, mobTemplateIds);
+    }
+
     // CLASSIC: on this server a defeated mob pays as many Crowns as gold (owner decision 2026-09-28).
     private void GrantMobCrowns(int gold) {
         if (!ClassicCrowns.CrownsFromMobs || gold <= 0 || GetActiveWizard() is not { } wizard) {
@@ -269,32 +280,7 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
         var random = Random.Shared;
         foreach (var templateId in defeatedMobTemplateIds ?? []) {
             AddHolidayDrops(rules, templateId, result, random); // CLASSIC: classic-data/holidays boss drops in season
-
-            if (ClassicMobInfo.Of(templateId) is not { } mob) {
-                continue;
-            }
-
-            var loot = rules.Roll(mob, random, ClassicSettings.DropRateMultiplier); // CLASSIC: dashboard switch
-            result.GoldAmount += loot.Gold;
-            foreach (var item in loot.Items) {
-                if (CoreObjectFactory.GetCoreTemplate(item) is not null) {
-                    result.Items.Add(new DropItemResult { ItemId = item.ToString(), ItemName = string.Empty, Quantity = 1 });
-                }
-            }
-
-            foreach (var card in loot.TreasureCards) {
-                if (card <= uint.MaxValue && CoreObjectFactory.GetCoreTemplate(card) is SpellTemplate) {
-                    result.TreasureCards.Add((uint) card);
-                }
-            }
-
-            foreach (var reagent in loot.Reagents) {
-                if (CoreObjectFactory.GetCoreTemplate(reagent.Template) is ReagentItemTemplate) {
-                    result.Reagents.Add(new DropItemResult {
-                        ItemId = reagent.Template.ToString(), ItemName = string.Empty, Quantity = reagent.Quantity,
-                    });
-                }
-            }
+            AddClassicMobLoot(rules, templateId, result, random);
         }
 
         if (!result.HasRewards) {
@@ -304,6 +290,38 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
         LootGranter.GrantAndDisplay(SessionActor.ActorRef, GetActiveWizard(), result);
 
         return result.GoldAmount;
+    }
+
+    /// <summary>
+    /// CLASSIC: one defeated mob's gold, equipment, treasure cards and reagents under the profile's mob reward rules,
+    /// added to <paramref name="result"/> (also a Second Chance chest's roll).
+    /// </summary>
+    internal static void AddClassicMobLoot(MobRewardRules rules, ulong templateId, DropTableResult result, Random random) {
+        if (ClassicMobInfo.Of(templateId) is not { } mob) {
+            return;
+        }
+
+        var loot = rules.Roll(mob, random, ClassicSettings.DropRateMultiplier); // CLASSIC: dashboard switch
+        result.GoldAmount += loot.Gold;
+        foreach (var item in loot.Items) {
+            if (CoreObjectFactory.GetCoreTemplate(item) is not null) {
+                result.Items.Add(new DropItemResult { ItemId = item.ToString(), ItemName = string.Empty, Quantity = 1 });
+            }
+        }
+
+        foreach (var card in loot.TreasureCards) {
+            if (card <= uint.MaxValue && CoreObjectFactory.GetCoreTemplate(card) is SpellTemplate) {
+                result.TreasureCards.Add((uint) card);
+            }
+        }
+
+        foreach (var reagent in loot.Reagents) {
+            if (CoreObjectFactory.GetCoreTemplate(reagent.Template) is ReagentItemTemplate) {
+                result.Reagents.Add(new DropItemResult {
+                    ItemId = reagent.Template.ToString(), ItemName = string.Empty, Quantity = reagent.Quantity,
+                });
+            }
+        }
     }
 
     // CLASSIC: while a holiday event runs, its bosses also roll their 2009 drops (classic-data/holidays), each list at

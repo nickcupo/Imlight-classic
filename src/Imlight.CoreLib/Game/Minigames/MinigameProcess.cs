@@ -230,6 +230,17 @@ internal sealed class MinigameProcess : Process {
             m_lootRarityList = new(),
         };
 
+        // CLASSIC: under a profile with potion rules the rewards are paid, not only shown: the mana refill (and, with
+        // the globe full, the potion flasks; 2009) and the gold. Stock Imlight only displayed them.
+        if (Imlight.CoreLib.Classic.ClassicProgression.Potions is { } potions) {
+            var reached = Imlight.CoreLib.Game.Minigames.MinigameRewards.ThresholdsReached(score, scoreThresholds);
+            Imlight.CoreLib.Game.Minigames.MinigameRewards.PayMana(Sender, wizard, potions, reached, lootInfo);
+            AddGoldReward(Math.Min(reached, s_goldTiers.Length - 1), lootInfo);
+            Imlight.CoreLib.Game.Minigames.MinigameRewards.PayGold(Sender, wizard, lootInfo);
+
+            return lootInfo;
+        }
+
         AddManaReward(score, thresholdIndex, wizard, lootInfo);
         AddGoldReward(thresholdIndex, lootInfo);
 
@@ -267,14 +278,15 @@ internal sealed class MinigameProcess : Process {
 
     private int GetScoreFromGenericIMessage(IMessage message) {
         try {
-            var scoreField = message.GetType().GetField("score",
-                System.Reflection.BindingFlags.Public |
-                System.Reflection.BindingFlags.NonPublic |
-                System.Reflection.BindingFlags.Instance);
+            const System.Reflection.BindingFlags flags = System.Reflection.BindingFlags.Public
+                | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
 
-            return scoreField != null
-                ? (int) scoreField.GetValue(message)
-                : -1;
+            // CLASSIC: the generated DML messages carry "score" as a property, so the field lookup alone found nothing
+            // and every finished game counted as a leaderboard query (no rewards; rig-trade p2, 2026-10-04).
+            var type = message.GetType();
+            var value = type.GetProperty("score", flags)?.GetValue(message) ?? type.GetField("score", flags)?.GetValue(message);
+
+            return value is int score ? score : -1;
         }
         catch (Exception ex) {
             Logger.Error("{0} {1} failed to get score: {2}",
