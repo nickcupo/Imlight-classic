@@ -280,7 +280,7 @@ internal sealed class InteractPersonaGoalComponent(ZoneEntity entity)
                 PlayerObject = playerObject
             };
             Timers.StartSingleTimer(
-                "start_transition",
+                "start_transition_" + playerActor.Path.Name, // CLASSIC: per wizard (one key per NPC dropped the first of two hand-ins a moment apart)
                 startTransitionMsg,
                 TimeSpan.FromMilliseconds(QUEST_COMPLETION_TRANSITION_DELAY_MS));
         }
@@ -381,7 +381,7 @@ internal sealed class InteractPersonaGoalComponent(ZoneEntity entity)
         };
 
         Timers.StartSingleTimer(
-            "delayed_quest_offer",
+            "delayed_quest_offer_" + playerActor.Path.Name, // CLASSIC: per wizard
             delayedQuestOfferMsg,
             TimeSpan.FromMilliseconds(QUEST_COMPLETION_TRANSITION_DELAY_MS));
     }
