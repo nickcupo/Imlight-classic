@@ -32,7 +32,11 @@ internal static class EnhancedMessageDecoder {
         if (frame.Length < 9 || BinaryPrimitives.ReadUInt16LittleEndian(frame) != 0xF00D)
             throw new InvalidDataException("Invalid frame");
         var length = BinaryPrimitives.ReadUInt16LittleEndian(frame.AsSpan(2));
-        if ((length & 0x8000) != 0 || length != frame.Length - 4 || frame[^1] != 0)
+        // CLASSIC: control frames carry no trailing zero byte. The official client's KeepAlive ends with the high byte of
+        // its ElapsedSessionTime (minutes), which is non-zero after 256 minutes: every keep-alive of a long session was
+        // rejected here (live log 2026-10-04: an error pair every 10 s from 4.5 h into the owner's session).
+        var control = frame[4] == 1;
+        if ((length & 0x8000) != 0 || length != frame.Length - 4 || (!control && frame[^1] != 0))
             throw new InvalidDataException("Invalid frame length");
         if (frame[4] == 1) return MessageEncoder.Decode(frame);
         if (frame[4] != 0) throw new InvalidDataException("Invalid control flag");
