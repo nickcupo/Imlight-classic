@@ -103,8 +103,17 @@ public sealed class SchemaDriftTests {
         Assert.Equal(EnumValues(rules.GetProperty("tutorial")), ClassicSchema.Tutorials.ToArray());
         Assert.Equal(EnumValues(rules.GetProperty("teleport_stones")), ClassicSchema.TeleportStoneRules.ToArray());
         Assert.Equal(new[] { "accuracy_table", "xp_table", "player_health", "mob_rewards", "badges", "quest_cards", "treasure_prices", "mob_stats", "crown_shop", "later_objects", "creature_decks", "power_pips_from_rank",
-                             "dragonspyre_difficulty", "tutorial", "teleport_stones" },
+                             "dragonspyre_difficulty", "tutorial", "teleport_stones", "potions", "second_chance" },
             rules.EnumerateObject().Select(rule => rule.Name).ToArray());
+    }
+
+    [Fact]
+    public void PotionAndSecondChanceLoaderKeysMatchTheirSchemas() { // CLASSIC
+        string[] Keys(System.Text.Json.JsonElement node) => [.. node.GetProperty("properties").EnumerateObject().Select(p => p.Name).Order(StringComparer.Ordinal)];
+        string[] Sorted(IEnumerable<string> keys) => [.. keys.Order(StringComparer.Ordinal)];
+
+        Assert.Equal(Keys(ReadSchema("potions.schema.json")), Sorted(PotionRulesLoader.s_rootKeys));
+        Assert.Equal(Keys(ReadSchema("second-chance.schema.json")), Sorted(SecondChanceRulesLoader.s_rootKeys));
     }
 
     [Fact]

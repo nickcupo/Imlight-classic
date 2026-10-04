@@ -230,6 +230,17 @@ internal sealed class MinigameProcess : Process {
             m_lootRarityList = new(),
         };
 
+        // CLASSIC: under a profile with potion rules the rewards are paid, not only shown: the mana refill (and, with
+        // the globe full, the potion flasks; 2009) and the gold. Stock Imlight only displayed them.
+        if (Imlight.CoreLib.Classic.ClassicProgression.Potions is { } potions) {
+            var reached = Imlight.CoreLib.Game.Minigames.MinigameRewards.ThresholdsReached(score, scoreThresholds);
+            Imlight.CoreLib.Game.Minigames.MinigameRewards.PayMana(Sender, wizard, potions, reached, lootInfo);
+            AddGoldReward(Math.Min(reached, s_goldTiers.Length - 1), lootInfo);
+            Imlight.CoreLib.Game.Minigames.MinigameRewards.PayGold(Sender, wizard, lootInfo);
+
+            return lootInfo;
+        }
+
         AddManaReward(score, thresholdIndex, wizard, lootInfo);
         AddGoldReward(thresholdIndex, lootInfo);
 

@@ -74,7 +74,14 @@ public static class LootGranter {
     /// <param name="playerActor">The player's SessionActor, which routes the messages.</param>
     /// <param name="wizard">The player wizard data receiving the rewards.</param>
     /// <param name="results">The rolled drop table results to grant.</param>
-    public static void GrantAndDisplay(IActorRef playerActor, Wizard wizard, DropTableResult results) {
+    public static void GrantAndDisplay(IActorRef playerActor, Wizard wizard, DropTableResult results)
+        => Grant(playerActor, wizard, results, showPopup: true);
+
+    /// <summary>
+    /// Grants every reward in <paramref name="results"/>; the loot popup only when <paramref name="showPopup"/> (a
+    /// Second Chance chest shows its rewards in its own window). CLASSIC.
+    /// </summary>
+    public static void Grant(IActorRef playerActor, Wizard wizard, DropTableResult results, bool showPopup) {
         // CLASSIC: [Classic] GoldMultiplier and XpMultiplier (dashboard switches; 2009: 1) scale the gold and XP of mob
         // and quest rewards before they are granted and shown.
         results.GoldAmount = Classic.ClassicSettings.Scale(results.GoldAmount, Classic.ClassicSettings.GoldMultiplier);
@@ -85,7 +92,9 @@ public static class LootGranter {
         UpdateCharacterItems(playerActor, wizard, results.Items);
         UpdateTreasureCards(playerActor, wizard, results);   // CLASSIC
         UpdateReagents(playerActor, wizard, results.Reagents);   // CLASSIC
-        SendLootInfoToClient(playerActor, results, wizard);
+        if (showPopup) {
+            SendLootInfoToClient(playerActor, results, wizard);
+        }
 
         if (results.GrantsPotionSlot) {
             UpdateWizardPotionMax(playerActor, wizard);

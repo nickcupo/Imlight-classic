@@ -63,7 +63,7 @@ public static class ClassicProfileLoader {
     internal static readonly FrozenSet<string> s_worldUnlockKeys = FrozenSet.Create(StringComparer.Ordinal, "any_of", "source", "notes");
     private static readonly FrozenSet<string> s_ruleKeys = FrozenSet.Create(StringComparer.Ordinal,
         "accuracy_table", "xp_table", "player_health", "mob_rewards", "badges", "quest_cards", "treasure_prices", "mob_stats", "crown_shop", "later_objects", "creature_decks", "power_pips_from_rank", "dragonspyre_difficulty", "tutorial",
-        "teleport_stones");
+        "teleport_stones", "potions", "second_chance");
 
     /// <summary>
     /// Loads the profile <paramref name="id"/> from <paramref name="profilesDir"/>, following its extends chain.
@@ -379,6 +379,14 @@ public static class ClassicProfileLoader {
                 case "accuracy_table" or "xp_table" or "player_health" or "mob_rewards" or "badges" or "quest_cards" or "treasure_prices" or "mob_stats" or "crown_shop" or "later_objects" or "creature_decks":
                     _ = diagnostics.ReadString(entry.Value, path);
                     break;
+                case "potions": // CLASSIC
+                    _ = diagnostics.ReadString(entry.Value, path);
+                    break;
+                case "second_chance": // CLASSIC: null switches off an inherited file (arc1-2009h1, before Oct 2009)
+                    if (entry.Value is not YNull) {
+                        _ = diagnostics.ReadString(entry.Value, path);
+                    }
+                    break;
                 case "power_pips_from_rank":
                     if (entry.Value is not YNull) {
                         _ = diagnostics.ReadEnum(entry.Value, path, ClassicSchema.PowerPipRanks);
@@ -433,6 +441,8 @@ public static class ClassicProfileLoader {
                 CrownShop = ScalarOf(rules, "crown_shop"),
                 LaterObjects = ScalarOf(rules, "later_objects"),
                 CreatureDecks = ScalarOf(rules, "creature_decks"), // CLASSIC
+                Potions = ScalarOf(rules, "potions"), // CLASSIC
+                SecondChance = ScalarOf(rules, "second_chance"), // CLASSIC
                 PowerPipsFromRank = ScalarOf(rules, "power_pips_from_rank"),
                 DragonspyreDifficulty = ScalarOf(rules, "dragonspyre_difficulty"),
                 Tutorial = ScalarOf(rules, "tutorial"),

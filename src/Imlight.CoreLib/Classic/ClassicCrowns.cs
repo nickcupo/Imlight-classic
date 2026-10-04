@@ -106,6 +106,29 @@ public static class ClassicCrowns {
     }
 
     /// <summary>
+    /// CLASSIC: spends <paramref name="amount"/> Crowns only if the account has them, as one step.
+    /// </summary>
+    /// <returns>True if they were spent.</returns>
+    public static bool TrySpend(Account account, int amount) {
+        if (account is null || amount < 0) {
+            return false;
+        }
+
+        lock (account) {
+            if (account.Crowns < amount) {
+                return false;
+            }
+
+            if (amount > 0) {
+                account.Crowns -= amount;
+                AccountCollection.UpdateCrowns(account.AccountId, account.Crowns, account.StartingCrownsGiven);
+            }
+
+            return true;
+        }
+    }
+
+    /// <summary>
     /// The message that shows <paramref name="account"/>'s balance on the character page and in the Crown Shop.
     /// </summary>
     public static WIZARD_12_PROTOCOL.MSG_CROWNBALANCE BalanceMessage(Account account, ulong characterId) => new() {
