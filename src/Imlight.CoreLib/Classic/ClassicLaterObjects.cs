@@ -26,7 +26,7 @@
  * later-objects.yaml); a profile without the rule hides nothing.
  *
  * USAGE EXAMPLE:
- * if (ClassicLaterObjects.Skips(objectInfo, zone.ZoneName)) continue;   // ZoneObjectSupervisor
+ * if (ClassicLaterObjects.Skips(objectInfo, zone.ZonePath)) continue;   // ZoneObjectSupervisor
  *
  * NOTE:
  * The first entry was the 2019 Private O'Ryan (1451483, WC-ST01-NPC05-B)
