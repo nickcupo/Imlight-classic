@@ -76,6 +76,35 @@ public interface IServiceComponent {
 
 }
 
+/// <summary>
+/// CLASSIC: which component owns each option index, kept per wizard. An NPC rebuilds its option list for whichever wizard asked last;
+/// the indexes of one wizard's list must not decide where another wizard's click goes (two friends at the same NPC, one just handed in a
+/// goal and offered the next quest, the other clicking the hand-in: the click reached the offer service and did nothing).
+/// </summary>
+internal sealed class PlayerOptionIndex {
+
+    private readonly Dictionary<IActorRef, Dictionary<int, IServiceComponent>> _maps = [];
+
+    internal void Set(IActorRef player, IReadOnlyDictionary<int, IServiceComponent> map) => _maps[player] = new Dictionary<int, IServiceComponent>(map);
+
+    internal void Remove(IActorRef player) => _maps.Remove(player);
+
+    /// <summary>The component for <paramref name="index"/> in the list this wizard was sent; <paramref name="fallback"/> when it was sent none.</summary>
+    internal bool TryResolve(IActorRef player, int index, IReadOnlyDictionary<int, IServiceComponent> fallback, out IServiceComponent component) {
+        var map = _maps.TryGetValue(player, out var own) ? own : fallback;
+        if (map.TryGetValue(index, out var found)) {
+            component = found;
+
+            return true;
+        }
+
+        component = null;
+
+        return false;
+    }
+
+}
+
 internal sealed class InteractServiceMementoComponent(ZoneEntity entity) 
     : ZoneEntityComponent(entity), IComponentFactory, IWithTimers {
 
@@ -90,6 +119,7 @@ internal sealed class InteractServiceMementoComponent(ZoneEntity entity)
     private readonly PlayersInRange _playersInRenderRange = new(); // CLASSIC
     private List<IServiceComponent> _serviceComponents = [];
     private Dictionary<int, IServiceComponent> _optionIndexToComponent = [];
+    private readonly PlayerOptionIndex _playerOptionIndex = new(); // CLASSIC: each wizard's own option indexes
     private ServiceMementoBase _serviceMemento;
     private MadlibBlock _madlibBlock;
     private float _renderDistance;
@@ -117,6 +147,7 @@ internal sealed class InteractServiceMementoComponent(ZoneEntity entity)
 
     public override void OnPlayerLeave(IActorRef playerActor, ulong id) {
         _sentTeleportOptions.Remove(playerActor); // CLASSIC
+        _playerOptionIndex.Remove(playerActor); // CLASSIC
         _playersInInteractionRange.Remove(playerActor);
         _playersInRenderRange.Remove(playerActor);
 
@@ -177,7 +208,8 @@ internal sealed class InteractServiceMementoComponent(ZoneEntity entity)
         // Route to the component that owns this option index.
         // Using FirstOrDefault by ServiceName is unsafe when multiple components share
         // the same service name (e.g. InteractQuestSelectComponent shadowing WoodenChestComponent).
-        if (!_optionIndexToComponent.TryGetValue((int) serviceIndex, out var serviceComponent)) {
+        // CLASSIC: in the list this wizard was sent, not the one the NPC built for whoever asked last.
+        if (!_playerOptionIndex.TryResolve(playerActor, (int) serviceIndex, _optionIndexToComponent, out var serviceComponent)) {
             Logger.Warning("No component owns service index {0} for NPC {1} with service name {2}",
                 Logger.Args(serviceIndex, Entity.ActiveGameObject.m_debugName, serviceName));
 
@@ -267,6 +299,7 @@ internal sealed class InteractServiceMementoComponent(ZoneEntity entity)
         }
 
         RefreshServiceMomento(wizard);
+        _playerOptionIndex.Set(playerActor, _optionIndexToComponent); // CLASSIC
         _sentTeleportOptions[playerActor] = _serviceMemento?.m_serviceOptions?.Count ?? 0; // CLASSIC
 
         // If we have no service options, do not send anything.
