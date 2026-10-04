@@ -55,6 +55,45 @@ public sealed class ExcludedEnemyDespawnTests {
             await system.Terminate(); ClassicRuntime.ResetForTests();
         }
     }
+    // CLASSIC: playbot ms (MS_Plague3_T1): a creature that has only just spawned inside a full circle is not deleted (its
+    // delete, sent with its creation, left a copy in the client every spawn interval); it stays out of the duel.
+    [Theory]
+    [InlineData("WizardCity/WC_Streets/WC_Colossus", 2)]
+    [InlineData("MooShu/MS_Plague/Interiors/MS_Plague3_T1", 2)]
+    public async Task CreatureSpawnedInsideAFullCircleStaysOutOfTheDuel(string path, int enemies) {
+        Configure();
+        ClassicRuntime.ResetForTests(); ClassicRuntime.Initialize(ClassicDataFixture.RealRules("late-2009"));
+        var system = ActorSystem.Create("fresh-spawn-" + Guid.NewGuid().ToString("N"));
+        try {
+            var channel = Channel.CreateUnbounded<object>();
+            var zoneActor = system.ActorOf(Props.Create(() => new Recorder(channel)));
+            var duel = CombatRegressionTests.MakeDuel();
+            var zone = (Zone)RuntimeHelpers.GetUninitializedObject(typeof(Zone));
+            CombatRegressionTests.SetProperty(zone, "ZonePath", path);
+            var sigil = Entity(zone); var enemyEntity = Entity(zone);
+            CombatRegressionTests.SetProperty(sigil, "ActiveGameObject", new CoreObject());
+            typeof(ZoneEntityComponent).GetProperty("Entity", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(duel, sigil);
+            typeof(CombatDuelComponent).GetField("_isActive", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(duel, true);
+            typeof(CombatDuelComponent).GetField("_combatSigilObjectInfo", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(duel, new CombatSigilObjectInfo { m_radius = 200 });
+            CombatRegressionTests.SetProperty(duel.SubCircles[4], "ParticipantObject", new CoreObject { m_templateID = 1 });
+            for(var slot=0; slot < enemies; slot++) CombatRegressionTests.SetProperty(duel.SubCircles[slot], "ParticipantObject", new CoreObject { m_templateID = 2 });
+            var objectAtCircle = new CoreObject { m_globalID = 123 };
+            CombatRegressionTests.SetProperty(enemyEntity, "ActiveGameObject", objectAtCircle);
+            CombatRegressionTests.SetProperty(enemyEntity, "ZoneRef", zoneActor);
+            var fresh = system.ActorOf(Props.Create(() => new AiDriver(enemyEntity, TimeSpan.Zero)));
+            duel.OnCreatureMove(objectAtCircle, fresh, enemyEntity);
+            var probe = new Probe();
+            fresh.Tell(probe);
+            var (inDuel, finalKill, _) = await probe.Result.Task.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+            Assert.False(inDuel);
+            Assert.False(finalKill);
+            Assert.False(channel.Reader.TryRead(out _));
+            Assert.Equal(enemies, duel.CreatureCount);
+        } finally {
+            await system.Terminate(); ClassicRuntime.ResetForTests();
+        }
+    }
+
     [Theory]
     [InlineData("WizardCity/WC_Streets/WC_Unicorn", 1)]
     [InlineData("WizardCity/WC_Streets/WC_Colossus", 2)]
@@ -130,8 +169,12 @@ public sealed class ExcludedEnemyDespawnTests {
     }
     // Actor mailbox routes the actual component handlers; deletion uses the actual ZoneEntity broadcast path.
     private sealed class AiDriver : ReceiveActor {
-        public AiDriver(ZoneEntity entity) {
+        public AiDriver(ZoneEntity entity) : this(entity, TimeSpan.FromMinutes(1)) { }
+
+        // CLASSIC: the creature's age (RoamingRejection): one that walked in is old, one that just spawned is not.
+        public AiDriver(ZoneEntity entity, TimeSpan age) {
             var ai = new CombatCreatureAIComponent(entity);
+            typeof(CombatCreatureAIComponent).GetField("_bornUtc", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(ai, DateTime.UtcNow - age);
             Receive<COMBAT_106_PROTOCOL.MSG_ACTORADDEDTODUEL>(m => CombatRegressionTests.Invoke(ai, "ReceiveCombatAdded", m));
             Receive<COMBAT_106_PROTOCOL.MSG_REJECTEDROAMINGCREATURE>(m => CombatRegressionTests.Invoke(ai, "ReceiveRoamingRejection", m));
             Receive<Probe>(p => p.Result.SetResult((
