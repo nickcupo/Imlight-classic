@@ -164,6 +164,25 @@ internal class CommandModifyProtocol : CommandProtocol {
         InformSenderClient($"Added item {coreObject.m_debugName} to inventory.");
     }
 
+    // CLASSIC: QA setup for treasure card trades: add treasure cards to the book, as a drop would.
+    [Help("Add treasure cards by spell template id: addtc <template> <count>.")]
+    [Command("addtc")]
+    [AuthRequired(AuthLevel.QualityAssurance)]
+    private void AddTreasureCardCommand(string templateId, string count) {
+        if (!uint.TryParse(templateId, out var id) || CoreObjectFactory.GetCoreTemplate(id) is not SpellTemplate spell
+            || !int.TryParse(count, out var copies) || copies is < 1 or > 99) {
+            InformSenderClient("Usage: addtc <spell template id> <1-99>");
+
+            return;
+        }
+
+        for (var i = 0; i < copies; i++) {
+            Game.DropTables.LootGranter.GrantTreasureCard(Context.SessionActor, Context.Character, id);
+        }
+
+        InformSenderClient($"Added {copies} {spell.m_name} treasure card(s).");
+    }
+
     [Help("Add a pet snack by template id.")]
     [Command("addsnack")]
     [AuthRequired(AuthLevel.QualityAssurance)]
