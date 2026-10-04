@@ -872,8 +872,12 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
 
         // Defer the server transfer by the cleanup wait time so the client can
         // finish tearing down zone objects.
+        // CLASSIC: [Classic] ZoneTransferDelayMs (default 250; upstream ZONE_TRANSFER_CLEANUP_WAIT_TIME_IN_SECONDS = 1 s).
+        var cleanupMs = ClassicRuntime.IsActive
+            ? Classic.ClassicSettings.ZoneTransferDelayMs
+            : ZONE_TRANSFER_CLEANUP_WAIT_TIME_IN_SECONDS * 1000;
         Timers.StartSingleTimer("zone-transfer-delay", new SERVICE_101_PROTOCOL.MSG_ZONETRANSFER_DELAY(),
-                                TimeSpan.FromSeconds(ZONE_TRANSFER_CLEANUP_WAIT_TIME_IN_SECONDS));
+                                TimeSpan.FromMilliseconds(Math.Max(0, cleanupMs)));
     }
 
     [MessageHandler(typeof(SERVICE_101_PROTOCOL.MSG_ZONETRANSFER_DELAY))]

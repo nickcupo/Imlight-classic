@@ -22,6 +22,23 @@ public sealed class EnhancedProtocolTests {
         Assert.Equal(source.Round, actual.Round); Assert.Equal(source.RequestID, actual.RequestID);
         Assert.Equal(source.SpellTarget, actual.SpellTarget); Assert.Equal(source.SpellSelection, actual.SpellSelection);
     }
+    [Theory] [InlineData((ushort)0)] [InlineData((ushort)255)] [InlineData((ushort)256)] [InlineData((ushort)273)] [InlineData((ushort)65535)]
+    public void ClientKeepAliveDecodesAtAnySessionAge(ushort minutes) {
+        // The official client's KeepAlive frame has no trailing zero: its last byte is the high byte of the minutes.
+        var frame = MessageEncoder.Encode(new ControlMessageProtocol.KeepAlive { SessionId = 17390, Milliseconds = 500, ElapsedSessionTime = minutes });
+        var keepAlive = Assert.IsType<ControlMessageProtocol.KeepAlive>(Assert.Single(EnhancedMessageDecoder.Decode(frame)));
+        Assert.Equal(minutes, keepAlive.ElapsedSessionTime);
+
+        var client = new byte[14];
+        BinaryPrimitives.WriteUInt16LittleEndian(client, 0xF00D);
+        BinaryPrimitives.WriteUInt16LittleEndian(client.AsSpan(2), 10);
+        client[4] = 1; client[5] = 3;
+        BinaryPrimitives.WriteUInt16LittleEndian(client.AsSpan(8), 17390);
+        BinaryPrimitives.WriteUInt16LittleEndian(client.AsSpan(10), 500);
+        BinaryPrimitives.WriteUInt16LittleEndian(client.AsSpan(12), minutes);
+        var fromClient = Assert.IsType<ControlMessageProtocol.KeepAlive>(Assert.Single(EnhancedMessageDecoder.Decode(client)));
+        Assert.Equal(minutes, fromClient.ElapsedSessionTime);
+    }
     [Fact] public void StockMessageStillDecodes() {
         var actual = EnhancedMessageDecoder.Decode(MessageEncoder.Encode(new DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_COMBATMOVE { MoveType = 1, SpellSelection = 3, SpellTarget = 32, TimeLeft = 10 }));
         var move = Assert.IsType<DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_COMBATMOVE>(Assert.Single(actual));

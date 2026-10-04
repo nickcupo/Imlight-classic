@@ -116,6 +116,45 @@ public sealed class CombatRejoinTests {
         }
     }
 
+    [Fact]
+    public void WaitingDuelResumesWhenAConnectedWizardWalksIn() {
+        // Zombie duel: the only wizard logged out (seat held), so the duel waited; a second wizard who walked into
+        // the circle then sat in it with no planning phase ever coming.
+        var duel = CombatRegressionTests.MakeDuel();
+        Seat(duel, 0, player: false, charId: 0);
+        var dropped = Seat(duel, 4, player: true, charId: 1);
+        dropped.HoldSeat(DateTime.UtcNow);
+        Waiting(duel, true);
+
+        Assert.False(TakeResume(duel)); // nobody connected yet: keep waiting
+        Assert.True(Waiting(duel));
+
+        var newcomer = Seat(duel, 5, player: true, charId: 2);
+        newcomer.AddedToDuel = false; // a walk-in is added to the fight at the next round
+        Assert.True(TakeResume(duel));
+        Assert.False(Waiting(duel));
+        Assert.False(TakeResume(duel)); // only once
+    }
+
+    [Fact]
+    public void ResumeIsANoOpForADuelThatIsNotWaiting() {
+        var duel = CombatRegressionTests.MakeDuel();
+        Seat(duel, 0, player: false, charId: 0);
+        Seat(duel, 4, player: true, charId: 1);
+
+        Assert.False(TakeResume(duel));
+    }
+
+    private static bool TakeResume(CombatDuelComponent duel)
+        => (bool) CombatRegressionTests.Invoke(duel, "TakeResumeAfterWaiting")!;
+
+    private static readonly FieldInfo WaitingField = typeof(CombatDuelComponent)
+        .GetField("_waitingForRejoin", BindingFlags.Instance | BindingFlags.NonPublic)!;
+
+    private static bool Waiting(CombatDuelComponent duel) => (bool) WaitingField.GetValue(duel)!;
+
+    private static void Waiting(CombatDuelComponent duel, bool value) => WaitingField.SetValue(duel, value);
+
     private static bool ShouldWait(CombatDuelComponent duel)
         => (bool) CombatRegressionTests.Invoke(duel, "ShouldWaitForRejoin")!;
 

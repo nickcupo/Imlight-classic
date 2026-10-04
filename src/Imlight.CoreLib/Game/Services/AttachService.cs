@@ -68,6 +68,7 @@ internal class AttachService(SessionActor sessionActor) : MessageService(session
     private Wizard _wizard;
     private GAME_5_PROTOCOL.MSG_LOGINCOMPLETE _loginCompleteMessage;
     private bool _attachReceived;
+    private bool _loginCompleteSent; // CLASSIC
     private ulong _instanceOwnerId; // CLASSIC: the instance the attach joined (Classic.GroupInstances)
     private int _zoneHardLimit; // CLASSIC
 
@@ -182,8 +183,25 @@ internal class AttachService(SessionActor sessionActor) : MessageService(session
         );
     }
 
+    // CLASSIC: QuestService reports its MSG_PRELOGIN work queued (the held quests go out before MSG_LOGINCOMPLETE),
+    // so login and every zone change continue at once instead of after the fixed 500 ms; the timer stays as a fallback.
+    [MessageHandler(typeof(CLASSIC_FEATURES_PROTOCOL.MSG_PRELOGINREADY))]
+    private void ReceivePreLoginReady(CLASSIC_FEATURES_PROTOCOL.MSG_PRELOGINREADY message) {
+        if (_loginCompleteMessage is null || _loginCompleteSent) {
+            return;
+        }
+
+        Timers.Cancel("PreLoginDelay");
+        ReceivePreLogin(null);
+    }
+
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_PRELOGIN))]
     private void ReceivePreLogin(ZONE_102_PROTOCOL.MSG_PRELOGIN message) {
+        if (_loginCompleteSent) { // CLASSIC: once per attach (the ready report or the fallback timer, whichever is first)
+            return;
+        }
+
+        _loginCompleteSent = true;
         var charGameObject = _wizard.GameObject as WizClientObject;
 
         // The client only counts critical objects whose MSG_NEWOBJECT arrives after MSG_LOGINCOMPLETE; one
