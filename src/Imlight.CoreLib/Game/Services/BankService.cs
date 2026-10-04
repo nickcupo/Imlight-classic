@@ -22,9 +22,10 @@
  * PURPOSE:
  * CLASSIC: the dorm bank and the account's shared bank (100 slots each, 2009). The client's BankingWindow
  * (r806919) speaks this protocol, read from the client:
- * - open: MSG_OPENBANK(GlobalID of the chest) builds the window over the player's ClientWizStorageBehavior, whose
- *   bank list (m_itemList) came with the player object and whose shared list only MSG_STORAGECLIENTADD with
- *   SharedBank=1 fills (an add replaces an item with the same id, so sending again is safe).
+ * - open: MSG_OPENBANK(GlobalID of the chest) builds the window over the player's ClientWizStorageBehavior. Its
+ *   sizes come with the player object; its bank list (m_itemList) is AuthorityTransmit only and its shared list is
+ *   runtime-only, so both are filled here with MSG_STORAGECLIENTADD (SharedBank 0/1) before the window opens. An
+ *   add replaces an item with the same id, so sending them at every opening is safe.
  * - backpack -> bank: MSG_MOVEINVTOBANK(ClientRequestID, GlobalID, UseShared, Quantity);
  *   bank -> backpack: MSG_MOVEBANKTOINV(ClientRequestID, GlobalID, UseShared, Quantity);
  *   bank <-> shared bank: MSG_MOVEBANKTOBANK, BankID set for bank -> shared, BankSharedID for shared -> bank.
@@ -66,6 +67,17 @@ internal class BankService(SessionActor sessionActor) : MessageService(sessionAc
     protected static Props Props(SessionActor parentActor)
         => Akka.Actor.Props.Create(() => new BankService(parentActor));
 
+    private ulong _openedFor;
+
+    // The session ends (logout, disconnect): the chest closes with it.
+    protected override void OnDispose() {
+        if (_openedFor != 0) {
+            s_openBanks.TryRemove(_openedFor, out _);
+        }
+
+        base.OnDispose();
+    }
+
     /// <summary>True when the wizard opened the bank in the zone they are in.</summary>
     internal static bool IsOpen(Wizard wizard)
         => wizard is not null && s_openBanks.TryGetValue(wizard.CharId, out var zone) && zone == wizard.Zone;
@@ -78,6 +90,7 @@ internal class BankService(SessionActor sessionActor) : MessageService(sessionAc
         }
 
         s_openBanks[wizard.CharId] = message.Zone ?? wizard.Zone;
+        _openedFor = wizard.CharId;
         wizard.StorageBehavior ??= new();
 
         // The bank came with the player object; it is sent again in case the object predates a change.
@@ -150,7 +163,7 @@ internal class BankService(SessionActor sessionActor) : MessageService(sessionAc
         if (result.Moved) {
             SendRemove(wizard, message.GlobalID, from);
             Logger.Information("{0} deleted item {1} ({2}) from the {3}.",
-                Logger.Args(wizard.CharId, message.GlobalID, result.Item.m_templateID, from));
+                Logger.Args(wizard.CharId, (ulong) message.GlobalID, result.Item.m_templateID.Full, from));
         }
 
         SendToSocket(new WIZARD_12_PROTOCOL.MSG_BANKDELETECONFIRM {
@@ -191,7 +204,7 @@ internal class BankService(SessionActor sessionActor) : MessageService(sessionAc
 
         SendRemove(wizard, itemId, from);
         Logger.Debug("Bank: {0} moved item {1} ({2}) {3} -> {4}.",
-            Logger.Args(wizard.CharId, itemId, result.Item.m_templateID, from, to));
+            Logger.Args(wizard.CharId, itemId, result.Item.m_templateID.Full, from, to));
         return result;
     }
 
