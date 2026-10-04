@@ -124,6 +124,7 @@ internal sealed class SERVICE_101_PROTOCOL : IServerProtocol {
         public string DestinationLocation;
         public bool MakePrivate;
         public ulong OwnerCharId;
+        public bool RefuseWhenFull; // CLASSIC: joining a friend's instance (Classic.GroupInstances)
 
     }
 

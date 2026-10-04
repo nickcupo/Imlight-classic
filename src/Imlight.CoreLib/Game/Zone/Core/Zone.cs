@@ -184,7 +184,41 @@ public class Zone : ReceiveProtocolDispatcher, IWithTimers {
         DropIfEmptyAfterLoss();
     }
 
+    // CLASSIC: a sigil run's instance that nobody is in is kept 30 minutes, then reset (2009: "Leaving any other way
+    // gives you 30 minutes to return before it resets"; Classic.GroupInstances). A wizard's own instance (a gate
+    // dungeon, the dorm) keeps its stock lifetime.
+    private const string EMPTY_RUN_TIMER_KEY = "classic-empty-run";
+
+    private void UpdateEmptyRunTimer() {
+        if (InstanceOwnerId == 0 || !Classic.GroupInstances.IsRun(InstanceOwnerId)) {
+            return;
+        }
+
+        if (_playerCount > 0 || _isLoading) {
+            Timers.Cancel(EMPTY_RUN_TIMER_KEY);
+
+            return;
+        }
+
+        if (!Timers.IsTimerActive(EMPTY_RUN_TIMER_KEY)) {
+            Timers.StartSingleTimer(EMPTY_RUN_TIMER_KEY, new CLASSIC_FEATURES_PROTOCOL.MSG_EMPTYRUNEXPIRED(),
+                Classic.GroupInstances.EmptyInstanceLifetime);
+        }
+    }
+
+    [MessageHandler(typeof(CLASSIC_FEATURES_PROTOCOL.MSG_EMPTYRUNEXPIRED))]
+    private void ReceiveEmptyRunExpired(CLASSIC_FEATURES_PROTOCOL.MSG_EMPTYRUNEXPIRED message) {
+        if (_playerCount > 0 || _isLoading) {
+            return;
+        }
+
+        Logger.Information("Zone {Zone} (sigil run {Owner}) has been empty {Minutes} minutes; resetting it.",
+            Logger.Args(ZonePath, InstanceOwnerId, Classic.GroupInstances.EmptyInstanceLifetime.TotalMinutes));
+        Context.Parent.Tell(new CLASSIC_FEATURES_PROTOCOL.MSG_DROPSELF { ZoneName = ZonePath });
+    }
+
     private void DropIfEmptyAfterLoss() {
+        UpdateEmptyRunTimer(); // CLASSIC
         if (!_resetWhenEmpty || _playerCount > 0 || _isLoading) {
             return;
         }
@@ -274,6 +308,7 @@ public class Zone : ReceiveProtocolDispatcher, IWithTimers {
         }
 
         _players.Add(message.PlayerActor); // CLASSIC: was _playerCount++.
+        UpdateEmptyRunTimer(); // CLASSIC
         InformZoneSupervisors(message.PlayerActor, message);
         
         // Send response to confirm player was added
@@ -538,13 +573,32 @@ public class Zone : ReceiveProtocolDispatcher, IWithTimers {
     }
 
     private void ProcessZoneTransfer(ZONE_102_PROTOCOL.MSG_ZONETRANSFER message, IActorRef sender) {
+        var hardLimit = ZoneData?.m_nHardLimit ?? 0;
+
+        // CLASSIC: up to four wizards in an instance; a friend teleporting into a full one is refused (2009:
+        // "Your friend is in a full instance"; Classic.GroupInstances).
+        if (message.RefuseWhenFull && InstanceOwnerId != 0 && Classic.GroupInstances.IsFull(_playerCount, hardLimit)) {
+            Logger.Information("Zone {Zone} (instance of {Owner}) is full ({Players}); a teleport-in was refused.",
+                Logger.Args(ZonePath, InstanceOwnerId, _playerCount));
+            sender.Tell(new ZONE_102_PROTOCOL.MSG_ZONETRANSFERRSP {
+                ErrorCode = Imcodec.Cryptography.StringHash.Compute(Classic.GroupInstances.FullInstanceError),
+                ErrorMessage = Classic.GroupInstances.FullInstanceMessage,
+                InstanceOwnerId = InstanceOwnerId,
+                ZoneHardLimit = hardLimit,
+            });
+
+            return;
+        }
+
         var rsp = new ZONE_102_PROTOCOL.MSG_ZONETRANSFERRSP {
             ZoneActorRef = Self,
             DynamicZoneId = _dynamicZoneId,
             ErrorCode = 0,
             MobileId = GenerateObjectIdentifier(),
             ZoneDisplayName = ZoneName,
-            CriticalObjects = [.. _criticalObjectIds]
+            CriticalObjects = [.. _criticalObjectIds],
+            InstanceOwnerId = InstanceOwnerId, // CLASSIC
+            ZoneHardLimit = hardLimit, // CLASSIC
         };
 
         var actualLocation = GetLocationFromString(message.DestinationLocation);
@@ -561,6 +615,7 @@ public class Zone : ReceiveProtocolDispatcher, IWithTimers {
             }
             else if (pendingEvent is ZONE_102_PROTOCOL.MSG_ADDPLAYER addPlayer) {
                 _players.Add(playerActor); // CLASSIC: was _playerCount++.
+                UpdateEmptyRunTimer(); // CLASSIC
                 InformZoneSupervisors(playerActor, addPlayer);
                 
                 // Send response to confirm player was added

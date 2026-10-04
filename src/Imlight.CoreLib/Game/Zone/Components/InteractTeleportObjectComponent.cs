@@ -156,6 +156,7 @@ internal sealed class InteractTeleportObjectComponent(ZoneEntity entity)
             DestinationLocation = teleport.m_destinationLoc,
             SendToClient = true,
             OwnerCharId = playerCharacter?.CharId ?? 0,
+            KeepInstance = true, // CLASSIC: a door inside an instance leads to the same instance (Classic.GroupInstances)
         });
     }
 

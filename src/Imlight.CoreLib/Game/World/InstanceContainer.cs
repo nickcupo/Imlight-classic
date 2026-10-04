@@ -111,9 +111,14 @@ internal sealed class InstanceContainer(ulong instanceOwnerId) : ReceiveProtocol
         }
 
         _zones.Remove(message.ZoneName);
-        Logger.Information("Resetting instance zone {ZoneName} (owner {OwnerId}) after a party loss.",
+        Logger.Information("Resetting instance zone {ZoneName} (owner {OwnerId}).",
             Logger.Args(message.ZoneName, _instanceOwnerId));
         Context.Stop(zoneActor);
+
+        // CLASSIC: a sigil run's container with nothing left in it is forgotten (no one can enter that run again).
+        if (_zones.Count == 0 && Classic.GroupInstances.IsRun(_instanceOwnerId)) {
+            Context.Parent.Tell(new CLASSIC_FEATURES_PROTOCOL.MSG_RUNCONTAINEREMPTY { OwnerId = _instanceOwnerId });
+        }
     }
 
     private IActorRef CreateZone(string zoneName) {

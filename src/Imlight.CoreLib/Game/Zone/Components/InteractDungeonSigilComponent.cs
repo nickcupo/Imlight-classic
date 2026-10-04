@@ -51,6 +51,8 @@ using System.Text.RegularExpressions;
 using Akka.Actor;
 using Imcodec.Math;
 using Imcodec.ObjectProperty.TypeCache;
+using Imlight.Classic;
+using Imlight.Common;
 using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.Game.Requirements;
 using Imlight.CoreLib.Game.Requirements.Contexts;
@@ -152,6 +154,26 @@ internal sealed partial class InteractDungeonSigilComponent(ZoneEntity entity)
         var heading = obj.m_orientation.Z;
         var sigilLoc = Util.GetCompactStringFromVector(new Vector4(pad.X, pad.Y, pad.Z, heading));
 
+        // CLASSIC: everyone who uses this sigil before its countdown ends (up to four) enters the same new instance,
+        // a sigil run (2009: "you all have to interact with the circles before the countdown reaches zero";
+        // Classic.GroupInstances). The first wizard starts the countdown; the others join it with the time left.
+        SigilTicket ticket = null;
+        if (ClassicRuntime.IsActive && playerCharacter is not null) {
+            var now = DateTime.UtcNow;
+            ticket = _group?.Join(playerCharacter.CharId, now);
+            if (ticket is null) {
+                if (_group is not null && _group.IsOpen(now)) {
+                    return; // every slot is taken
+                }
+
+                _group = new SigilGroup(GroupInstances.NewRunId(now), now, GroupInstances.SigilCountdownSeconds);
+                ticket = _group.Join(playerCharacter.CharId, now);
+            }
+
+            Logger.Information("Dungeon sigil -> '{0}': {1} is wizard {2} of sigil run {3} ({4:0.0} s left).",
+                Logger.Args(sigil.DestinationZone, playerCharacter.CharId, ticket.Slot + 1, ticket.RunId, ticket.SecondsLeft));
+        }
+
         // Hand off to the player's session, which owns dismount + snap + countdown + transfer. The pad
         // object's gid lets the session trip the client's native on-face countdown on it.
         playerActor.Tell(new ZONE_102_PROTOCOL.MSG_STARTSIGILENTRY {
@@ -161,8 +183,14 @@ internal sealed partial class InteractDungeonSigilComponent(ZoneEntity entity)
             Radius = DEFAULT_INTERACTION_RADIUS,
             DestinationZone = sigil.DestinationZone,
             DestinationLoc = sigil.DestinationLoc,
+            RunId = ticket?.RunId ?? 0, // CLASSIC
+            Slot = ticket?.Slot ?? 0, // CLASSIC
+            CountdownSeconds = ticket?.SecondsLeft ?? 0, // CLASSIC
         });
     }
+
+    // CLASSIC: the group gathering on this sigil (null until first used; a new one once its countdown is over).
+    private SigilGroup _group;
 
     // CLASSIC: the sigil's own m_requirements (a MinigameSigilInfo list: the quest that opens its dungeon), read the
     // KingsIsle way when the classic quest rules are on. Stock Imlight never checked them.
