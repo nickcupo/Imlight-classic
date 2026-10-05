@@ -115,12 +115,14 @@ public sealed class LostLieutenantServerTests : IDisposable {
         var quest = LoadQuest(LostLieutenantTests.Quest);
         var wizard = WizardAt(50);
         Assert.False(Meets(Sigil(), wizard)); // dark before the quest
+        Assert.False(Imlight.CoreLib.Classic.BriskbreezeTower.IsUnlocked(wizard));
 
         // What ResModifyEntryHandler does with the quest's start result (Wizard.SetRegistryValue, without its save).
         var start = Assert.IsType<ResModifyEntry>(Assert.Single(quest.m_startResults.m_results));
         Assert.False(start.m_isQuestRegistry);
         Assert.True(wizard.QuestBehavior.SetRegistryValue(start.m_entryName, (ulong) start.m_value));
         Assert.True(Meets(Sigil(), wizard));
+        Assert.True(Imlight.CoreLib.Classic.BriskbreezeTower.IsUnlocked(wizard)); // the spellbook guide follows the same entry
 
         // Completion only rolls the reward table; nothing clears the entry.
         Assert.All(quest.m_endResults.m_results, result => Assert.IsNotType<ResModifyEntry>(result));
@@ -134,6 +136,11 @@ public sealed class LostLieutenantServerTests : IDisposable {
         var quest = LoadQuest(LostLieutenantTests.Quest);
         Assert.Equal(["WC-SHP-NPC01", "WC-ST06-NPC01", "WC-ST06-NPC04", "WC-ST06-NPC06_Culpepper"],
             quest.m_goals.Select(goal => Assert.IsType<PersonaGoalTemplate>(goal).m_personaName.ToString()));
+
+        // The client's compiled quest-helper (POI) table keys this quest's arrows by these ids: KingsIsle's goal names
+        // "Goal", "Goal 1", "Goal 2" and "Goal 3" (r806919 POI records under StringHash("WC-GNT-C01-001")).
+        Assert.Equal(new[] { "Goal", "Goal 1", "Goal 2", "Goal 3" }.Select(Imcodec.Cryptography.StringHash.Compute),
+            quest.m_goals.Select(goal => goal.m_goalNameID));
 
         // Walk the goal logic from the start goals: each step adds the next goal, the last completes the quest.
         var active = quest.m_startGoals.Select(goal => goal.ToString()).ToList();
