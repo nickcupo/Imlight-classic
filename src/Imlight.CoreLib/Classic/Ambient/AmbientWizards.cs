@@ -116,6 +116,9 @@ internal sealed class AmbientWizard {
     public DateTime NextIdleLine { get; set; }
     public DateTime NextLook { get; set; }
 
+    /// <summary>CLASSIC (2026-10-04): the after-duel protection, as a player's (translucent until it walks off, then 6 s).</summary>
+    public Imlight.Classic.Quests.PostCombatGrace Grace { get; } = new();
+
     public FriendMemory FriendOf(ulong charId)
         => Record.Friends.FirstOrDefault(f => f.CharId == charId)?.ToMemory();
 

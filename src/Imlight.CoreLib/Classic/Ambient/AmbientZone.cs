@@ -275,10 +275,64 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
             Logger.Args(wizard.Name, wizard.Wizard.MagicSchoolBehavior.Level, wizard.Identity.School, _zone));
     }
 
+    /// <summary>
+    /// CLASSIC (2026-10-04): an ambient wizard's after-duel protection, as a player's (PostCombatGrace): translucent
+    /// and left alone by creatures while it stands on the duel spot (up to 30 s), then 6 s from when it walks off.
+    /// </summary>
+    private void StartGrace(AmbientWizard wizard, DateTime now) {
+        if (!ClassicQuestEngine.IsActive) {
+            return;
+        }
+
+        wizard.Grace.Start(now, Num(wizard.Position));
+        BroadcastEffects(wizard, PostCombatEffects.Put(wizard.Wizard, wizard.Wizard.GameObjectID, wizard.Grace.EffectName,
+            wizard.Grace.EndsUtc));
+    }
+
+    private void TickGrace(AmbientWizard wizard, DateTime now) {
+        var changed = wizard.Moving && wizard.Grace.Moved(Num(wizard.Position), now);
+        if (!changed && wizard.Grace.Due(now)) {
+            wizard.Grace.Advance(now);
+            changed = true;
+        }
+
+        if (!changed) {
+            return;
+        }
+
+        BroadcastEffects(wizard, wizard.Grace.Protected
+            ? PostCombatEffects.Put(wizard.Wizard, wizard.Wizard.GameObjectID, wizard.Grace.EffectName, wizard.Grace.EndsUtc)
+            : PostCombatEffects.Take(wizard.Wizard, wizard.Wizard.GameObjectID));
+    }
+
+    private void EndGrace(AmbientWizard wizard) {
+        if (!wizard.Grace.Protected && !wizard.Wizard.IsInCombatGrace) {
+            return;
+        }
+
+        wizard.Grace.Clear();
+        BroadcastEffects(wizard, PostCombatEffects.Take(wizard.Wizard, wizard.Wizard.GameObjectID));
+    }
+
+    private void BroadcastEffects(AmbientWizard wizard, List<IMessage> messages) {
+        if (_zoneActor is null || _realPlayers == 0) {
+            return;
+        }
+
+        foreach (var message in messages) {
+            _zoneActor.Tell(new ZONE_102_PROTOCOL.MSG_ZONEBROADCAST {
+                Message = message, Selfless = true, Sender = wizard.Endpoint, Targets = ZoneBroadcastTarget.Players,
+            });
+        }
+    }
+
     private void Leave(AmbientWizard wizard) {
         if (!wizard.Present) {
             return;
         }
+
+        wizard.Grace.Clear();
+        PostCombatEffects.Take(wizard.Wizard, wizard.Wizard.GameObjectID);
 
         wizard.Present = false;
         Drop(wizard);
@@ -365,6 +419,10 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
                 Decide(wizard, now);
             }
 
+            if (wizard.Grace.Protected) {
+                TickGrace(wizard, now); // CLASSIC: still translucent after its duel?
+            }
+
             if (wizard.DuelSigil == ulong.MaxValue && wizard.Activity == AmbientActivity.Walking && now >= wizard.NextLook
                 && _zoneActor is not null) {
                 // Hunting (one hunter a zone): every tick (a player fishes every 250 ms; at 600 units a second a
@@ -372,7 +430,7 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
                 // a player's MoveService does, so a street mob whose aggro range covers this spot starts a duel with it (its
                 // permit for a fight of its own is set). Static duelists answer the duel-target question instead.
                 wizard.NextLook = now.AddSeconds(TickSeconds * 0.9);
-                wizard.Wizard.IsInCombatGrace = false;
+                wizard.Wizard.IsInCombatGrace = wizard.Grace.Protected; // CLASSIC: mobs leave a translucent hunter alone
                 Fish(wizard);
                 _zoneActor.Tell(new ZONE_102_PROTOCOL.MSG_QUERYNEARESTDUELTARGET { PlayerGameObject = wizard.Wizard.GameObject },
                     wizard.Endpoint);
@@ -854,6 +912,7 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
             ? AmbientActivity.Sparring : AmbientActivity.Fighting;
         Drop(wizard); // the seat below is where it goes
         wizard.DuelSigil = added.Duel?.SigilId ?? 0;
+        EndGrace(wizard); // CLASSIC: a duel ends the last one's fade
         wizard.Wizard.IsInDuel = true;
         wizard.Position = added.SlotPosition;
         wizard.Wizard.Location = added.SlotPosition;
@@ -901,6 +960,7 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
         if (!won && defeated) {
             // A defeated wizard goes home to heal (2009: back to the commons) and comes back a little later.
             wizard.Activity = AmbientActivity.Away;
+            EndGrace(wizard);
             Leave(wizard);
             Timers.StartSingleTimer($"enter-{wizard.CharId}", new Enter(wizard.CharId), TimeSpan.FromSeconds(45 + _rng.Next(45)));
             return;
@@ -908,6 +968,7 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
 
         wizard.Activity = AmbientActivity.Idle;
         wizard.Until = DateTime.UtcNow.AddSeconds(6 + _rng.Next(10));
+        StartGrace(wizard, DateTime.UtcNow); // CLASSIC: translucent on the duel spot, as a player is
         if (won && notice is not null && AmbientWizards.Settings.Chat && wizard.Limiter.TryTake(DateTime.UtcNow)) {
             if (AmbientChatBrain.AfterWin(ChatFor(wizard, 0), wizard.Turn++) is { } line) {
                 AmbientChat.Say(wizard, line);
