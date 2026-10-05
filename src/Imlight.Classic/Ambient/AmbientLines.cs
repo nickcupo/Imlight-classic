@@ -179,7 +179,7 @@ public static class AmbientLines {
     // ---- on their own ---------------------------------------------------------------------------
 
     private static readonly string[] s_smallTalk = [
-        "anyone want to quest?", "lf group", "this place is busy today", "anyone seen my pet?", "hi everyone",
+        "anyone want to quest?", "lfg", "this place is busy today", "anyone seen my pet?", "hi everyone",
         "where's a good place to level?", "i love this hat", "need more gold lol", "i wish i had more treasure cards",
         "my deck needs work", "anyone know a good shield spell?", "i keep fizzling today", "brb, getting a snack",
         "back!", "so many quests", "i almost have enough training points", "who else is questing?",
@@ -198,7 +198,7 @@ public static class AmbientLines {
 
     private static readonly Dictionary<AmbientSchool, string[]> s_school = new() {
         [AmbientSchool.Fire] = ["fire spells are so warm", "fire elf, go!", "{school} wizards are the hottest lol", "i love my fire cat"],
-        [AmbientSchool.Ice] = ["ice wizards are tough", "my ice shields are the best", "brr, ice magic", "frost beetle time"],
+        [AmbientSchool.Ice] = ["ice wizards are tough", "my ice shields are the best", "ice magic is so cold", "frost beetle time"],
         [AmbientSchool.Storm] = ["storm spells hit so hard", "thunder snake!", "storm wizards never miss lol, jk", "zap!"],
         [AmbientSchool.Myth] = ["myth minions are so helpful", "blood bat go!", "myth is the coolest", "my minion is my best friend"],
         [AmbientSchool.Life] = ["need a heal? i'm life", "life wizards heal everyone", "imp, go!", "fairy heals for everyone :)"],

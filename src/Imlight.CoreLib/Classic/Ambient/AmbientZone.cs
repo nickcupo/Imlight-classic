@@ -77,7 +77,7 @@ internal sealed record AmbientDuelNotice(ulong SigilId, Vector3 Location, ulong[
                                          bool Active, bool Pvp);
 
 /// <summary>Drives one zone's ambient wizards (see the file header).</summary>
-internal sealed class AmbientZone : ReceiveActor, IWithTimers {
+internal sealed partial class AmbientZone : ReceiveActor, IWithTimers {
 
     private sealed record Tick;
     private sealed record Enter(ulong CharId);
@@ -109,12 +109,10 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
     private readonly Dictionary<ulong, AmbientDuelNotice> _duels = [];
     private readonly HashSet<ulong> _offeredDuels = [];
 
-    // CLASSIC (2026-10-03): what the zone's players heard lately (no line twice in their last twenty), who is here to
-    // hear, and when the zone may next talk unprompted: one idle line every few minutes for the whole zone, so most
-    // passers-by hear nothing.
+    // CLASSIC (2026-10-03): what the zone's players heard lately (no line twice in their last twenty) and who is here to
+    // hear. When the zone talks unprompted is AmbientChatter's ChatRhythm (2026-10-05).
     private readonly LineHistory _heard = new();
     private ulong[] _audience = [];
-    private DateTime _nextZoneLine;
     private IActorRef _zoneActor;
     private NavGrid _nav;                        // CLASSIC (2026-10-03): where a wizard can walk; null until loaded
     private List<Spot> _spots;
@@ -271,6 +269,7 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
         wizard.NextIdleLine = DateTime.UtcNow.AddSeconds(30 + _rng.Next(90));
         SpawnFor(wizard, null);
         SetOnline(wizard);
+        Chatter.Arrived(wizard, _audience);
         Logger.Information("Ambient wizard {Name} (level {Level} {School}) is in {Zone}.",
             Logger.Args(wizard.Name, wizard.Wizard.MagicSchoolBehavior.Level, wizard.Identity.School, _zone));
     }
@@ -338,6 +337,8 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
             foreach (var notice in _duels.Values.ToList()) {
                 TryOffer(notice);
             }
+
+            Chatter.Census(now, _audience); // CLASSIC (2026-10-05): greet a player who stops near (AmbientZone.Chat.cs)
         }
 
         if (now >= _nextOnline) {
@@ -377,21 +378,9 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
                 _zoneActor.Tell(new ZONE_102_PROTOCOL.MSG_QUERYNEARESTDUELTARGET { PlayerGameObject = wizard.Wizard.GameObject },
                     wizard.Endpoint);
             }
-
-            if (now >= wizard.NextIdleLine && _realPlayers == 0) {
-                wizard.NextIdleLine = now.AddSeconds(IdleGap(wizard)); // nobody to talk to; keep the lines spread out
-            }
-            else if (now >= wizard.NextIdleLine && AmbientWizards.Settings.Chat) {
-                wizard.NextIdleLine = now.AddSeconds(IdleGap(wizard));
-                if (now >= _nextZoneLine && wizard.Activity is AmbientActivity.Idle or AmbientActivity.Walking
-                    && wizard.Limiter.TryTake(now)
-                    && AmbientChatBrain.Idle(ChatFor(wizard, 0), wizard.Turn++ + wizard.Identity.Seed) is { } line) {
-                    _nextZoneLine = now.AddSeconds(180 + _rng.Next(240));
-                    AmbientChat.Say(wizard, line);
-                }
-            }
         }
 
+        Chatter.Tick(now, _audience); // CLASSIC (2026-10-05): unprompted talk (AmbientChatter)
         Send(batch);
     }
 
@@ -405,12 +394,6 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
             });
         }
     }
-
-    private double IdleGap(AmbientWizard wizard) => wizard.Identity.Temper switch {
-        AmbientTemper.Chatty => 240 + _rng.Next(240),
-        AmbientTemper.Friendly => 480 + _rng.Next(480),
-        _ => 900 + _rng.Next(900),
-    };
 
     /// <summary>
     /// CLASSIC (2026-10-04): starts the run to Target: its first step (the stream sends the rest every 100 ms) and a
@@ -898,6 +881,7 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
             AmbientWizards.EndSparring(wizard.Endpoint);
         }
 
+        Chatter.AfterDuel(wizard, won, notice?.PlayerCharIds ?? []); // CLASSIC (2026-10-05): "gg", "ty for the help", "aw man"
         if (!won && defeated) {
             // A defeated wizard goes home to heal (2009: back to the commons) and comes back a little later.
             wizard.Activity = AmbientActivity.Away;
@@ -908,11 +892,6 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
 
         wizard.Activity = AmbientActivity.Idle;
         wizard.Until = DateTime.UtcNow.AddSeconds(6 + _rng.Next(10));
-        if (won && notice is not null && AmbientWizards.Settings.Chat && wizard.Limiter.TryTake(DateTime.UtcNow)) {
-            if (AmbientChatBrain.AfterWin(ChatFor(wizard, 0), wizard.Turn++) is { } line) {
-                AmbientChat.Say(wizard, line);
-            }
-        }
     }
 
     private void Sparring(AmbientWizard wizard, ulong sigil) {
@@ -1026,7 +1005,6 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
     private static readonly TimeSpan MenuSettle = ChatTiming.MenuSettle;
 
     private readonly Dictionary<ulong, DateTime> _lastTyped = [];
-    private DateTime _lastAnswer;                // the zone's latest planned answer: two wizards never answer at once
     private (ulong Speaker, string Text, DateTime At) _lastMenuLogged;
 
     private void Heard(AmbientWizard wizard, ulong sourceGid, byte[] sourceName, string text, bool whisper, bool menuChat = false) {
@@ -1060,8 +1038,7 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
     private void Answer(AmbientWizard wizard, string key, string heard, string reply, Action<AmbientWizard> send) {
         var now = DateTime.UtcNow;
         var busy = wizard.Activity is AmbientActivity.Fighting or AmbientActivity.Sparring or AmbientActivity.Helping;
-        var due = ChatTiming.Stagger(now + ChatTiming.Answer(heard, reply, ChatPersona.For(wizard.Identity), busy, _rng), _lastAnswer, _rng);
-        _lastAnswer = due;
+        var due = Chatter.Stagger(now + ChatTiming.Answer(heard, reply, ChatPersona.For(wizard.Identity), busy, _rng));
         Timers.StartSingleTimer($"{key}-{wizard.CharId}-{due.Ticks}", new Later(wizard, send), due - now);
     }
 
@@ -1079,43 +1056,27 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
         var persona = ChatPersona.For(wizard.Identity);
         var answer = wizard.Offers.Hear(speaker, text, now);
         if (answer.Kind == HelpAnswerKind.Yes) {
-            var line = AmbientChatBrain.HelpAnswered(true, wizard.Turn++, ChatFor(wizard, speaker));
+            var line = ChatStyle.Apply(AmbientChatBrain.HelpAnswered(true, wizard.Turn++, ChatFor(wizard, speaker)), persona, _rng,
+                ChatWordFilter.Current);
             Answer(wizard, "yes", text, line, w => JoinWithYes(w, answer, speaker, line));
             return;
         }
 
         if (answer.Kind == HelpAnswerKind.No) {
-            var line = AmbientChatBrain.HelpAnswered(false, wizard.Turn++, ChatFor(wizard, speaker));
+            var line = ChatStyle.Apply(AmbientChatBrain.HelpAnswered(false, wizard.Turn++, ChatFor(wizard, speaker)), persona, _rng,
+                ChatWordFilter.Current);
             Answer(wizard, "no", text, line, w => Say(w, speaker, line));
             return;
         }
 
         // A menu phrase answers an offer (above) but is not talk to reply to.
-        if (menuChat || !AmbientWizards.Settings.Chat || !wizard.Limiter.TryTake(now, speaker)) {
+        if (menuChat || !AmbientWizards.Settings.Chat) {
             return;
         }
 
-        var facts = AmbientKnowledge.Facts(speaker);
-        var reply = AmbientChatBrain.Reply(text, ChatFor(wizard, speaker, facts), whisper, wizard.Turn);
-        if (reply is null) {
-            return;
-        }
-
-        wizard.Turn++;
-        if (!whisper && ChatTiming.Ignores(persona, _rng)) {
-            return; // people miss lines now and then
-        }
-
-        // Noticing and reading the line, a thinking pause and typing at the wizard's own speed: never an instant answer.
-        Answer(wizard, "reply", text, reply, w => {
-            if (whisper) {
-                AmbientChat.Whisper(w, speaker, reply);
-            }
-            else {
-                AmbientChat.Say(w, reply);
-            }
-        });
-        if (wizard.FriendOf(speaker) is not null) {
+        // CLASSIC (2026-10-05): who answers (the wizard named, the one already talking with the player, or for a line to
+        // everyone maybe one nearby), what, and when (reading and typing time) is AmbientChatter's.
+        if (Chatter.Heard(wizard, speaker, text, whisper) && wizard.FriendOf(speaker) is not null) {
             Remember(wizard, speaker, helped: false);
         }
     }

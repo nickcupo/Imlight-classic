@@ -95,38 +95,116 @@ public sealed record ChatContext(string MyName, AmbientSchool School, int Level,
 /// </summary>
 public static class AmbientChatBrain {
 
-    private sealed record Rule(string Name, Regex Pattern, Func<Match, ChatContext, int, string?> Reply);
+    /// <summary>What a line asks for: the reply pool (templates) and any extra slots.</summary>
+    /// <param name="Name">The rule's name ("level", "greet", ...).</param>
+    /// <param name="Pool">Reply templates.</param>
+    /// <param name="Extra">Extra slot values.</param>
+    /// <param name="Menu">The menu-chat phrases that fit, for a wizard that only has menu chat.</param>
+    public sealed record ChatIntent(string Name, IReadOnlyList<string> Pool, IReadOnlyDictionary<string, string>? Extra = null,
+                                    IReadOnlyList<string>? Menu = null);
+
+    private sealed record Rule(string Name, Regex Pattern, Func<Match, ChatContext, ChatPersona?, ChatIntent?> Intent);
 
     private const RegexOptions Options = RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled;
 
+    private static readonly string[] s_menuYes = ["Sure!", "Okay!", "Yes!"];
+
+    private static ChatIntent Pool(string name, IReadOnlyList<string> pool, IReadOnlyList<string>? menu = null) => new(name, pool, null, menu);
+
+    // CLASSIC (2026-10-04): the first rule that matches answers. Order matters: "where is" before "what", thanks before help.
     private static readonly Rule[] s_rules = [
-        new("level", new(@"\b(what|wat|wut)\s*(level|lvl|lv)\b|\b(level|lvl)\s*\?|\bhow high\b|\bur level\b|\byour level\b", Options),
-            (_, c, t) => AmbientLines.Choose(AmbientLines.Level, t, c)),
+        new("bot", new(@"\b(are|r)\s+(you|u)\s+(a\s+)?(bot|robot|npc|real|computer|fake)\b|\bnpc\b", Options),
+            (_, _, _) => Pool("bot", AmbientLinePool.NotABot, ["What?"])),
+        new("age", new(@"\bhow old\b|\bwhat grade\b|\bur age\b|\byour age\b|\bage\s*\?", Options),
+            (_, _, _) => Pool("age", AmbientLinePool.AgeAnswer, ["Sorry!"])),
+        new("level", new(@"\b(what|wat|wut)\s*(level|lvl|lv)\b|\b(level|lvl)\s*\?|\bhow high\b|\bur (level|lvl)\b|\byour (level|lvl)\b", Options),
+            (_, _, p) => Pool("level", p is null || p.Numbers ? AmbientLinePool.LevelNumber : AmbientLinePool.LevelNoNumber, ["I don't know."])),
         new("school", new(@"\b(what|wat|which)\s+school\b|\bur school\b|\byour school\b", Options),
-            (_, c, t) => AmbientLines.Choose(AmbientLines.School, t, c)),
-        new("duel", new(@"\b(duel|pvp|fight me|1v1|arena)\b", Options),
-            (_, c, t) => AmbientLines.Choose(AmbientLines.Duel, t, c)),
+            (_, _, _) => Pool("school", AmbientLinePool.SchoolAnswer)),
+        new("name", new(@"\bwhat'?s\s+(your|ur)\s+name\b|\bwhat is your name\b|\bwho are (you|u)\b", Options),
+            (_, _, _) => Pool("name", AmbientLinePool.NameAnswer)),
         new("where", new(@"\bwhere\s+(is|are|r|can i find|do i find)\s+(?:the\s+)?(?<what>[a-z' ]{3,40})", Options),
-            (m, c, t) => WhereReply(m.Groups["what"].Value, c, t)),
-        new("help", new(@"\b(can|could|will)\s+(you|u)\s+help\b|\bneed\s+help\b|\bhelp\s+me\b|\bhelp\s+pls\b|\bhelp\s+plz\b", Options),
-            (_, c, t) => AmbientLines.Choose(AmbientLines.Help, t, c)),
-        new("friend", new(@"\b(friend me|add me|be my friend|be friends|friend request)\b", Options),
-            (_, c, t) => AmbientLines.Choose(AmbientLines.Friend, t, c)),
-        new("thanks", new(@"\b(thanks|thank you|thx|ty|tyvm)\b", Options),
-            (_, c, t) => AmbientLines.Choose(AmbientLines.Thanks, t, c)),
-        new("bye", new(@"\b(bye|cya|see ya|gtg|got to go|g2g|later)\b", Options),
-            (_, c, t) => AmbientLines.Choose(AmbientLines.Bye, t, c)),
-        new("how", new(@"\bhow\s+(are|r)\s+(you|u)\b|\bhow'?s it going\b|\bsup\b|\bwhat'?s up\b", Options),
-            (_, c, t) => AmbientLines.Choose(AmbientLines.HowAreYou, t, c)),
-        new("quest", new(@"\b(what|which)\s+quest\b|\bwhat are you doing\b|\bwhat r u doing\b|\bwhatcha doing\b", Options),
-            (_, c, t) => AmbientLines.Choose(AmbientLines.Doing, t, c)),
-        new("greet", new(@"^\s*(hi|hello|hey|hiya|yo|heya|howdy|greetings)\b", Options),
-            (_, c, t) => Greeting(c, t)),
+            (m, c, _) => WhereIntent(m.Groups["what"].Value, c)),
+        new("thanks", new(@"\b(thanks|thank you|thx|ty|tyvm|thanx)\b", Options),
+            (_, _, _) => Pool("thanks", AmbientLinePool.Thanks, ["You're welcome!"])),
+        new("compliment", new(@"\b(nice|cool|love|like|awesome|pretty)\s+(your\s+|ur\s+)?(hat|robe|wand|outfit|clothes|pet|name|boots|mount|broom|deck)\b", Options),
+            (_, _, _) => Pool("compliment", AmbientLinePool.ComplimentThanks, ["Thank you!"])),
+        new("gold", new(@"\b(give|gimme|spare|can i have|need)\b.*\bgold\b|\bfree gold\b", Options),
+            (_, _, _) => Pool("gold", AmbientLinePool.GoldBeg, ["Sorry!"])),
+        new("howgold", new(@"\bhow\s+(do|can)\s+(i|you|u)\s+(get|make)\s+(more\s+)?gold\b", Options),
+            (_, _, _) => Pool("howgold", AmbientLinePool.HowToGold)),
+        new("hatch", new(@"\bhatch", Options),
+            (_, c, _) => (c.ZoneKey ?? "").Contains("Hatchery", StringComparison.OrdinalIgnoreCase)
+                         || (c.ZoneKey ?? "").Contains("PET_Park", StringComparison.OrdinalIgnoreCase)
+                ? Pool("hatch", ["sure what pet", "ok whats your pet", "maybe my pet isnt an adult yet", "sure"], s_menuYes)
+                : Pool("hatch", AmbientLinePool.HowToHatch)),
+        new("teleport", new(@"\b(teleport|port|tp)\b", Options),
+            (_, _, _) => Pool("teleport", AmbientLinePool.Teleport)),
+        new("trade", new(@"\btrade\b", Options),
+            (_, _, _) => Pool("trade", AmbientLinePool.Trade)),
+        new("duel", new(@"\b(duel|pvp|fight me|1v1|arena)\b", Options),
+            (_, _, _) => Pool("duel", AmbientLinePool.Duel, s_menuYes)),
+        new("help", new(@"\b(can|could|will)\s+(you|u|someone|anyone|any1)\s+help\b|\bneed\s+help\b|\bhelp\s+me\b|\bhelp\s+(pls|plz|please)\b|\bhelp\s+with\b|\b(wanna|want to)\s+help\b", Options),
+            (_, _, _) => Pool("help", AmbientLinePool.HelpSure, s_menuYes)),
+        new("friend", new(@"\b(friend me|add me|be my friend|be friends|friend request|wanna be friends|want to be friends)\b", Options),
+            (_, _, _) => Pool("friend", AmbientLinePool.Friend, ["Sure!", "Okay!"])),
+        new("quest", new(@"\b(anyone|anybody|who|wanna|want to|lets|let's)\b.*\b(quest|questing|team up|group|lfg)\b|\blfg\b", Options),
+            (_, _, _) => Pool("quest", AmbientLinePool.QuestTogether, s_menuYes)),
+        new("come", new(@"\b(follow me|come here|come with me|come on|lets go|let's go)\b", Options),
+            (_, _, _) => Pool("come", AmbientLinePool.Come, ["Okay!", "Let's go!"])),
+        new("bye", new(@"\b(bye|cya|see ya|gtg|got to go|g2g|later|ttyl|good night|goodnight)\b", Options),
+            (_, _, _) => Pool("bye", AmbientLinePool.Bye, ["Goodbye!", "See you later!"])),
+        new("how", new(@"\bhow\s+(are|r)\s+(you|u)\b|\bhow'?s it going\b|\bsup\b|\bwhat'?s up\b|\bwassup\b", Options),
+            (_, _, _) => Pool("how", AmbientLinePool.HowAreYou, ["Good!"])),
+        new("doing", new(@"\b(what|which)\s+quest\b|\bwhat are (you|u) doing\b|\bwhat r u doing\b|\bwhatcha doing\b|\bwyd\b", Options),
+            (_, _, _) => Pool("doing", AmbientLinePool.Doing)),
+        new("greet", new(@"^\s*(hi+|hello|hey+|hiya|yo|heya|howdy|greetings|sup)\b", Options),
+            (_, c, _) => Pool("greet", c.Friend is not null ? AmbientLines.FriendGreetings : AmbientLinePool.Greet, ["Hi!", "Hello!"])),
+        new("laugh", new(@"^\s*(lol+|lolz|haha+|hehe+|rofl|xd)\s*!*$", Options),
+            (_, _, _) => Pool("laugh", AmbientLinePool.Laugh)),
+        new("agree", new(@"^\s*(yes|yeah|ya|yep|ok|okay|k|sure|true|cool|nice)\s*!*$", Options),
+            (_, _, _) => Pool("agree", AmbientLinePool.Agree)),
     ];
+
+    private static readonly Regex s_openCall = new(
+        @"\b(anyone|anybody|any1|everyone|everybody|someone|somebody|who wants|who wanna|lfg|lfm|guys|all)\b|^\s*(hi+|hello|hey+|hiya|heya)\s*!*$",
+        Options);
+
+    /// <summary>True for a Say to everyone around ("anyone wanna help", "hi all", a bare "hello").</summary>
+    public static bool IsOpenCall(string? text) => !string.IsNullOrWhiteSpace(text) && s_openCall.IsMatch(text);
+
+    /// <summary>True when <paramref name="text"/> uses <paramref name="firstName"/>.</summary>
+    public static bool Mentions(string? text, string firstName)
+        => !string.IsNullOrWhiteSpace(text) && firstName.Length > 0
+           && Regex.IsMatch(text, $@"\b{Regex.Escape(firstName)}\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    /// <summary>
+    /// What <paramref name="text"/> asks for, or null when no rule fits (then only a line to the wizard by name gets a
+    /// fallback). <paramref name="persona"/> null answers levels with numbers.
+    /// </summary>
+    public static ChatIntent? Understand(string? text, ChatContext context, ChatPersona? persona = null) {
+        ArgumentNullException.ThrowIfNull(context);
+        if (string.IsNullOrWhiteSpace(text)) {
+            return null;
+        }
+
+        foreach (var rule in s_rules) {
+            var match = rule.Pattern.Match(text);
+            if (match.Success && rule.Intent(match, context, persona) is { } intent) {
+                return intent;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>The fallback intent: a short "lol" or "hmm" for a line to the wizard that no rule understood.</summary>
+    public static ChatIntent Fallback { get; } = new("fallback", AmbientLinePool.Fallback, null, ["Okay!", "Cool!"]);
 
     /// <summary>
     /// The reply to <paramref name="text"/>, or null to stay quiet. A Say that does not use the wizard's first name gets
-    /// no reply; a whisper (<paramref name="direct"/>) always gets one.
+    /// no reply; a whisper (<paramref name="direct"/>) always gets one. (The zone's AmbientChatter also answers open
+    /// calls and players it is already talking with, typed in the wizard's own style.)
     /// </summary>
     /// <param name="text">What the player said.</param>
     /// <param name="context">The wizard and the speaker.</param>
@@ -137,20 +215,14 @@ public static class AmbientChatBrain {
             return null;
         }
 
-        var mentioned = Regex.IsMatch(text, $@"\b{Regex.Escape(context.MyFirstName)}\b", RegexOptions.IgnoreCase);
-        if (!direct && !mentioned) {
+        if (!direct && !Mentions(text, context.MyFirstName)) {
             return null;
         }
 
         var seed = turn + StableHash(text);
-        foreach (var rule in s_rules) {
-            var match = rule.Pattern.Match(text);
-            if (match.Success && rule.Reply(match, context, seed) is { } reply && IsClean(reply)) {
-                return reply;
-            }
-        }
-
-        return AmbientLines.Choose(AmbientLines.Fallback, seed, context);
+        var intent = Understand(text, context) ?? Fallback;
+        var me = new Dictionary<string, string>(intent.Extra ?? new Dictionary<string, string>()) { ["me"] = context.MyName };
+        return AmbientLines.Choose(intent.Pool, seed, context, me) ?? AmbientLines.Choose(AmbientLinePool.Fallback, seed, context);
     }
 
     /// <summary>
@@ -251,22 +323,19 @@ public static class AmbientChatBrain {
         return friend.TimesHelped > 0 ? Clean($"{first}! ready for another fight?") : null;
     }
 
-    private static string? WhereReply(string what, ChatContext context, int turn) {
+    private static ChatIntent? WhereIntent(string what, ChatContext context) {
         var subject = what.Trim().TrimEnd('?', '.', '!');
         if (subject.Length == 0) {
             return null;
         }
 
         if (context.WhereIs?.Invoke(subject) is { Length: > 0 } where) {
-            return AmbientLines.Choose(AmbientLines.WhereKnown, turn, context,
-                new Dictionary<string, string> { ["what"] = Title(subject), ["where"] = where });
+            return new ChatIntent("where", AmbientLines.WhereKnown,
+                new Dictionary<string, string> { ["what"] = Title(subject), ["where"] = where }, ["I don't know."]);
         }
 
-        return AmbientLines.Choose(AmbientLines.WhereUnknown, turn, context);
+        return new ChatIntent("where", AmbientLines.WhereUnknown, null, ["I don't know."]);
     }
-
-    private static string? Greeting(ChatContext context, int turn)
-        => context.Friend is not null ? GreetFriend(context, turn) : AmbientLines.Choose(AmbientLines.Greetings, turn, context);
 
     private static string? Clean(string line) => IsClean(line) ? line : null;
 
