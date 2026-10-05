@@ -77,7 +77,7 @@ internal sealed record AmbientDuelNotice(ulong SigilId, Vector3 Location, ulong[
                                          bool Active, bool Pvp);
 
 /// <summary>Drives one zone's ambient wizards (see the file header).</summary>
-internal sealed class AmbientZone : ReceiveActor, IWithTimers {
+internal sealed partial class AmbientZone : ReceiveActor, IWithTimers {
 
     private sealed record Tick;
     private sealed record Enter(ulong CharId);
@@ -148,6 +148,7 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
             _nav = ready.Grid;
             _spots = null; // re-made on the grid
         });
+        ReceivePavilionAndBazaar(); // CLASSIC (2026-10-04): AmbientZone.Pavilion.cs
         Receive<Status.Failure>(failure => Logger.Warning("Ambient wizards in {Zone}: {Error}",
             Logger.Args(_zone, failure.Cause?.GetBaseException().Message)));
     }
@@ -175,6 +176,7 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
         foreach (var wizard in _wizards) {
             wizard.Zone = _zone;
             wizard.Endpoint = Context.ActorOf(AmbientEndpoint.Props(wizard, Self), $"wizard-{wizard.CharId:x}");
+            wizard.Group = Self;
             AmbientWizards.Register(wizard);
             ActiveWizardDirectory.SetWizard(wizard.Endpoint, wizard.Wizard);
             // A few seconds apart, like players logging in.
@@ -184,6 +186,7 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
 
         Timers.StartPeriodicTimer("tick", new Tick(), TimeSpan.FromSeconds(TickSeconds));
         Timers.StartPeriodicTimer("stream", new Stream(), StreamInterval);
+        StartPavilionAndBazaar(); // CLASSIC (2026-10-04)
     }
 
     protected override void PostStop() {
@@ -606,6 +609,11 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
     // ---- what to do next ---------------------------------------------------------------------
 
     private void Decide(AmbientWizard wizard, DateTime now) {
+        if (wizard.Activity == AmbientActivity.Hatching) {
+            wizard.Until = now.AddSeconds(5); // CLASSIC (2026-10-04): on a hatching spot until the hatch is over
+            return;
+        }
+
         if (wizard.Activity == AmbientActivity.Helping || wizard.DuelSigil == ulong.MaxValue) {
             // The yes was not followed by a seat in time (full, or the duel ended), or the hunt is over.
             AmbientWizards.RevokeJoin(wizard.Endpoint);
@@ -1087,6 +1095,11 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
         if (answer.Kind == HelpAnswerKind.No) {
             var line = AmbientChatBrain.HelpAnswered(false, wizard.Turn++, ChatFor(wizard, speaker));
             Answer(wizard, "no", text, line, w => Say(w, speaker, line));
+            return;
+        }
+
+        // CLASSIC (2026-10-04): "anyone hatch?" in the Pet Pavilion gets one wizard's yes (AmbientZone.Pavilion.cs).
+        if (!menuChat && HatchAsked(wizard, speaker, text, now)) {
             return;
         }
 

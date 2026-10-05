@@ -17,6 +17,7 @@
  */
 
 using System;
+using System.Linq;
 using Imcodec.CoreObject;
 using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty.TypeCache;
@@ -470,6 +471,31 @@ internal class CommandModifyProtocol : CommandProtocol {
         behavior.m_XP = (uint) Math.Clamp((int) behavior.m_XP + amount, 0, Math.Max((int) behavior.m_XP, stop));
         WizardData.Collections.WizardItemCollection.SavePetGrowth(pet);
         InformSenderClient($"Pet XP now {behavior.m_XP} of {behavior.m_requiredXP} (level {behavior.m_level}).");
+    }
+
+    // CLASSIC (2026-10-04): QA setup for hatching (Adult or older); grows a pet as games would, talents and all.
+    [Help("Grow a hatched pet to a level (1-5): petlevel <level> [pet template id]; the equipped pet, else the newest one.")]
+    [Command("petlevel")]
+    [AuthRequired(AuthLevel.QualityAssurance)]
+    private void PetLevelCommand(string level, string templateId = "") {
+        var wanted = ulong.TryParse(templateId, out var tid) ? tid : 0;
+        var pets = (Context.Character.EquipmentBehavior.EquippedItems ?? []).Concat(Context.Character.InventoryBehavior.Items ?? [])
+            .Where(i => PetProgress.Behavior(i) is { m_level: > 0 } && (wanted == 0 || i.m_templateID.Full == wanted)).ToList();
+        var equipped = Context.Character.EquipmentBehavior.GetEquippedPetId();
+        var pet = pets.FirstOrDefault(p => p.m_globalID == equipped && wanted == 0) ?? pets.LastOrDefault();
+        if (!int.TryParse(level, out var target) || target is < 1 or > Imlight.Classic.Pets.PetRules.MaxLevel || pet is null) {
+            InformSenderClient("Usage: petlevel <1-5> [pet template id], with a hatched pet.");
+
+            return;
+        }
+
+        PetProgress.EnsureInitialized(pet);
+        var thresholds = PetProgress.Thresholds((uint) pet.m_templateID.Full);
+        var behavior = PetProgress.Behavior(pet);
+        var growth = PetProgress.AddXp(pet, Math.Max(0, thresholds[target] - (int) behavior.m_XP), Random.Shared);
+        WizardData.Collections.WizardItemCollection.SavePetGrowth(pet);
+        InformSenderClient($"Pet {pet.m_globalID.Full} ({pet.m_templateID.Full}) is now level {behavior.m_level} "
+            + $"({Imlight.Classic.Pets.PetRules.LevelName(behavior.m_level)}), XP {behavior.m_XP}, {growth.NewTalents.Count} talent(s) learned.");
     }
 
     [Help("Set your maximum energy.")]

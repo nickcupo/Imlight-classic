@@ -62,7 +62,8 @@ using Imlight.CoreLib.WizardData.Models.Player;
 namespace Imlight.CoreLib.Classic.Ambient;
 
 /// <summary>What an ambient wizard is doing.</summary>
-internal enum AmbientActivity { Arriving, Idle, Walking, Shopping, Following, Helping, Fighting, Sparring, Away }
+// CLASSIC (2026-10-04): Hatching = on a Pet Pavilion hatching spot with a player (AmbientHatching).
+internal enum AmbientActivity { Arriving, Idle, Walking, Shopping, Following, Helping, Fighting, Sparring, Away, Hatching }
 
 /// <summary>
 /// One ambient wizard: its stored record, its Wizard (never saved), its endpoint actor and its live state. Only its
@@ -82,6 +83,9 @@ internal sealed class AmbientWizard {
     public ulong CharId => Record.CharId;
     public string Name => Wizard.PlayerNameBehavior.GetWizardName();
     public IActorRef Endpoint { get; set; }
+
+    /// <summary>CLASSIC (2026-10-04): the AmbientZone actor that drives this wizard (hatch news goes there).</summary>
+    public IActorRef Group { get; set; }
 
     // Live state, owned by the AmbientZone actor.
     public string Zone { get; set; }

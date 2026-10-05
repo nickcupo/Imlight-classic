@@ -27,6 +27,13 @@
  * classic-data's mob rewards) and rotates its old ones out. What players
  * sold stays and sells as before.
  *
+ * CLASSIC (2026-10-04): ambient wizards in the Bazaar room also trade
+ * (AmbientVisit, planned by AmbientBazaarTrader): their sales are
+ * players' copies (kept by the restock, never rotated out) and their
+ * purchases take copies off the shelf, so the stock changes between
+ * restocks as a populated 2009 Bazaar's did. A real player's sale is left
+ * alone for AmbientBazaarTrader.PlayerSaleShield (NoteRealSale).
+ *
  * NOTE:
  * [Classic] BazaarStocked (on by default, owner request) and
  * BazaarStockPerRestock change at the next restock. The ledger of the
@@ -35,7 +42,7 @@
  *
  * Created by: Nick with Claude Code (claude-opus-5-5)
  * Version: KALI 1.0
- * Last Updated: 10/01/2026
+ * Last Updated: 10/04/2026
  */
 
 #nullable enable
@@ -48,6 +55,7 @@ using System.Threading;
 using Imcodec.ObjectProperty.TypeCache;
 using Imcodec.Types;
 using Imlight.Classic;
+using Imlight.Classic.Ambient;
 using Imlight.Classic.Bazaar;
 using Imlight.Common;
 using Imlight.CoreLib.Classic.Admin;
@@ -68,6 +76,13 @@ public static class ClassicBazaar {
     private static DateTime s_lastRestockUtc;
     private static DateTime s_nextRestockUtc;
     private static string s_lastResult = "not yet";
+
+    // CLASSIC (2026-10-04): ambient wizards' trading (AmbientVisit).
+    private static readonly AmbientTradeBudget s_ambientBudget = new(AmbientBazaarTrader.MaxTradesPerHour);
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<ulong, DateTime> s_realSales = new();
+    private static readonly object s_ambientStatsGate = new();
+    private static int s_ambientVisits, s_ambientSold, s_ambientBought;
+    private static readonly Queue<string> s_ambientLast = new();
 
     /// <summary>The loaded rules, or null (stock Imlight prices).</summary>
     public static BazaarRules? Rules => s_rules;
@@ -283,6 +298,94 @@ public static class ClassicBazaar {
         return pool;
     }
 
+    /// <summary>CLASSIC (2026-10-04): a real player sold <paramref name="templateId"/>: ambient wizards leave it for players a while.</summary>
+    public static void NoteRealSale(ulong templateId) {
+        if (s_rules is null) {
+            return;
+        }
+
+        var now = DateTime.UtcNow;
+        s_realSales[templateId] = now;
+        foreach (var (template, at) in s_realSales) {
+            if (now - at > AmbientBazaarTrader.PlayerSaleShield) {
+                s_realSales.TryRemove(template, out _);
+            }
+        }
+    }
+
+    /// <summary>
+    /// CLASSIC (2026-10-04): one ambient wizard's visit to the counter: 1 to 3 sales or purchases (AmbientBazaarTrader),
+    /// within the server-wide hourly budget. Blocking (database); call off the actors. Returns what it did.
+    /// </summary>
+    public static string AmbientVisit(string who, Random random) {
+        if (s_rules is not { } rules || !ClassicRuntime.Rules.IsFeatureEnabled(ClassicFeatures.Bazaar)) {
+            return "no Bazaar";
+        }
+
+        var ledger = BazaarServerStockCollection.Load().Copies
+            .Select(pair => (Ok: ulong.TryParse(pair.Key, out var id), Id: id, pair.Value))
+            .Where(entry => entry.Ok).ToDictionary(entry => entry.Id, entry => entry.Value);
+        var now = DateTime.UtcNow;
+        var done = new List<string>();
+        int sold = 0, bought = 0;
+        lock (AuctionHouseCollection.Lock) {
+            var entries = AuctionHouseCollection.GetAllAuctionHouseEntries();
+            var shelf = entries.GroupBy(entry => entry.m_templateID.Full).Select(group => {
+                var template = group.Key;
+                var kind = KindOf(CoreObjectFactory.GetCoreTemplate(template)) ?? BazaarKind.Gear;
+                var shielded = s_realSales.TryGetValue(template, out var at) && now - at < AmbientBazaarTrader.PlayerSaleShield;
+                return new BazaarShelfLot(template, kind, group.Sum(entry => entry.m_numForSale), ledger.GetValueOrDefault(template), shielded);
+            }).ToList();
+            var plan = AmbientBazaarTrader.Plan(rules, shelf, s_pool, random);
+            var granted = s_ambientBudget.Take(plan.Count, now);
+            if (granted == 0) {
+                return plan.Count == 0 ? "nothing to trade" : "hourly budget spent";
+            }
+
+            var held = shelf.ToDictionary(lot => lot.Template, lot => lot.Copies);
+            var upserts = new List<AuctionHouseEntry>();
+            var removals = new List<ulong>();
+            foreach (var trade in plan.Take(granted)) {
+                var copies = Math.Max(0, held.GetValueOrDefault(trade.Template) + trade.Change);
+                held[trade.Template] = copies;
+                if (copies == 0) {
+                    removals.Add(trade.Template);
+                }
+                else {
+                    var (buy, sell) = PricesFor(trade.Template, copies);
+                    upserts.Add(new AuctionHouseEntry {
+                        m_templateID = (GID) trade.Template, m_numForSale = copies, m_buyPrice = buy, m_sellPrice = sell,
+                    });
+                }
+
+                if (trade.Change > 0) {
+                    sold += trade.Change;
+                }
+                else {
+                    bought -= trade.Change;
+                }
+
+                done.Add($"{(trade.Change > 0 ? "sold" : "bought")} {Math.Abs(trade.Change)} x {trade.Template} ({trade.Kind}, now {copies})");
+            }
+
+            AuctionHouseCollection.ApplyStockChanges(upserts, removals);
+        }
+
+        var result = $"{who}: {string.Join("; ", done)}";
+        lock (s_ambientStatsGate) {
+            s_ambientVisits++;
+            s_ambientSold += sold;
+            s_ambientBought += bought;
+            s_ambientLast.Enqueue($"{now:u} {result}");
+            while (s_ambientLast.Count > 10) {
+                s_ambientLast.Dequeue();
+            }
+        }
+
+        Logger.Information("Ambient Bazaar: {Result}.", Logger.Args(result));
+        return result;
+    }
+
     private static object DashboardState() => new {
         stocked = ClassicSettings.BazaarStocked ? "on" : "off",
         rules = s_rules?.SourceFile,
@@ -291,6 +394,16 @@ public static class ClassicBazaar {
         lastResult = s_lastResult,
         nextRestock = s_nextRestockUtc.ToString("u"),
         entries = AuctionHouseCollection.GetAllAuctionHouseEntries().Count,
+        ambient = AmbientDashboard(),
     };
+
+    private static object AmbientDashboard() {
+        lock (s_ambientStatsGate) {
+            return new {
+                visits = s_ambientVisits, copiesSold = s_ambientSold, copiesBought = s_ambientBought,
+                tradesPerHourCap = AmbientBazaarTrader.MaxTradesPerHour, last = s_ambientLast.ToArray(),
+            };
+        }
+    }
 
 }

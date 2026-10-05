@@ -37,10 +37,15 @@
  * game from the Hatchery's two-player sigils (PetMorphSigil01/02, the
  * PetGameMorph phantom zone) is not wired: wizards are paired here by
  * joining PetGameMorph in the same zone, two at a time.
+ * CLASSIC (2026-10-04): a player who waits alone may get an ambient
+ * wizard of the zone as partner (AmbientHatching, AmbientPets' waits):
+ * this service plays the partner's side (its pet, its confirm) and lets
+ * it go when the egg is made, the player leaves, or the player has not
+ * confirmed in AmbientPets.HoldLimit. A real player joining first wins.
  *
  * Created by: Nick with Claude Code (claude-opus-5-5)
  * Version: KALI 1.0
- * Last Updated: 10/02/2026
+ * Last Updated: 10/04/2026
  */
 
 using System;
@@ -53,7 +58,9 @@ using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Classic.Pets;
+using Imlight.Classic.Ambient;
 using Imlight.Common;
+using Imlight.CoreLib.Classic.Ambient;
 using Imlight.CoreLib.Game.Pet;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;
@@ -76,6 +83,9 @@ internal sealed partial class PetGameService {
         public bool Ready;
         public bool Done;
 
+        /// <summary>CLASSIC (2026-10-04): the ambient wizard playing this side (no service of its own), or null.</summary>
+        public AmbientWizard Ambient;
+
     }
 
     /// <summary>Two wizards hatching together (in one zone).</summary>
@@ -90,6 +100,12 @@ internal sealed partial class PetGameService {
     private sealed record PartnerChanged(ulong PetId, bool Ready, bool Left);
 
     private sealed record MorphEggTimer(ulong EggId);
+
+    // CLASSIC (2026-10-04): the ambient partner's steps, run by the waiting player's service.
+    private sealed record AmbientMorphJoin;
+    private sealed record AmbientMorphPick;
+    private sealed record AmbientMorphConfirm;
+    private sealed record AmbientMorphHold;
 
     private static readonly ConcurrentDictionary<string, MorphLobby> s_lobbies = new(StringComparer.Ordinal);
 
@@ -131,6 +147,12 @@ internal sealed partial class PetGameService {
         }
 
         Logger.Information("Pet hatching: {0} joins side {1} in {2}.", Logger.Args(wizard.CharId, _morph.Value.Side, key));
+        if (AmbientHatching.Enabled) {
+            // CLASSIC (2026-10-04): alone on the spots, an ambient wizard of the zone may come over after a moment.
+            Timers.StartSingleTimer("ambientMorphJoin", new AmbientMorphJoin(),
+                AmbientPets.Wait(Random.Shared, AmbientPets.JoinMinSeconds, AmbientPets.JoinMaxSeconds));
+        }
+
         SendToSocket(new PET_9_PROTOCOL.MSG_PETGAMEJOINRSP { Game = MorphGame, Success = 1 });
         SendToSocket(new PET_9_PROTOCOL.MSG_PETGAMEINIT { Game = MorphGame, Data = "", MinLevel = PetHatchRules.MinLevel, Track = (byte) _morph.Value.Side });
         SendToSocket(new PET_9_PROTOCOL.MSG_PETGAMESTART { Game = MorphGame, Data = "" });
@@ -142,16 +164,28 @@ internal sealed partial class PetGameService {
         }
 
         _morph = null;
+        CancelAmbientTimers();
         MorphSide partner;
+        ulong mineId;
         lock (m.Lobby.Gate) {
+            mineId = m.Lobby.Sides[m.Side]?.CharId ?? 0;
             m.Lobby.Sides[m.Side] = null;
             partner = m.Lobby.Sides[1 - m.Side];
-            if (partner is null) {
+            if (partner?.Ambient is not null) {
+                m.Lobby.Sides[1 - m.Side] = null; // the ambient partner leaves with the player
+            }
+
+            if (partner is null || partner.Ambient is not null) {
                 s_lobbies.TryRemove(new KeyValuePair<string, MorphLobby>(m.Key, m.Lobby));
             }
         }
 
-        partner?.Service.Tell(new PartnerChanged(0, false, true));
+        if (partner?.Ambient is { } ambient) {
+            AmbientHatching.Release(ambient, mineId, AmbientHatchEnd.PlayerLeft); // nothing when it already hatched
+            return;
+        }
+
+        partner?.Service?.Tell(new PartnerChanged(0, false, true));
     }
 
     private void ReceiveMorphCommand(string text) {
@@ -175,8 +209,12 @@ internal sealed partial class PetGameService {
                 }
 
                 Logger.Information("Pet hatching: {0} offers pet {1} (level {2}).", Logger.Args(wizard.CharId, me.PetId, parent?.Level ?? 0));
-                partner?.Service.Tell(new PartnerChanged(me.PetId, false, false));
+                partner?.Service?.Tell(new PartnerChanged(me.PetId, false, false));
                 SendAffordability(m);
+                if (partner?.Ambient is not null) {
+                    AmbientSawPick(m, partner);
+                }
+
                 break;
             }
 
@@ -191,7 +229,7 @@ internal sealed partial class PetGameService {
                 }
 
                 // The partner's service makes the partner's egg when it sees both sides confirmed.
-                partner?.Service.Tell(new PartnerChanged(me.PetId, me.Ready, false));
+                partner?.Service?.Tell(new PartnerChanged(me.PetId, me.Ready, false));
                 if (both) {
                     TryMakeEgg();
                 }
@@ -259,11 +297,11 @@ internal sealed partial class PetGameService {
             return;
         }
 
-        MorphSide me;
+        MorphSide me, partner;
         HatchParent mine, theirs;
         lock (m.Lobby.Gate) {
             me = m.Lobby.Sides[m.Side];
-            var partner = m.Lobby.Sides[1 - m.Side];
+            partner = m.Lobby.Sides[1 - m.Side];
             if (me is null || partner is null || !me.Ready || !partner.Ready || me.Done) {
                 return;
             }
@@ -335,6 +373,179 @@ internal sealed partial class PetGameService {
         Logger.Information("Pet hatching: {0} paid {1} gold; egg {2} of template {3} hatches in {4} s; max stats {5}; pool {6}.",
             Logger.Args(wizard.CharId, cost, egg.m_globalID.Full, baby.TemplateId, hatchSeconds,
                 string.Join(" ", baby.MaxStats.Select(kv => $"{kv.Key}={kv.Value}")), string.Join(", ", baby.TalentPool)));
+
+        if (partner.Ambient is { } ambient) {
+            // CLASSIC (2026-10-04): the ambient partner hatched too (its egg is off screen); its pet rests 24 hours.
+            CancelAmbientTimers();
+            lock (m.Lobby.Gate) {
+                partner.Done = true;
+            }
+
+            AmbientHatching.Release(ambient, wizard.CharId, AmbientHatchEnd.Hatched);
+        }
+    }
+
+    // ---- CLASSIC (2026-10-04): an ambient wizard as the partner -------------------------------------
+
+    private void CancelAmbientTimers() {
+        foreach (var key in new[] { "ambientMorphJoin", "ambientMorphPick", "ambientMorphConfirm", "ambientMorphHold" }) {
+            Timers.Cancel(key);
+        }
+    }
+
+    /// <summary>Still alone on the spots: a free ambient wizard of the zone takes the other one.</summary>
+    [MessageHandler(typeof(AmbientMorphJoin))]
+    private void ReceiveAmbientMorphJoin(AmbientMorphJoin message) {
+        if (_morph is not { } m || GetActiveWizard() is not { } wizard) {
+            return;
+        }
+
+        lock (m.Lobby.Gate) {
+            if (m.Lobby.Sides[1 - m.Side] is not null) {
+                return; // a real player came
+            }
+        }
+
+        var ambient = AmbientHatching.Claim(m.Key, wizard.CharId, DateTime.UtcNow);
+        if (ambient is null) {
+            Logger.Information("Pet hatching: no ambient wizard free to hatch with {0} in {1}.", Logger.Args(wizard.CharId, m.Key));
+            return;
+        }
+
+        lock (m.Lobby.Gate) {
+            if (m.Lobby.Sides[1 - m.Side] is not null || !ReferenceEquals(_morph?.Lobby, m.Lobby)) {
+                ambient = null;
+            }
+            else {
+                m.Lobby.Sides[1 - m.Side] = new MorphSide { CharId = ambient.CharId, Ambient = ambient };
+                s_lobbies.TryRemove(new KeyValuePair<string, MorphLobby>(m.Key, m.Lobby)); // full: the next pair starts a new one
+            }
+        }
+
+        if (ambient is null) {
+            return;
+        }
+
+        Timers.StartSingleTimer("ambientMorphPick", new AmbientMorphPick(),
+            AmbientPets.Wait(Random.Shared, AmbientPets.PickMinSeconds, AmbientPets.PickMaxSeconds));
+        Timers.StartSingleTimer("ambientMorphHold", new AmbientMorphHold(), AmbientPets.HoldLimit);
+    }
+
+    /// <summary>The ambient partner shows its pet.</summary>
+    [MessageHandler(typeof(AmbientMorphPick))]
+    private void ReceiveAmbientMorphPick(AmbientMorphPick message) {
+        if (_morph is not { } m) {
+            return;
+        }
+
+        MorphSide partner, me;
+        lock (m.Lobby.Gate) {
+            partner = m.Lobby.Sides[1 - m.Side];
+            me = m.Lobby.Sides[m.Side];
+        }
+
+        if (partner?.Ambient is not { } ambient) {
+            return;
+        }
+
+        var parent = AmbientHatching.ParentOf(ambient);
+        var pet = AmbientHatching.PetOf(ambient);
+        if (parent is null || pet is null) {
+            Logger.Warning("Pet hatching: ambient wizard {0} has no pet to hatch with.", Logger.Args(ambient.Name));
+            DropAmbientPartner(m, AmbientHatchEnd.TimedOut);
+            return;
+        }
+
+        lock (m.Lobby.Gate) {
+            partner.PetId = pet.m_globalID;
+            partner.Parent = parent;
+            partner.Ready = false;
+        }
+
+        Logger.Information("Pet hatching: ambient wizard {0} offers {1} (level {2}, pedigree {3}).",
+            Logger.Args(ambient.Name, parent.TemplateId, parent.Level, parent.Pedigree));
+        SendToSocket(new PET_9_PROTOCOL.MSG_PETMORPHSET { PetID = partner.PetId });
+        SendToSocket(new PET_9_PROTOCOL.MSG_PETMORPHREADY { Confirmed = 0 });
+        SendAffordability(m);
+        if (me?.Parent is not null) {
+            AmbientSawPick(m, partner);
+        }
+    }
+
+    /// <summary>The player picked (or changed) a pet: the ambient partner un-confirms and thinks it over.</summary>
+    private void AmbientSawPick((MorphLobby Lobby, int Side, string Key) m, MorphSide partner) {
+        if (partner.Parent is null) {
+            return; // it has not shown its own pet yet; it looks at the player's when it does
+        }
+
+        var wasReady = false;
+        lock (m.Lobby.Gate) {
+            wasReady = partner.Ready;
+            partner.Ready = false;
+        }
+
+        if (wasReady) {
+            SendToSocket(new PET_9_PROTOCOL.MSG_PETMORPHREADY { Confirmed = 0 });
+        }
+
+        Timers.StartSingleTimer("ambientMorphConfirm", new AmbientMorphConfirm(),
+            AmbientPets.Wait(Random.Shared, AmbientPets.ConfirmMinSeconds, AmbientPets.ConfirmMaxSeconds));
+    }
+
+    /// <summary>The ambient partner confirms; with the player confirmed too, the egg is made.</summary>
+    [MessageHandler(typeof(AmbientMorphConfirm))]
+    private void ReceiveAmbientMorphConfirm(AmbientMorphConfirm message) {
+        if (_morph is not { } m) {
+            return;
+        }
+
+        MorphSide partner, me;
+        bool both;
+        lock (m.Lobby.Gate) {
+            partner = m.Lobby.Sides[1 - m.Side];
+            me = m.Lobby.Sides[m.Side];
+            if (partner?.Ambient is null || partner.Parent is null || me?.Parent is null || partner.Done) {
+                return;
+            }
+
+            partner.Ready = true;
+            both = me.Ready;
+        }
+
+        Logger.Information("Pet hatching: ambient wizard {0} confirms.", Logger.Args(partner.Ambient.Name));
+        SendToSocket(new PET_9_PROTOCOL.MSG_PETMORPHREADY { Confirmed = 1 });
+        if (both) {
+            TryMakeEgg();
+        }
+    }
+
+    /// <summary>The player has not hatched in time: the ambient partner goes, freeing the spot.</summary>
+    [MessageHandler(typeof(AmbientMorphHold))]
+    private void ReceiveAmbientMorphHold(AmbientMorphHold message) {
+        if (_morph is { } m) {
+            DropAmbientPartner(m, AmbientHatchEnd.TimedOut);
+        }
+    }
+
+    private void DropAmbientPartner((MorphLobby Lobby, int Side, string Key) m, AmbientHatchEnd end) {
+        MorphSide partner;
+        ulong mine;
+        lock (m.Lobby.Gate) {
+            partner = m.Lobby.Sides[1 - m.Side];
+            if (partner?.Ambient is null || partner.Done) {
+                return;
+            }
+
+            m.Lobby.Sides[1 - m.Side] = null;
+            mine = m.Lobby.Sides[m.Side]?.CharId ?? 0;
+            s_lobbies.TryAdd(m.Key, m.Lobby); // the player waits again; a real player may now join
+        }
+
+        CancelAmbientTimers();
+        Logger.Information("Pet hatching: ambient wizard {0} leaves the hatching spot ({1}).", Logger.Args(partner.Ambient.Name, end));
+        SendToSocket(new PET_9_PROTOCOL.MSG_PETMORPHSET { PetID = 0 });
+        SendToSocket(new PET_9_PROTOCOL.MSG_PETMORPHREADY { Confirmed = 0 });
+        AmbientHatching.Release(partner.Ambient, mine, end);
     }
 
     protected override void OnPreDispose() {
