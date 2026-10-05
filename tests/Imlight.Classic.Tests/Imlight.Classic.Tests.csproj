@@ -61,6 +61,7 @@
     <ServerIntegrationTest Include="BankStorageTests.cs" />
     <ServerIntegrationTest Include="OpsPersistenceTests.cs" />
     <ServerIntegrationTest Include="EconomyFixesTests.cs" />
+    <ServerIntegrationTest Include="RobustnessFixesTests.cs" />
   </ItemGroup>
   <PropertyGroup>
     <_TypeInputPath>$(MSBuildThisFileDirectory)../../submodule/Imcodec/src/Imcodec.ObjectProperty/GeneratorInput</_TypeInputPath>

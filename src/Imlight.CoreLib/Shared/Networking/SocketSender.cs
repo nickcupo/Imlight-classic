@@ -95,6 +95,8 @@ internal sealed class SocketSender : ReceiveActor, IDisposable {
     private void SendToSocket(IMessage message) {
         if (!_socket.Connected) {
             Dispose();
+
+            return; // CLASSIC: sending on a socket the client closed only threw ObjectDisposed/Shutdown errors.
         }
         if (_isSending) {
             Logger.Error("SessionActor {SessionId} send failure: " +
@@ -116,6 +118,13 @@ internal sealed class SocketSender : ReceiveActor, IDisposable {
                     $"SessionActor [{_sessionid}] send failure: " +
                     $"Sent {bytesSent} bytes out of {data.Length} bytes.");
             }
+        }
+        catch (Exception ex) when (SocketListener.IsNormalDisconnect(ex)) {
+            // CLASSIC: the client went away (quit or crash): a disconnect, logged at Information, not a fatal error.
+            Logger.Information("SessionActor {SessionId} disconnected while sending: {Message}", Logger.Args(_sessionid, ex.Message));
+            Dispose();
+
+            return;
         }
         catch (SocketException ex) {
             throw new SessionFatalException($"SessionActor [{_sessionid}] send failure: {ex.SocketErrorCode}");

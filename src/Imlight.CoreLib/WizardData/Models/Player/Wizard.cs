@@ -801,7 +801,7 @@ public class Wizard {
 
     public bool LearnSpell(Spell spell) {
         if (SpellbookBehavior.LearnedSpellTemplateIds.Contains(spell.m_templateID)) {
-            Logger.Warning("{0} Tried to learn spell with template ID {1} that is already known.",
+            Logger.Debug("{0} Tried to learn spell with template ID {1} that is already known.", // CLASSIC: harmless
                 Logger.Args(PlayerNameBehavior.GetWizardName(), spell.m_templateID));
 
             return false;
@@ -1564,7 +1564,10 @@ public class Wizard {
     private void InitializeMagicSchoolBehavior(MagicSchool school, byte level) {
         MagicSchoolBehavior = new ServerMagicSchoolBehavior {
             MagicSchool = school,
-            ExperiencePoints = 0,
+            // CLASSIC: the XP a wizard of this level starts with (0 at level 1). An ambient wizard is made at its level,
+            // and the stats recalculation inside its construction read XP 0 for level N: 960 "XP/Level mismatch" lines
+            // per start on live.
+            ExperiencePoints = level > 1 ? MagicLevelsConfig.GetExperiencePointsAtLevel(level) : 0,
             Level = level,
             TrainingPoints = 0,
             OverflowXp = 0,

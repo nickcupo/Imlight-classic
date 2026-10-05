@@ -36,6 +36,9 @@ public abstract class RavenDatabaseSingleton<T> where T : RavenDatabaseSingleton
     private static readonly Lazy<T> s_lazy = new(() => (Activator.CreateInstance(typeof(T), true) as T)!);
     public static T Instance => s_lazy.Value;
 
+    /// <summary>CLASSIC: whether the database was opened (cleanups skip it otherwise, e.g. in tests).</summary>
+    public static bool IsCreated => s_lazy.IsValueCreated;
+
     protected readonly byte MaxNumberOfRequestsPerSession
         = ConfigurationManager.Settings["Database.DatabaseMaxNumberOfRequestsPerSession"].AsByte();
     protected readonly byte RequestTimeoutInSeconds

@@ -79,7 +79,9 @@ internal sealed class InteractVendorComponent(ZoneEntity entity) : ZoneEntityCom
         if (!NpcInventoryCollection.TryGetNpcInventory(Entity.ActiveGameObject.m_templateID, out var inventory)) {
             // CLASSIC: a warning with the template id (the GID printed as its type name); a vendor the client lists
             // without an inventory in the data sells nothing.
-            Logger.Warning("No vendor inventory for NPC {0} ({1}); it sells nothing.",
+            // CLASSIC: Debug: the recipe vendors (crafting, set aside by the owner 2026-10-01) and the arena furniture
+            // vendor have none in the data, every start.
+            Logger.Debug("No vendor inventory for NPC {0} ({1}); it sells nothing.",
                 Logger.Args(Entity.ActiveGameObject.m_templateID.Full, Entity.ActiveGameObject.m_debugName));
 
             return;

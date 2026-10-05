@@ -109,7 +109,8 @@ internal static class LocalWadCache {
                 .FirstOrDefault();
 
             if (file is null) {
-                Logger.Warning("LocalCache does not contain a file definition for {FileName}!", 
+                // CLASSIC: a cold cache on a zone's first visit; the caller fetches it next and warns if that fails.
+                Logger.Debug("LocalCache does not contain a file definition for {FileName}!", 
                     Logger.Args(wadName));
 
                 return null;

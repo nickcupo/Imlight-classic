@@ -44,6 +44,7 @@ using System;
 using System.Collections.Generic;
 using System.Reflection;
 using Akka.Actor;
+using Imlight.Common;
 
 namespace Imlight.CoreLib.Shared.Networking;
 
@@ -75,6 +76,22 @@ public class ReceiveProtocolDispatcher : ReceiveActor {
     /// and primary-constructor initializers have run by then; its constructor body has not.
     /// </summary>
     protected virtual void OnDispatcherConstructed() { }
+
+    /// <summary>
+    /// CLASSIC: a client message that reached a service with no handler for it is warned about once per message type per
+    /// process (it is a spinner or a hang for the player); server-internal messages stay with Akka's default.
+    /// </summary>
+    protected override void Unhandled(object message) {
+        if (message is Imcodec.MessageLayer.IMessage and not IServerMessage && Classic.UnhandledMessageLog.FirstTime(message.GetType())) {
+            Logger.Warning("{Actor} received client message {Type} and has no handler for it (first of its type; later ones at Verbose).",
+                Logger.Args(GetType().Name, message.GetType().Name));
+        }
+        else if (message is Imcodec.MessageLayer.IMessage and not IServerMessage) {
+            Logger.Verbose("{Actor} received unhandled client message {Type}.", Logger.Args(GetType().Name, message.GetType().Name));
+        }
+
+        base.Unhandled(message);
+    }
 
     protected virtual void ConfigureReceivers() => Receive<object>(message => {
         var handler = MessageHandlerTable.DispatcherFor(GetType(), message.GetType());

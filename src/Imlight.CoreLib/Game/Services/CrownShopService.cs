@@ -295,9 +295,26 @@ internal class CrownShopService(SessionActor sessionActor) : MessageService(sess
     private static (FrozenDictionary<ulong, CrownShopEntry>, ByteString) BuildCatalog() {
         var offered = ClassicProgression.CrownShop?.Offered(ClassicRuntime.Rules.IsFeatureEnabled)
             ?? FrozenDictionary<ulong, CrownShopEntry>.Empty;
+        var shown = ForClient(offered.Values).ToFrozenDictionary(item => item.Template);
 
-        return (offered, SerializeCatalog(offered.Values));
+        return (shown, SerializeCatalog(shown.Values));
     }
+
+    /// <summary>
+    /// CLASSIC: the catalog as the r806919 client can show it (owner client log 2026-10-04 03:12, Crown Shop open).
+    /// <list type="bullet">
+    /// <item>Henchmen are left out: the client's PermanentShop rejects every henchman template ("templateID N not
+    /// found"; it lists items, and a henchman is a creature), and the client has no other way to hire one (no henchman
+    /// message in its protocol), so an offered henchman could never be seen or bought.</item>
+    /// <item>A gold-only item (the 2009 1-day mount rentals) gets a Crowns price: the client drops a row without one
+    /// ("Invalid Crowns Price Recieved!"). It is the gold price / 10, rounded up: the ratio of every 2009 rental sold
+    /// for both (7-day Enchanted Broom 1,000 Crowns or 10,000 gold). The gold price stays as 2009 had it.</item>
+    /// </list>
+    /// </summary>
+    internal static IEnumerable<CrownShopEntry> ForClient(IEnumerable<CrownShopEntry> offered)
+        => offered
+            .Where(item => item.Category != CrownShopCategories.Henchmen)
+            .Select(item => item.Crowns <= 0 && item.Gold > 0 ? item with { Crowns = (item.Gold + 9) / 10 } : item);
 
     // The client's CrownShopData for these items.
     internal static ByteString SerializeCatalog(IEnumerable<CrownShopEntry> offered) {

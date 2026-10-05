@@ -148,6 +148,7 @@ internal sealed class InteractServiceMementoComponent(ZoneEntity entity)
     public override void OnPlayerLeave(IActorRef playerActor, ulong id) {
         _sentTeleportOptions.Remove(playerActor); // CLASSIC
         _playerOptionIndex.Remove(playerActor); // CLASSIC
+        _lastInteraction.Remove(playerActor); // CLASSIC
         _playersInInteractionRange.Remove(playerActor);
         _playersInRenderRange.Remove(playerActor);
 
@@ -209,15 +210,94 @@ internal sealed class InteractServiceMementoComponent(ZoneEntity entity)
         // Using FirstOrDefault by ServiceName is unsafe when multiple components share
         // the same service name (e.g. InteractQuestSelectComponent shadowing WoodenChestComponent).
         // CLASSIC: in the list this wizard was sent, not the one the NPC built for whoever asked last.
-        if (!_playerOptionIndex.TryResolve(playerActor, (int) serviceIndex, _optionIndexToComponent, out var serviceComponent)) {
-            Logger.Warning("No component owns service index {0} for NPC {1} with service name {2}",
+        if (!_playerOptionIndex.TryResolve(playerActor, (int) serviceIndex, _optionIndexToComponent, out var serviceComponent)
+                && !TryResolveFromCurrentOptions(playerActor, playerCharacter, ref serviceIndex, serviceName, out serviceComponent)) {
+            // CLASSIC: the click names an option of a list this wizard no longer has. Send the current list instead of
+            // dropping the click silently (the dialog then shows what the NPC offers now).
+            Logger.Debug("No component owns service index {0} for NPC {1} with service name {2}; re-sent the options.",
                 Logger.Args(serviceIndex, Entity.ActiveGameObject.m_debugName, serviceName));
+            SendLeaveServiceRange(playerActor);
+            SendActorServiceOptions(playerActor, 2);
 
             return;
         }
 
+        _lastInteraction[playerActor] = DateTime.UtcNow; // CLASSIC
+
         // Call the service component's interaction method.
         serviceComponent.OnServiceInteraction(playerActor, playerCharacter, playerObject, serviceIndex);
+    }
+
+    /// <summary>
+    /// CLASSIC: the option at <paramref name="index"/> in the list the NPC has for this wizard now, when it is the
+    /// service the click names. The wizard's own list was sent on coming into range; a quest step since then (a goal
+    /// done elsewhere, a quest turned in) can add an option the client shows from the NPC's wizbang while the list the
+    /// server kept for the wizard has no such index (WC-ST01-NPC02's QuestOfferService, rig-final 2026-10-04: every
+    /// click dropped as "No component owns service index 0").
+    /// </summary>
+    private bool TryResolveFromCurrentOptions(IActorRef playerActor, Wizard wizard, ref uint serviceIndex, string serviceName,
+                                              out IServiceComponent component) {
+        component = null;
+        var index = (int) serviceIndex;
+        wizard ??= PlayerQuery.ActiveWizard(playerActor, $"Service options of {Entity.ActiveGameObject?.m_debugName}");
+        if (wizard is null) {
+            return false;
+        }
+
+        RefreshServiceMomento(wizard);
+        var options = _serviceMemento?.m_serviceOptions;
+        if (options is null) {
+            return false;
+        }
+
+        // The index as clicked when it names that service; else the one option of that service (a server-made click,
+        // the seamless quest offer, says index 0 whatever the list).
+        bool Named(int i) => string.Equals(options[i]?.m_serviceName?.ToString(), serviceName, StringComparison.Ordinal);
+        if (index < 0 || index >= options.Count || !Named(index)) {
+            var named = Enumerable.Range(0, options.Count).Where(Named).ToList();
+            if (named.Count != 1) {
+                return false;
+            }
+
+            index = named[0];
+        }
+
+        if (!_optionIndexToComponent.TryGetValue(index, out var current)) {
+            return false;
+        }
+
+        _playerOptionIndex.Set(playerActor, _optionIndexToComponent);
+        _sentTeleportOptions[playerActor] = options.Count;
+        component = current;
+        serviceIndex = (uint) index;
+
+        return true;
+    }
+
+    /// <summary>CLASSIC: ResReInteract for one wizard (see ResReInteractHandler).</summary>
+    internal sealed record ReInteractPlayer(IActorRef PlayerActor) : IServerMessage {
+        public byte MessageOrder => 0;
+        public byte ServiceID => 102;
+    }
+
+    // CLASSIC: when each wizard last used this object's options; a ResReInteract reopens the dialog only for them.
+    private readonly Dictionary<IActorRef, DateTime> _lastInteraction = [];
+    private static readonly TimeSpan ReInteractWindow = TimeSpan.FromMinutes(2);
+
+    [MessageHandler(typeof(ReInteractPlayer))]
+    private void ReceiveReInteract(ReInteractPlayer message) {
+        var playerActor = message.PlayerActor;
+        if (playerActor is null || _serviceComponents.Count <= 0 || !_playersInInteractionRange.Contains(playerActor)) {
+            return;
+        }
+
+        // The object the wizard was just talking to opens its dialog again (Reinteract 2); any other in range only
+        // refreshes its list.
+        var reopen = _lastInteraction.TryGetValue(playerActor, out var at) && DateTime.UtcNow - at < ReInteractWindow;
+        Logger.Debug("ResReInteract: {0} {1} its options to {2}.",
+            Logger.Args(Entity.ActiveGameObject?.m_debugName, reopen ? "reopens" : "refreshes", playerActor.Path.Name));
+        SendLeaveServiceRange(playerActor);
+        SendActorServiceOptions(playerActor, reopen ? 2 : 0);
     }
 
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_WIZBANGUPDATEINTERVAL))]

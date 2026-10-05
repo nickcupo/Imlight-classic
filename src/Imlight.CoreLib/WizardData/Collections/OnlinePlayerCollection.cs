@@ -38,6 +38,7 @@
  * Last Updated: 04/28/2025
  */
 
+using System;
 using Imlight.CoreLib.WizardData.Databases;
 using Imlight.CoreLib.WizardData.Models.Misc;
 using Raven.Client.Documents;
@@ -50,12 +51,15 @@ namespace Imlight.CoreLib.WizardData.Collections;
 public static class OnlinePlayerCollection {
 
     public const string CollectionName = "OnlinePlayers";
-    private static readonly IDocumentStore s_store;
 
+    // CLASSIC: opened on first database use, so the in-memory list works without a database (tests, early start).
+    private static IDocumentStore Store => PlayerDatabase.Instance.Store;
+
+    // CLASSIC: the authority. The Director hosts every server in one process and clears the list at start, so this
+    // cache holds every online player. The database copy is a mirror for outside tools only: reading it back returned
+    // players whose sessions were gone (a removal query that ran before RavenDB indexed the add, or an entry left by a
+    // crash), and a teleport-to-friend then asked a dead session (rig-pg-ms 2026-10-04).
     private static readonly ConcurrentDictionary<ulong, OnlinePlayer> s_onlinePlayerCache = new();
-
-    static OnlinePlayerCollection() 
-        => s_store = PlayerDatabase.Instance.Store;
 
     private static void DeleteOnlinePlayer(IDocumentSession session, OnlinePlayer onlinePlayer) {
         var documentId = session.Advanced.GetDocumentId(onlinePlayer);
@@ -75,7 +79,7 @@ public static class OnlinePlayerCollection {
         );
 
         // Store the online player in the database.
-        using var session = s_store.OpenSession();
+        using var session = Store.OpenSession();
 
         session.Store(onlinePlayer);
         var metadata = session.Advanced.GetMetadataFor(onlinePlayer);
@@ -101,7 +105,7 @@ public static class OnlinePlayerCollection {
         // Remove from the cache.
         s_onlinePlayerCache.TryRemove(accountId, out _);
 
-        using var session = s_store.OpenSession();
+        using var session = Store.OpenSession();
 
         var onlinePlayer = session
             .Query<OnlinePlayer>(collectionName: CollectionName)
@@ -124,7 +128,7 @@ public static class OnlinePlayerCollection {
             }
         }
 
-        using var session = s_store.OpenSession();
+        using var session = Store.OpenSession();
 
         var onlinePlayer = session
             .Query<OnlinePlayer>(collectionName: CollectionName)
@@ -136,93 +140,83 @@ public static class OnlinePlayerCollection {
     }
 
     /// <summary>
+    /// CLASSIC: takes every entry of a disposed session off the list, by its session actor's path (session ids are
+    /// reused and differ between the login and game servers; the path is the session itself). Memory at once, the
+    /// database mirror in the background so a disposing session is not held up by it.
+    /// </summary>
+    /// <param name="actorPath">The session actor's path, as stored in <see cref="OnlinePlayer.ActorPath"/>.</param>
+    /// <returns>How many entries left the in-memory list.</returns>
+    public static int RemoveSessionByActorPath(string actorPath) {
+        if (string.IsNullOrEmpty(actorPath)) {
+            return 0;
+        }
+
+        var removed = 0;
+        foreach (var kvp in s_onlinePlayerCache) {
+            if (kvp.Value.ActorPath == actorPath && !Classic.Ambient.AmbientWizards.IsAmbientChar(kvp.Value.CharacterId)
+                    && s_onlinePlayerCache.TryRemove(kvp)) {
+                removed++;
+            }
+        }
+
+        if (!PlayerDatabase.IsCreated) {
+            return removed;
+        }
+
+        _ = System.Threading.Tasks.Task.Run(() => {
+            try {
+                using var session = Store.OpenSession();
+                foreach (var stale in session.Query<OnlinePlayer>(collectionName: CollectionName)
+                             .Where(x => x.ActorPath == actorPath).ToList()) {
+                    DeleteOnlinePlayer(session, stale);
+                }
+
+                session.SaveChanges();
+            }
+            catch (Exception ex) {
+                Imlight.Common.Logger.Debug("Online player mirror cleanup for {0} failed: {1}", Imlight.Common.Logger.Args(actorPath, ex.Message));
+            }
+        });
+
+        return removed;
+    }
+
+    /// <summary>
     /// Retrieves all online players from the collection.
     /// </summary>
     /// <returns>An array of online players.</returns>
-    public static OnlinePlayer[] GetOnlinePlayers() {
-        // If the cache is not empty, return the cached players.
-        if (!s_onlinePlayerCache.IsEmpty) {
-            return s_onlinePlayerCache.Values.ToArray();
-        }
-
-        // Otherwise, query the database for online players.
-        using var session = s_store.OpenSession();
-
-        return session.Query<OnlinePlayer>(collectionName: CollectionName).ToArray();
-    }
+    public static OnlinePlayer[] GetOnlinePlayers()
+        => s_onlinePlayerCache.Values.ToArray();
 
     /// <summary>
     /// Retrieves the online player with the specified character ID from the collection.
     /// </summary>
     /// <param name="characterId">The character ID of the online player to retrieve.</param>
     /// <returns>The online player with the specified character ID, or null if not found.</returns>
-    public static OnlinePlayer GetOnlinePlayer(ulong characterId) {
-        // Check the cache first.  Values snapshot is safe for concurrent reads.
-        var cachedPlayer = s_onlinePlayerCache.Values
-            .FirstOrDefault(x => x.CharacterId == characterId);
-        if (cachedPlayer != null) {
-            return cachedPlayer;
-        }
-
-        // If not found in the cache, query the database.
-        using var session = s_store.OpenSession();
-
-        return session
-            .Query<OnlinePlayer>(collectionName: CollectionName)
-            .FirstOrDefault(x => x.CharacterId == characterId);
-    }
+    public static OnlinePlayer GetOnlinePlayer(ulong characterId)
+        => s_onlinePlayerCache.Values.FirstOrDefault(x => x.CharacterId == characterId);
 
     /// <summary>
     /// Retrieves all online players in the specified zone from the collection.
     /// </summary>
     /// <param name="zone">The zone to filter by.</param>
     /// <returns>An array of online players in the specified zone.</returns>
-    public static OnlinePlayer[] GetPlayersInZone(string zone) {
-        // Check the cache first.
-        var cachedPlayers = s_onlinePlayerCache.Values
-            .Where(x => x.CurrentZone == zone)
-            .ToArray();
-        if (cachedPlayers.Length > 0) {
-            return cachedPlayers;
-        }
-
-        // If not found in the cache, query the database.
-        using var session = s_store.OpenSession();
-
-        return session
-            .Query<OnlinePlayer>(collectionName: CollectionName)
-            .Where(x => x.CurrentZone == zone)
-            .ToArray();
-    }
+    public static OnlinePlayer[] GetPlayersInZone(string zone)
+        => s_onlinePlayerCache.Values.Where(x => x.CurrentZone == zone).ToArray();
 
     /// <summary>
     /// Retrieves all online players in the specified realm from the collection.
     /// </summary>
     /// <param name="realm">The realm to filter by.</param>
     /// <returns>An array of online players in the specified realm.</returns>
-    public static OnlinePlayer[] GetPlayersInRealm(string realm) {
-        // Check the cache first.
-        var cachedPlayers = s_onlinePlayerCache.Values
-            .Where(x => x.CurrentRealm == realm)
-            .ToArray();
-        if (cachedPlayers.Length > 0) {
-            return cachedPlayers;
-        }
-
-        // If not found in the cache, query the database.
-        using var session = s_store.OpenSession();
-
-        return session
-            .Query<OnlinePlayer>(collectionName: CollectionName)
-            .Where(x => x.CurrentRealm == realm)
-            .ToArray();
-    }
+    public static OnlinePlayer[] GetPlayersInRealm(string realm)
+        => s_onlinePlayerCache.Values.Where(x => x.CurrentRealm == realm).ToArray();
 
     public static void Clear() {
         // Clear the cache.
         s_onlinePlayerCache.Clear();
 
-        using var session = s_store.OpenSession();
+        using var session = Store.OpenSession();
 
         var onlinePlayers = session
             .Query<OnlinePlayer>(collectionName: CollectionName)

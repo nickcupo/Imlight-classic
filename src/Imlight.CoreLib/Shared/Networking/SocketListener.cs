@@ -147,13 +147,41 @@ internal sealed class SocketListener : ReceiveActor, IDisposable {
         }
 
         if (_closeOnSocketException) {
-            Logger.Error("SessionActor {Id} receive operation failed: {Message}",
-                Logger.Args(_sessionid, result.Error.Message));
+            // CLASSIC: a client that quit or crashed resets or cancels the read; that is a disconnect, not an error.
+            if (IsNormalDisconnect(result.Error)) {
+                Logger.Information("SessionActor {Id} disconnected: {Message}", Logger.Args(_sessionid, result.Error.Message));
+            }
+            else {
+                Logger.Error("SessionActor {Id} receive operation failed: {Message}",
+                    Logger.Args(_sessionid, result.Error.Message));
+            }
+
             Dispose();
             return;
         }
 
         StartReceive();
+    }
+
+    /// <summary>
+    /// CLASSIC: an exception that only says the other end went away (reset, aborted, shut down, a cancelled or disposed
+    /// socket operation).
+    /// </summary>
+    internal static bool IsNormalDisconnect(Exception error) {
+        for (var ex = error; ex is not null; ex = ex.InnerException) {
+            switch (ex) {
+                case SocketException { SocketErrorCode: SocketError.ConnectionReset or SocketError.ConnectionAborted
+                        or SocketError.Shutdown or SocketError.Disconnecting or SocketError.NotConnected
+                        or SocketError.OperationAborted or SocketError.TimedOut }:
+                case OperationCanceledException:
+                case ObjectDisposedException:
+                    return true;
+                case AggregateException aggregate when aggregate.InnerExceptions.Count == 1:
+                    continue;
+            }
+        }
+
+        return false;
     }
 
     private void ProcessReceivedData(byte[] buffer, int bytesReceived) {
