@@ -135,7 +135,9 @@ internal sealed partial class CombatDuelComponent {
 
         var (seated0, seated1) = PvpSeats();
         if (side is not (0 or 1)) {
-            side = OpenPvpRules.ChooseSide(DistanceToSide(participant, 0), DistanceToSide(participant, 1), seated0, seated1);
+            side = ClassicPvp.Config?.SideRule == OpenPvpRules.SideRuleAlternate
+                ? OpenPvpRules.ChooseSideByArrival(seated0, seated1)
+                : OpenPvpRules.ChooseSide(DistanceToSide(participant, 0), DistanceToSide(participant, 1), seated0, seated1);
         }
         else if ((side == 0 ? seated0 : seated1) >= OpenPvpRules.SideSize) {
             side = 1 - side;
@@ -153,7 +155,9 @@ internal sealed partial class CombatDuelComponent {
 
         AssignParticipantToSubCircle(slot, actor, participant);
         var (now0, now1) = PvpSeats();
-        actor.Tell(ClassicChat.Line(now0 > 0 && now1 > 0
+        actor.Tell(ClassicChat.Line(_arena
+            ? $"You are on side {side + 1} ({now0} v {now1}). The match starts when everyone is here."
+            : now0 > 0 && now1 > 0
             ? $"You joined side {side + 1} ({now0} v {now1}). The duel starts soon; say .pvp ready to start sooner, .pvp leave to step out."
             : $"You joined side {side + 1}. Waiting for a wizard on the other side; .pvp leave to step out."));
         Logger.Information("Duel {0} | open PvP: {1} joined side {2} ({3} v {4}).",
@@ -177,6 +181,12 @@ internal sealed partial class CombatDuelComponent {
     private void ReceivePvpCountdown(CLASSIC_FEATURES_PROTOCOL.MSG_PVPCOUNTDOWN message) {
         if (!_pvp || !_isActive || !_pvpLobby) {
             Timers.Cancel(PVP_TICK_KEY);
+
+            return;
+        }
+
+        if (_arena) {
+            ArenaTick(); // CLASSIC: an arena match circle waits for its own wizards
 
             return;
         }
@@ -304,8 +314,14 @@ internal sealed partial class CombatDuelComponent {
         Logger.Information("Duel {0} | open PvP over: side {1} won.", Logger.Args(Duel.m_duelID.Full, side1Won ? 2 : 1));
 
         foreach (var seat in SubCircles.Where(c => c is { Occupied: true, IsWizard: true }).ToList()) {
+            if (seat.Disconnected) {
+                ArenaMarkFled(seat); // CLASSIC: still away when an arena match ends: a loss
+            }
+
             PvpReleaseSeat(seat, won: seat.OccupiedTeam == winning, fought: true);
         }
+
+        ArenaReport(side1Won ? 1 : 0); // CLASSIC: slots 1-4 are side 1 (index 0)
 
         ZoneBroadcast(new DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_COMBATMATCHRESULT { DuelID = SigilId, WinningTeam = (byte) winning });
         Duel.m_duelPhase = kDuelPhase.kPhase_Ended;
@@ -317,6 +333,7 @@ internal sealed partial class CombatDuelComponent {
     /// <summary>Closes a circle whose fight never started.</summary>
     private void PvpClose(string reason) {
         Logger.Information("Duel {0} | open PvP circle closed: {1}.", Logger.Args(Duel.m_duelID.Full, reason));
+        ArenaReport(-1); // CLASSIC: an arena match that never fought (no-op when already reported)
         foreach (var seat in SubCircles.Where(c => c is { Occupied: true }).ToList()) {
             seat.ParticipantActor?.Tell(ClassicChat.Line($"The duel circle closed: {reason}."));
             PvpReleaseSeat(seat, won: false, fought: false);

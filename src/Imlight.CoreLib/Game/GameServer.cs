@@ -302,6 +302,7 @@ public class GameServer : Server {
         if (Imlight.Classic.ClassicRuntime.IsActive) {
             Classic.ClassicHolidays.Initialize(Classic.ClassicStartup.ClassicDataRoot, Imlight.Classic.ClassicRuntime.Rules.Profile.Id);
             Classic.ClassicPvp.Initialize(Classic.ClassicStartup.ClassicDataRoot, Imlight.Classic.ClassicRuntime.Rules.Profile.Id);
+            Classic.Arena.ClassicArena.Initialize(Classic.ClassicStartup.ClassicDataRoot, Imlight.Classic.ClassicRuntime.Rules.Profile.Id);
             Classic.ClassicBazaar.Initialize(Classic.ClassicStartup.ClassicDataRoot, Imlight.Classic.ClassicRuntime.Rules.Profile.Id);
         }
     }

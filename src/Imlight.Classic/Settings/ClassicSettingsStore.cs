@@ -96,6 +96,7 @@ public static class ClassicSettingKeys {
     public const string BazaarStockPerRestock = "BazaarStockPerRestock";
     public const string OpenPvp = "OpenPvp";
     public const string PvpCountdownSeconds = "PvpCountdownSeconds";
+    public const string ArenaMatches = "ArenaMatches";
     public const string PetPavilion = "PetPavilion";
     public const string MovementGuard = "MovementGuard";
     public const string MovementMaxSpeed = "MovementMaxSpeed";
@@ -154,6 +155,9 @@ public sealed class ClassicSettingsStore {
         new(ClassicSettingKeys.PvpCountdownSeconds, ClassicSettingKind.Int, "20", "PvP",
             "Seconds an arena circle waits for more wizards once both sides have one, unless all are ready sooner.",
             3, 300),
+        new(ClassicSettingKeys.ArenaMatches, ClassicSettingKind.Bool, "true", "PvP",
+            "The January 2009 arena (classic-data/pvp/arena-*.yaml): the Practice and Ranked guards, Create, Join and "
+            + "Quick Join matches 1v1 to 4v4, Go to Arena, a random arena; Ranked moves ratings and gives Arena Tickets."),
         new(ClassicSettingKeys.PetPavilion, ClassicSettingKind.Bool, "true", "Owner extras",
             "The Pet Pavilion (May 2010, after the 2009 cutoff; owner request): opens the pet park and turns on pet "
             + "leveling, talents, energy and hatching. Zone changes apply at the next zone entry."),

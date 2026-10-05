@@ -661,6 +661,14 @@ internal class FriendsService(SessionActor sessionActor) : MessageService(sessio
         // CLASSIC: a friend in a dungeon is reached in their instance (a sigil group's run or the dungeon's owner), and
         // not when it already holds four wizards (2009: "Your friend is in a full instance"; Classic.GroupInstances).
         var instanceOwner = ClassicRuntime.IsActive ? onlinePlayer.InstanceOwnerId : 0;
+
+        // CLASSIC: a friend fighting an arena match is busy (the arena instance is the match's own).
+        if (Classic.Arena.ArenaMatchmaker.Instance?.IsRun(instanceOwner) == true) {
+            InformGameClient("That player is busy right now.", true);
+
+            return;
+        }
+
         if (instanceOwner != 0 && GroupInstances.IsFull(GroupInstances.CountIn(OnlinePlayerCollection.GetOnlinePlayers(),
                 p => p.CurrentZone, p => p.InstanceOwnerId, zone, instanceOwner), onlinePlayer.ZoneHardLimit)) {
             InformGameClient(GroupInstances.FullInstanceMessage, true);

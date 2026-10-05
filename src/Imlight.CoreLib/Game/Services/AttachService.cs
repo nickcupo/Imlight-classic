@@ -100,6 +100,16 @@ internal class AttachService(SessionActor sessionActor) : MessageService(session
         _instanceOwnerId = zoneDetails.InstanceOwnerId; // CLASSIC
         _zoneHardLimit = zoneDetails.ZoneHardLimit; // CLASSIC
 
+        // CLASSIC: logging back in to an arena whose match is over (or a copy of one nobody fights in): back to the arena
+        // hall once the attach is done.
+        if (Classic.Arena.ClassicArena.IsArenaZone(message.ZoneName)
+                && Classic.Arena.ArenaMatchmaker.Instance?.RunFor(_wizard.CharId) is null
+                && Classic.Arena.ClassicArena.Config is { } arena) {
+            TellOtherServices(new CLASSIC_FEATURES_PROTOCOL.MSG_ARENARETURN {
+                Zone = arena.HallZone, Location = arena.HallLocation, DelaySeconds = 5,
+            });
+        }
+
         // Set the character's location and zone to the ones given in the message.
         _wizard.SetZone(message.ZoneName, zoneDetails.ZoneDisplayName);
         _wizard.SetPersistentLocation(zoneDetails.Location);

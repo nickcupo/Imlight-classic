@@ -61,6 +61,9 @@ public sealed class OpenPvpConfig {
     public required string SigilType { get; init; }
     public required float Radius { get; init; }
     public required int LobbyTimeoutSeconds { get; init; }
+
+    /// <summary>How a wizard's side is chosen: "half" (the half they walk in from) or "alternate" (by arrival).</summary>
+    public string SideRule { get; init; } = OpenPvpRules.SideRuleHalf;
     public required ImmutableArray<OpenPvpCircle> Circles { get; init; }
     public required string SourceFile { get; init; }
 
@@ -87,6 +90,36 @@ public static class OpenPvpRules {
 
     /// <summary>Wizards per side.</summary>
     public const int SideSize = 4;
+
+    /// <summary>The side is the half of the circle the wizard walks in from (the street-duel feel).</summary>
+    public const string SideRuleHalf = "half";
+
+    /// <summary>
+    /// Sides alternate by arrival: "step onto it and you'll go to one side of the dueling sigil. The next Wizard on goes
+    /// to the other side, and so on until the timer stops or the dueling sigil is full" (client string
+    /// WizHousingPreview_00000199, the housing dueling sigil; Housing Preview, early 2010). Kept for that sigil.
+    /// </summary>
+    public const string SideRuleAlternate = "alternate";
+
+    /// <summary>
+    /// The side (0 or 1) a wizard joins by arrival: the side with fewer wizards, the first side on a tie; -1 when both
+    /// are full. Arrivals alternate 0, 1, 0, 1 ... (WizHousingPreview_00000199).
+    /// </summary>
+    public static int ChooseSideByArrival(int seated0, int seated1) {
+        if (seated0 >= SideSize && seated1 >= SideSize) {
+            return -1;
+        }
+
+        if (seated0 >= SideSize) {
+            return 1;
+        }
+
+        if (seated1 >= SideSize) {
+            return 0;
+        }
+
+        return seated1 < seated0 ? 1 : 0;
+    }
 
     /// <summary>
     /// The side (0 or 1) a wizard joins: the side whose half they stand nearer to, or the other one when it is full;
@@ -137,7 +170,7 @@ public static class OpenPvpLoader {
 
     private static readonly FrozenSet<string> s_rootKeys = FrozenSet.Create(StringComparer.Ordinal,
         "id", "title", "profiles", "provenance", "license_tag", "notes", "zone", "template", "sigil_type", "radius",
-        "lobby_timeout_seconds", "circles");
+        "lobby_timeout_seconds", "circles", "side_rule");
     private static readonly FrozenSet<string> s_circleKeys = FrozenSet.Create(StringComparer.Ordinal, "tag", "x", "y", "z", "yaw", "source");
     private static readonly Regex s_id = new(@"^open-pvp-[a-z0-9][a-z0-9-]*\z", RegexOptions.CultureInvariant);
 
@@ -178,6 +211,9 @@ public static class OpenPvpLoader {
             diagnostics.At(map.Find("radius")!.Value, "radius", "must be above 0 and at most 5000");
         }
 
+        var sideRule = map.Find("side_rule") is { } sr
+            ? diagnostics.ReadEnum(sr.Value, "side_rule", [OpenPvpRules.SideRuleHalf, OpenPvpRules.SideRuleAlternate])
+            : OpenPvpRules.SideRuleHalf;
         var timeout = map.Find("lobby_timeout_seconds") is { } lt ? diagnostics.ReadInt(lt.Value, "lobby_timeout_seconds", 10, 3600) : null;
         var circles = ImmutableArray.CreateBuilder<OpenPvpCircle>();
         var tags = new HashSet<string>(StringComparer.Ordinal);
@@ -212,7 +248,7 @@ public static class OpenPvpLoader {
 
         return new OpenPvpConfig {
             Id = id!, Profiles = profiles, Zone = zone!, Template = (uint) template!.Value, SigilType = sigilType!,
-            Radius = radius!.Value, LobbyTimeoutSeconds = timeout!.Value, Circles = circles.ToImmutable(), SourceFile = display,
+            Radius = radius!.Value, LobbyTimeoutSeconds = timeout!.Value, SideRule = sideRule ?? OpenPvpRules.SideRuleHalf, Circles = circles.ToImmutable(), SourceFile = display,
         };
     }
 

@@ -78,6 +78,7 @@ public class GameServiceFactory : ServiceFactory {
         typeof(PotionService),
         typeof(BankService), // CLASSIC: the dorm bank and shared bank.
         typeof(TradeService), // CLASSIC: treasure card trading between friends (2009).
+        typeof(ArenaService), // CLASSIC: the 2009 arena's Practice and Ranked matches.
         typeof(SecondChanceService), // CLASSIC: Second Chance chests (October 2009).
         typeof(TreasureShopService),
         typeof(ClassicCinematicService), // CLASSIC
