@@ -49,6 +49,8 @@
  * the same bytes: the Windhammer tower's crystal stand summons the drake
  * DS-NEC1-C01-004/006 talk to and DS-NEC1-C02-001/002 are given by, so the
  * stand stays usable for that branch without an open goal.
+ * Sunken City's book pedestal fires "DecayBook" (Finding A Way, the Tome
+ * of Decay).
  *
  * TODO:
  * - DS-ACAD1-C01-002's goals 1 to 5 complete on entering the Crystal Grove;
@@ -58,7 +60,7 @@
  *
  * Created by: Nick with Claude Code (claude-opus-5-5)
  * Version: KALI 1.0
- * Last Updated: 09/27/2026
+ * Last Updated: 10/05/2026
  */
 
 using System;
@@ -106,6 +108,9 @@ internal static class InteractableQuestEvents {
         ["MS_Mantra2Tablet"] = [new("Mantra2")], // MS-DTH1-C01-002 goal 2, in MS_Death1_T1
         ["MS_Mantra3Tablet"] = [new("Mantra3")], // MS-DTH1-C01-003 goal 2, in MS_Death1_T2
         ["MS_BookPed"] = [new("TakeBook")], // MS-MAIN-C03-001 goal 3, in the Rock Dojo (MS_RockDojoT2)
+        // Sunken City's book tower: the pedestal's behavior fires "DecayBook", which completes Finding A Way's
+        // (WC-ST07-C02-001) "Goal" and makes the tower's own trigger play the Tome of Decay narration.
+        ["WC_BookPedestal_SunkenCity"] = [new("DecayBook", "WizardCity/WC_Streets/Interiors/WC_Sunken_City_T2")],
         ["DS_Coffin"] = [new("TouchTomb")], // DS-NEC2-C01-009 goal 2, in the Necropolis crypt (5Room3_5)
         ["DS_CrystalStand_NEC1_C02_002"] = [new("UseCrystalStand6")], // DS-NEC1-C02-002 goal 3, in DS_Hatchery_T4
         ["DS_CrystalStand_C01-002"] = [new("UseEmptyCrystalPedestal")], // DS-NEC2-C01-002, in DS_A2Z2_Arena (its goal has a zone of its own)
