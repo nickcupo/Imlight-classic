@@ -235,7 +235,7 @@ public class CombatResolver(Duel duel, CombatDuelSubCircle[] actorSubCircles) {
         foreach (var action in _queuedCombatActions) {
             // A caster who left the duel mid-round (fled, logged out, minion removed) has no CombatParticipant any
             // more. Their queued action is void; resolving it would throw and hang the whole duel (audit 2026-10-04).
-            if (action.SpellCaster is null || action.SpellCaster.CombatParticipant is null || !action.SpellCaster.Occupied) {
+            if (action.SpellCaster is null || action.SpellCaster.CombatParticipant is null) {
                 Logger.Debug("Duel {0} | Slot {1} | Caster left the duel. Skipping action.",
                     Logger.Args(_duel.m_duelID.Full, action.SpellCaster?.SlotIndex ?? -1));
 
