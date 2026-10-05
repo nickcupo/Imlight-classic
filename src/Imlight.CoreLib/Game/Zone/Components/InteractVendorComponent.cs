@@ -90,14 +90,22 @@ internal sealed class InteractVendorComponent(ZoneEntity entity) : ZoneEntityCom
         _inventory = inventory.Inventory;
     }
 
+    // CLASSIC: an Arena Ticket vendor (Diego, Roland Silverheart; classic-data/pvp/arena-*.yaml).
+    private Imlight.Classic.Pvp.ArenaVendor TicketVendor
+        => Classic.Arena.ClassicArena.TicketVendor((uint) Entity.ActiveGameObject.m_templateID.Full);
+
     public IEnumerable<ServiceOptionBase> GetServiceOptions(Wizard _)
         => [
             new EquipmentShopOption {
-                m_displayKey = DisplayKey,
-                m_iconKey = NpcIcon,
+                // CLASSIC: a ticket vendor's option reads "Redeem Arena Tickets" with the tickets icon (client r806919).
+                m_displayKey = TicketVendor is null ? DisplayKey : "GUI_ShopArenaItems",
+                m_iconKey = TicketVendor is null ? NpcIcon : "ArenaPoints",
                 m_serviceName = ServiceName,
             }
         ];
+
+    /// <summary>CLASSIC: true when this vendor sells for Arena Tickets.</summary>
+    public bool SellsForTickets => TicketVendor is not null;
 
     public void OnServiceInteraction(IActorRef playerActor, Wizard playerCharacter, CoreObject playerObject, uint serviceOptionIndex) {
         SendShopOfferings(playerActor);
@@ -111,13 +119,14 @@ internal sealed class InteractVendorComponent(ZoneEntity entity) : ZoneEntityCom
     private void SendShopOfferings(IActorRef playerActor) {
         var shopOffering = new WizShopOffering() {
             m_sellModifier = 0.05f,
-            m_shopTitle = "KrocNPC_00000013",
+            m_shopTitle = TicketVendor?.Title ?? "KrocNPC_00000013", // CLASSIC: a ticket vendor's own shop title
             m_shopList = _inventory,
 
             // Changes the type of currency that is used
             // 0 - Gold
             // 1 - PvP tickets
-            m_shopType = 0,
+            // CLASSIC: an Arena Ticket vendor's window prices in tickets.
+            m_shopType = TicketVendor is null ? 0 : 1,
 
             // todo: figure this out for QA
             m_CSRTestShop = false,

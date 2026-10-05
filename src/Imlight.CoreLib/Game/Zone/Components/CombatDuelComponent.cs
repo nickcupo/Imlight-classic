@@ -173,6 +173,15 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
     };
 
     public override void OnPlayerJoin(CoreObject playerObj, IActorRef playerActor, Wizard playerWizard) {
+        // CLASSIC: a wizard of an arena match arrives: their seat (or their held seat after a drop).
+        if (_arena) {
+            if (!(_isActive && TryRejoin(playerObj, playerActor, playerWizard))) {
+                ArenaOnPlayer(playerObj, playerActor, playerWizard);
+            }
+
+            return;
+        }
+
         if (!_isActive) {
             return;
         }
@@ -203,7 +212,12 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
         // CLASSIC: an open PvP circle opens when a wizard walks in.
         if (_pvp) {
             if (_combatSigilObjectInfo is not null) {
-                PvpOnPlayerMove(playerObj, playerActor, playerWizard);
+                if (_arena) {
+                    ArenaOnPlayer(playerObj, playerActor, playerWizard); // CLASSIC: an arena match circle
+                }
+                else {
+                    PvpOnPlayerMove(playerObj, playerActor, playerWizard);
+                }
             }
 
             return;
@@ -309,6 +323,10 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
 
         // CLASSIC: one of the server's open PvP circles (classic-data/pvp).
         _pvp = ClassicPvp.IsPvpCircle(Entity.Zone?.ZonePath, _combatSigilObjectInfo.m_zoneTag);
+
+        // CLASSIC: an arena's match circle (Classic/Arena) runs as a PvP circle too.
+        _arena = Classic.Arena.ClassicArena.IsArenaCircle(Entity.Zone?.ZonePath, _combatSigilObjectInfo.m_zoneTag);
+        _pvp |= _arena;
     }
 
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_REQUESTCOMBATSIGIL))]
@@ -1429,6 +1447,7 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
         // CLASSIC: leaving an open PvP fight costs nothing; the other side wins once one side is empty.
         if (_pvp && caster.IsWizard) {
             DisableOwnedMinionControl(caster.ParticipantObject);
+            ArenaMarkFled(caster); // CLASSIC: fleeing an arena match is a loss
             PvpReleaseSeat(caster, won: false, fought: !_pvpLobby);
             if (_pvpLobby) {
                 if (PvpSeats() == (0, 0)) {

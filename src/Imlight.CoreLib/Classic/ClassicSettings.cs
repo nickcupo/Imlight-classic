@@ -70,6 +70,7 @@ public static class ClassicSettings {
     public static int BazaarStockPerRestock => Store.Int(ClassicSettingKeys.BazaarStockPerRestock);
     public static bool OpenPvp => Store.Bool(ClassicSettingKeys.OpenPvp);
     public static int PvpCountdownSeconds => Store.Int(ClassicSettingKeys.PvpCountdownSeconds);
+    public static bool ArenaMatches => Store.Bool(ClassicSettingKeys.ArenaMatches);
     public static bool PetPavilion => Store.Bool(ClassicSettingKeys.PetPavilion);
     public static bool MovementGuard => Store.Bool(ClassicSettingKeys.MovementGuard);
     public static int MovementMaxSpeed => Store.Int(ClassicSettingKeys.MovementMaxSpeed);

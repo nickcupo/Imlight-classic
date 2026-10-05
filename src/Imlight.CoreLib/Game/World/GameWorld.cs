@@ -210,7 +210,8 @@ public class GameWorld : ReceiveProtocolDispatcher, IWithTimers {
         // Wizard City Arena has 12): wizards meet there to duel, so it is never a per-player copy.
         var isInstancedZone = wasPrivateRequest
                            || (message.ZoneData.m_nHardLimit <= HARD_LIMIT_INSTANCE_THRESHHOLD
-                               && !Classic.ClassicPvp.IsOpenPvpZone(zonePath));
+                               && !Classic.ClassicPvp.IsOpenPvpZone(zonePath)
+                               && !Classic.Arena.ClassicArena.IsHall(zonePath)); // CLASSIC: the arena hall is shared
         if (isInstancedZone) {
             Logger.Information("Game world loaded instance zone {0} for {1} (hard limit {2}{3}).",
                 Logger.Args(zonePath, ownerId, message.ZoneData.m_nHardLimit,

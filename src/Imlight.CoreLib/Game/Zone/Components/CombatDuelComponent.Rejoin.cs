@@ -254,6 +254,7 @@ internal sealed partial class CombatDuelComponent {
     /// </summary>
     private void ReleaseHeldSeat(CombatDuelSubCircle circle, bool walkedAway = false) {
         if (_pvp) {
+            ArenaMarkFled(circle); // CLASSIC: an arena match: the seat ran out, a loss
             PvpReleaseSeat(circle, won: false, fought: true); // CLASSIC: no defeat penalty in open PvP
 
             return;

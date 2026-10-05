@@ -194,4 +194,57 @@ internal sealed class CLASSIC_FEATURES_PROTOCOL : IServerProtocol {
 
     }
 
+    /// <summary>
+    /// CLASSIC: a wizard used a Practice or Ranked guard in the arena (InteractPvpKioskComponent, on the zone actor); the
+    /// session's ArenaService opens the client's PvP window.
+    /// </summary>
+    public sealed class MSG_ARENAKIOSK : IServerMessage {
+
+        public byte MessageOrder { get; } = 13;
+        public byte ServiceID { get; } = 110;
+
+        public bool Ranked;
+        public ulong KioskGid;
+
+    }
+
+    /// <summary>CLASSIC: the arena matchmaker sends this wizard into their match's arena instance.</summary>
+    public sealed class MSG_ARENATRAVEL : IServerMessage {
+
+        public byte MessageOrder { get; } = 14;
+        public byte ServiceID { get; } = 110;
+
+        public string Zone;
+        public string Location;
+        public ulong RunId;
+
+    }
+
+    /// <summary>
+    /// CLASSIC: the arena matchmaker's result for this wizard: Arena Tickets into the game stats, the result window,
+    /// and the trip back to the arena hall.
+    /// </summary>
+    public sealed class MSG_ARENAOUTCOME : IServerMessage {
+
+        public byte MessageOrder { get; } = 15;
+        public byte ServiceID { get; } = 110;
+
+        public Imlight.CoreLib.Classic.Arena.ArenaOutcome Outcome;
+
+    }
+
+    /// <summary>CLASSIC: an ArenaService timer: back to the arena hall after a match.</summary>
+    public sealed class MSG_ARENARETURN : IServerMessage {
+
+        public byte MessageOrder { get; } = 16;
+        public byte ServiceID { get; } = 110;
+
+        public string Zone;
+        public string Location;
+
+        /// <summary>Seconds to wait first (a login into an arena waits for the attach to finish).</summary>
+        public int DelaySeconds;
+
+    }
+
 }
