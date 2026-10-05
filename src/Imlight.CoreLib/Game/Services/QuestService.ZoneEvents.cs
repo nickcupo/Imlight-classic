@@ -52,6 +52,8 @@ using System.Linq;
 using Akka.Actor;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.CoreLib.Classic;
+using Imlight.CoreLib.Game.Results;
+using Imlight.CoreLib.WizardData.Collections;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;
 
@@ -65,6 +67,32 @@ internal partial class QuestService {
 
     private IActorRef ResultZoneActor()
         => ClassicQuestEngine.IsActive ? SessionActor.GetZoneActor() : null;
+
+    // CLASSIC: on entering a zone, post again the zone events of active goals there (GoalZoneEvents): a new instance
+    // has not seen them (Stealthy Stuff's MovePawman in Big Ben).
+    private void ReplayGoalZoneEvents(Imlight.CoreLib.WizardData.Models.Player.Wizard wizard) {
+        if (!ClassicQuestEngine.IsActive || wizard?.QuestBehavior is null) {
+            return;
+        }
+
+        var held = wizard.QuestBehavior.CurrentQuestInstances
+            .Where(q => q is not null)
+            .ToDictionary(q => q.QuestName, q => q, StringComparer.Ordinal);
+        var templates = held.Keys.Select(QuestTemplateCollection.GetQuestByName).Where(t => t is not null).ToList();
+        foreach (var (quest, goal) in GoalZoneEvents.ToReplay(templates,
+                     (q, goalName) => held.TryGetValue(q.m_questName, out var instance) && instance.IsGoalActive(goalName),
+                     wizard.Zone)) {
+            ResultDispatcher.ExecuteResults(
+                actorContext: Context,
+                results: goal.m_activateResults,
+                playerRef: SessionActor.ActorRef,
+                playerObj: GetActiveGameObject(),
+                zoneActor: ResultZoneActor(),
+                questName: quest.m_questName,
+                goalName: goal.m_goalName
+            );
+        }
+    }
 
     private void PostMonsterKilled(ulong[] defeatedTemplateIds) {
         if (!ClassicQuestEngine.IsActive || defeatedTemplateIds is not { Length: > 0 }) {

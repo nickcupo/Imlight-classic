@@ -35,7 +35,7 @@
  * 
  * Created by: Jooty with Codex (GPT-6)
  * Version: KALI 1.0
- * Last Updated: 09/28/2026
+ * Last Updated: 10/05/2026
  */
 
 using System.Collections.Generic;
@@ -46,6 +46,7 @@ using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
+using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.Game.Requirements;
 using Imlight.CoreLib.Game.Requirements.Contexts;
 using Imlight.CoreLib.Game.Zone.Core;
@@ -72,6 +73,9 @@ internal sealed class RenderComponent(ZoneEntity entity) : ZoneEntityComponent(e
     private readonly Dictionary<Wizard, IActorRef> _playersWithRequirementsMet = [];
     private readonly Dictionary<IActorRef, Wizard> _playerIgnoreBecauseDynamod = [];
     private readonly HashSet<IActorRef> _collectedHidden = []; // CLASSIC: hidden by HideCollectedForPlayer, not a dynamod.
+    // CLASSIC: the players this object has taken on (OnPlayerJoin, or OnPlayerMove for a player who was already in the
+    // zone when the object started; see TakeOnLatePlayer).
+    private readonly HashSet<IActorRef> _knownPlayers = [];
     private float _renderDistance;
     private bool _doesDistanceCheck = false;
 
@@ -104,6 +108,7 @@ internal sealed class RenderComponent(ZoneEntity entity) : ZoneEntityComponent(e
         });
 
     public override void OnPlayerJoin(CoreObject player, IActorRef suspect, Wizard wizard) {
+        _knownPlayers.Add(suspect); // CLASSIC
         // Check to see if dynamods would enable/disable this object.
         // We don't need to check for spawns, only despawns.
         var relevantDynaMods = wizard?.DynamodSet?.Dynamods?
@@ -177,6 +182,7 @@ internal sealed class RenderComponent(ZoneEntity entity) : ZoneEntityComponent(e
 
     public override void OnPlayerLeave(IActorRef suspect, ulong id) {
         _collectedHidden.Remove(suspect); // CLASSIC
+        _knownPlayers.Remove(suspect); // CLASSIC
 
         var wizard = _playersWithRequirementsMet.FirstOrDefault(x => x.Value == suspect).Key;
         if (wizard != null) {
@@ -203,6 +209,10 @@ internal sealed class RenderComponent(ZoneEntity entity) : ZoneEntityComponent(e
 
         // If this player is ignoring the object due to a dynamod, do nothing.
         if (_playerIgnoreBecauseDynamod.ContainsKey(playerActor)) {
+            return;
+        }
+
+        if (TakeOnLatePlayer(playerObj, playerActor, playerWizard)) { // CLASSIC
             return;
         }
 
@@ -326,6 +336,41 @@ internal sealed class RenderComponent(ZoneEntity entity) : ZoneEntityComponent(e
         if (Entity.TriggerObjectState is { } triggerState) {
             Entity.ChangeStateExclusiveSender(triggerState, player);
         }
+    }
+
+    /// <summary>
+    /// CLASSIC: an object that starts while players are already in the zone (a spawner a trigger or quest result
+    /// started, such as Big Ben's level-5 Travis Pawman after MovePawman) reaches them through its start broadcast
+    /// only: they never pass OnPlayerJoin, so leaving its render range removed it and coming back never sent it
+    /// again (playbot begst s2). The first move of such a player takes them on as OnPlayerJoin would have, minus
+    /// the MSG_NEWOBJECT they already had; a player its spawn requirements refuse loses it.
+    /// </summary>
+    /// <returns>True when the player was taken on now (the next move checks the distance).</returns>
+    private bool TakeOnLatePlayer(CoreObject playerObj, IActorRef playerActor, Wizard playerWizard) {
+        if (!ClassicQuestEngine.IsActive || playerWizard is null || playerActor is null || !_knownPlayers.Add(playerActor)) {
+            return false;
+        }
+
+        if (!MeetsSpawnRequirements(playerActor, playerWizard)) {
+            DespawnObjectForPlayer(playerActor);
+
+            return true;
+        }
+
+        _playersWithRequirementsMet.TryAdd(playerWizard, playerActor);
+        _playersInRange.Remove(playerObj);
+        _playersInRange.Add(playerObj, playerActor);
+
+        return true;
+    }
+
+    private bool MeetsSpawnRequirements(IActorRef playerActor, Wizard wizard) {
+        if (Entity.Info?.m_spawnRequirements is not { } requirements) {
+            return true;
+        }
+
+        return RequirementDispatcher.EvaluateRequirements(requirements,
+            new ZoneRequirementContext(requirements, playerActor, null, wizard, Entity.ZoneRef));
     }
 
     private void CreateObjectForAllPlayers() {
