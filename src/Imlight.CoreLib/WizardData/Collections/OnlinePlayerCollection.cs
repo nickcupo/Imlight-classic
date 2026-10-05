@@ -44,6 +44,7 @@ using Imlight.CoreLib.WizardData.Models.Misc;
 using Raven.Client.Documents;
 using Raven.Client.Documents.Session;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Linq;
 
 namespace Imlight.CoreLib.WizardData.Collections;
@@ -78,10 +79,13 @@ public static class OnlinePlayerCollection {
             (_, _) => onlinePlayer
         );
 
-        // Store the online player in the database.
+        // Store the online player in the database. CLASSIC: one document per account (a fixed id), so a login, every
+        // zone change and the logout touch the same row. Stored without an id, each of them added a new row and the
+        // removal (an index query, often stale right after the store) missed some: offline wizards stayed "online"
+        // in the database, and a cache miss (GetOnlinePlayer) read them back (lost whispers, friends shown online).
         using var session = Store.OpenSession();
 
-        session.Store(onlinePlayer);
+        session.Store(onlinePlayer, DocumentIdFor(onlinePlayer.AccountId));
         var metadata = session.Advanced.GetMetadataFor(onlinePlayer);
         metadata[Raven.Client.Constants.Documents.Metadata.Collection] = CollectionName;
 
@@ -107,14 +111,12 @@ public static class OnlinePlayerCollection {
 
         using var session = Store.OpenSession();
 
-        var onlinePlayer = session
-            .Query<OnlinePlayer>(collectionName: CollectionName)
-            .FirstOrDefault(x => x.AccountId == accountId);
-        if (onlinePlayer != null) {
-            DeleteOnlinePlayer(session, onlinePlayer);
-            session.SaveChanges();
-        }
+        session.Delete(DocumentIdFor(accountId)); // CLASSIC: by its fixed id (no index query)
+        session.SaveChanges();
     }
+
+    /// <summary>CLASSIC: the database id of an account's online row.</summary>
+    internal static string DocumentIdFor(ulong accountId) => $"{CollectionName}/{accountId}";
 
     /// <summary>
     /// Removes an online player from the collection based on the specified session ID.
@@ -122,19 +124,32 @@ public static class OnlinePlayerCollection {
     /// <param name="sessionId">The session ID of the online player to remove.</param>
     public static void RemoveOnlinePlayer(ushort sessionId) {
         // Scan the snapshot and remove every entry with a matching SessionId.
+        var accounts = new List<ulong>();
         foreach (var kvp in s_onlinePlayerCache) {
             if (kvp.Value.SessionId == sessionId && !Classic.Ambient.AmbientWizards.IsAmbientChar(kvp.Value.CharacterId)) { // CLASSIC
-                s_onlinePlayerCache.TryRemove(kvp.Key, out _);
+                if (s_onlinePlayerCache.TryRemove(kvp)) {
+                    accounts.Add(kvp.Key);
+                }
             }
         }
 
-        using var session = Store.OpenSession();
+        // CLASSIC: the account's row, by its fixed id, and only while it is still this session's (a zone change's new
+        // session may have written it already). A session no longer in the cache has nothing left to remove.
+        if (accounts.Count == 0) {
+            return;
+        }
 
-        var onlinePlayer = session
-            .Query<OnlinePlayer>(collectionName: CollectionName)
-            .FirstOrDefault(x => x.SessionId == sessionId);
-        if (onlinePlayer != null) {
-            DeleteOnlinePlayer(session, onlinePlayer);
+        using var session = Store.OpenSession();
+        var changed = false;
+        foreach (var accountId in accounts) {
+            var row = session.Load<OnlinePlayer>(DocumentIdFor(accountId));
+            if (row is not null && row.SessionId == sessionId) {
+                DeleteOnlinePlayer(session, row);
+                changed = true;
+            }
+        }
+
+        if (changed) {
             session.SaveChanges();
         }
     }
