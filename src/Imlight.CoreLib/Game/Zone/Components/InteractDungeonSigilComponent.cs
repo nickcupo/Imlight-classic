@@ -284,12 +284,19 @@ internal sealed partial class InteractDungeonSigilComponent(ZoneEntity entity)
         return false;
     }
 
-    private static WizardTeleportData MatchEntranceTeleport(string tag, WizardZoneData zoneData) {
+    internal static WizardTeleportData MatchEntranceTeleport(string tag, WizardZoneData zoneData) {
         if (zoneData?.Teleports is null || zoneData.Teleports.Count == 0) {
             return null;
         }
 
         var tagMatch = s_streetTowerRx.Match(tag);
+        // CLASSIC: an entry named exactly like the sigil wins over the street/tower match below, which reads
+        // "Street 6 Tower 1 Instance Sigil" as "street6" + "tower1" and so also matches "Street 6 CustTower 1 Instance
+        // Sigil" (Colossus Boulevard lists that one first, sending Seal the Deal's Rotunda sigil into Troll Tower).
+        if (tagMatch.Success && ClassicQuestEngine.IsActive && ExactTeleport(tag, zoneData) is { } exact) {
+            return exact;
+        }
+
         if (tagMatch.Success) {
             var streetTok = "street" + tagMatch.Groups[1].Value;
             var instance = NormalizeSigilToken(tagMatch.Groups[2].Value);
@@ -301,6 +308,11 @@ internal sealed partial class InteractDungeonSigilComponent(ZoneEntity entity)
             });
         }
 
+        return ExactTeleport(tag, zoneData);
+    }
+
+    // The zone teleport whose trigger name is the sigil's tag (case, spaces and punctuation ignored), or null.
+    private static WizardTeleportData ExactTeleport(string tag, WizardZoneData zoneData) {
         var tagNorm = NormalizeSigilToken(tag);
 
         return zoneData.Teleports.FirstOrDefault(t => {
