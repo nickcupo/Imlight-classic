@@ -77,4 +77,11 @@ public sealed class DatamineGateFixesTests {
         Assert.Equal(destination, (string?) Teleport(Colossus, sigil)["m_destinationZone"]);
     }
 
+    [Fact]
+    public void EightLeggedQueenOpensTheCrystalGroveGauntletSigil() {
+        Assert.True(StartSetsEntry("DS-ACAD1-C05-003", "QT-ACAD1-C05-003"));
+        Assert.Equal("DragonSpire/DS_A3_Kings/Interiors/DS_CrystalGrove_Gauntlet_7Room",
+            (string?) Teleport("DragonSpire-DS_A3_Kings-DS_A3Z1_CrystalGrove", "ToTower7FromDS_CrystalGrove")["m_destinationZone"]);
+    }
+
 }
