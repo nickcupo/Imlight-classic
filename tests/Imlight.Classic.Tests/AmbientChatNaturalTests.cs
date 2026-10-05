@@ -281,6 +281,8 @@ public sealed class AmbientChatNaturalTests {
     [InlineData("my level is 23", false)]
     [InlineData("check out www.example.com", false)]
     [InlineData("i love fishing in the commons", false)]
+    [InlineData("Hi there! How may I help you today?", false)]
+    [InlineData("ok your answer is lol", false)]
     [InlineData("this is a very long line that goes on and on and on about everything in the whole game", false)]
     public void TheModelsLinesAreFiltered(string raw, bool kept) {
         var persona = ChatPersona.For(1, AmbientTemper.Chatty) with { Channel = ChatChannel.Dictionary, Spelling = ChatSpelling.Casual };

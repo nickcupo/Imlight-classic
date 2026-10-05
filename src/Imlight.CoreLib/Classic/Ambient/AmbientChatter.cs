@@ -202,10 +202,12 @@ internal sealed class AmbientChatter {
             var key = $"{_zone}|{speaker.Moment}|{wizard.Identity.School}|{state.Persona.Spelling}|{state.Persona.Grownup}";
             if (_rng.NextDouble() < 0.5 && llm.TryTake(key, out var generated)) {
                 text = generated;
+                Logger.Debug("Ambient wizard {Name} uses a model line: {Text}", Logger.Args(wizard.Name, text));
             }
 
-            llm.Refill(key, AmbientLlmPrompt.System(state.Persona, wizard.Identity.School, speaker.Context.ZoneName, speaker.Moment),
-                AmbientLlmPrompt.User([.. _recent], null), state.Persona, ChatWordFilter.Current);
+            llm.Refill(key, AmbientLlmPrompt.System,
+                AmbientLlmPrompt.User(state.Persona, wizard.Identity.School, speaker.Context.ZoneName, speaker.Moment, [.. _recent], null),
+                state.Persona, ChatWordFilter.Current);
         }
 
         if (text is null) {
@@ -362,8 +364,9 @@ internal sealed class AmbientChatter {
         // The model may word it better; it has until the wizard would have finished typing.
         Task<string> generated = null;
         if (Llm is { Enabled: true } llm && state.Persona.Channel != ChatChannel.Menu && intent.Name is "fallback" or "how" or "doing" or "greet") {
-            generated = llm.Reply(AmbientLlmPrompt.System(state.Persona, answerer.Identity.School, speaker.Context.ZoneName, ChatMoment.Idle),
-                AmbientLlmPrompt.User([.. _recent], text), state.Persona, ChatWordFilter.Current);
+            generated = llm.Reply(AmbientLlmPrompt.System,
+                AmbientLlmPrompt.User(state.Persona, answerer.Identity.School, speaker.Context.ZoneName, ChatMoment.Idle, [.. _recent], text),
+                state.Persona, ChatWordFilter.Current);
         }
 
         state.TalkingWith = speakerId;
@@ -372,6 +375,10 @@ internal sealed class AmbientChatter {
         state.LastSpoke = due;
         _later(answerer, due - now, w => {
             var line = generated is { IsCompletedSuccessfully: true, Result: { } better } ? better : reply;
+            if (!ReferenceEquals(line, reply)) {
+                Logger.Debug("Ambient wizard {Name} answers with a model line: {Text}", Logger.Args(w.Name, line));
+            }
+
             Remember(line);
             if (whisper) {
                 AmbientChat.Whisper(w, speakerId, line);

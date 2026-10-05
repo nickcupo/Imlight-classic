@@ -23,8 +23,10 @@
  * CLASSIC (owner, 2026-10-04: "if we have bandwidth on the server for a
  * small llm that might be cool"): ambient wizards may take some lines
  * from a small local language model (llama.cpp's llama-server with a
- * ~0.5B instruct model, deploy/linux/llm). Off unless [Classic]
+ * ~1B instruct model, deploy/linux/llm). Off unless [Classic]
  * AmbientWizardLlm = true. The game never waits for it:
+ *   - One fixed system prompt (kept in llama-server's prompt cache); the
+ *     persona, place and recent chat go in the short user message.
  *   - Unprompted lines come from a small per-context cache that a
  *     background task refills (one request at a time, a per-minute cap);
  *     an empty cache means the rule-based line (AmbientLinePool).
@@ -95,7 +97,7 @@ public sealed record AmbientLlmSettings(bool Enabled, Uri? Endpoint, TimeSpan Ti
         }
 
         return new AmbientLlmSettings(true, endpoint,
-            TimeSpan.FromMilliseconds(Int(timeoutMs, 4000, 500, 15000)), Int(perMinute, 12, 1, 120), Int(maxTokens, 24, 8, 64), "on");
+            TimeSpan.FromMilliseconds(Int(timeoutMs, 5000, 500, 15000)), Int(perMinute, 6, 1, 60), Int(maxTokens, 24, 8, 64), "on");
     }
 
     /// <summary>True for localhost, a loopback address or a private (RFC 1918 / unique local) address.</summary>
@@ -153,36 +155,44 @@ public static class AmbientLlmPrompt {
                && !s_eraPhrases.Any(p => lower.Contains(p, StringComparison.Ordinal));
     }
 
-    /// <summary>The system prompt: one 2009 player, one short chat line.</summary>
-    public static string System(ChatPersona persona, AmbientSchool school, string zoneName, ChatMoment moment) {
-        ArgumentNullException.ThrowIfNull(persona);
-        var who = persona.Grownup ? "a parent playing Wizard101 with their kid" : "a kid playing Wizard101";
-        var spell = persona.Spelling switch {
-            ChatSpelling.Neat => "Write in full words with normal capitals.",
-            ChatSpelling.Sloppy => "Write all lowercase, no punctuation, short words like lol, plz, wanna, idk, ty.",
-            ChatSpelling.Excited => "Write lowercase and excited, with !! at the end.",
-            _ => "Write lowercase, casual.",
-        };
-        return $"You are {who} in the year 2009, a {AmbientChatBrain.SchoolName(school)} wizard in {zoneName}, {Doing(moment)}. "
-               + "Write ONE chat line of 3 to 10 words that this player would type. "
-               + $"{spell} No numbers. Never mention anything outside the game or after 2009. "
-               + "Only Wizard City, Krokotopia, Marleybone, MooShu, Dragonspyre and Grizzleheim exist. Be friendly. "
-               + "Reply with the chat line only.";
-    }
+    /// <summary>
+    /// The system prompt, the same for every wizard so llama-server keeps it in its prompt cache (on the N100 the
+    /// prompt costs more than the answer); who the wizard is goes in the user message.
+    /// </summary>
+    public const string System =
+        "You play a kid in the online game Wizard101 in the year 2009 and type one short chat line. "
+        + "Write 3 to 10 words the way kids typed in game chat. No numbers. You are a player, not a helper. "
+        + "Never mention anything outside the game or after 2009. Only Wizard City, Krokotopia, Marleybone, MooShu, "
+        + "Dragonspyre and Grizzleheim exist. Be friendly. Examples of how players type: \"anyone wanna quest\", "
+        + "\"lol nice hat\", \"i need more gold\", \"ty\", \"ice is the best school\", \"brb dinner\". "
+        + "Reply with the chat line only.";
 
-    /// <summary>The user prompt: what was said around (no names), and what to answer when someone spoke to the wizard.</summary>
-    public static string User(IReadOnlyList<string> recent, string? heard) {
+    /// <summary>The user prompt: who the wizard is, what was said around (no names), and what to answer when spoken to.</summary>
+    public static string User(ChatPersona persona, AmbientSchool school, string zoneName, ChatMoment moment, IReadOnlyList<string> recent,
+                              string? heard) {
+        ArgumentNullException.ThrowIfNull(persona);
         var sb = new StringBuilder();
+        sb.Append(persona.Grownup ? "You are a parent playing with your kid" : "You are a kid")
+          .Append($", a {AmbientChatBrain.SchoolName(school)} wizard in {Scrub(zoneName)}, {Doing(moment)}. ")
+          .Append(persona.Spelling switch {
+              ChatSpelling.Neat => "You write full words with capitals.",
+              ChatSpelling.Sloppy => "You write all lowercase, no punctuation, lol, plz, wanna, idk, ty.",
+              ChatSpelling.Excited => "You write lowercase and excited.",
+              _ => "You write lowercase.",
+          }).Append('\n');
         if (recent.Count > 0) {
-            sb.Append("Recent chat nearby:\n");
-            foreach (var line in recent.TakeLast(4)) {
-                sb.Append("- ").Append(Scrub(line)).Append('\n');
-            }
+            sb.Append("Chat nearby: ").Append(string.Join(" / ", recent.TakeLast(3).Select(Scrub))).Append('\n');
         }
 
-        sb.Append(heard is null ? "Say something." : $"A player says to you: \"{Scrub(heard)}\"\nAnswer them.");
+        sb.Append(heard is null ? "Your line:" : $"Someone says: \"{Scrub(heard)}\"\nYour answer:");
         return sb.ToString();
     }
+
+    // Prompt echoes and helper talk a small model slips into.
+    private static readonly string[] s_badPhrases = [
+        "help you", "assist", "chat nearby", "your line", "your answer", "someone says", "a player", "how may i", "how can i",
+        "as a kid", "in the year", "wizard101",
+    ];
 
     /// <summary>
     /// The model's output as a chat line, or null when it is not fit: first line only, quotes and "Name:" removed, 2-60
@@ -205,7 +215,8 @@ public static class AmbientLlmPrompt {
         }
 
         var words = Regex.Matches(line.ToLowerInvariant(), @"[a-z']+").Select(m => m.Value.Trim('\'')).ToList();
-        if (words.Count == 0 || words.Count > 14 || words.Any(s_unsafe.Contains) || !InEra(line)) {
+        if (words.Count == 0 || words.Count > 14 || words.Any(s_unsafe.Contains) || !InEra(line)
+            || s_badPhrases.Any(p => line.Contains(p, StringComparison.OrdinalIgnoreCase))) {
             return null;
         }
 
