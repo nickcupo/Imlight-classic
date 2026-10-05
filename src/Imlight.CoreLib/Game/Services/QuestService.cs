@@ -128,6 +128,8 @@ internal partial class QuestService(SessionActor sessionActor) : MessageService(
         // Exiting the previous zone may have triggered waypoint goals for quests.
         CheckForWaypointGoalZoneExit(wizard);
 
+        ReplayGoalZoneEvents(wizard); // CLASSIC: QuestService.ZoneEvents.cs.
+
         RefreshTowerGuide(); // CLASSIC: QuestService.TowerGuide.cs.
     }
 

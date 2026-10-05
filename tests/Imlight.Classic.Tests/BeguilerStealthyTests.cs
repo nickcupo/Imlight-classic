@@ -203,14 +203,30 @@ public sealed class BeguilerStealthyTests : IDisposable {
         Assert.Equal("MB-MUSE3-NPC03", downstairs.m_personaName.ToString());
         Assert.Equal("MB-MUSE3-NPC05_Maintenance", upstairs.m_personaName.ToString());
 
-        // The first talk sends Travis up the stairs: Big Ben's MoveTravisPawman trigger waits for this event.
-        var post = Assert.IsType<ResPostEvent>(Assert.Single(downstairs.m_completeResults.m_results));
+        // Starting the upstairs goal sends Travis up the stairs: Big Ben's MoveTravisPawman trigger waits for this
+        // event. Only a zone event, so the server posts it again when the holder enters Big Ben (GoalZoneEvents).
+        var post = Assert.IsType<ResPostEvent>(Assert.Single(upstairs.m_activateResults.m_results));
         Assert.Equal("MovePawman", post.m_eventName.ToString());
+        Assert.Empty(downstairs.m_completeResults.m_results);
         Assert.Empty(upstairs.m_completeResults.m_results);
+
+        var held = new[] { quest };
+        Assert.Equal([upstairs], Imlight.CoreLib.Classic.GoalZoneEvents.ToReplay(held, (_, goal) => goal == "Goal", BigBen)
+            .Select(x => x.Goal));
+        Assert.Empty(Imlight.CoreLib.Classic.GoalZoneEvents.ToReplay(held, (_, goal) => goal == "Goal 2", BigBen));
+        Assert.Empty(Imlight.CoreLib.Classic.GoalZoneEvents.ToReplay(held, (_, goal) => goal == "Goal",
+            "Marleybone/MB_BigBen/MB_Museum"));
 
         Assert.Equal(["WizQst9B8D_00000005"], Lines(downstairs));
         Assert.Equal(["WizQst9B8D_00000006", "WizQst9B8D_00000007"], Lines(upstairs));
         Assert.All(quest.m_goals, goal => Assert.Equal(BigBen, goal.m_destinationZone.ToString()));
+    }
+
+    [Fact]
+    public void GoalsMixingOtherResultsAreNotReplayed() {
+        var quest = LoadQuest("GH-FORT-C03-003"); // its goal 7 starts with a ResModifyEntry and a ResPostEvent
+        var goal = quest.m_goals.Single(g => g.m_activateResults?.m_results?.OfType<ResPostEvent>().Any() == true);
+        Assert.Empty(Imlight.CoreLib.Classic.GoalZoneEvents.ToReplay([quest], (_, _) => true, goal.m_destinationZone));
     }
 
     [Fact]
