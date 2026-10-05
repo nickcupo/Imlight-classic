@@ -63,6 +63,9 @@ using Imlight.CoreLib.WizardData.Models.World;
 
 namespace Imlight.CoreLib.Classic.Ambient;
 
+/// <summary>QA (.ambient call): up to <paramref name="Count"/> free wizards wander over near <paramref name="At"/>.</summary>
+internal sealed record AmbientCall(Vector3 At, int Count);
+
 internal sealed partial class AmbientZone {
 
     private sealed record SightReady(SightGrid Grid);
@@ -75,7 +78,52 @@ internal sealed partial class AmbientZone {
     private SightGrid _sight;
     private List<System.Numerics.Vector2> _doorways;
 
-    private void ReceiveManners() => Receive<SightReady>(ready => _sight = ready.Grid);
+    private void ReceiveManners() {
+        Receive<SightReady>(ready => _sight = ready.Grid);
+        Receive<AmbientCall>(OnCall);
+    }
+
+    /// <summary>QA (.ambient call): free wizards wander over to 400-800 units from the caller.</summary>
+    private void OnCall(AmbientCall call) {
+        var free = _wizards.Where(w => w.Present && w.Activity is AmbientActivity.Idle or AmbientActivity.Walking or AmbientActivity.Shopping
+                                       && !_askAbout.ContainsKey(w))
+            .OrderBy(w => Distance(w.Position, call.At)).Take(call.Count).ToList();
+        foreach (var wizard in free) {
+            if (wizard.DuelSigil == ulong.MaxValue) {
+                wizard.DuelSigil = 0;
+                AmbientWizards.RevokeJoin(wizard.Endpoint);
+            }
+
+            for (var attempt = 0; attempt < 10; attempt++) {
+                var angle = _rng.NextDouble() * Math.PI * 2;
+                var reach = 400 + _rng.NextDouble() * 400;
+                var at = new Vector3(call.At.X + (float) (Math.Cos(angle) * reach), call.At.Y + (float) (Math.Sin(angle) * reach), call.At.Z);
+                if (_nav?.Snap(Num(at), 150f) is not { } open || !CanSee(new Vector3(open.X, open.Y, open.Z), call.At)) {
+                    continue;
+                }
+
+                var spot = new Vector3(open.X, open.Y, open.Z);
+                if (!WalkTo(wizard, spot, AmbientActivity.Walking)) {
+                    // Too far for one walk (the far end of a street): QA puts it a street block away first.
+                    var back = new Vector3(call.At.X + (float) (Math.Cos(angle) * 1600), call.At.Y + (float) (Math.Sin(angle) * 1600), call.At.Z);
+                    if (_nav.Snap(Num(back), 400f) is not { } start) {
+                        continue;
+                    }
+
+                    Halt(wizard);
+                    wizard.Position = new Vector3(start.X, start.Y, start.Z);
+                    wizard.Wizard.Location = wizard.Position;
+                    Send([Move(wizard)]);
+                    if (!WalkTo(wizard, spot, AmbientActivity.Walking)) {
+                        continue;
+                    }
+                }
+
+                Logger.Information("Ambient wizard {Name} wanders over (QA call).", Logger.Args(wizard.Name));
+                break;
+            }
+        }
+    }
 
     private void StartManners() {
         var self = Self;

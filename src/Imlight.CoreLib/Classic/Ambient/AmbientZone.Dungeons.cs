@@ -117,6 +117,12 @@ internal sealed partial class AmbientZone {
                         && 2.5 + c.Distance / AmbientNav.RunSpeed < secondsLeft - 1)
             .OrderBy(c => c.Distance)
             .ToList();
+        if (candidates.Count == 0) {
+            Logger.Debug("Ambient wizards in {Zone}: none can see and reach the sigil of run {Run}: {Who}", Logger.Args(_zone, group.RunId,
+                string.Join("; ", _wizards.Select(w => $"{w.Name} L{w.Wizard.MagicSchoolBehavior.Level} {w.Activity} {(int) Distance(w.Position, notice.Pad)}"
+                    + $"{(CanSee(w.Position, notice.Pad) ? "" : " unseen")}{(DungeonManners.Fits(w.Wizard.MagicSchoolBehavior.Level, notice.PlayerLevel) ? "" : " unfit")}"))
+                + $" (player level {notice.PlayerLevel}, {secondsLeft:0.0} s left)"));
+        }
         foreach (var (wizard, _) in candidates) {
             if (open <= 0) {
                 break;
@@ -129,8 +135,8 @@ internal sealed partial class AmbientZone {
             open--;
             var seat = new SigilSeat(notice, known.HardLimit);
             _toSigil[wizard] = seat;
-            Logger.Information("Ambient wizard {Name} (level {Level}) comes to the sigil for {Dungeon} (run {Run}).",
-                Logger.Args(wizard.Name, wizard.Wizard.MagicSchoolBehavior.Level, notice.DestinationZone, group.RunId));
+            Logger.Information("Ambient wizard {Name} (level {Level}) comes to the sigil for {Dungeon} (run {Run}, player level {Player}).",
+                Logger.Args(wizard.Name, wizard.Wizard.MagicSchoolBehavior.Level, notice.DestinationZone, group.RunId, notice.PlayerLevel));
             // A moment to notice and decide, as a person would.
             Timers.StartSingleTimer($"sigil-{wizard.CharId}", new Later(wizard, w => GoToSigil(w, seat)),
                 TimeSpan.FromMilliseconds(900 + _rng.Next(1300)));
@@ -248,6 +254,8 @@ internal sealed partial class AmbientZone {
         }
 
         seat.Notice.Group.Leave(wizard.CharId);
+        Timers.Cancel($"sigil-say-{wizard.CharId}"); // no "can i come?" after it was told no
+        Timers.Cancel($"sigil-go-{wizard.CharId}");
         wizard.Activity = AmbientActivity.Idle;
         wizard.Until = DateTime.UtcNow.AddSeconds(2 + _rng.Next(3));
         _afterDuel.Add(wizard); // it walks off rather than standing on the sigil

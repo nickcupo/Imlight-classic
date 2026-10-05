@@ -629,6 +629,10 @@ internal sealed class AmbientDungeonParty : ReceiveActor, IWithTimers {
     // ---- going home -----------------------------------------------------------------------------
 
     private void EndRun(string why) {
+        if (_helpers.Count == 0) {
+            return; // already over (the party stops a moment later)
+        }
+
         Logger.Information("Ambient dungeon run {Run} is over ({Why}).", Logger.Args(_runId, why));
         foreach (var helper in _helpers.ToList()) {
             GoHome(helper, DungeonLines.Pick(DungeonLines.Thanks, helper.Wizard.Identity.Seed + helper.Index), TimeSpan.FromSeconds(3 + _rng.Next(8)));
