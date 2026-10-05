@@ -903,6 +903,8 @@ internal partial class QuestService(SessionActor sessionActor) : MessageService(
 
         // Check to see if the defeated mob matches the goal's NPC adjectives.
         if (matchCount == 0) {
+            Logger.Debug("Quest goal {0} wants [{1}]; defeated [{2}] templates [{3}]: no match.",
+                Logger.Args(goalTemplate.m_goalName, string.Join(",", goalMobAdjectives), string.Join(",", defeatedMobAdjectives), string.Join(",", defeatedMobTemplateIds ?? [])));
             return;
         }
 

@@ -395,8 +395,14 @@ public class Wizard {
     public void UpdateHealth(int newHealth) {
         GameStats.m_currentHitpoints = newHealth;
 
-        // Persistent save.
-        WizardCollection.UpdateCharacterGameStats(this);
+        // Persistent save. CLASSIC: best effort here - this runs inside duel resolution, and a database timeout thrown out of it
+        // ended the planning-phase handler and left the duel waiting forever. The new value is in memory and is saved with the next write.
+        try {
+            WizardCollection.UpdateCharacterGameStats(this);
+        }
+        catch (Exception ex) {
+            Logger.Error("Saving health {0} of a wizard failed ({1}); it is kept in memory.", Logger.Args(newHealth, ex.GetType().Name));
+        }
     }
 
     public void UpdateMaxHealth(int newMaxHealth) {
@@ -409,8 +415,13 @@ public class Wizard {
     public void UpdateMana(int newMana) {
         GameStats.m_currentMana = newMana;
 
-        // Persistent save.
-        WizardCollection.UpdateCharacterGameStats(this);
+        // Persistent save (best effort, as UpdateHealth: it runs inside duel resolution).
+        try {
+            WizardCollection.UpdateCharacterGameStats(this);
+        }
+        catch (Exception ex) {
+            Logger.Error("Saving mana {0} of a wizard failed ({1}); it is kept in memory.", Logger.Args(newMana, ex.GetType().Name));
+        }
     }
 
     public void UpdateEnergy(int newEnergy) {
