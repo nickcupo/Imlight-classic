@@ -389,6 +389,7 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
         // Pre-planning phase just wants to send who is up first.
         Duel.m_duelPhase = kDuelPhase.kPhase_PrePlanning;
         Duel.m_roundNum++;
+        BeginBossCheatRound(Duel.m_roundNum); // CLASSIC: Briskbreeze Tower's scripted bosses
         ApplyFullTeamGoesFirst();
         SendCombatPhase((byte) Duel.m_duelPhase);
         SendUpFirst(Duel.m_roundNum);

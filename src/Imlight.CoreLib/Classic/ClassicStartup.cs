@@ -288,6 +288,7 @@ public static class ClassicStartup {
             ("rules.creature_decks", rules.Profile.Rules.CreatureDecks), // CLASSIC
             ("rules.potions", rules.Profile.Rules.Potions), // CLASSIC
             ("rules.second_chance", rules.Profile.Rules.SecondChance), // CLASSIC
+            ("rules.boss_cheats", rules.Profile.Rules.BossCheats), // CLASSIC
         };
         foreach (var (key, relativePath) in tables) {
             if (relativePath is null || File.Exists(Path.Combine(s_classicDataRoot, relativePath))) {

@@ -75,6 +75,8 @@ public class QueuedCombatAction {
     public CombatDuelSubCircle SelectedTarget;
     public Spell Spell;
     public SpellTemplate SpellTemplate;
+    // CLASSIC: a boss cheat cast (BossCheatDirector): no card, no pips, and out of turn when Interrupt is set.
+    internal BossCheatCast Cheat;
     
 }
 
@@ -119,6 +121,10 @@ public class CombatResolver(Duel duel, CombatDuelSubCircle[] actorSubCircles) {
         // Some subcircles may not have queued actions. Ensure they do by adding a pass action.
         AddCasterPassActionIfNeeded();
         SortQueuedActions();
+        // CLASSIC: a listed boss's extra casts follow its own card (Briskbreeze Tower, October 2009).
+        if (ClassicRuntime.IsInitialized && ClassicRuntime.IsActive) {
+            BossCheats?.AddExtraCasts(_queuedCombatActions);
+        }
 
         var cinematicTime = ProcessQueuedActions(combatActionListObj);
 
@@ -228,11 +234,17 @@ public class CombatResolver(Duel duel, CombatDuelSubCircle[] actorSubCircles) {
         }
     });
 
+    // CLASSIC: the duel's boss cheats; null for a duel with no duel actor.
+    private BossCheatDirector BossCheats => _subCircles.Length > 0 ? _subCircles[0]._duelActor?.BossCheats : null;
+
     private float ProcessQueuedActions(CombatActionListObj combatActionList) {
         var cinematicTime = 0.0f;
         var instantCinematics = _subCircles[0]._duelActor.CheatInstantCinematics;
+        var bossCheats = ClassicRuntime.IsInitialized && ClassicRuntime.IsActive ? BossCheats : null; // CLASSIC
 
-        foreach (var action in _queuedCombatActions) {
+        // CLASSIC: an index loop, because a boss's out-of-turn casts go in right after the spell that set them off.
+        for (var actionIndex = 0; actionIndex < _queuedCombatActions.Count; actionIndex++) {
+            var action = _queuedCombatActions[actionIndex];
             // A caster who left the duel mid-round (fled, logged out, minion removed) has no CombatParticipant any
             // more. Their queued action is void; resolving it would throw and hang the whole duel (audit 2026-10-04).
             if (action.SpellCaster is null || action.SpellCaster.CombatParticipant is null) {
@@ -296,6 +308,8 @@ public class CombatResolver(Duel duel, CombatDuelSubCircle[] actorSubCircles) {
                     continue;
                 }
 
+                bossCheats?.BeforeAction(action); // CLASSIC
+                List<QueuedCombatAction> cheatResponses = null;
                 // Recheck under the session lock through effects AND costs. Strict Hello may have arrived after queuing.
                 if (!action.SpellCaster._duelActor.RunMonstrologyCast(action.SpellCaster, action.Spell, action.SpellTemplate, () => {
                     // Determine if this spell hits or fizzles.
@@ -313,8 +327,12 @@ public class CombatResolver(Duel duel, CombatDuelSubCircle[] actorSubCircles) {
                         // Record when this caster's cinematic begins so a summoned minion appears with its cast.
                         action.SpellCaster._duelActor.CurrentActionCinematicOffsetSeconds = cinematicTime;
                         cinematicTime += HandleSuccessfulAction(action, combatActionList);
+                        cheatResponses = bossCheats?.AfterAction(action); // CLASSIC
                     }
                 })) cinematicTime += HandlePassAction(action, combatActionList);
+                if (cheatResponses is { Count: > 0 }) {
+                    _queuedCombatActions.InsertRange(actionIndex + 1, cheatResponses);
+                }
             }
             finally {
                 if (beguiled) {
@@ -391,7 +409,10 @@ public class CombatResolver(Duel duel, CombatDuelSubCircle[] actorSubCircles) {
             return SPELL_PASS_TIME;
         }
 
-        DoSpellCastConsequences(action.SpellCaster, combatAction);
+        // CLASSIC: a boss cheat cast uses no card and costs no pips.
+        if (action.Cheat is null) {
+            DoSpellCastConsequences(action.SpellCaster, combatAction);
+        }
 
         return GetActionCinematicTime(action) + cinematicTime;
     }
@@ -506,6 +527,9 @@ public class CombatResolver(Duel duel, CombatDuelSubCircle[] actorSubCircles) {
         m_shadowPactTarget = -1,
         m_petCastTarget = -1,
         m_CritHitList = [],
+        // CLASSIC: a boss's out-of-turn cast, as the client shows a cheating boss's interrupt.
+        m_interrupt = action.Cheat?.Interrupt ?? false,
+        m_stringKeyMessage = action.Cheat?.Message,
     };
 
     private static float GetActionCinematicTime(QueuedCombatAction action) {

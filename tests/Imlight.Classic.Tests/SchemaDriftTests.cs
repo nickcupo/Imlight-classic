@@ -103,7 +103,7 @@ public sealed class SchemaDriftTests {
         Assert.Equal(EnumValues(rules.GetProperty("tutorial")), ClassicSchema.Tutorials.ToArray());
         Assert.Equal(EnumValues(rules.GetProperty("teleport_stones")), ClassicSchema.TeleportStoneRules.ToArray());
         Assert.Equal(new[] { "accuracy_table", "xp_table", "player_health", "mob_rewards", "badges", "quest_cards", "treasure_prices", "mob_stats", "crown_shop", "later_objects", "creature_decks", "power_pips_from_rank",
-                             "dragonspyre_difficulty", "tutorial", "teleport_stones", "potions", "second_chance" },
+                             "dragonspyre_difficulty", "tutorial", "teleport_stones", "potions", "second_chance", "boss_cheats" },
             rules.EnumerateObject().Select(rule => rule.Name).ToArray());
     }
 
@@ -114,6 +114,23 @@ public sealed class SchemaDriftTests {
 
         Assert.Equal(Keys(ReadSchema("potions.schema.json")), Sorted(PotionRulesLoader.s_rootKeys));
         Assert.Equal(Keys(ReadSchema("second-chance.schema.json")), Sorted(SecondChanceRulesLoader.s_rootKeys));
+    }
+
+    [Fact]
+    public void BossCheatLoaderKeysMatchTheirSchema() { // CLASSIC
+        string[] Keys(System.Text.Json.JsonElement node) => [.. node.GetProperty("properties").EnumerateObject().Select(p => p.Name).Order(StringComparer.Ordinal)];
+        string[] Sorted(IEnumerable<string> keys) => [.. keys.Order(StringComparer.Ordinal)];
+        var schema = ReadSchema("boss-cheats.schema.json");
+        var defs = schema.GetProperty("$defs");
+        var boss = defs.GetProperty("boss");
+
+        Assert.Equal(Keys(schema), Sorted(BossCheatsLoader.s_rootKeys));
+        Assert.Equal(Keys(schema.GetProperty("properties").GetProperty("dungeon")), Sorted(BossCheatsLoader.s_dungeonKeys));
+        Assert.Equal(Keys(boss), Sorted(BossCheatsLoader.s_bossKeys));
+        Assert.Equal(Keys(boss.GetProperty("properties").GetProperty("interrupt")), Sorted(BossCheatsLoader.s_interruptKeys));
+        Assert.Equal(Keys(boss.GetProperty("properties").GetProperty("destroy_traps")), Sorted(BossCheatsLoader.s_trapKeys));
+        Assert.Equal(Keys(boss.GetProperty("properties").GetProperty("summons").GetProperty("items")), Sorted(BossCheatsLoader.s_summonKeys));
+        Assert.Equal(Keys(boss.GetProperty("properties").GetProperty("free_spells").GetProperty("items")), Sorted(BossCheatsLoader.s_freeKeys));
     }
 
     [Fact]

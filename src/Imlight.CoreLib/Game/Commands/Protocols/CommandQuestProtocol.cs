@@ -63,6 +63,22 @@ internal class CommandQuest : CommandProtocol {
         InformSenderClient($"Marked complete: {string.Join(", ", done)}.");
     }
 
+    // CLASSIC: QA setup: sets a plain registry entry, such as a sigil's "QT-<quest>" requirement for a quest no data has
+    // (Briskbreeze Tower's ToGauntlet01 needs QT-WC-GNT-C01-001, which neither the client nor SpiralDB defines).
+    [Command("entry")]
+    [AuthRequired(AuthLevel.QualityAssurance)]
+    private void QuestEntryCommand(string entryName) {
+        var wizard = Context.Character;
+        if (!wizard.SetRegistryValue(entryName, 1)) {
+            InformSenderClient($"Could not set registry entry '{entryName}'.");
+
+            return;
+        }
+
+        WizardCollection.UpdateCharacterQuestBehavior(wizard);
+        InformSenderClient($"Registry entry set: {entryName}.");
+    }
+
     [Command("offer")]
     [AuthRequired(AuthLevel.QualityAssurance)]
     private void QuestOfferCommand(string questName) {
