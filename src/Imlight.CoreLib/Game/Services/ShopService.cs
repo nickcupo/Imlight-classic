@@ -194,7 +194,9 @@ internal class ShopService(SessionActor sessionActor) : MessageService(sessionAc
         }
     }
 
-    // CLASSIC: a purchase from an Arena Ticket vendor: the 2009 price in tickets (the template's, as the shop window shows),
+    // CLASSIC: a purchase from an Arena Ticket vendor: the 2009 price in tickets (price_2009 where the client's template
+    // carries a later price, else the template's m_arenaPointCost; the client step "tickets" puts the 2009 price in the
+    // client's template, so the shop window shows what is charged),
     // the item's PvP rank (wiki item pages, 2009: "PvP Rank Sergeant Only"...), tickets taken in one save before the item.
     private void BuyWithTickets(Wizard wizard, WizClientObjectItem item, WizItemTemplate template, uint itemTemplateID, uint npcTemplate) {
         var entry = Classic.Arena.ClassicArena.TicketItem(npcTemplate, itemTemplateID);

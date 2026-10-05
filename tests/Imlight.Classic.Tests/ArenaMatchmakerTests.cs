@@ -313,8 +313,10 @@ public sealed class ArenaMatchmakerTests {
         w.Arena.Tick(DateTime.UtcNow);
         w.Arena.Tick(DateTime.UtcNow.AddSeconds(ArenaMatchmaker.OfflineGraceSeconds + 5));
         Assert.NotEqual(0ul, w.Arena.MatchOf(B));   // gone to the arena: the fight decides
+        w.Sent.Clear();
         w.Arena.Leave(B);   // the window's leave cannot pull a wizard out of a fight
         Assert.NotEqual(0ul, w.Arena.MatchOf(B));
+        Assert.Equal(11, w.Status(B));   // the client cleared its status on Leave: the match status comes back (HUD PvP button)
 
         // Nobody's arena fight started: no contest a minute after the arrival time.
         w.Arena.Tick(DateTime.UtcNow.AddSeconds(w.Config.ArrivalSeconds + 61));

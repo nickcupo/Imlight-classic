@@ -29,6 +29,8 @@
  * Last Updated: 10/05/2026
  */
 
+using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using Imlight.Classic.Pvp;
@@ -123,7 +125,33 @@ public sealed class ArenaRulesTests {
         var roland = config.TicketVendors.Single(v => v.Npc == 164327);
         Assert.Equal(10, roland.Items.Length);
         Assert.Equal("Sergeant", roland.Items.Single(i => i.Template == 164213).Rank);  // Ribbon Stand
-        Assert.All(config.TicketVendors.SelectMany(v => v.Items), i => Assert.Null(i.Price));   // the client shows the template's
+        // Diego's templates carry the 2009 prices: charged as the template says (the shop window shows the template's).
+        Assert.All(diego.Items, i => Assert.Null(i.Price));
+        // Roland's housing templates carry later prices: the 2009 ones are charged (wiki oldid 36841, 2009-07-25), and the
+        // client step "tickets" (tools/mac/classic_tickets.py) writes the same numbers into the client's templates.
+        var expected = new Dictionary<uint, int> {
+            [160592] = 625, [160333] = 500, [82862] = 1200, [160274] = 1500, [164202] = 200, [164211] = 200, [164213] = 200,
+            [160655] = 485, [160238] = 750, [160823] = 1500,
+        };
+        Assert.Equal(expected, roland.Items.ToDictionary(i => i.Template, i => i.Price!.Value));
+    }
+
+    [Fact]
+    public void AnExplicitPriceWinsOverThe2009Price() {
+        var dir = Directory.CreateDirectory(Path.Combine(Path.GetTempPath(), $"arena-price-{Guid.NewGuid():N}")).FullName;
+        var path = Path.Combine(dir, "arena-2009.yaml");   // the loader wants the id to match the file name
+        var text = File.ReadAllText(Path.Combine(ClassicDataFixture.Root, "pvp", "arena-2009.yaml"))
+            .Replace("{template: 160592, name: 'Ninja Sword Rack', price_2009: 625}",
+                "{template: 160592, name: 'Ninja Sword Rack', price: 7, price_2009: 625}");
+        File.WriteAllText(path, text);
+        try {
+            var roland = ArenaLoader.Load(path).TicketVendors.Single(v => v.Npc == 164327);
+            Assert.Equal(7, roland.Items.Single(i => i.Template == 160592).Price);
+            Assert.Equal(500, roland.Items.Single(i => i.Template == 160333).Price);
+        }
+        finally {
+            Directory.Delete(dir, recursive: true);
+        }
     }
 
     [Theory]
