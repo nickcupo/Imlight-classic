@@ -333,15 +333,19 @@ internal sealed class AmbientChatter {
         }
 
         if (answerer is null) {
+            Logger.Debug("Ambient chat in {Zone}: nobody answers \"{Text}\" (open call {Open}).", Logger.Args(_zone, text,
+                AmbientChatBrain.IsOpenCall(text)));
             return false;
         }
 
         var state = StateOf(answerer);
         if (!answerer.Limiter.TryTake(now, speakerId)) {
+            Logger.Debug("Ambient chat: {Name} would answer \"{Text}\" but has talked enough this minute.", Logger.Args(answerer.Name, text));
             return false;
         }
 
         if (!whisper && addressed && ChatTiming.Ignores(state.Persona, _rng)) {
+            Logger.Debug("Ambient chat: {Name} lets \"{Text}\" go by.", Logger.Args(answerer.Name, text));
             return false; // people miss lines now and then
         }
 
@@ -349,6 +353,7 @@ internal sealed class AmbientChatter {
         var speaker = Speaker(answerer, state, speakerId, facts);
         var intent = AmbientChatBrain.Understand(text, speaker.Context, state.Persona);
         if (intent is null && !addressed) {
+            Logger.Debug("Ambient chat: {Name} has nothing to say to \"{Text}\".", Logger.Args(answerer.Name, text));
             return false; // a line to everyone the wizard has nothing to say to
         }
 
