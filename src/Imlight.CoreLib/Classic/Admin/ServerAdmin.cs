@@ -334,6 +334,41 @@ public static class ServerAdmin {
         }
     }
 
+    /// <summary>
+    /// CLASSIC: the process is told to stop (SIGTERM from systemctl stop/restart, as every deploy does; SIGINT): tell
+    /// every wizard, close the sessions (which saves their places and leaves trades and duels the way a logout does)
+    /// and shut the database down, as a safe restart's last step. Without it the process just died: wizards were
+    /// dropped mid-sentence, logged back in where they last changed zones, and RavenDB was not shut down. Returns
+    /// false when a safe restart is already carrying itself out.
+    /// </summary>
+    public static bool StopForSignal(string signal) {
+        lock (s_lock) {
+            if (s_state == "restarting") {
+                return false;
+            }
+
+            s_state = "restarting";
+        }
+
+        BlockNewDuels = true;
+        Logger.Information("[ADMIN] {Signal}: closing every session before the process exits.", Logger.Args(signal));
+        var told = Broadcast("The server is restarting now. Please log back in in a minute.", modal: true);
+        if (told > 0) {
+            Thread.Sleep(TimeSpan.FromSeconds(1));
+        }
+
+        var closed = CloseSessions();
+        Logger.Information("[ADMIN] Closed {Count} session(s) for {Signal}.", Logger.Args(closed, signal));
+        if (closed > 0) {
+            Thread.Sleep(TimeSpan.FromSeconds(5));
+        }
+
+        WizardData.Implementations.EmbeddedDatabaseManager.Shutdown(TimeSpan.FromSeconds(30));
+        Serilog.Log.CloseAndFlush();
+
+        return true;
+    }
+
     private static void Execute(RestartPlan plan) {
         Executions++;
         Broadcast(plan.Kind == RestartKind.Backup
