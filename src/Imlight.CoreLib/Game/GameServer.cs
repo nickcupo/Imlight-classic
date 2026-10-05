@@ -123,10 +123,8 @@ public class GameServer : Server {
     private void ReceiveCreatePlayerKey(SERVER_100_PROTOCOL.MSG_CREATEPLAYERKEY message) {
         // If this server is the target realm, create the key locally.
         if (message.TargetRealmName == RealmName) {
-            // CLASSIC: the client attaches to the new realm with the key it already has (MSG_SERVERTRANSFER carries no
-            // string key), and the key store is shared by every game server of the process: re-arm it.
-            Keys.Arm(message.Account.AccountId);
-
+            // CLASSIC: the key store is shared by every game server of the process; the realm transfer issues the
+            // client a fresh transfer key in its MSG_SERVERTRANSFER (ZoneService.ReceiveTransferRealms).
             Sender.Tell(new SERVER_100_PROTOCOL.MSG_CREATEPLAYERKEYRSP {
                 Key = "",
                 IP = Ip,
@@ -160,8 +158,11 @@ public class GameServer : Server {
         // (by default) from the address that selected the character. It is consumed; transfers re-arm it.
         var result = Keys.TryConsume(message.Key.ToString(), message.UserID, message.SessionActor?.RemoteIp);
         if (result != GameKeyResult.Accepted) {
-            Logger.Warning("Attach refused for account {Account} from {Ip}: {Result}",
-                Logger.Args(message.UserID, message.SessionActor?.RemoteIp, result));
+            // CLASSIC: the shape of the key (never the key): a 44-character select key or a decimal transfer key.
+            var given = message.Key.ToString() ?? "";
+            var shape = given.Length > 0 && given.Length <= 11 && given.All(char.IsAsciiDigit) ? "decimal" : $"{given.Length} chars";
+            Logger.Warning("Attach refused for account {Account} from {Ip}: {Result} (key {Shape})",
+                Logger.Args(message.UserID, message.SessionActor?.RemoteIp, result, shape));
             Sender.Tell(new SERVER_100_PROTOCOL.MSG_VALIDATESESSIONKEYRSP() { ErrorCode = 1 });
 
             return;
