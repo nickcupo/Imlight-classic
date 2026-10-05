@@ -45,6 +45,8 @@ using Imlight.CoreLib.Shared.Resources;
 using Imlight.CoreLib.Game.Spells;
 using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty.TypeCache;
+using Imlight.Classic.Rules;
+using Imlight.CoreLib.Classic;
 
 namespace Imlight.CoreLib.Game.Services;
 
@@ -88,15 +90,33 @@ internal class TrainService(SessionActor sessionActor) : MessageService(sessionA
             return;
         }
 
-        var spellEntry = trainerComponent.SpellInventory[message.TrainingIndex];
-        var spellTemplate = (SpellTemplate) CoreObjectFactory.GetCoreTemplate(spellEntry.TemplateID);
+        // CLASSIC: the trainer must be by the wizard, and the entry trainable as the trainer's window shows it
+        // (InteractTrainerComponent.GetServiceOptions): level, required spell, training points, not yet known.
+        if (!ServiceProximity.IsNear(wizard, response.ZoneObject)) {
+            Logger.Warning("Wizard {0} attempted to train at {1} from out of range.",
+                Logger.Args(wizard.PlayerNameBehavior.GetWizardName(), message.MobileID));
 
-        // Determine if the wizard has enough training points to learn the spell.
+            return;
+        }
+
+        var spellEntry = trainerComponent.SpellInventory[message.TrainingIndex];
+        if (CoreObjectFactory.GetCoreTemplate(spellEntry.TemplateID) is not SpellTemplate spellTemplate) {
+            return;
+        }
+
         // Wizards that are of the same magic school as the spell they are training have a cost of 0.
-        var spellCost = wizard.MagicSchoolBehavior.MagicSchool.ToString() == spellTemplate.m_sMagicSchoolName ? 0 : 1;
-        if (wizard.MagicSchoolBehavior.TrainingPoints < spellCost) {
-            Logger.Error("Wizard {0} attempted to train spell {1} but does not have enough training points.",
-                Logger.Args(wizard.PlayerNameBehavior.GetWizardName(), spellEntry.TemplateID));
+        var spellCost = TrainRules.Cost(wizard.MagicSchoolBehavior.MagicSchool.ToString(), spellTemplate.m_sMagicSchoolName);
+        var refusal = TrainRules.Check(
+            known: wizard.SpellbookBehavior.HasSpell((uint) spellEntry.TemplateID),
+            level: wizard.MagicSchoolBehavior.Level,
+            requiredLevel: spellEntry.Level,
+            requiredSpellId: spellEntry.RequiredSpellID,
+            hasSpell: id => wizard.SpellbookBehavior.HasSpell((uint) id),
+            trainingPoints: wizard.MagicSchoolBehavior.TrainingPoints,
+            cost: spellCost);
+        if (refusal != TrainRefusal.None) {
+            Logger.Warning("Wizard {0} attempted to train spell {1} but was refused: {2}.",
+                Logger.Args(wizard.PlayerNameBehavior.GetWizardName(), spellEntry.TemplateID, refusal));
 
             return;
         }
@@ -142,5 +162,6 @@ internal class TrainService(SessionActor sessionActor) : MessageService(sessionA
         };
         SendToSocket(trainCompleteMsg);
     }
+
 
 }

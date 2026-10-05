@@ -44,6 +44,7 @@ using Imcodec.ObjectProperty.TypeCache;
 using Imcodec.CoreObject;
 using Imcodec.Types;
 using Imlight.Classic;
+using Imlight.Classic.Rules;
 using Imlight.Common;
 using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.Shared.Items;
@@ -87,8 +88,9 @@ internal class ShopService(SessionActor sessionActor) : MessageService(sessionAc
         }
 
         // Ensure that the interacted object is a vendor.
+        // CLASSIC: and that the wizard stands by it.
         var vendorComponent = interactedObject.GetComponentOfType<InteractVendorComponent>();
-        if (vendorComponent is null) {
+        if (vendorComponent is null || !ServiceProximity.IsNear(GetActiveWizard(), interactedObject)) {
             Logger.Warning("Failed to find VendorComponent for NPC {0} in zone for shop purchase",
                 Logger.Args(message.npcGlobalID));
             var shopDenyMsg = new WIZARD_12_PROTOCOL.MSG_SHOPBUYCONFIRM { Failure = 1 };
@@ -129,8 +131,16 @@ internal class ShopService(SessionActor sessionActor) : MessageService(sessionAc
         var item = PetFactory.IsPetTemplate(itemTemplateID)
             ? PetFactory.CreateHatchedPet(playerWizard.CharId, itemTemplateID)
             : (WizClientObjectItem) CoreObjectFactory.FinalizeCoreObject(itemTemplateID);
-        item.m_primaryColor = message.texture;
-        item.m_secondaryColor = message.decal;
+        // CLASSIC: a chosen color only on an item the shop offers colors for (its price carries the dyed markup);
+        // otherwise, or out of range, the template's own.
+        ApplyBuyDyes(item, template, message.texture, message.decal);
+
+        // CLASSIC: never charge for an item the backpack cannot take.
+        if (playerWizard.InventoryBehavior.IsFull) {
+            SendShopDenyMessage();
+
+            return;
+        }
 
         // CLASSIC: a holiday vendor's item sells at its 2009 price (classic-data/holidays). A Crowns-only item, or one the
         // wizard chose to pay for in Crowns (CurrencyType 1), costs the item's Crowns price from the account's balance.
@@ -180,6 +190,16 @@ internal class ShopService(SessionActor sessionActor) : MessageService(sessionAc
     private void ReceiveShopSellRequest(WIZARD_12_PROTOCOL.MSG_SHOPSELLREQUEST message) {
         var wizard = GetActiveWizard();
         var item = wizard.InventoryBehavior.GetItem(message.GlobalID);
+
+        // CLASSIC: a shop buys only from a wizard standing by it (the request's NPC, or the shop last opened).
+        if (ServiceProximity.FindNear<InteractVendorComponent>(wizard, message.npcGlobalID, GetZoneObject) is null
+            && ServiceProximity.FindNear<InteractReagentComponent>(wizard, message.npcGlobalID, GetZoneObject) is null) {
+            Logger.Warning("{0} tried to sell item {1} away from a shop.", Logger.Args(wizard.CharId, message.GlobalID));
+            ProcessFailedSale();
+
+            return;
+        }
+
         // CLASSIC: reject an unsellable item before removing it from the backpack.
         if (ClassicRuntime.Rules.UsesKingsIsleQuestRules
             && (item is null || CoreObjectFactory.GetCoreTemplate(item.m_templateID) is not WizItemTemplate sellTemplate
@@ -564,6 +584,15 @@ internal class ShopService(SessionActor sessionActor) : MessageService(sessionAc
         SendToSocket(shopConfirmMsg);
 
         return true;
+    }
+
+    // CLASSIC: the buyer's texture and decal when the shop offers colors for the item and they are valid; else the
+    // finalized item keeps its template's colors. Also used by the Bazaar.
+    internal static void ApplyBuyDyes(WizClientObjectItem item, WizItemTemplate template, int texture, int decal) {
+        var isPet = PetFactory.IsPetTemplate(template.m_templateID);
+        var dyeable = DyeRules.IsDyeable(template.m_numPrimaryColors, template.m_numSecondaryColors);
+        item.m_primaryColor = DyeRules.BuyLayer(texture, item.m_primaryColor, dyeable, isPet, template.m_numPrimaryColors);
+        item.m_secondaryColor = DyeRules.BuyLayer(decal, item.m_secondaryColor, dyeable, isPet, template.m_numSecondaryColors);
     }
 
     private void HandleIllegalPurchaseAttempt(uint itemTemplateID, ulong interactedObjectGID) {

@@ -108,6 +108,18 @@ internal class AuctionHouseService(SessionActor sessionActor) : MessageService(s
             return;
         }
 
+        // CLASSIC: the Bazaar serves only a wizard standing by it (the request's NPC, or the Bazaar last opened).
+        if (message.Command is 0 or 1 or 2 or 3
+            && ServiceProximity.FindNear<Zone.Components.InteractAuctionHouseComponent>(GetActiveWizard(), message.npcGlobalID, GetZoneObject) is null) {
+            Logger.Warning("{0} sent Bazaar command {1} away from the Bazaar.",
+                Logger.Args(GetActiveWizard()?.CharId, message.Command));
+            if (message.Command == 3) {
+                SendBuyFailure();
+            }
+
+            return;
+        }
+
         switch (message.Command) {
             case 0:
                 SendAuctionHouseContents(message.npcGlobalID, message.category, message.key);
@@ -184,6 +196,14 @@ internal class AuctionHouseService(SessionActor sessionActor) : MessageService(s
             return;
         }
 
+        // CLASSIC: never take the stock or the gold for an item the backpack cannot take.
+        var isItem = coreTemplate is not (SpellTemplate or ReagentItemTemplate);
+        if (isItem && (coreTemplate is not WizItemTemplate || wizard.InventoryBehavior.IsFull)) {
+            SendBuyFailure();
+
+            return;
+        }
+
         // CLASSIC: one lock from reading the stock to saving it (other players and the restock timer change it too); a
         // wizard who cannot pay is refused; with classic Bazaar rules the price follows the copies left.
         int goldCost;
@@ -239,10 +259,11 @@ internal class AuctionHouseService(SessionActor sessionActor) : MessageService(s
                 break;
             default: {
                 var item = (WizClientObjectItem) CoreObjectFactory.FinalizeCoreObject(templateId);
-                item.m_primaryColor = texture;
-                item.m_secondaryColor = decal;
+                ShopService.ApplyBuyDyes(item, (WizItemTemplate) coreTemplate, texture, decal); // CLASSIC
                 if (!_itemSerializer.Serialize(item, 1, out var itemData)) {
                     Logger.Error("Failed to serialize item data.");
+                    wizard.RefundGold(goldCost); // CLASSIC: paid but not given.
+                    SendBuyFailure();
 
                     return;
                 }
@@ -307,9 +328,11 @@ internal class AuctionHouseService(SessionActor sessionActor) : MessageService(s
             return;
         }
 
-        var template = (WizItemTemplate) CoreObjectFactory.GetCoreTemplate(item.m_templateID);
+        var template = CoreObjectFactory.GetCoreTemplate(item.m_templateID) as WizItemTemplate;
 
-        var isNoAuction = template.m_adjectiveList.Any(x => x == "FLAG_NoAuction");
+        // CLASSIC: no NoAuction, NoTrade, NoSell or Crowns item (ClassicBazaar.KindOf is null for them).
+        var isNoAuction = template is null || ClassicBazaar.KindOf(template) is null
+            || template.m_adjectiveList.Any(x => x == "FLAG_NoAuction");
         if (isNoAuction) { // The item cannot be sold to the bazaar.
             // Todo: respond with error
             var auctionRspErrorMsg = new WIZARD_12_PROTOCOL.MSG_AUCTIONRESPONSE {
