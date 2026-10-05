@@ -24,13 +24,14 @@
  *   - Arrival: each wizard enters like a player (zone transfer, then
  *     MSG_ADDPLAYER from its endpoint), a few seconds apart, and spawns
  *     itself for every real player there and every later arrival.
- *   - Movement: a walk is a route of straight legs (NavGrid). The client
- *     gets one MSG_SERVERMOVE per leg, to its far corner, and runs the
- *     mobile there at a player's speed (AmbientWalk); a timer per wizard
- *     starts the next leg when it gets there. One timer for the whole zone
- *     (every 300 ms) keeps each walker's spot along its leg and starts new
- *     walks; the moves of a tick go to the zone as one MSG_CLIENTBATCH,
- *     which each session writes to its socket.
+ *   - Movement: a walk is a route of straight legs (NavGrid), run at a
+ *     player's speed (AmbientWalk). While a wizard runs, a move goes out
+ *     every 100 ms, 60 units ahead of it on its leg, as a player's client
+ *     sends its own (the client plays the run from moves at that pace); a
+ *     timer per wizard turns each corner. One timer for the whole zone
+ *     (every 300 ms) keeps each walker's spot and starts new walks; the
+ *     moves of a tick go to the zone as one MSG_CLIENTBATCH, which each
+ *     session writes to its socket.
  *   - Behaviour: walk to an NPC and stand at it (shops), wander between
  *     the zone's named locations, follow a friend who is here, hunt street
  *     mobs (Unicorn Way and other streets), offer help at real players'
@@ -82,12 +83,20 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
     private sealed record Enter(ulong CharId);
     private sealed record Later(AmbientWizard Wizard, Action<AmbientWizard> Action);
     private sealed record LegEnd(AmbientWizard Wizard, int LegId);
+    private sealed record Stream;
     private sealed record FriendAccepted(AmbientWizard Wizard, ulong Requester, Relationship Relationship, string Name);
     private sealed record Spot(Vector3 At, float FaceYaw, bool Npc);
     private sealed record NavReady(NavGrid Grid);
 
     private const double TickSeconds = 0.3;
     private static readonly TimeSpan CornerLead = TimeSpan.FromMilliseconds(50);
+
+    /// <summary>
+    /// CLASSIC (2026-10-04): how often a running wizard's move goes out, as a player's client sends its own: a step of
+    /// 600 x 0.1 = 60 units. One move per leg made the client slide the mobile without its run animation (the owner:
+    /// "they just glide"); the client takes the run from moves that come at a player's pace.
+    /// </summary>
+    private static readonly TimeSpan StreamInterval = TimeSpan.FromMilliseconds(100);
     private const float Arrive = 30f;
     private const float Neighbourhood = 2600f;   // how far a wizard walks in one go
     private const float HelpRange = 9000f;       // how far away a duel draws an offer (about 15 s at a run)
@@ -125,6 +134,7 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
 
         Receive<Tick>(_ => OnTick());
         Receive<LegEnd>(OnLegEnd);
+        Receive<Stream>(_ => OnStream());
         Receive<Enter>(OnEnter);
         Receive<Later>(later => {
             if (_wizards.Contains(later.Wizard)) {
@@ -173,6 +183,7 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
         }
 
         Timers.StartPeriodicTimer("tick", new Tick(), TimeSpan.FromSeconds(TickSeconds));
+        Timers.StartPeriodicTimer("stream", new Stream(), StreamInterval);
     }
 
     protected override void PostStop() {
@@ -300,8 +311,8 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
         var spawn = new GAME_5_PROTOCOL.MSG_NEWOBJECT { Data = data };
         if (player is not null) {
             player.Tell(spawn);
-            if (wizard.Leg is not null && wizard.Target is { } corner) {
-                player.Tell(Move(wizard, corner)); // mid-run: where the run goes, or it stands until the next corner
+            if (wizard.Leg is not null && wizard.Target is not null) {
+                player.Tell(Move(wizard, Ahead(wizard, DateTime.UtcNow))); // mid-run: the stream carries on from here
             }
 
             return;
@@ -402,9 +413,9 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
     };
 
     /// <summary>
-    /// CLASSIC (2026-10-04): starts the run to Target: one MSG_SERVERMOVE to the leg's far corner (the client runs the
-    /// mobile there at a player's speed) and a timer for when the wizard gets there. Before, a 69-unit step went out
-    /// every 300 ms at 230 units a second; the client, running at 600, did each in 115 ms and stood the rest.
+    /// CLASSIC (2026-10-04): starts the run to Target: its first step (the stream sends the rest every 100 ms) and a
+    /// timer for the corner. Before: a 69-unit step every 300 ms at 230 units a second (the client, at 600, ran each in
+    /// 115 ms and stood the rest); then one move per leg to its far corner (smooth, but no run animation).
     /// </summary>
     private void StartLeg(AmbientWizard wizard, DateTime now, List<IMessage> batch) {
         while (true) {
@@ -437,7 +448,38 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
         // mobile standing at the corner for a frame or two (it cuts the corner by about CornerLead x 600 = 30 units).
         var due = leg.End - now - (wizard.Route.Count > 0 ? CornerLead : TimeSpan.Zero);
         Timers.StartSingleTimer($"leg-{wizard.CharId}", new LegEnd(wizard, wizard.LegId), due > TimeSpan.Zero ? due : TimeSpan.Zero);
-        batch.Add(Move(wizard, target));
+        batch.Add(Move(wizard, Ahead(wizard, now)));
+    }
+
+    /// <summary>
+    /// Where a running wizard will be one <see cref="StreamInterval"/> from <paramref name="now"/> (never past its
+    /// leg's corner): the client runs toward it at a player's speed, so it is still running when the next move comes.
+    /// </summary>
+    private static Vector3 Ahead(AmbientWizard wizard, DateTime now) {
+        if (wizard.Leg is not { } leg) {
+            return wizard.Position;
+        }
+
+        var at = leg.At(now + StreamInterval);
+        return new Vector3(at.X, at.Y, at.Z);
+    }
+
+    /// <summary>Every running wizard's next step, as a player's client sends them (see <see cref="StreamInterval"/>).</summary>
+    private void OnStream() {
+        if (_realPlayers == 0) {
+            return;
+        }
+
+        var now = DateTime.UtcNow;
+        var batch = new List<IMessage>();
+        foreach (var wizard in _wizards) {
+            if (wizard.Present && wizard.Moving && wizard.Leg is { } leg && now < leg.End
+                && wizard.Activity is not (AmbientActivity.Fighting or AmbientActivity.Sparring or AmbientActivity.Away)) {
+                batch.Add(Move(wizard, Ahead(wizard, now)));
+            }
+        }
+
+        Send(batch);
     }
 
     /// <summary>The wizard got to the end of a run: the next one starts at once (the client is there now), or it stops.</summary>
@@ -524,7 +566,7 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
 
     /// <summary>
     /// MSG_SERVERMOVE as MoveService relays a client's move: position over 4, yaw as a packed byte. The position is
-    /// <paramref name="at"/> (a run's far corner) or the wizard's own.
+    /// <paramref name="at"/> (a step ahead on a run) or the wizard's own.
     /// </summary>
     internal static GAME_5_PROTOCOL.MSG_SERVERMOVE Move(AmbientWizard wizard, Vector3? at = null) {
         var degrees = AmbientWizards.ClientYaw(wizard.Yaw) * 180f / MathF.PI; // CLASSIC: the client's clockwise yaw
