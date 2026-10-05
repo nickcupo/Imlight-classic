@@ -64,7 +64,7 @@ namespace Imlight.CoreLib.Classic.Arena;
 
 /// <summary>A wizard as the arena knows them.</summary>
 /// <param name="CharId">Character id (the server's key).</param>
-/// <param name="ActorId">The id the client knows its wizard by (the game object id).</param>
+/// <param name="ActorId">The id the client knows its wizard by (its CharacterID: the character list's id).</param>
 /// <param name="NameBlob">The packed name (4 bytes) the client unpacks.</param>
 /// <param name="Name">The name, for logs and chat.</param>
 /// <param name="Level">Magic level.</param>

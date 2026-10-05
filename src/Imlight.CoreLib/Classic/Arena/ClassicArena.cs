@@ -224,7 +224,9 @@ internal sealed class ServerArenaWorld(ActorSystem system) : IArenaWorld {
         var name = wizard.PlayerNameBehavior;
         var school = wizard.MagicSchoolBehavior?.MagicSchool.ToString() ?? "";
 
-        return new ArenaPlayer(wizard.CharId, wizard.GameObjectID,
+        // The client's own CharacterID (PvPClientManager reads it from the same field as MSG_GETLADDER's) is the character
+        // id of the character list, not the game object id.
+        return new ArenaPlayer(wizard.CharId, wizard.CharId,
             DataManipulation.SpacedHexStringToBytes(name.GetWizardNameAsByteHexString()), name.GetWizardName(),
             wizard.MagicSchoolBehavior?.Level ?? 1, school, (short) (name.Gender == Imcodec.ObjectProperty.TypeCache.eGender.Female ? 1 : 0));
     }
