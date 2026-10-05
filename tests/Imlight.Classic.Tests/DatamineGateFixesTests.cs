@@ -113,6 +113,15 @@ public sealed class DatamineGateFixesTests {
         Assert.Empty(bad);
     }
 
+    [Theory]
+    [InlineData("KT-SPH3-C02-006", "QT-KT-SPH3-Gate1")] // Battle of the Sunbird: Bird gate, KT_Arena_T5
+    [InlineData("KT-SPH3-C02-002", "QT-KT-SPH3-Gate2")] // Stonechin: Sun gate, KT_Arena_T6
+    [InlineData("KT-SPH3-C02-003", "QT-KT-SPH3-Gate3")] // Malletmane: Snake gate, KT_Arena_T7
+    [InlineData("KT-SPH3-C02-004", "QT-KT-SPH3-Gate4")] // Who's More Amazing?: Moon gate, KT_Arena_T8
+    public void GrandArenaQuestsOpenTheirGate(string quest, string entry) {
+        Assert.True(StartSetsEntry(quest, entry));
+    }
+
     [Fact]
     public void EightLeggedQueenOpensTheCrystalGroveGauntletSigil() {
         Assert.True(StartSetsEntry("DS-ACAD1-C05-003", "QT-ACAD1-C05-003"));
