@@ -74,6 +74,12 @@ internal static class MonstrologyCardCatalog {
         return map;
     });
 
+    /// <summary>CLASSIC: a 2009 Monstrology creature: filed under an Arc 1 world and in the 2009 creature set
+    /// (MonstrologyEra2009: it spawns in a zone the late-2009 game had). The tome, extraction, card creation, the QA
+    /// max-out and duels all ask this, so a later creature is never listed, counted, studied, made or cast.</summary>
     internal static bool IsArc1Creature(uint creature)
-        => TemplateFolders.Value.TryGetValue(creature, out var folder) && IsArc1Folder(folder);
+        => Is2009Creature(creature, TemplateFolders.Value.TryGetValue(creature, out var folder) ? folder : null);
+
+    internal static bool Is2009Creature(uint creature, string folder)
+        => folder is not null && IsArc1Folder(folder) && MonstrologyEra2009.Creatures.Contains(creature);
 }

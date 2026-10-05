@@ -19,4 +19,22 @@ public sealed class MonstrologyArc1Tests {
     [InlineData("", false)]
     public void OnlyArc1WorldFoldersCount(string path, bool arc1)
         => Assert.Equal(arc1, MonstrologyCardCatalog.IsArc1Folder(MonstrologyCardCatalog.FolderOf(path)));
+
+    // CLASSIC (owner request 2026-10-05): only 2009 creatures, even inside an Arc 1 folder.
+    [Theory]
+    [InlineData(35085u, "WC", true)]      // Ghost-Blue-L01 (Wizard City; the rig's Monstrology creature)
+    [InlineData(346694u, "GH", false)]    // GH2-Bear-Valkyrie-2-BOSS-R10: Wintertusk (Hrundle Fjord), Nov 2010
+    [InlineData(1668223u, "KT", false)]   // KT_SE_Beetle_Scarab_C_01: Selenopolis
+    [InlineData(1302672u, "MB", false)]   // G14-BP-Golem_Steel_Boss: 2014 Marleybone dungeon
+    [InlineData(1466263u, "WC", false)]   // Wooden Skeleton Key boss room
+    [InlineData(1340305u, "WC", false)]   // Heroic_WC_Rattlebones
+    [InlineData(35085u, "MR", false)]     // a 2009 id is still refused outside an Arc 1 folder
+    public void OnlyCreaturesOfThe2009WorldCount(uint creature, string folder, bool counts)
+        => Assert.Equal(counts, MonstrologyCardCatalog.Is2009Creature(creature, folder));
+
+    [Fact]
+    public void The2009SetHasTheArc1CreaturesAndNoLaterOnes() {
+        Assert.Equal(375, MonstrologyEra2009.Creatures.Count);
+        Assert.DoesNotContain(346694u, MonstrologyEra2009.Creatures); // the owner's 2026-10-05 minion (Wintertusk)
+    }
 }
