@@ -119,8 +119,8 @@ public sealed class GroupInstancesTests {
         var group = new SigilGroup(7, T0, 10);
         group.Join(1, T0);
         group.Join(900, T0.AddSeconds(1), ambient: true);
-        Assert.False(group.Leave(1)); // a real player's place is kept
         Assert.True(group.Leave(900));
+        Assert.False(group.Leave(900));
         Assert.False(group.IsMember(900));
         Assert.Equal(1, group.Join(2, T0.AddSeconds(2))!.Slot);
         Assert.False(group.Join(2, T0.AddSeconds(3))!.Started);
@@ -240,6 +240,71 @@ public sealed class GroupInstancesTests {
         Assert.Equal((9UL, 2, 3.5), (entry.RunId, entry.Slot, entry.CountdownSeconds));
         Assert.True(transfer.KeepInstance && transfer.RefuseWhenFull);
         Assert.Equal((9UL, 4), (answer.InstanceOwnerId, answer.ZoneHardLimit));
+    }
+
+    // Multiplayer audit B (2026-10-05): a wizard who steps off before zero (walks off, disconnects, changes zone)
+    // frees its slot; a wizard stepping on during the countdown may take it; a fifth is still silently not counted.
+
+    [Fact]
+    public void ARealPlayerWhoStepsOffFreesTheSlotForAFifth() {
+        var group = new SigilGroup(31, T0, GroupInstances.SigilCountdownSeconds);
+        for (ulong id = 1; id <= 4; id++) {
+            Assert.NotNull(group.Join(id, T0.AddSeconds(id)));
+        }
+
+        Assert.Null(group.Join(5, T0.AddSeconds(5))); // full: not counted, no message
+
+        Assert.True(group.Leave(2)); // walked off the pad
+        Assert.False(group.IsMember(2));
+        var fifth = group.Join(5, T0.AddSeconds(6))!;
+        Assert.Equal(1, fifth.Slot); // the freed face
+        Assert.Equal(31UL, fifth.RunId);
+        Assert.Equal(4.0, fifth.SecondsLeft, 3);
+        Assert.Equal([1UL, 3, 4, 5], group.Members);
+
+        Assert.Null(group.Join(2, T0.AddSeconds(7))); // the one who left finds it full again
+        Assert.Null(group.Join(6, T0.AddSeconds(10))); // and nobody joins after zero
+    }
+
+    [Fact]
+    public void AWizardWhoStepsBackOnBeforeZeroRejoins() {
+        var group = new SigilGroup(32, T0, 10);
+        group.Join(1, T0);
+        group.Join(2, T0.AddSeconds(1));
+        Assert.True(group.Leave(1));
+        var again = group.Join(1, T0.AddSeconds(3))!;
+        Assert.Equal(0, again.Slot);
+        Assert.True(again.Started); // still the wizard who started the countdown
+        Assert.Equal(7.0, again.SecondsLeft, 3);
+    }
+
+    [Fact]
+    public void ASessionStepsOffItsGroupByRunId() {
+        var now = DateTime.UtcNow;
+        var group = new SigilGroup(GroupInstances.NewRunId(now), now, 10);
+        GroupInstances.TrackSigilGroup(group, now);
+        group.Join(11, now);
+        group.Join(12, now);
+
+        Assert.True(GroupInstances.LeaveSigilRun(group.RunId, 12));
+        Assert.False(GroupInstances.LeaveSigilRun(group.RunId, 12));
+        Assert.False(GroupInstances.LeaveSigilRun(0, 11)); // a wizard's own instance has no group
+        Assert.False(GroupInstances.LeaveSigilRun(group.RunId ^ 1, 11));
+        Assert.Equal([11UL], group.Members);
+        GroupInstances.EndRun(group.RunId);
+    }
+
+    [Fact]
+    public void OnlyAWizardStillOnThePadAtZeroGoes() {
+        var entry = new ZONE_102_PROTOCOL.MSG_STARTSIGILENTRY { SigilLoc = "100,200,0,0", Radius = 50 };
+
+        Assert.True(Imlight.CoreLib.Game.Services.ZoneService.IsOnSigilPad(entry, new(130, 230, 0)));
+        Assert.False(Imlight.CoreLib.Game.Services.ZoneService.IsOnSigilPad(entry, new(160, 200, 0)));
+        // A move just past the edge is not yet walking off (the snap may lag a move); the countdown end is strict.
+        Assert.True(Imlight.CoreLib.Game.Services.ZoneService.IsOnSigilPad(entry, new(155, 200, 0),
+            Imlight.CoreLib.Game.Services.ZoneService.SigilWalkOffSlack));
+        Assert.False(Imlight.CoreLib.Game.Services.ZoneService.IsOnSigilPad(entry, new(200, 200, 0),
+            Imlight.CoreLib.Game.Services.ZoneService.SigilWalkOffSlack));
     }
 
 }

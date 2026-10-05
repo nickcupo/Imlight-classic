@@ -178,10 +178,16 @@ public sealed class SigilGroup {
         }
     }
 
-    /// <summary>An ambient wizard steps off the sigil (a real player's place is kept until the countdown ends).</summary>
+    /// <summary>
+    /// A wizard steps off the sigil before its countdown ends (walks off the pad, disconnects or changes zone): its slot
+    /// is free for a wizard who steps on during the countdown. CLASSIC (multiplayer audit B, 2026-10-05): a real player
+    /// used to keep the slot until the countdown ended, so a fifth wizard was refused for a wizard no longer there
+    /// (Help_Instances03: "As long as everyone is standing on the sigil when it is finished counting down, everyone will
+    /// be teleported to the same Dungeon"). False when the wizard was not on it.
+    /// </summary>
     public bool Leave(ulong charId) {
         lock (_lock) {
-            if (!_ambient.Contains(charId)) {
+            if (!_slots.ContainsKey(charId)) {
                 return false;
             }
 
@@ -225,6 +231,37 @@ public static class GroupInstances {
     private static readonly ConcurrentDictionary<ulong, PendingEntry> s_pending = new();
 
     private sealed record PendingEntry(string Zone, ulong OwnerId, DateTime ExpiresUtc);
+
+    // CLASSIC: the sigil groups still counting down (or just finished), by run id, so a session can step off its group.
+    private static readonly ConcurrentDictionary<ulong, SigilGroup> s_sigilGroups = new();
+
+    /// <summary>CLASSIC: how long after its countdown a sigil group is kept for a late step-off (then forgotten).</summary>
+    private static readonly TimeSpan SigilGroupLinger = TimeSpan.FromMinutes(1);
+
+    /// <summary>CLASSIC: makes a sigil group known by its run id (a dungeon sigil's new group), forgetting old ones.</summary>
+    public static void TrackSigilGroup(SigilGroup group, DateTime nowUtc) {
+        foreach (var (runId, old) in s_sigilGroups) {
+            if (nowUtc > old.EndsUtc + SigilGroupLinger) {
+                s_sigilGroups.TryRemove(runId, out _);
+            }
+        }
+
+        s_sigilGroups[group.RunId] = group;
+    }
+
+    /// <summary>
+    /// CLASSIC: <paramref name="charId"/> steps off the sigil of run <paramref name="runId"/> (walked off the pad,
+    /// disconnected or changed zone during the countdown); its slot is free again. False when there was nothing to free.
+    /// </summary>
+    public static bool LeaveSigilRun(ulong runId, ulong charId)
+        => runId != 0 && charId != 0 && s_sigilGroups.TryGetValue(runId, out var group) && group.Leave(charId);
+
+    /// <summary>
+    /// CLASSIC: true when a wizard at (<paramref name="dx"/>, <paramref name="dy"/>, <paramref name="dz"/>) from the
+    /// pad's centre is still standing on a pad of <paramref name="radius"/> (the radius the countdown end checks).
+    /// </summary>
+    public static bool IsOnPad(float dx, float dy, float dz, float radius)
+        => (dx * dx) + (dy * dy) + (dz * dz) <= radius * radius;
 
     /// <summary>A new sigil run id; never 0 and never a run already in use.</summary>
     public static ulong NewRunId(DateTime nowUtc) {

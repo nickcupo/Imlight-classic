@@ -164,10 +164,13 @@ internal sealed partial class InteractDungeonSigilComponent(ZoneEntity entity)
             ticket = _group?.Join(playerCharacter.CharId, now, Classic.Ambient.AmbientWizards.IsAmbient(playerActor));
             if (ticket is null) {
                 if (_group is not null && _group.IsOpen(now)) {
-                    return; // every slot is taken
+                    // Every slot is taken. 2009 had no "sigil full" string for a dungeon sigil (sigil-arena-2009.md),
+                    // so the fifth wizard is silently not counted; a slot frees when a wizard steps off before zero.
+                    return;
                 }
 
                 _group = new SigilGroup(GroupInstances.NewRunId(now), now, GroupInstances.SigilCountdownSeconds);
+                GroupInstances.TrackSigilGroup(_group, now); // CLASSIC: a session steps off it by run id (ZoneService)
                 ticket = _group.Join(playerCharacter.CharId, now);
             }
 

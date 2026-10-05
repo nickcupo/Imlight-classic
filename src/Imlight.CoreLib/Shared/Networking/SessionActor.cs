@@ -108,6 +108,12 @@ public sealed partial class SessionActor : ReceiveActor, IDisposable {
     private IActorRef _socketSenderRef;
     private volatile bool _isDisposed;
 
+    // CLASSIC: the number of service failures (SessionFaults); the first is logged in full and closes the session.
+    private int _faults;
+    internal int FaultCount => Volatile.Read(ref _faults);
+    /// <summary>CLASSIC: counts a failure; true for the session's first.</summary>
+    internal bool MarkFaulted() => Interlocked.Increment(ref _faults) == 1;
+
     /// <summary>CLASSIC: true once Dispose ran; a service that adds this session somewhere checks it afterwards.</summary>
     internal bool IsDisposed => _isDisposed;
     private long _lastPacketReceivedTicks;
@@ -366,9 +372,15 @@ public sealed partial class SessionActor : ReceiveActor, IDisposable {
         ActorRef.Tell(PoisonPill.Instance);
     }
 
+    // CLASSIC (multiplayer audit item D): one service's failure no longer stops all of them (AllForOneStrategy with
+    // Directive.Stop: no OnPreDispose ran, the wizard was not saved and stayed in its zone as a frozen ghost, and a
+    // restart restarted the socket actors too). A handler's exception is caught where it is handled (MessageService.
+    // OnHandlerFault) and closes the session the normal way. What still reaches the supervisor (a failure outside a
+    // handler, a socket actor's SessionFatalException) is logged here once and closes the session the same way: the
+    // failed actor is resumed so its OnPreDispose can run, or stopped when it never started. A ServiceRetryException
+    // restarts that service alone; one that keeps failing is stopped by Akka, and the session closes (Terminated).
     protected override SupervisorStrategy SupervisorStrategy() =>
-        // Recall that child actors of the SessionActor are the message services.
-        new AllForOneStrategy(
+        new OneForOneStrategy(
             maxNrOfRetries: _serviceRetryCount,
             withinTimeRange: TimeSpan.FromSeconds(_serviceTimeRangeRetryInSeconds),
             localOnlyDecider: ex => {
@@ -378,16 +390,13 @@ public sealed partial class SessionActor : ReceiveActor, IDisposable {
                                       "{Message}", Logger.Args(SessionID, tex.CallingClass, tex.LineNumber, tex.Message));
                             return Directive.Restart;
                         }
-                    case SessionFatalException tex: {
-                            Logger.Error("SessionActor {Sid} service {Class} L:{LineNumber} threw fatal exception: " +
-                                      "{Message}", Logger.Args(SessionID, tex.CallingClass, tex.LineNumber, tex.Message));
+                    case ActorInitializationException or ActorKilledException or DeathPactException: {
+                            SessionFaults.Report(this, ex.TargetSite?.DeclaringType?.Name ?? "a child actor", null, ex);
                             return Directive.Stop;
                         }
                     default:
-                        Logger.Error("SessionActor {Sid} service {Class} L:{LineNumber} threw unknown exception: " +
-                                     "{Message}. Exception details: {Exception}. Inner exception: {InnerException}",
-                                     Logger.Args(SessionID, ex.TargetSite.DeclaringType, ex.TargetSite.Name, ex.Message, ex, ex.InnerException));
-                        return Directive.Stop;
+                        SessionFaults.Report(this, ex.TargetSite?.DeclaringType?.Name ?? "a child actor", null, ex);
+                        return Directive.Resume;
                 }
             }
         );
@@ -442,6 +451,17 @@ public sealed partial class SessionActor : ReceiveActor, IDisposable {
         Receive<SERVICE_101_PROTOCOL.MSG_GETALLSERVICES>(InitializeActiveSession);
         Receive<SERVER_100_PROTOCOL.MSG_PING>(x => this.Ping = x.Ping);
         Receive<Exception>(ReceiveException);
+        Receive<ServiceFaulted>(_ => Dispose()); // CLASSIC: logged by SessionFaults; closes the normal way
+        // CLASSIC: a service that stopped for good (a restart that kept failing) leaves the session without it.
+        Receive<Terminated>(terminated => {
+            if (_isDisposed || !_serviceOrder.Any(s => s.Ref.Equals(terminated.ActorRef))) {
+                return;
+            }
+
+            Logger.Error("SessionActor {Sid}: service {Service} stopped; closing the session.",
+                Logger.Args(SessionID, terminated.ActorRef.Path.Name));
+            Dispose();
+        });
         Receive<SERVER_100_PROTOCOL.MSG_RECEIVEDPACKET>(x => HandlePacket(x.Packet));
 
         Receive<LegacyDoorOwnerObject>(ReceiveLegacyDoorOwnerObject);
@@ -502,6 +522,7 @@ public sealed partial class SessionActor : ReceiveActor, IDisposable {
             // MSG_QUERYMESSAGESERVICEIDENTITY); the instance registers itself (RegisterService) when it is constructed.
             // A blocking identity Ask per service held a pool thread for every service of every new connection.
             _serviceOrder.Add((childRef, service));
+            Context.Watch(childRef); // CLASSIC: see the Terminated receiver
 
             // Populate the dispatch table.
             foreach (var msgType in MessageHandlerTable.HandlersOf(service).Keys) {
@@ -568,8 +589,10 @@ public sealed partial class SessionActor : ReceiveActor, IDisposable {
         // Iterate through each service and send them a pre-dispose message. This lets a service gracefully handle
         // the dispose in the case that it requires another service to still be active.
         foreach (var (actorRef, type) in _serviceOrder) {
-            // If the service doesn't have a pre-dispose message handler, we'll just skip it.
-            if (!MessageHandlerTable.HandlersOf(type).ContainsKey(typeof(SERVICE_101_PROTOCOL.MSG_PREDISPOSE))) {
+            // If the service doesn't have a pre-dispose message handler, we'll just skip it. CLASSIC: nor a stopped one
+            // (it would only time out).
+            if (!MessageHandlerTable.HandlersOf(type).ContainsKey(typeof(SERVICE_101_PROTOCOL.MSG_PREDISPOSE))
+                || actorRef is IInternalActorRef { IsTerminated: true }) {
                 continue;
             }
 

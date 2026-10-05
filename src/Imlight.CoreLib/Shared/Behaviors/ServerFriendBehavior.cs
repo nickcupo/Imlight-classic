@@ -50,6 +50,7 @@ using System.Collections.Generic;
 using System.Linq;
 using Newtonsoft.Json;
 using Imcodec.ObjectProperty.TypeCache;
+using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.WizardData.Models.Player;
 using Imlight.CoreLib.WizardData.Collections;
 using Imlight.CoreLib.Shared.Utilities;
@@ -123,8 +124,7 @@ public class ServerFriendBehavior : IClientBehaviorProvider<BehaviorInstance> {
         if (existingRelationship != null) {
             existingRelationship.FirstPlayerId = ownerId;
             existingRelationship.SecondPlayerId = newFrienddId;
-            existingRelationship.IsBrokenUp = false;
-            existingRelationship.Blocked = false;
+            existingRelationship.IsBrokenUp = false; // CLASSIC: an ignore is lifted only by its owner (IgnoreRules)
 
             return existingRelationship;
         }
@@ -155,8 +155,7 @@ public class ServerFriendBehavior : IClientBehaviorProvider<BehaviorInstance> {
         if (existingRelationship != null) {
             existingRelationship.FirstPlayerId = ownerId;
             existingRelationship.SecondPlayerId = newFrienddId;
-            existingRelationship.IsBrokenUp = false;
-            existingRelationship.Blocked = false;
+            existingRelationship.IsBrokenUp = false; // CLASSIC: an ignore is lifted only by its owner (IgnoreRules)
             existingRelationship.AddedViaTrueFriend = true;
 
             return existingRelationship;
@@ -190,27 +189,8 @@ public class ServerFriendBehavior : IClientBehaviorProvider<BehaviorInstance> {
 
         PendingFriendRequestsFromCharId.Remove(newFrienddId);
 
-        // Create a new relationship.
-        var relationship = new Relationship {
-            FirstPlayerId = ownerId,
-            SecondPlayerId = newFrienddId,
-            Blocked = true,
-        };
-        Relationships.Add(relationship);
-
-        // Upsert the relationship if it already exists.
-        var existingRelationship = Relationships
-            .FirstOrDefault(x => x.FirstPlayerId == newFrienddId && x.SecondPlayerId == ownerId);
-        if (existingRelationship != null) {
-            existingRelationship.FirstPlayerId = ownerId;
-            existingRelationship.SecondPlayerId = newFrienddId;
-            existingRelationship.IsBrokenUp = false;
-            existingRelationship.Blocked = true;
-
-            return existingRelationship;
-        }
-
-        return relationship;
+        // CLASSIC: the owner's ignore on the shared row (IgnoreRules); it used to add a second row and flip the first.
+        return Ignore(ownerId, newFrienddId);
     }
 
     /// <summary>
@@ -246,25 +226,49 @@ public class ServerFriendBehavior : IClientBehaviorProvider<BehaviorInstance> {
             Relationships.Add(relationship);
         }
 
-        relationship.Blocked = true;
+        // CLASSIC: the owner's ignore only; the other wizard's own ignore of the owner is theirs (IgnoreRules).
+        IgnoreRules.MigrateLegacy(relationship);
+        IgnoreRules.SetIgnore(relationship, ownerId, ignore: true);
 
         return relationship;
     }
 
     /// <summary>
-    /// Unignores a relationship with a character, clearing the blocked flag.
+    /// Unignores a relationship with a character, lifting the owner's ignore only.
     /// </summary>
+    /// <param name="ownerId">The character ID of the player who is unignoring.</param>
     /// <param name="characterId">The character ID of the player who is being unignored.</param>
     /// <returns>The relationship between the two players, or null if no relationship exists.</returns>
-    public Relationship Unignore(ulong characterId) {
+    public Relationship Unignore(ulong ownerId, ulong characterId) {
         if (!TryGetRelationship(characterId, out var relationship)) {
             return null;
         }
 
-        relationship.Blocked = false;
+        IgnoreRules.MigrateLegacy(relationship);
+        IgnoreRules.SetIgnore(relationship, ownerId, ignore: false);
 
         return relationship;
     }
+
+    /// <summary>
+    /// CLASSIC: puts the stored copy of a row in place of this wizard's copy (or adds it), after a database write.
+    /// </summary>
+    public void MirrorRelationship(Relationship stored) {
+        if (stored is null) {
+            return;
+        }
+
+        var index = Relationships.FindIndex(x => IgnoreRules.IsBetween(x, stored.FirstPlayerId, stored.SecondPlayerId));
+        if (index >= 0) {
+            Relationships[index] = stored;
+        }
+        else {
+            Relationships.Add(stored);
+        }
+    }
+
+    /// <summary>CLASSIC: the wizards <paramref name="ownerId"/> ignores (their ignore list).</summary>
+    public List<ulong> GetIgnoredCharacterIds(ulong ownerId) => [.. IgnoreRules.IgnoredBy(Relationships, ownerId)];
 
     /// <summary>
     /// Gets all the ignored players.
@@ -276,13 +280,14 @@ public class ServerFriendBehavior : IClientBehaviorProvider<BehaviorInstance> {
             m_ignoreDataList = []
         };
 
-        foreach (var ignoredRelationship in Relationships
-                     .Where(x => x.Blocked && !x.IsBrokenUp)) {
-            var otherPlayerID = ignoredRelationship.FirstPlayerId == ownerId
-                ? ignoredRelationship.SecondPlayerId
-                : ignoredRelationship.FirstPlayerId;
-
+        // CLASSIC: only the wizards this owner ignores (it listed the other side's ignores too), and strangers as well
+        // as former friends (a stranger's row is born broken up and was filtered out).
+        foreach (var otherPlayerID in GetIgnoredCharacterIds(ownerId)) {
             var otherPlayerWizardData = WizardCollection.GetCharacterUnloaded(otherPlayerID);
+            if (otherPlayerWizardData is null) {
+                continue; // a deleted character
+            }
+
             var otherPlayerWizardHexName = otherPlayerWizardData.PlayerNameBehavior.GetWizardNameAsByteHexString();
             var otherPlayerByteName = DataManipulation.SpacedHexStringToBytes(otherPlayerWizardHexName);
 
@@ -335,15 +340,11 @@ public class ServerFriendBehavior : IClientBehaviorProvider<BehaviorInstance> {
     /// <summary>
     /// Checks if the player has a certain other player blocked.
     /// </summary>
+    /// <param name="ownerId">The character ID of this player.</param>
     /// <param name="characterId">The character ID of the player who is being checked.</param>
-    /// <returns>True if the player has the other player blocked.</returns>
-    public bool HasPlayerBlocked(ulong characterId) {
-        if (!TryGetRelationship(characterId, out var relationship)) {
-            return false;
-        }
-
-        return relationship.Blocked;
-    }
+    /// <returns>True if this player ignores the other player (not the other way round).</returns>
+    public bool HasPlayerBlocked(ulong ownerId, ulong characterId)
+        => TryGetRelationship(characterId, out var relationship) && IgnoreRules.Ignores(relationship, ownerId, characterId);
 
     BehaviorInstance IClientBehaviorProvider<BehaviorInstance>.GetClientBehaviorInstance() 
         => throw new NotImplementedException();

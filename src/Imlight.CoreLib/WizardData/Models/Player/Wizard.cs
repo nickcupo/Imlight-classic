@@ -1219,7 +1219,10 @@ public class Wizard {
     }
 
     public bool IgnorePlayer(ulong playerId) {
-        var relationship = FriendsBehavior.Ignore(this.CharId, playerId);
+        // CLASSIC: the ignore is this wizard's, written to the shared row by owner (IgnoreRules), and this wizard's copy
+        // of the row is replaced with the stored one. It used to save this wizard's whole copy, undoing anything the
+        // other wizard had written to the row since this login.
+        var relationship = BuddyRelationshipCollection.SetIgnore(this.CharId, playerId, ignore: true);
         if (relationship is null) {
             Logger.Warning("Could not ignore player ({0}) for player {1}.",
                 Logger.Args(playerId, PlayerNameBehavior.GetWizardName()));
@@ -1227,24 +1230,28 @@ public class Wizard {
             return false;
         }
 
-        // Persistent save; use AddRelationship so the row is created when this
-        // is the very first interaction between the two characters.
-        BuddyRelationshipCollection.AddRelationship(relationship);
+        FriendsBehavior.MirrorRelationship(relationship);
 
         return true;
     }
 
     public bool UnignorePlayer(ulong playerId) {
-        var relationship = FriendsBehavior.Unignore(playerId);
-        if (relationship is null) {
+        if (!FriendsBehavior.HasPlayerBlocked(this.CharId, playerId)) {
             Logger.Warning("Could not unignore player ({0}) for player {1}.",
                 Logger.Args(playerId, PlayerNameBehavior.GetWizardName()));
 
             return false;
         }
 
-        // Persistent save.
-        BuddyRelationshipCollection.UpdateRelationship(relationship);
+        // CLASSIC: lifts this wizard's ignore only (see IgnorePlayer).
+        var relationship = BuddyRelationshipCollection.SetIgnore(this.CharId, playerId, ignore: false);
+        if (relationship is null) {
+            FriendsBehavior.Unignore(this.CharId, playerId);
+
+            return true;
+        }
+
+        FriendsBehavior.MirrorRelationship(relationship);
 
         return true;
     }
