@@ -242,6 +242,7 @@ internal class AttachService(SessionActor sessionActor) : MessageService(session
     }
 
     private void ValidateAttach(GAME_5_PROTOCOL.MSG_ATTACH message) {
+        var loadedAtUtc = DateTime.UtcNow; // CLASSIC: the key check below loads the account (Game/AccountSessions.cs)
         if (!ValidateLoginKey(message.LoginKey, message.UserID, out var account)) {
             SendToSocket(new GAME_5_PROTOCOL.MSG_ATTACHFAILED() {
                 Error = 1,
@@ -251,6 +252,22 @@ internal class AttachService(SessionActor sessionActor) : MessageService(session
             throw new SessionFatalException(
                 $"User [{message.UserID}] failed to validate login key: {message.LoginKey}.");
         }
+        // CLASSIC: one game session (so one wizard) per account. An older session of the account is closed and has
+        // stopped, with its last saves in, before this one goes on; the account is loaded again if that session stopped
+        // after this copy was read. Refused when the older session will not stop.
+        switch (AccountSessions.Claim(account.AccountId, SessionActor, loadedAtUtc)) {
+            case AccountClaim.Refused:
+                SendToSocket(new GAME_5_PROTOCOL.MSG_ATTACHFAILED() {
+                    Error = 1,
+                    Rejected = 1,
+                });
+
+                throw new SessionFatalException($"User [{message.UserID}] is still logged in elsewhere.");
+            case AccountClaim.AdmittedReload:
+                account = AccountCollection.GetAccount(account.AccountId) ?? account;
+                break;
+        }
+
         if (!GetWizardFromAccount(account, message.CharID, out var wizard)) {
             SendToSocket(new GAME_5_PROTOCOL.MSG_ATTACHFAILED() {
                 Error = 1,

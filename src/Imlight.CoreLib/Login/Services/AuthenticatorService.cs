@@ -153,7 +153,13 @@ internal class AuthenticatorService(SessionActor parentActor) : MessageService(p
     private bool AdmitClientToLogin(Account account) {
         // Enqueue ourselves to the connected server. Inform the socket if its been placed into a queue and
         // what position it could potentially be in.
-        var serverEnqueueResult = SessionActor.EnqueueToServer();
+        // CLASSIC: logging in again puts the account's game session out (2009: one wizard per account online, the
+        // newest login wins; Game/AccountSessions.cs) and waits for it to stop, so the character list is read after
+        // its last saves. A session that will not stop refuses this login instead.
+        var stillInGame = !Imlight.CoreLib.Game.AccountSessions.CloseAndWait(account.AccountId);
+        var serverEnqueueResult = stillInGame
+            ? new SERVER_100_PROTOCOL.MSG_PLAYERENQUEUEDRSP { Failed = true }
+            : SessionActor.EnqueueToServer();
         if (serverEnqueueResult.Failed) {
             SendToSocket(new LOGIN_7_PROTOCOL.MSG_USER_ADMIT_IND {
                 Status = 0,
