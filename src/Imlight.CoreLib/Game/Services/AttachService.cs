@@ -340,6 +340,13 @@ internal class AttachService(SessionActor sessionActor) : MessageService(session
             OwnerCharId = Classic.GroupInstances.OwnerForAttach(_wizard.CharId, zoneName, DateTime.UtcNow),
         };
 
+        // CLASSIC: logging out resets the dungeon the wizard was in (2009 rule, Classic.InstanceResets), unless a fight
+        // there holds the wizard's seat or someone else is inside. The attach that ends a zone transfer is not a login.
+        if (Classic.InstanceResets.IsActive && Classic.InstanceResets.ResetOnLogin(_wizard.CharId, zoneName, zoneMsg.OwnerCharId,
+                DateTime.UtcNow)) {
+            zoneMsg.ResetInstance = true;
+        }
+
         return AskOtherService<ZONE_102_PROTOCOL.MSG_ZONETRANSFERRSP>(zoneMsg);
     }
 

@@ -38,24 +38,22 @@
  * golem (playbot-reports/golem-tower.md, run r6).
  *
  * USAGE EXAMPLE:
- * if (Gauntlets.EntersFromOutside(fromZone, toZone)) { ... drop Gauntlets.ZonesOf(toZone) ... }
+ * if (Gauntlets.EntersFromOutside(fromZone, toZone)) { ... }
  *
  * NOTE:
- * Moving from floor to floor is not leaving: the floors behind stay as the
- * wizard left them. Only an entry from a zone outside the gauntlet resets it.
- *
- * TODO:
- * Other gauntlets (Briskbreeze Tower and the later ones) when their reset is
- * checked against dated sources.
+ * Since 10/05/2026 the gauntlets are groups of the general instance reset
+ * rule (InstanceGroups, classic-data/rules/instance-resets-2009.yaml): the
+ * Golem Tower, Briskbreeze Tower, Secure House and the Storm Kraken room. This
+ * class answers for the gauntlet groups only; ordinary dungeons reset by the
+ * same machinery with a return window (InstanceResetPolicy).
  *
  * Created by: Nick with Claude Code (claude-opus-5-5)
  * Version: KALI 1.0
  * Last Updated: 10/05/2026
  */
 
-using System;
 using System.Collections.Immutable;
-using System.Linq;
+using Imlight.Classic.Rules;
 
 namespace Imlight.Classic.Travel;
 
@@ -65,37 +63,15 @@ namespace Imlight.Classic.Travel;
 public static class Gauntlets {
 
     /// <summary>The Golem Tower's five floors, bottom to top.</summary>
-    public static readonly ImmutableArray<string> GolemTower = [
-        "WizardCity/WC_Streets/WC_Golem_Tower/WC_Golem_Tower_1",
-        "WizardCity/WC_Streets/WC_Golem_Tower/WC_Golem_Tower_2",
-        "WizardCity/WC_Streets/WC_Golem_Tower/WC_Golem_Tower_3",
-        "WizardCity/WC_Streets/WC_Golem_Tower/WC_Golem_Tower_4",
-        "WizardCity/WC_Streets/WC_Golem_Tower/WC_Golem_Tower_5",
-    ];
-
-    private static readonly ImmutableArray<ImmutableArray<string>> s_all = [GolemTower];
+    public static ImmutableArray<string> GolemTower => InstanceResetRules.GolemTowerFloors;
 
     /// <summary>Every zone of the gauntlet <paramref name="zone"/> belongs to; empty when it is not a gauntlet zone.</summary>
-    public static ImmutableArray<string> ZonesOf(string? zone) {
-        if (string.IsNullOrEmpty(zone)) {
-            return [];
-        }
-
-        foreach (var gauntlet in s_all) {
-            if (gauntlet.Contains(zone, StringComparer.OrdinalIgnoreCase)) {
-                return gauntlet;
-            }
-        }
-
-        return [];
-    }
+    public static ImmutableArray<string> ZonesOf(string? zone)
+        => InstanceGroups.GroupOf(zone) is { Kind: InstanceKind.Gauntlet } group ? group.Zones : [];
 
     /// <summary>True when a transfer from <paramref name="fromZone"/> into <paramref name="toZone"/> enters a gauntlet
     /// from outside it (a new trip: the gauntlet starts fresh).</summary>
-    public static bool EntersFromOutside(string? fromZone, string? toZone) {
-        var gauntlet = ZonesOf(toZone);
-
-        return !gauntlet.IsEmpty && !gauntlet.Contains(fromZone ?? "", StringComparer.OrdinalIgnoreCase);
-    }
+    public static bool EntersFromOutside(string? fromZone, string? toZone)
+        => InstanceGroups.GroupOf(toZone) is { Kind: InstanceKind.Gauntlet } group && !group.Contains(fromZone);
 
 }

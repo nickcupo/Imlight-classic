@@ -85,6 +85,14 @@ public static class ActiveDuels {
             ? seat.InstanceOwnerId
             : characterId;
 
+    /// <summary>
+    /// CLASSIC: true when a seat is held (not expired) in instance <paramref name="instanceOwnerId"/> in a zone
+    /// <paramref name="zoneMatches"/> accepts: a fight there is not over, so its dungeon must not be reset.
+    /// </summary>
+    public static bool AnyHeldSeat(ulong instanceOwnerId, Func<string?, bool> zoneMatches, DateTime nowUtc, ulong exceptCharacterId = 0)
+        => s_held.Values.Any(seat => seat.InstanceOwnerId == instanceOwnerId && seat.ExpiresUtc > nowUtc && zoneMatches(seat.Zone)
+                                     && (exceptCharacterId == 0 || seat.CharacterId != exceptCharacterId));
+
     internal static void ClearForTests() {
         s_duels.Clear();
         s_held.Clear();

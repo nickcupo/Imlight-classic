@@ -249,6 +249,10 @@ public static class GroupInstances {
         s_sigilGroups[group.RunId] = group;
     }
 
+    /// <summary>CLASSIC: true when a sigil group of run <paramref name="runId"/> is tracked and not yet past its linger time.</summary>
+    public static bool HasLiveSigilGroup(ulong runId, DateTime nowUtc)
+        => s_sigilGroups.TryGetValue(runId, out var group) && nowUtc <= group.EndsUtc + SigilGroupLinger;
+
     /// <summary>
     /// CLASSIC: <paramref name="charId"/> steps off the sigil of run <paramref name="runId"/> (walked off the pad,
     /// disconnected or changed zone during the countdown); its slot is free again. False when there was nothing to free.

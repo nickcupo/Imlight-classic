@@ -189,37 +189,30 @@ public class Zone : ReceiveProtocolDispatcher, IWithTimers {
         DropIfEmptyAfterLoss();
     }
 
-    // CLASSIC: a sigil run's instance that nobody is in is kept 30 minutes, then reset (2009: "Leaving any other way
-    // gives you 30 minutes to return before it resets"; Classic.GroupInstances). A wizard's own instance (a gate
-    // dungeon, the dorm) keeps its stock lifetime.
-    private const string EMPTY_RUN_TIMER_KEY = "classic-empty-run";
+    // CLASSIC: an instanced zone tells its container whenever it becomes empty or occupied. The container keeps a
+    // dungeon nobody is in for the empty lifetime, then resets all of its zones together (2009: "Leaving any other way
+    // gives you 30 minutes to return before it resets"; the level resets once everyone has left; Classic.InstanceResets,
+    // InstanceContainer). Was a per-zone timer for sigil runs only, which could drop a room behind a party still in the
+    // next one, and kept a wizard's own dungeon copies until a restart.
+    private bool? _reportedOccupied;
 
     private void UpdateEmptyRunTimer() {
-        if (InstanceOwnerId == 0 || !Classic.GroupInstances.IsRun(InstanceOwnerId)) {
+        if (InstanceOwnerId == 0 || !Imlight.Classic.ClassicRuntime.IsActive) {
             return;
         }
 
-        if (_playerCount > 0 || _isLoading) {
-            Timers.Cancel(EMPTY_RUN_TIMER_KEY);
-
+        var occupied = _playerCount > 0 || _isLoading;
+        if (_reportedOccupied == occupied) {
             return;
         }
 
-        if (!Timers.IsTimerActive(EMPTY_RUN_TIMER_KEY)) {
-            Timers.StartSingleTimer(EMPTY_RUN_TIMER_KEY, new CLASSIC_FEATURES_PROTOCOL.MSG_EMPTYRUNEXPIRED(),
-                Classic.GroupInstances.EmptyInstanceLifetime);
-        }
+        _reportedOccupied = occupied;
+        Context.Parent.Tell(new Imlight.CoreLib.Game.World.InstanceContainer.ZoneOccupancy(ZonePath, occupied));
     }
 
     [MessageHandler(typeof(CLASSIC_FEATURES_PROTOCOL.MSG_EMPTYRUNEXPIRED))]
     private void ReceiveEmptyRunExpired(CLASSIC_FEATURES_PROTOCOL.MSG_EMPTYRUNEXPIRED message) {
-        if (_playerCount > 0 || _isLoading) {
-            return;
-        }
-
-        Logger.Information("Zone {Zone} (sigil run {Owner}) has been empty {Minutes} minutes; resetting it.",
-            Logger.Args(ZonePath, InstanceOwnerId, Classic.GroupInstances.EmptyInstanceLifetime.TotalMinutes));
-        Context.Parent.Tell(new CLASSIC_FEATURES_PROTOCOL.MSG_DROPSELF { ZoneName = ZonePath });
+        // CLASSIC: superseded by the container's dungeon timer (InstanceContainer.ZoneOccupancy).
     }
 
     private void DropIfEmptyAfterLoss() {
@@ -497,6 +490,7 @@ public class Zone : ReceiveProtocolDispatcher, IWithTimers {
             _zoneLoadTimer.Stop();
             Logger.Information("Zone {ZoneName} loaded in {Time}ms.", Logger.Args(ZoneName, _zoneLoadTimer.ElapsedMilliseconds));
             _isLoading = false;
+            UpdateEmptyRunTimer(); // CLASSIC: a copy nobody ever entered still expires.
 
             var startMsg = new ZONE_102_PROTOCOL.MSG_ZONESTART();
 

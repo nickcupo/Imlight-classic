@@ -198,10 +198,20 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
             message.OwnerCharId = GroupInstances.OwnerForTransfer(message.OwnerCharId, message.KeepInstance,
                 _currentInstanceOwner);
 
-            // CLASSIC: a gauntlet (the Golem Tower) resets whenever its wizard leaves it, so a trip in from outside
-            // starts a fresh one (Classic.Travel.Gauntlets).
-            if (message.SendToClient && Imlight.Classic.Travel.Gauntlets.EntersFromOutside(GetActiveWizard()?.Zone,
-                    message.DestinationZone)) {
+            // CLASSIC: a door between two zones of one dungeon keeps the wizard in the same private copy, even when the
+            // next room's hard limit is a public zone's (Briskbreeze Tower's floors 2-10 have 100).
+            var fromZone = GetActiveWizard()?.Zone;
+            if (message.KeepInstance && _currentInstanceOwner != 0
+                    && Imlight.Classic.Travel.InstanceGroups.SameGroup(fromZone, message.DestinationZone)) {
+                message.IsPrivate = true;
+            }
+
+            // CLASSIC: the 2009 reset rule (Classic.InstanceResets): entering a dungeon from outside into the wizard's
+            // own copy starts it fresh, every zone of it, unless someone is inside or the wizard left it "another way"
+            // within the return window. A gauntlet (the Golem Tower) always starts fresh.
+            if (message.SendToClient && GetActiveWizard() is { } entering
+                    && InstanceResets.ResetOnEntry(entering.CharId, fromZone, message.DestinationZone, message.OwnerCharId,
+                        DateTime.UtcNow)) {
                 message.ResetInstance = true;
             }
         }
@@ -228,6 +238,10 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
             if (ClassicRuntime.IsActive && GetActiveWizard() is { } traveller) {
                 GroupInstances.QueueEntry(traveller.CharId, message.DestinationZone, zoneDetails.InstanceOwnerId,
                     DateTime.UtcNow);
+
+                // CLASSIC: how the wizard left a dungeon (its exit, or another way), for the 2009 reset rule.
+                InstanceResets.NoteTransfer(traveller.CharId, traveller.Zone, _currentInstanceOwner, message.DestinationZone,
+                    zoneDetails.InstanceOwnerId, message.KeepInstance, DateTime.UtcNow);
             }
 
             ReadyClientForZoneTransfer(message);
