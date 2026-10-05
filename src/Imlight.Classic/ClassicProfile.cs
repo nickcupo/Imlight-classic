@@ -260,6 +260,12 @@ public sealed class ClassicProfile {
     public ImmutableArray<string> Notes { get; init; } = [];
 
     /// <summary>
+    /// CLASSIC: quests the profile removes once every SpiralDB overlay has loaded, as a quest tombstone would:
+    /// content of a later update in a profile whose cutoff predates it (<c>disabled_quests</c>).
+    /// </summary>
+    public ImmutableArray<string> DisabledQuests { get; init; } = [];
+
+    /// <summary>
     /// The files the profile was merged from, child first.
     /// </summary>
     public required ImmutableArray<string> SourceFiles { get; init; }

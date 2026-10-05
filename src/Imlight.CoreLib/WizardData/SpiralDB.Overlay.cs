@@ -395,6 +395,45 @@ public static partial class SpiralDB {
         }
     }
 
+    // CLASSIC: removes the active profile's disabled_quests (content of a later update, such as Briskbreeze Tower's
+    // Lost Lieutenant in arc1-2009h1) after every overlay has loaded, as a tombstone in the last root would.
+    private static void ApplyProfileDisabledQuests(ConcurrentDictionary<string, QuestTemplate> questsByName) {
+        if (!Imlight.Classic.ClassicRuntime.IsInitialized) {
+            return;
+        }
+
+        var profile = Imlight.Classic.ClassicRuntime.Rules.Profile;
+        var removed = RemoveDisabledQuests(questsByName, profile.DisabledQuests, out var unmatched);
+        foreach (var name in removed) {
+            Logger.Information("Profile {0} disables quest {1}.", Logger.Args(profile.Id, name));
+        }
+
+        foreach (var name in unmatched) {
+            Logger.Warning("Profile {0} lists {1} under disabled_quests, but no such quest is loaded.",
+                Logger.Args(profile.Id, name));
+        }
+    }
+
+    /// <summary>
+    /// CLASSIC: removes <paramref name="disabled"/> from <paramref name="questsByName"/>.
+    /// </summary>
+    /// <returns>The names removed; <paramref name="unmatched"/> gets the names that were not loaded.</returns>
+    internal static List<string> RemoveDisabledQuests(ConcurrentDictionary<string, QuestTemplate> questsByName,
+                                                      IEnumerable<string> disabled, out List<string> unmatched) {
+        var removed = new List<string>();
+        unmatched = [];
+        foreach (var name in disabled) {
+            if (questsByName.TryRemove(name, out _)) {
+                removed.Add(name);
+            }
+            else {
+                unmatched.Add(name);
+            }
+        }
+
+        return removed;
+    }
+
     // CLASSIC: the quest list in first-load order, one entry per name, each the winning (last loaded)
     // version; quests no longer in the by-name map (tombstoned, or without a name) are left out.
     private static List<QuestTemplate> RebuildQuestList(List<QuestTemplate> loadOrder,
