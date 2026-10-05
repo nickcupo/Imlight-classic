@@ -54,6 +54,7 @@ using System.IO;
 using System.Linq;
 using Imlight.Classic.Quests;
 using Imlight.Classic.Rules;
+using Imlight.Classic.Travel;
 using Newtonsoft.Json.Linq;
 using Xunit;
 
@@ -134,6 +135,34 @@ public sealed class GolemTowerTests {
             .Where(f => File.ReadAllText(f).Contains(prefix, StringComparison.Ordinal))
             .Select(Path.GetFileNameWithoutExtension);
         Assert.Empty(users);
+    }
+
+    [Theory]
+    [InlineData("WizardCity/WC_Golem_Tower", Floors + "1", true)]      // the tower door in Golem Court: a new trip
+    [InlineData("WizardCity/WC_Hub", Floors + "3", true)]              // any way in from outside
+    [InlineData(null, Floors + "1", true)]
+    [InlineData(Floors + "1", Floors + "2", false)]                     // floor to floor is not leaving
+    [InlineData(Floors + "5", Floors + "4", false)]
+    [InlineData(Floors + "5", "WizardCity/WC_Golem_Tower", false)]      // leaving resets on the next entry
+    [InlineData("WizardCity/WC_Hub", "WizardCity/WC_Golem_Tower", false)]
+    [InlineData("WizardCity/WC_Streets/WC_Unicorn", "WizardCity/WC_Streets/Interiors/WC_Unicorn_T2", false)] // not a gauntlet
+    public void EnteringTheTowerFromOutsideStartsAFreshTower(string? from, string to, bool fresh)
+        => Assert.Equal(fresh, Gauntlets.EntersFromOutside(from, to));
+
+    [Fact]
+    public void ResettingTheTowerResetsAllFiveFloors() {
+        Assert.Equal(Enumerable.Range(1, 5).Select(n => Floors + n), Gauntlets.ZonesOf(Floors + "1"));
+        Assert.Equal(Gauntlets.GolemTower, Gauntlets.ZonesOf(Floors.ToLowerInvariant() + "5"));
+        Assert.Empty(Gauntlets.ZonesOf("WizardCity/WC_Golem_Tower"));
+        Assert.Empty(Gauntlets.ZonesOf(null));
+    }
+
+    [Fact]
+    public void TheTowerFloorsAreTheOnesTheQuestsSendTheWizardTo() {
+        var goalZones = new[] { "WC-CLASSIC-SIDE-056", "WC-CLASSIC-SIDE-057", "WC-CLASSIC-SIDE-058", "WC-STRM-C02-001", "WC-LIFE-C02-001" }
+            .SelectMany(q => Quest(q)["m_goals"]!.Select(g => (string?) g["m_destinationZone"]))
+            .Where(z => z is not null && z.StartsWith(Floors, StringComparison.Ordinal));
+        Assert.All(goalZones, z => Assert.Contains(z!, Gauntlets.GolemTower));
     }
 
 }

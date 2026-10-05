@@ -117,9 +117,14 @@ public class GameWorld : ReceiveProtocolDispatcher, IWithTimers {
             // A fresh SIGIL entry starts a NEW run: drop any stale copy of this zone so the transfer below
             // builds a FRESH one.
             if (message.ResetInstance) {
-                instanceContainer.Tell(new ZONE_102_PROTOCOL.MSG_DROPINSTANCEZONE {
-                    ZoneName = message.DestinationZone,
-                });
+                // CLASSIC: entering a gauntlet from outside resets every zone of it, not just the first.
+                var gauntlet = Imlight.Classic.Travel.Gauntlets.ZonesOf(message.DestinationZone);
+                IEnumerable<string> zonesToDrop = gauntlet.IsEmpty ? [message.DestinationZone] : gauntlet;
+                foreach (var zoneName in zonesToDrop) {
+                    instanceContainer.Tell(new ZONE_102_PROTOCOL.MSG_DROPINSTANCEZONE {
+                        ZoneName = zoneName,
+                    });
+                }
             }
 
             HandleInstancedZoneTransfer(message);
