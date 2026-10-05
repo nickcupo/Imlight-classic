@@ -637,6 +637,7 @@ public sealed class OwnedMinionDuelTests : IDisposable {
     public void AMinionCastsWhatItsOwnersCardWindowShowsCastable(MagicSchool minionSchool, int shownGeneric, int shownPower) {
         // A real creature's stats carry no m_schoolID (JsonIgnore, set only for wizards); the fixture's Myth hid it.
         _minion.ParticipantGameStats.m_schoolID = 0;
+        _owner.CombatParticipant.m_primaryMagicSchoolID = (int) MagicSchool.Myth;
         _minion.CombatParticipant.m_primaryMagicSchoolID = (int) minionSchool;
         _minion.CombatParticipant.m_pipCount = new PipCount { m_genericPips = 1, m_powerPips = 2 };
         _spell.m_magicSchoolID = (uint) minionSchool;
