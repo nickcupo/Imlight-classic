@@ -40,6 +40,7 @@
  */
 
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Text.RegularExpressions;
 using Akka.Actor;
@@ -378,21 +379,24 @@ internal class ChatService(SessionActor sessionActor) : MessageService(sessionAc
     private void SendFilteredZoneMessage(IMessage msg, ulong senderCharId, string zoneName) {
         var blockedBy = BuddyRelationshipCollection.GetCharactersWhoBlocked(senderCharId);
         var playersInZone = OnlinePlayerCollection.GetPlayersInZone(zoneName);
+        var senderInstance = OnlinePlayerCollection.GetOnlinePlayer(senderCharId)?.InstanceOwnerId ?? 0; // CLASSIC
 
-        foreach (var player in playersInZone) {
-            // Skip the sender (they see their own message client-side).
-            if (player.CharacterId == senderCharId) {
-                continue;
-            }
-
-            // Skip players who have blocked the sender.
-            if (blockedBy.Contains(player.CharacterId)) {
-                continue;
-            }
-
+        foreach (var player in ChatAudience(playersInZone, senderCharId, senderInstance, blockedBy)) {
             Context.ActorSelection(player.ActorPath).Tell(msg);
         }
     }
+
+    /// <summary>
+    /// The players a zone chat line reaches: everyone in the sender's zone, except the sender (they see their own
+    /// message client-side) and those who have blocked the sender. CLASSIC: only in the sender's instance, too; an
+    /// instance (a dorm, a sigil run, a quest instance) shares its zone name with every other copy of that zone, so
+    /// a Say in one dungeon run used to reach the wizards in every other run of it.
+    /// </summary>
+    internal static IEnumerable<OnlinePlayer> ChatAudience(IEnumerable<OnlinePlayer> playersInZone, ulong senderCharId,
+                                                          ulong senderInstance, ICollection<ulong> blockedBy)
+        => playersInZone.Where(player => player.CharacterId != senderCharId
+                                         && player.InstanceOwnerId == senderInstance
+                                         && !blockedBy.Contains(player.CharacterId));
 
     private void SendChatCommand(string input, CoreObject charObj, Wizard character) {
         var account = GetActiveAccount();
