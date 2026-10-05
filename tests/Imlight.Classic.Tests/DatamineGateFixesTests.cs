@@ -132,6 +132,11 @@ public sealed class DatamineGateFixesTests {
     }
 
     [Fact]
+    public void TicketToKensingtonOpensTheKensingtonSigil() {
+        Assert.True(StartSetsEntry("MB-CLASSIC-SIDE-052", "MB-AIRHub-C07"));
+    }
+
+    [Fact]
     public void EightLeggedQueenOpensTheCrystalGroveGauntletSigil() {
         Assert.True(StartSetsEntry("DS-ACAD1-C05-003", "QT-ACAD1-C05-003"));
         Assert.Equal("DragonSpire/DS_A3_Kings/Interiors/DS_CrystalGrove_Gauntlet_7Room",
