@@ -113,7 +113,13 @@ public class ReceiveProtocolDispatcher : ReceiveActor {
             handler(this, message);
         }
         finally {
-            Classic.PerfMonitor.EndHandler(GetType(), message.GetType(), started);
+            // CLASSIC: a component's own message is named by the component and what it got, not the envelope.
+            if (message is Game.Zone.Core.ComponentMessage envelope) {
+                Classic.PerfMonitor.EndHandler(envelope.Component?.GetType() ?? GetType(), envelope.Message?.GetType() ?? message.GetType(), started);
+            }
+            else {
+                Classic.PerfMonitor.EndHandler(GetType(), message.GetType(), started);
+            }
         }
     });
 

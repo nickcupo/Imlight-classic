@@ -101,6 +101,7 @@
  */
 
 using System;
+using System.Collections.Concurrent;
 using System.Linq;
 using Akka.Actor;
 using Imcodec.Cryptography;
@@ -131,6 +132,35 @@ internal class FriendsService(SessionActor sessionActor) : MessageService(sessio
     // CLASSIC: each stat lookup reads the database; a burst of 10, then 2 a second (security audit 2026-10-04).
     private readonly Imlight.Classic.Security.TokenBucket _buddyStatsRate = new(capacity: 10, refillPerSecond: 2);
     private readonly uint _englishLocaleHash = StringHash.Compute("English");
+
+    // CLASSIC: friend requests waiting for an answer, (recipient, requester). The wizard's pending list holds both the
+    // requests it sent and the ones it received, so a wizard could "accept" its own request (a friendship the other
+    // never agreed to) and two wizards asking each other at the same moment each dropped the other's request as
+    // "already pending". Kept server-wide so a zone change (a new session) does not lose it.
+    private static readonly ConcurrentDictionary<(ulong Recipient, ulong Requester), DateTime> s_incomingRequests = new();
+
+    internal static void NoteIncomingRequest(ulong recipient, ulong requester) {
+        var now = DateTime.UtcNow;
+        foreach (var stale in s_incomingRequests.Where(r => now - r.Value > TimeSpan.FromHours(1)).Select(r => r.Key).ToList()) {
+            s_incomingRequests.TryRemove(stale, out _); // never answered
+        }
+
+        s_incomingRequests[(recipient, requester)] = now;
+    }
+
+    internal static bool HasIncomingRequest(ulong recipient, ulong requester)
+        => s_incomingRequests.ContainsKey((recipient, requester));
+
+    internal static bool TakeIncomingRequest(ulong recipient, ulong requester) {
+        if (!s_incomingRequests.TryRemove((recipient, requester), out _)) {
+            return false;
+        }
+
+        // Two wizards who asked each other: one answer settles both requests.
+        s_incomingRequests.TryRemove((requester, recipient), out _);
+
+        return true;
+    }
 
     protected static Props Props(SessionActor parentActor)
         => Akka.Actor.Props.Create(() => new FriendsService(parentActor));
@@ -329,8 +359,8 @@ internal class FriendsService(SessionActor sessionActor) : MessageService(sessio
 
         var buddyCharID = message.RequesterCharId;
 
-        // Check to see if we already have this friend request pending.
-        if (wizard.FriendsBehavior.HasPendingFriendRequest(buddyCharID)) {
+        // Check to see if we already have this friend request pending. CLASSIC: a request received, not one we sent.
+        if (HasIncomingRequest(wizard.CharId, buddyCharID)) {
             Logger.Warning("{0} tried to add character ID {1} as a friend, but the request is already pending.",
                 Logger.Args(wizard.PlayerNameBehavior.GetWizardName(), buddyCharID));
 
@@ -339,6 +369,7 @@ internal class FriendsService(SessionActor sessionActor) : MessageService(sessio
 
         // Add the pending request to the recipient. When we get a response from the sender, we'll know it's valid.
         wizard.AddPendingFriendRequest(buddyCharID);
+        NoteIncomingRequest(wizard.CharId, buddyCharID); // CLASSIC
 
         // Inform the game client. We will now await the player's response.
         var clientMsg = new GAME_5_PROTOCOL.MSG_BUDDYREQUESTADD {
@@ -359,7 +390,8 @@ internal class FriendsService(SessionActor sessionActor) : MessageService(sessio
         // Ensure that this wizard was even pending. If not, log an error and return.
         // Replies identify the saved requester, unlike the initial object-targeted add request.
         var buddyCharID = message.ListOwnerGID;
-        if (!wizard.RemovePendingFriendRequest(buddyCharID)) {
+        // CLASSIC: only a request this wizard received can be accepted.
+        if (!TakeIncomingRequest(wizard.CharId, buddyCharID) | !wizard.RemovePendingFriendRequest(buddyCharID)) {
             Logger.Error("{0} tried to add character ID {1} as a friend, but the request was not pending.",
                 Logger.Args(wizard.PlayerNameBehavior.GetWizardName(), buddyCharID));
 
@@ -427,8 +459,8 @@ internal class FriendsService(SessionActor sessionActor) : MessageService(sessio
         var wizard = GetActiveWizard();
         // Replies identify the saved requester, unlike the initial object-targeted add request.
         var buddyCharID = message.ListOwnerGID;
-        // Ensure that this wizard was even pending. If not, log an error and return.
-        if (!wizard.RemovePendingFriendRequest(buddyCharID)) {
+        // Ensure that this wizard was even pending. If not, log an error and return. CLASSIC: a request it received.
+        if (!TakeIncomingRequest(wizard.CharId, buddyCharID) | !wizard.RemovePendingFriendRequest(buddyCharID)) {
             Logger.Error("{0} tried to deny a friend request from character ID {1}, but the request was not pending.",
                 Logger.Args(wizard.PlayerNameBehavior.GetWizardName(), buddyCharID));
 
@@ -919,6 +951,53 @@ internal class FriendsService(SessionActor sessionActor) : MessageService(sessio
             ListOwnerGID = wizard.GameObjectID
         };
         SendToSocket(completeMsg);
+    }
+
+    /// <summary>How long after a session goes away a wizard still not back online counts as offline to friends.</summary>
+    internal static readonly TimeSpan OfflineGrace = TimeSpan.FromSeconds(10);
+
+    // CLASSIC: friends heard "offline" only from the client's own logout or disconnect packet, so a wizard whose game
+    // crashed, whose network dropped, or whose session the server closed (a restart) stayed "online" on every friend's
+    // list until the friend logged out (rig-mp fo1). A zone change also closes the session, so the check waits
+    // OfflineGrace and tells friends only if the wizard has not come back online by then.
+    protected override void OnPreDispose() {
+        try {
+            // Never a blocking ask while the session is going away: the wizard this session played, if any.
+            var charId = Classic.ActiveWizardDirectory.TryGet(SessionActor?.ActorRef, out var wizard, out _) ? wizard?.CharId ?? 0 : 0;
+            var system = Context.System;
+            if (charId != 0) {
+                _ = System.Threading.Tasks.Task.Delay(OfflineGrace).ContinueWith(_ => TellFriendsIfStillOffline(system, charId),
+                    System.Threading.Tasks.TaskScheduler.Default);
+            }
+        }
+        catch (Exception ex) {
+            Logger.Warning("Could not schedule the offline notice for friends: {0}", Logger.Args(ex.Message));
+        }
+
+        base.OnPreDispose();
+    }
+
+    private static void TellFriendsIfStillOffline(ActorSystem system, ulong charId) {
+        try {
+            if (OnlinePlayerCollection.GetOnlinePlayer(charId) is not null) {
+                return; // back (a zone change) or never gone
+            }
+
+            foreach (var buddy in BuddyRelationshipCollection.GetBuddiesForWizard(charId).Where(buddy => buddy != null)) {
+                if (OnlinePlayerCollection.GetOnlinePlayer(buddy.CharId) is { ActorPath: { Length: > 0 } path } online) {
+                    system.ActorSelection(path).Tell(new GAME_5_PROTOCOL.MSG_BUDDYSTATUSUPDATE {
+                        ListOwnerGID = buddy.GameObjectID,
+                        EntryGID = charId,
+                        Status = OFFLINE_STATUS_CODE,
+                        ZoneName = online.CurrentZoneDisplayName,
+                        RealmName = online.CurrentRealm,
+                    });
+                }
+            }
+        }
+        catch (Exception ex) {
+            Logger.Warning("Could not tell friends that {0} went offline: {1}", Logger.Args(charId, ex.Message));
+        }
     }
 
     private void InformBuddiesOfStatusChange(bool isOnline) {

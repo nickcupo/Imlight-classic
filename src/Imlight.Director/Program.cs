@@ -185,6 +185,12 @@ internal static class Program {
         Imlight.CoreLib.Classic.Admin.ServerAdmin.Initialize(s_imlightSystem);
         Imlight.CoreLib.Classic.Admin.AdminDashboard.Start();
 
+        // CLASSIC: systemctl stop/restart (every deploy) sends SIGTERM; close the sessions and the database first.
+        s_stopSignals = [
+            System.Runtime.InteropServices.PosixSignalRegistration.Create(System.Runtime.InteropServices.PosixSignal.SIGTERM, OnStopSignal),
+            System.Runtime.InteropServices.PosixSignalRegistration.Create(System.Runtime.InteropServices.PosixSignal.SIGINT, OnStopSignal),
+        ];
+
         // Keep program busy with a while loop.
         Logger.Information("Imlight may now be connected to.");
         while (true) {
@@ -192,6 +198,16 @@ internal static class Program {
             Thread.Sleep(300000);
 
             Logger.Information("Still alive..");
+        }
+    }
+
+    // CLASSIC: kept alive for the process's lifetime (a collected registration stops handling the signal).
+    private static System.Runtime.InteropServices.PosixSignalRegistration[] s_stopSignals;
+
+    private static void OnStopSignal(System.Runtime.InteropServices.PosixSignalContext context) {
+        context.Cancel = true; // exit after the sessions are closed, not at once
+        if (Imlight.CoreLib.Classic.Admin.ServerAdmin.StopForSignal(context.Signal.ToString())) {
+            Environment.Exit(0);
         }
     }
 

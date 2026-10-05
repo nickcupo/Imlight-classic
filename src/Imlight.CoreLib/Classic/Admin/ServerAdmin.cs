@@ -101,7 +101,10 @@ public static class ServerAdmin {
         => Setting("Classic.BackupDirectory") ?? "/var/lib/w101c/backups";
 
     public static string ControlDirectory
-        => Setting("Classic.ControlDirectory") ?? "/var/lib/w101c/control";
+        => ControlDirectoryOverride ?? Setting("Classic.ControlDirectory") ?? "/var/lib/w101c/control";
+
+    /// <summary>For tests: where backup requests go instead of the configured directory.</summary>
+    internal static string? ControlDirectoryOverride { get; set; }
 
     /// <summary>Called once the actor system exists.</summary>
     public static void Initialize(ActorSystem system) {
@@ -246,7 +249,7 @@ public static class ServerAdmin {
             return;
         }
 
-        if (Status() is { } existing) {
+        if (Status() is { } existing && IsPending(existing.State)) { // CLASSIC: a finished or failed one may be replaced
             Logger.Information("[ADMIN] The nightly backup asked for a backup, but a {Kind} is already scheduled; "
                                + "the nightly timer tries again later.", Logger.Args(existing.Kind));
 
@@ -260,7 +263,15 @@ public static class ServerAdmin {
         Schedule(RestartKind.Backup, warning, "nightly backup", "nightly backup timer");
     }
 
-    private static void Tick() {
+    // CLASSIC: how many times a restart or backup was carried out (tests).
+    internal static int Executions { get; private set; }
+
+    // CLASSIC: a plan still counting down or waiting for fights; anything else (restarting, backup requested, backup
+    // failed) is carried out already and must not run again.
+    private static bool IsPending(string state)
+        => state is "counting down" or "waiting for fights to end";
+
+    internal static void Tick() {
         try {
             PollScheduleRequest();
         }
@@ -271,6 +282,13 @@ public static class ServerAdmin {
         RestartPlan? plan;
         lock (s_lock) {
             plan = s_plan;
+
+            // CLASSIC: a backup leaves its plan in place (the dashboard shows "backup requested" or the failure); without
+            // this the 1 s timer carried it out again every ~7 s, kicking everyone each time, for as long as the process
+            // lived (forever when the backup request could not be written, or with no backup unit, as on the Mac rigs).
+            if (plan is not null && !IsPending(s_state)) {
+                return;
+            }
         }
 
         if (plan is null) {
@@ -302,7 +320,7 @@ public static class ServerAdmin {
             }
 
             lock (s_lock) {
-                if (!ReferenceEquals(s_plan, plan) || s_state == "restarting") {
+                if (!ReferenceEquals(s_plan, plan) || !IsPending(s_state)) {
                     return;
                 }
 
@@ -316,7 +334,43 @@ public static class ServerAdmin {
         }
     }
 
+    /// <summary>
+    /// CLASSIC: the process is told to stop (SIGTERM from systemctl stop/restart, as every deploy does; SIGINT): tell
+    /// every wizard, close the sessions (which saves their places and leaves trades and duels the way a logout does)
+    /// and shut the database down, as a safe restart's last step. Without it the process just died: wizards were
+    /// dropped mid-sentence, logged back in where they last changed zones, and RavenDB was not shut down. Returns
+    /// false when a safe restart is already carrying itself out.
+    /// </summary>
+    public static bool StopForSignal(string signal) {
+        lock (s_lock) {
+            if (s_state == "restarting") {
+                return false;
+            }
+
+            s_state = "restarting";
+        }
+
+        BlockNewDuels = true;
+        Logger.Information("[ADMIN] {Signal}: closing every session before the process exits.", Logger.Args(signal));
+        var told = Broadcast("The server is restarting now. Please log back in in a minute.", modal: true);
+        if (told > 0) {
+            Thread.Sleep(TimeSpan.FromSeconds(1));
+        }
+
+        var closed = CloseSessions();
+        Logger.Information("[ADMIN] Closed {Count} session(s) for {Signal}.", Logger.Args(closed, signal));
+        if (closed > 0) {
+            Thread.Sleep(TimeSpan.FromSeconds(5));
+        }
+
+        WizardData.Implementations.EmbeddedDatabaseManager.Shutdown(TimeSpan.FromSeconds(30));
+        Serilog.Log.CloseAndFlush();
+
+        return true;
+    }
+
     private static void Execute(RestartPlan plan) {
+        Executions++;
         Broadcast(plan.Kind == RestartKind.Backup
             ? "The server is going down for a backup now. Please log back in in a minute or two."
             : "The server is restarting now. Please log back in in a minute.", modal: true);
