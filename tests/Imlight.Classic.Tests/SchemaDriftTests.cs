@@ -131,6 +131,10 @@ public sealed class SchemaDriftTests {
         Assert.Equal(Keys(boss.GetProperty("properties").GetProperty("destroy_traps")), Sorted(BossCheatsLoader.s_trapKeys));
         Assert.Equal(Keys(boss.GetProperty("properties").GetProperty("summons").GetProperty("items")), Sorted(BossCheatsLoader.s_summonKeys));
         Assert.Equal(Keys(boss.GetProperty("properties").GetProperty("free_spells").GetProperty("items")), Sorted(BossCheatsLoader.s_freeKeys));
+        var guide = schema.GetProperty("properties").GetProperty("guide");
+        Assert.Equal(Keys(guide), Sorted(BossCheatGuideLoader.s_guideKeys));
+        Assert.Equal(Keys(guide.GetProperty("properties").GetProperty("spells").GetProperty("items")), Sorted(BossCheatGuideLoader.s_spellKeys));
+        Assert.Equal(Keys(guide.GetProperty("properties").GetProperty("bosses").GetProperty("items")), Sorted(BossCheatGuideLoader.s_bossKeys));
     }
 
     [Fact]

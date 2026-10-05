@@ -51,10 +51,15 @@ internal sealed class ReqHasEntryHandler : BaseRequirementHandler<ReqHasEntry> {
             return wizard.HasQuestRegistryValue(questName, entryName);
         }
         else {
-            return wizard.HasRegistryValue(entryName)
-                || HasTakenQuest(wizard, entryName); // CLASSIC: KingsIsle's "QT-<quest>" entries.
+            return HasEntry(wizard, entryName); // CLASSIC: shared with BriskbreezeTower.IsUnlocked.
         }
     }
+
+    // CLASSIC: a plain (non-quest) registry entry as a client requirement reads it, including KingsIsle's
+    // "QT-<quest>" entries. Also the one check of Briskbreeze Tower's unlock (Imlight.CoreLib.Classic.BriskbreezeTower).
+    internal static bool HasEntry(Wizard wizard, string entryName)
+        => wizard.HasRegistryValue(entryName)
+            || HasTakenQuest(wizard, entryName); // CLASSIC: KingsIsle's "QT-<quest>" entries.
 
     // CLASSIC: KingsIsle's server set "QT-<quest>" when a quest was taken; nothing in SpiralDB writes it,
     // so the entry reads as "has the quest, active or done" (Imlight.Classic.Quests.QuestTakenEntry).

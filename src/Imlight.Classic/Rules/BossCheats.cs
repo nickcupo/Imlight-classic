@@ -130,6 +130,8 @@ public sealed record BossCheat {
     public required string Zone { get; init; }
     /// <summary>Spells it casts in its own turn each round (its ordinary card plus extra casts).</summary>
     public required int CastsPerRound { get; init; }
+    /// <summary>Its health in the fight, when the file gives it (the duel takes health from mob-stats).</summary>
+    public int? Health { get; init; }
     /// <summary>Spells it casts for no pips; its extra casts are drawn from those of its current health.</summary>
     public required ImmutableArray<BossFreeSpell> FreeSpells { get; init; }
     public BossInterrupt? Interrupt { get; init; }
@@ -164,6 +166,8 @@ public sealed class BossCheats {
     public required string DungeonZone { get; init; }
     public required ImmutableArray<BossCheat> Bosses { get; init; }
     public required string SourceFile { get; init; }
+    /// <summary>The player-facing guide to the cheats (the guide block), or null when the file has none.</summary>
+    public BossCheatGuide? Guide { get; init; }
 
     internal FrozenDictionary<uint, BossCheat> _byTemplate { get; init; } = FrozenDictionary<uint, BossCheat>.Empty;
 
@@ -197,7 +201,7 @@ public sealed class BossCheats {
 public static class BossCheatsLoader {
 
     internal static readonly FrozenSet<string> s_rootKeys = FrozenSet.Create(StringComparer.Ordinal,
-        "kind", "version", "id", "title", "profiles", "license_tag", "provenance", "notes", "dungeon", "floors", "bosses");
+        "kind", "version", "id", "title", "profiles", "license_tag", "provenance", "notes", "dungeon", "floors", "bosses", "guide");
     internal static readonly FrozenSet<string> s_dungeonKeys = FrozenSet.Create(StringComparer.Ordinal,
         "name", "zone", "entry", "source", "source_date", "notes");
     internal static readonly FrozenSet<string> s_bossKeys = FrozenSet.Create(StringComparer.Ordinal,
@@ -285,11 +289,11 @@ public static class BossCheatsLoader {
             }
         }
 
+        var built = bosses.ToImmutable();
+        var guide = map.Find("guide") is { } guideEntry ? BossCheatGuideLoader.Read(guideEntry.Value, built, diagnostics) : null;
         if (diagnostics.HasErrors) {
             throw diagnostics.ToException();
         }
-
-        var built = bosses.ToImmutable();
 
         return new BossCheats {
             Id = id!,
@@ -297,6 +301,7 @@ public static class BossCheatsLoader {
             DungeonZone = dungeonZone!,
             Bosses = built,
             SourceFile = display,
+            Guide = guide,
             _byTemplate = built.ToFrozenDictionary(b => b.Template),
         };
     }
@@ -310,6 +315,7 @@ public static class BossCheatsLoader {
         var source = entry.Find("source") is { } s ? diagnostics.ReadString(s.Value, YamlTree.Join(keyPath, "source")) : null;
         var date = entry.Find("source_date") is { } d ? diagnostics.ReadDate(d.Value, YamlTree.Join(keyPath, "source_date"), false) : null;
         var casts = entry.Find("casts_per_round") is { } c ? diagnostics.ReadInt(c.Value, YamlTree.Join(keyPath, "casts_per_round"), 1, 3) : 1;
+        var health = entry.Find("health") is { } h ? diagnostics.ReadInt(h.Value, YamlTree.Join(keyPath, "health"), 1) : null;
 
         if (zone is not null && dungeonZone is not null
             && !zone.StartsWith(dungeonZone + "/", StringComparison.OrdinalIgnoreCase)) {
@@ -431,6 +437,7 @@ public static class BossCheatsLoader {
             Floor = floor.Value,
             Zone = zone,
             CastsPerRound = casts.Value,
+            Health = health,
             FreeSpells = freeSpells.ToImmutable(),
             Interrupt = interrupt,
             DestroyTraps = traps,

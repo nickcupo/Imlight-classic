@@ -105,6 +105,8 @@ internal partial class QuestService(SessionActor sessionActor) : MessageService(
                 _cachedQuestTemplates.Add(qTemplate);
             }
         }
+
+        SendTowerGuideAfterHeldQuests(); // CLASSIC: QuestService.TowerGuide.cs.
     }
 
     [MessageHandler(typeof(SERVICE_101_PROTOCOL.MSG_ATTACHCOMPLETE))]
@@ -125,6 +127,8 @@ internal partial class QuestService(SessionActor sessionActor) : MessageService(
 
         // Exiting the previous zone may have triggered waypoint goals for quests.
         CheckForWaypointGoalZoneExit(wizard);
+
+        RefreshTowerGuide(); // CLASSIC: QuestService.TowerGuide.cs.
     }
 
     [MessageHandler(typeof(CHARACTER_103_PROTOCOL.MSG_SENDQUESTOFFERCACHEOPTION))]
@@ -476,6 +480,8 @@ internal partial class QuestService(SessionActor sessionActor) : MessageService(
             zoneActor: ResultZoneActor(), // CLASSIC: ResSpawn and ResPostEvent need the wizard's zone.
             questName: questInstance.QuestName
         );
+
+        RefreshTowerGuide(); // CLASSIC: taking Lost Lieutenant unlocks Briskbreeze Tower (QuestService.TowerGuide.cs).
     }
 
     private void SendQuestResumeMessage(QuestTemplate qTemplate, QuestInstance qInstance) {
@@ -715,6 +721,8 @@ internal partial class QuestService(SessionActor sessionActor) : MessageService(
         foreach (var g in gTemplates) {
             StartGoal(questInstance, g);
         }
+
+        RefreshTowerGuide(); // CLASSIC: a goal's results may set the unlock entry (QuestService.TowerGuide.cs).
     }
 
     private void CompleteQuest(QuestInstance questInstance) {
@@ -766,6 +774,7 @@ internal partial class QuestService(SessionActor sessionActor) : MessageService(
         // Chain advance: completion stamps the "Complete" registry entry, which is the ReqHasEntry
         // prerequisite of the next quest in the dungeon's chain.
         TryGrantDungeonQuests(wizard);
+        RefreshTowerGuide(); // CLASSIC: QuestService.TowerGuide.cs.
     }
 
     private void SendGoalMessage(GoalTemplate gTemplate, QuestInstance qInstance, byte sendType = 0, bool forceSendDestZone = true) {
