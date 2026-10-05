@@ -172,13 +172,13 @@ internal static class Program {
             Environment.Exit(Imlight.Classic.Admin.PlayerDataSchema.RefusedExitCode);
         }
 
-        // CLASSIC (player data schema 3): ignores written before per-owner ignores become the first player's ignore of
-        // the second (BuddyRelationshipCollection.MigrateIgnoresToPerOwner, Classic/IgnoreRules.cs). Idempotent.
+        // CLASSIC (player data schema 3): ignores written before per-owner ignores get their owners
+        // (BuddyRelationshipCollection.MigrateIgnoresToPerOwner, Classic/IgnoreRules.cs). Idempotent.
         try {
             Imlight.CoreLib.WizardData.Collections.BuddyRelationshipCollection.MigrateIgnoresToPerOwner();
         }
         catch (Exception ex) {
-            Serilog.Log.Error(ex, "Ignore migration failed; old ignored rows are read as the first player's ignore until it runs.");
+            Serilog.Log.Error(ex, "Ignore migration failed; old ignored rows are read the same way in memory until it runs.");
         }
 
         var loginServer = StartLoginServer();

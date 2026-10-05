@@ -352,7 +352,8 @@ public static class BuddyRelationshipCollection {
 
     /// <summary>
     /// CLASSIC (player data schema 3): rewrites every ignored row written before per-owner ignores (Blocked without
-    /// BlockedBy) as the first player's ignore of the second, the way the old chat check read it. Idempotent; runs at
+    /// BlockedBy) with their owners (IgnoreRules.MigrateLegacy: a stranger's row is the first player's ignore, an ignored
+    /// friendship row an ignore both ways, since it does not say who ignored). Idempotent; runs at
     /// every start-up after the schema check. Returns the number of rows changed.
     /// </summary>
     public static int MigrateIgnoresToPerOwner() {

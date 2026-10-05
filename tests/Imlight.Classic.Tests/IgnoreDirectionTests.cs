@@ -22,7 +22,7 @@
  * PURPOSE:
  * Multiplayer audit item C: an ignore belongs to the wizard who made it. A ignoring B (on a shared friend row whose
  * first player is B) hides B from A; it no longer reads as B ignoring A. Old rows (Blocked, no BlockedBy) migrate as
- * the first player's ignore of the second.
+ * the first player's ignore (a stranger's row) or both ways (a friendship row, which does not say who ignored).
  *
  * Created by: Nick with Claude Code (claude-opus-5-5)
  * Version: KALI 1.0
@@ -101,6 +101,20 @@ public sealed class IgnoreDirectionTests {
         Assert.False(IgnoreRules.Ignores(legacy, B, A));
 
         Assert.False(IgnoreRules.MigrateLegacy(legacy)); // idempotent
+    }
+
+    [Fact]
+    public void AnOldIgnoredFriendshipRowMigratesBothWays() {
+        // An old friend row (stamped when made) does not say who ignored: both ignores are kept, so the ignorer's is.
+        var legacy = JsonConvert.DeserializeObject<Relationship>(
+            $"{{\"RelationshipId\":7,\"FirstPlayerId\":{B},\"SecondPlayerId\":{A},\"Blocked\":true,\"IsBrokenUp\":false,\"RelationshipEpochInSeconds\":1791000000}}")!;
+
+        Assert.False(IgnoreRules.IsLegacyStrangerIgnore(legacy));
+        Assert.True(IgnoreRules.MigrateLegacy(legacy));
+        Assert.Equal([B, A], legacy.BlockedBy);
+        Assert.True(IgnoreRules.Ignores(legacy, A, B));
+        Assert.True(IgnoreRules.Ignores(legacy, B, A));
+        Assert.False(IgnoreRules.MigrateLegacy(legacy));
     }
 
     [Fact]

@@ -28,8 +28,12 @@
  *
  *   Before player data schema 3 the row had only Blocked: chat read it as "FirstPlayerId ignores SecondPlayerId", the
  *   ignore list as "either way", and the first player of a friendship row is whoever first asked. So A ignoring a
- *   friend B could drop A's whispers to B and put A on B's list. MigrateLegacy reads an old row the way its writer
- *   meant it: Ignore() always put the ignoring wizard first on a row it created, and chat already read it that way.
+ *   friend B could drop A's whispers to B and put A on B's list. MigrateLegacy reads an old row as well as it can:
+ *     - a row Ignore() created for two wizards who had none (a stranger) has no epoch (it was built with the empty
+ *       constructor) and the ignoring wizard first: it becomes the first player's ignore;
+ *     - an ignored friendship row does not say who ignored (its order is who asked first): it becomes an ignore both
+ *       ways. That keeps the ignorer's ignore whichever it was; the other wizard may find the ignorer on their own
+ *       ignore list (as before, after a relog) and can drop it there. Each migrated row is logged.
  *
  * Created by: Nick with Claude Code (claude-opus-5-5)
  * Version: KALI 1.0
@@ -87,8 +91,16 @@ internal static class IgnoreRules {
     }
 
     /// <summary>
-    /// Brings a row written before schema 3 up to date: a Blocked row without BlockedBy is the first player's ignore of
-    /// the second. Also drops ids that are not on the row and repairs Blocked. True when the row changed.
+    /// True for a row the old Ignore() created between two wizards with no row yet: the ignoring wizard is first, and
+    /// it has no epoch (every friendship row is stamped when it is made).
+    /// </summary>
+    internal static bool IsLegacyStrangerIgnore(Relationship relationship)
+        => relationship.RelationshipEpochInSeconds == 0 && relationship.IsBrokenUp;
+
+    /// <summary>
+    /// Brings a row written before schema 3 up to date: a Blocked row without BlockedBy becomes the first player's
+    /// ignore of the second when the old Ignore() made it for a stranger, and an ignore both ways otherwise (see the
+    /// file header). Also drops ids that are not on the row and repairs Blocked. True when the row changed.
     /// </summary>
     internal static bool MigrateLegacy(Relationship relationship) {
         var changed = false;
@@ -99,6 +111,10 @@ internal static class IgnoreRules {
 
         if (relationship.Blocked && relationship.BlockedBy.Count == 0) {
             relationship.BlockedBy.Add(relationship.FirstPlayerId);
+            if (!IsLegacyStrangerIgnore(relationship)) {
+                relationship.BlockedBy.Add(relationship.SecondPlayerId); // who ignored is unknown: keep it both ways
+            }
+
             changed = true;
         }
 
