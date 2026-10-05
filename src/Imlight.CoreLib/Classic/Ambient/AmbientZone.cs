@@ -74,7 +74,7 @@ namespace Imlight.CoreLib.Classic.Ambient;
 
 /// <summary>A real player's duel in a zone, as ambient wizards hear of it (from CombatDuelComponent).</summary>
 internal sealed record AmbientDuelNotice(ulong SigilId, Vector3 Location, ulong[] PlayerCharIds, int FreePlayerSlots,
-                                         bool Active, bool Pvp);
+                                         bool Active, bool Pvp, DuelOdds? Odds = null);
 
 /// <summary>Drives one zone's ambient wizards (see the file header).</summary>
 internal sealed partial class AmbientZone : ReceiveActor, IWithTimers {
@@ -99,7 +99,6 @@ internal sealed partial class AmbientZone : ReceiveActor, IWithTimers {
     private static readonly TimeSpan StreamInterval = TimeSpan.FromMilliseconds(100);
     private const float Arrive = 30f;
     private const float Neighbourhood = 2600f;   // how far a wizard walks in one go
-    private const float HelpRange = 9000f;       // how far away a duel draws an offer (about 15 s at a run)
 
     private readonly string _zone;
     private readonly IActorRef _server;
@@ -142,6 +141,8 @@ internal sealed partial class AmbientZone : ReceiveActor, IWithTimers {
         Receive<AmbientInbox>(OnInbox);
         Receive<AmbientDuelNotice>(OnDuelNotice);
         Receive<FriendAccepted>(OnFriendAccepted);
+        ReceiveManners(); // CLASSIC (2026-10-04): AmbientZone.Manners.cs
+        ReceiveDungeons(); // CLASSIC (2026-10-04): AmbientZone.Dungeons.cs
         Receive<NavReady>(ready => {
             _nav = ready.Grid;
             _spots = null; // re-made on the grid
@@ -182,6 +183,7 @@ internal sealed partial class AmbientZone : ReceiveActor, IWithTimers {
             i++;
         }
 
+        StartManners();
         Timers.StartPeriodicTimer("tick", new Tick(), TimeSpan.FromSeconds(TickSeconds));
         Timers.StartPeriodicTimer("stream", new Stream(), StreamInterval);
         StartPavilionAndBazaar(); // CLASSIC (2026-10-04)
@@ -237,6 +239,10 @@ internal sealed partial class AmbientZone : ReceiveActor, IWithTimers {
         var distance = 60 + _rng.NextDouble() * 180;
         wizard.Position = new Vector3(rsp.Location.X + (float) (Math.Cos(angle) * distance),
             rsp.Location.Y + (float) (Math.Sin(angle) * distance), rsp.Location.Z);
+        if (_returnAt.Remove(wizard, out var back)) {
+            wizard.Position = back; // CLASSIC (2026-10-04): back from a dungeon, at its sigil (AmbientZone.Dungeons.cs)
+        }
+
         if (_nav?.Snap(Num(wizard.Position)) is { } ground) {
             wizard.Position = new Vector3(ground.X, ground.Y, ground.Z); // on open floor, not in a wall or the air
         }
@@ -390,8 +396,12 @@ internal sealed partial class AmbientZone : ReceiveActor, IWithTimers {
             _audience = [.. OnlinePlayerCollection.GetPlayersInZone(_zone).Select(p => p.CharacterId).Where(id => !AmbientWizards.IsAmbientChar(id))];
             _realPlayers = _audience.Length;
             foreach (var wizard in _wizards) {
-                wizard.Offers.Expire(now);
+                foreach (var lapsed in wizard.Offers.TakeLapsed(now)) {
+                    _helpMemory.Ignored(lapsed, now); // CLASSIC (2026-10-04): an unanswered offer quiets the zone too
+                }
             }
+
+            CheckLongDuels(now);
 
             foreach (var notice in _duels.Values.ToList()) {
                 TryOffer(notice);
@@ -629,6 +639,10 @@ internal sealed partial class AmbientZone : ReceiveActor, IWithTimers {
 
     private void Arrived(AmbientWizard wizard) {
         var now = DateTime.UtcNow;
+        if (ArrivedWithPurpose(wizard, now)) {
+            return; // CLASSIC (2026-10-04): walked over to ask about a duel, or to a dungeon sigil
+        }
+
         switch (wizard.Activity) {
             case AmbientActivity.Helping:
                 // At the circle: walk in (the duel takes it only with the player's yes and a free slot).
@@ -668,6 +682,10 @@ internal sealed partial class AmbientZone : ReceiveActor, IWithTimers {
             return;
         }
 
+        if (MoveOnAfterDuel(wizard, now)) {
+            return; // CLASSIC (2026-10-04): after a duel it walks on, never stands where the duel was
+        }
+
         var roll = _rng.NextDouble();
         if (AmbientWizards.Settings.StreetFights && _mobNodes is { Count: > 0 } && roll < 0.35
             && !_wizards.Any(w => w != wizard && w.DuelSigil == ulong.MaxValue)
@@ -687,21 +705,12 @@ internal sealed partial class AmbientZone : ReceiveActor, IWithTimers {
             }
         }
 
-        if (_spots is { Count: > 0 } && roll < 0.85) {
-            var npcs = _spots.Where(s => s.Npc && Distance(s.At, wizard.Position) < Neighbourhood).ToList();
-            var pool = npcs.Count > 0 && roll < 0.65 ? npcs : _spots.Where(s => Distance(s.At, wizard.Position) < Neighbourhood).ToList();
-            if (pool.Count > 0) {
-                var spot = pool[_rng.Next(pool.Count)];
-                if (WalkTo(wizard, spot.At, spot.Npc ? AmbientActivity.Shopping : AmbientActivity.Walking)) {
-                    wizard.ArriveYaw = spot.Npc ? spot.FaceYaw : null; // turn to the NPC on arrival
-                    return;
-                }
-            }
+        if (_spots is { Count: > 0 } && roll < 0.85 && WalkToSpot(wizard, roll)) {
+            return; // CLASSIC (2026-10-04): off doorways, not on another wizard (AmbientZone.Manners.cs)
         }
 
         // Stay a while, turning now and then.
-        wizard.Activity = AmbientActivity.Idle;
-        wizard.Until = now.AddSeconds(5 + _rng.Next(20));
+        StandAWhile(wizard, now);
     }
 
     private bool Follow(AmbientWizard wizard, DateTime now) {
@@ -962,8 +971,8 @@ internal sealed partial class AmbientZone : ReceiveActor, IWithTimers {
         }
 
         wizard.Activity = AmbientActivity.Idle;
-        wizard.Until = DateTime.UtcNow.AddSeconds(6 + _rng.Next(10));
         StartGrace(wizard, DateTime.UtcNow); // CLASSIC: translucent on the duel spot, as a player is
+        LingerAfterDuel(wizard); // CLASSIC (2026-10-04): a few seconds, then it walks on (AmbientZone.Manners.cs)
     }
 
     private void Sparring(AmbientWizard wizard, ulong sigil) {
@@ -985,6 +994,7 @@ internal sealed partial class AmbientZone : ReceiveActor, IWithTimers {
         if (!notice.Active) {
             _duels.Remove(notice.SigilId);
             _offeredDuels.Remove(notice.SigilId);
+            DuelClosed(notice.SigilId); // CLASSIC (2026-10-04)
             return;
         }
 
@@ -992,53 +1002,6 @@ internal sealed partial class AmbientZone : ReceiveActor, IWithTimers {
         Logger.Debug("Ambient wizards in {Zone}: duel {Sigil} with {Players} player(s), {Free} free slot(s).",
             Logger.Args(_zone, notice.SigilId, notice.PlayerCharIds.Length, notice.FreePlayerSlots));
         TryOffer(notice);
-    }
-
-    /// <summary>
-    /// One ambient wizard nearby (a friend of a player in it first) asks a player of this duel whether they want help.
-    /// Called when the duel is announced and every few seconds while it runs and nobody has asked yet.
-    /// </summary>
-    private void TryOffer(AmbientDuelNotice notice) {
-        // No chat, no offer: an ambient wizard never joins a real player's duel without asking first.
-        if (!AmbientWizards.Settings.Battles || !AmbientWizards.Settings.Chat || notice.Pvp || notice.FreePlayerSlots <= 0 || notice.PlayerCharIds.Length == 0
-            || _offeredDuels.Contains(notice.SigilId)) {
-            return;
-        }
-
-        var now = DateTime.UtcNow;
-        var player = notice.PlayerCharIds[0];
-        var friendOfSomeone = _wizards.FirstOrDefault(w => w.Present && w.Activity is not (AmbientActivity.Fighting
-                or AmbientActivity.Sparring or AmbientActivity.Away or AmbientActivity.Helping)
-            && notice.PlayerCharIds.Any(p => w.FriendOf(p) is not null) && Distance(w.Position, notice.Location) < HelpRange * 2);
-        var helper = friendOfSomeone ?? _wizards.Where(w => w.Present && w.Activity is AmbientActivity.Idle or AmbientActivity.Walking
-                                                            or AmbientActivity.Shopping or AmbientActivity.Following
-                                                        && Distance(w.Position, notice.Location) < HelpRange)
-            .OrderBy(w => Distance(w.Position, notice.Location)).FirstOrDefault();
-        if (helper is null) {
-            {
-                Logger.Debug("Ambient wizards in {Zone}: none free near duel {Sigil}: {Who}", Logger.Args(_zone, notice.SigilId,
-                    string.Join("; ", _wizards.Select(w => $"{w.Name} {w.Activity} {(int) Distance(w.Position, notice.Location)}"))));
-            }
-
-            return;
-        }
-
-        if (friendOfSomeone is not null) {
-            player = notice.PlayerCharIds.First(p => helper.FriendOf(p) is not null);
-        }
-
-        if (!helper.Offers.MayOffer(player, now) || !helper.Limiter.TryTake(now)) {
-            return;
-        }
-
-        _offeredDuels.Add(notice.SigilId);
-        Logger.Debug("Ambient wizard {Name} offers help in duel {Sigil}.", Logger.Args(helper.Name, notice.SigilId));
-        helper.Offers.Offered(player, notice.SigilId, now);
-        var facts = AmbientKnowledge.Facts(player);
-        var line = AmbientChatBrain.HelpOffer(ChatFor(helper, player, facts), helper.Turn++);
-        if (helper.FriendOf(player) is null || !AmbientChat.Whisper(helper, player, line)) {
-            AmbientChat.Say(helper, line);
-        }
     }
 
     private void JoinWithYes(AmbientWizard wizard, HelpAnswer answer, ulong player, string line) {
@@ -1051,11 +1014,17 @@ internal sealed partial class AmbientZone : ReceiveActor, IWithTimers {
         Say(wizard, player, line);
         AmbientWizards.PermitJoin(wizard.Endpoint, notice.SigilId);
         wizard.DuelSigil = notice.SigilId;
-        if (!WalkTo(wizard, notice.Location, AmbientActivity.Helping)) {
-            wizard.Activity = AmbientActivity.Helping; // no walk there: it waits, and the yes lapses after the wait
-            Halt(wizard);
-        }
+        // CLASSIC (2026-10-04): it answers, then sets off a moment later (a person reads the yes, types, then runs).
+        wizard.Activity = AmbientActivity.Helping;
+        Halt(wizard);
         wizard.Until = DateTime.UtcNow.AddSeconds(25);
+        var sigil = notice.SigilId;
+        Timers.StartSingleTimer($"join-{wizard.CharId}", new Later(wizard, w => {
+            if (w.Activity == AmbientActivity.Helping && w.DuelSigil == sigil && _duels.TryGetValue(sigil, out var duel)
+                && !WalkTo(w, duel.Location, AmbientActivity.Helping)) {
+                w.Activity = AmbientActivity.Helping; // no walk there: it waits, and the yes lapses after the wait
+            }
+        }), TimeSpan.FromMilliseconds(700 + _rng.Next(900)));
     }
 
     // ---- chat -----------------------------------------------------------------------------------
@@ -1082,6 +1051,10 @@ internal sealed partial class AmbientZone : ReceiveActor, IWithTimers {
     private void Heard(AmbientWizard wizard, ulong sourceGid, byte[] sourceName, string text, bool whisper, bool menuChat = false) {
         if (!Wizard.TryGetCharacterId(sourceGid, out var speaker) || AmbientWizards.IsAmbientChar(speaker) || !wizard.Present) {
             return;
+        }
+
+        if (!whisper && !CanHear(wizard, sourceGid)) {
+            return; // CLASSIC (2026-10-04): open chat from across the zone is not talk to it
         }
 
         var now = DateTime.UtcNow;
@@ -1126,6 +1099,10 @@ internal sealed partial class AmbientZone : ReceiveActor, IWithTimers {
 
         var now = DateTime.UtcNow;
         var persona = ChatPersona.For(wizard.Identity);
+        if (SigilAnswer(wizard, speaker, text, now)) {
+            return; // CLASSIC (2026-10-04): a no to a dungeon helper on the sigil (AmbientZone.Dungeons.cs)
+        }
+
         var answer = wizard.Offers.Hear(speaker, text, now);
         if (answer.Kind == HelpAnswerKind.Yes) {
             var line = ChatStyle.Apply(AmbientChatBrain.HelpAnswered(true, wizard.Turn++, ChatFor(wizard, speaker)), persona, _rng,
@@ -1135,6 +1112,7 @@ internal sealed partial class AmbientZone : ReceiveActor, IWithTimers {
         }
 
         if (answer.Kind == HelpAnswerKind.No) {
+            _helpMemory.SaidNo(speaker, now); // CLASSIC (2026-10-04): no wizard here asks again for a while
             var line = ChatStyle.Apply(AmbientChatBrain.HelpAnswered(false, wizard.Turn++, ChatFor(wizard, speaker)), persona, _rng,
                 ChatWordFilter.Current);
             Answer(wizard, "no", text, line, w => Say(w, speaker, line));
@@ -1256,8 +1234,16 @@ internal sealed partial class AmbientZone : ReceiveActor, IWithTimers {
         if (AmbientWizards.Settings.Chat && wizard.Limiter.TryTake(DateTime.UtcNow, arrival.CharId)) {
             var facts = AmbientKnowledge.Facts(arrival.CharId);
             if (AmbientChatBrain.GreetFriend(ChatFor(wizard, arrival.CharId, facts), wizard.Turn++) is { } line) {
-                Timers.StartSingleTimer($"greet-{wizard.CharId}-{arrival.CharId}", new Later(wizard, w => AmbientChat.Say(w, line)),
-                    TimeSpan.FromSeconds(5 + _rng.Next(5)));
+                // CLASSIC (2026-10-04): out loud only when the friend is close enough to hear it; else a whisper.
+                var near = Distance(arrival.Location, wizard.Position) <= HelpManners.HearingDistance;
+                Timers.StartSingleTimer($"greet-{wizard.CharId}-{arrival.CharId}", new Later(wizard, w => {
+                    if (near) {
+                        AmbientChat.Say(w, line);
+                    }
+                    else {
+                        AmbientChat.Whisper(w, arrival.CharId, line);
+                    }
+                }), TimeSpan.FromSeconds(5 + _rng.Next(5)));
             }
         }
 

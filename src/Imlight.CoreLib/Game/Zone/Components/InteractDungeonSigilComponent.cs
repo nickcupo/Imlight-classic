@@ -160,7 +160,8 @@ internal sealed partial class InteractDungeonSigilComponent(ZoneEntity entity)
         SigilTicket ticket = null;
         if (ClassicRuntime.IsActive && playerCharacter is not null) {
             var now = DateTime.UtcNow;
-            ticket = _group?.Join(playerCharacter.CharId, now);
+            // CLASSIC (2026-10-04): a real player at a full group takes an ambient wizard's place (it steps off).
+            ticket = _group?.Join(playerCharacter.CharId, now, Classic.Ambient.AmbientWizards.IsAmbient(playerActor));
             if (ticket is null) {
                 if (_group is not null && _group.IsOpen(now)) {
                     return; // every slot is taken
@@ -172,6 +173,13 @@ internal sealed partial class InteractDungeonSigilComponent(ZoneEntity entity)
 
             Logger.Information("Dungeon sigil -> '{0}': {1} is wizard {2} of sigil run {3} ({4:0.0} s left).",
                 Logger.Args(sigil.DestinationZone, playerCharacter.CharId, ticket.Slot + 1, ticket.RunId, ticket.SecondsLeft));
+
+            // CLASSIC (2026-10-04): ambient wizards nearby may come over and step on too (AmbientZone.Dungeons).
+            if (!Classic.Ambient.AmbientWizards.IsAmbient(playerActor)) {
+                Classic.Ambient.AmbientDungeons.NotifySigil(Entity.ZoneRef, new Classic.Ambient.AmbientSigilNotice(_group, pad,
+                    heading, (ulong) obj.m_globalID, SigilInfo.m_sigilType.ToString() ?? "", sigil.DestinationZone,
+                    sigil.DestinationLoc, playerCharacter.CharId, playerCharacter.MagicSchoolBehavior?.Level ?? 1));
+            }
         }
 
         // Hand off to the player's session, which owns dismount + snap + countdown + transfer. The pad

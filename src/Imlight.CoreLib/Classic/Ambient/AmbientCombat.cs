@@ -175,32 +175,28 @@ internal static class AmbientCombat {
     }
 
     /// <summary>
-    /// A 2009 deck for the school and level: the school's trained spells up to the level (classic spell records),
-    /// two copies of each (four of the cheapest damage spell), plus the Life heal everyone could learn (Fairy) at 14+.
+    /// A 2009 deck for the school and level: the school's trained spells up to the level (classic spell records), plus
+    /// the Life heal everyone could learn (Fairy) at 14+, composed like a player's deck by AmbientDeckPlanner
+    /// (CLASSIC 2026-10-04: was two copies of every trained spell, so a level 30 drew its first bolt as often as its best
+    /// hit).
     /// </summary>
     internal static List<SpellData> DeckFor(MagicSchool school, int level) {
         var schoolName = school.ToString().ToLowerInvariant();
-        var records = ClassicSpellTemplates.Records
+        var known = ClassicSpellTemplates.Records
             .Where(r => r.Kind == "trained" && r.ClientTemplate is not null
-                        && string.Equals(r.School, schoolName, StringComparison.OrdinalIgnoreCase))
-            .Select(r => (Record: r, Level: r.Values.LevelLearned ?? 99))
-            .Where(r => r.Level <= level)
-            .OrderBy(r => r.Level)
+                        && string.Equals(r.School, schoolName, StringComparison.OrdinalIgnoreCase)
+                        && (r.Values.LevelLearned ?? 99) <= level)
             .ToList();
-
-        var deck = new List<SpellData>();
-        foreach (var (record, _) in records) {
-            if (CoreObjectFactory.TryGetTemplateIdByPath(record.ClientTemplate) is not { } id) {
-                continue;
-            }
-
-            deck.Add(new SpellData { m_templateID = (uint) id, m_quantity = (uint) (deck.Count == 0 ? 4 : 2) });
+        if (level >= 14 && school != MagicSchool.Life
+            && ClassicSpellTemplates.Records.FirstOrDefault(r => r.Name == "Fairy") is { ClientTemplate: not null } fairy) {
+            known.Add(fairy);
         }
 
-        if (level >= 14 && school != MagicSchool.Life
-            && ClassicSpellTemplates.Records.FirstOrDefault(r => r.Name == "Fairy") is { ClientTemplate: { } fairy }
-            && CoreObjectFactory.TryGetTemplateIdByPath(fairy) is { } fairyId) {
-            deck.Add(new SpellData { m_templateID = (uint) fairyId, m_quantity = 2 });
+        var deck = new List<SpellData>();
+        foreach (var (record, copies) in AmbientDeckPlanner.Plan(known, schoolName, level)) {
+            if (CoreObjectFactory.TryGetTemplateIdByPath(record.ClientTemplate) is { } id) {
+                deck.Add(new SpellData { m_templateID = (uint) id, m_quantity = (uint) copies });
+            }
         }
 
         return deck;
@@ -237,7 +233,8 @@ public static class AmbientSparring {
         actor = null;
         playerObject = null;
         if (!AmbientWizards.TryGet(ambientCharId, out var wizard) || !wizard.Present || wizard.Endpoint is null
-            || wizard.Activity is AmbientActivity.Fighting or AmbientActivity.Sparring or AmbientActivity.Helping) {
+            || wizard.Activity is AmbientActivity.Fighting or AmbientActivity.Sparring or AmbientActivity.Helping
+                or AmbientActivity.Dungeon or AmbientActivity.Away) {
             return false;
         }
 

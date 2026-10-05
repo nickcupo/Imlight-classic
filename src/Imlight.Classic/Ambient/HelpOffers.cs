@@ -71,6 +71,7 @@ public sealed class HelpOffers {
 
     private readonly Dictionary<ulong, (ulong DuelId, DateTime At)> _open = [];
     private readonly Dictionary<ulong, DateTime> _quietUntil = [];
+    private readonly List<ulong> _lapsed = [];
 
     /// <summary>True when the wizard may ask this player now: nothing open and no cool-down.</summary>
     public bool MayOffer(ulong player, DateTime now) {
@@ -112,7 +113,23 @@ public sealed class HelpOffers {
         foreach (var (player, offer) in _open.Where(kv => now - kv.Value.At > AnswerWindow).ToList()) {
             _open.Remove(player);
             _quietUntil[player] = offer.At + AnswerWindow + Cooldown;
+            _lapsed.Add(player);
         }
+    }
+
+    /// <summary>
+    /// CLASSIC (2026-10-04): the players whose offers lapsed unanswered since the last call (the zone then leaves them
+    /// alone for a while, HelpManners).
+    /// </summary>
+    public IReadOnlyList<ulong> TakeLapsed(DateTime now) {
+        Expire(now);
+        if (_lapsed.Count == 0) {
+            return [];
+        }
+
+        var lapsed = _lapsed.ToArray();
+        _lapsed.Clear();
+        return lapsed;
     }
 
     /// <summary>Yes, no or neither, from a chat line (case, punctuation and a trailing "!" or "?" ignored).</summary>

@@ -106,6 +106,37 @@ internal static class AmbientNav {
 
     /// <summary>The grid for a parsed collision file.</summary>
     internal static NavGrid Build(Bcd bcd) {
+        var (floor, obstacles) = Shapes(bcd);
+        return NavGrid.Build(floor, obstacles);
+    }
+
+    /// <summary>
+    /// CLASSIC (2026-10-04): the zone's lines of sight (SightGrid) from the same collision file, built once per zone off
+    /// the actor thread; null without collision data. Help offers and dungeon recruiting ask it.
+    /// </summary>
+    internal static Task<SightGrid> SightFor(string zone)
+        => s_sight.GetOrAdd(zone, z => new Lazy<Task<SightGrid>>(() => Task.Run(() => LoadSight(z)))).Value;
+
+    private static readonly ConcurrentDictionary<string, Lazy<Task<SightGrid>>> s_sight = new(StringComparer.OrdinalIgnoreCase);
+
+    private static SightGrid LoadSight(string zone) {
+        try {
+            if (!ResourceManager.TryLoadArchive(zone, out var wad) || wad.OpenFile(CollisionFile) is not { } bytes) {
+                return null;
+            }
+
+            using var stream = new MemoryStream(bytes.ToArray(), writable: false);
+            var (floor, obstacles) = Shapes(Bcd.Parse(stream));
+            return SightGrid.Build(floor, obstacles);
+        }
+        catch (Exception e) {
+            Logger.Warning("Ambient wizards in {Zone}: no sight lines ({Error}).", Logger.Args(zone, e.Message));
+            return null;
+        }
+    }
+
+    /// <summary>The floor triangles (Walkable, not water) and solid shapes (Object primitives) of a collision file.</summary>
+    internal static (List<NavTriangle> Floor, List<NavObstacle> Obstacles) Shapes(Bcd bcd) {
         var floor = new List<NavTriangle>();
         var obstacles = new List<NavObstacle>();
         foreach (var c in bcd.Collisions) {
@@ -141,7 +172,7 @@ internal static class AmbientNav {
             }
         }
 
-        return NavGrid.Build(floor, obstacles);
+        return (floor, obstacles);
     }
 
     private static NumVector3 Transform(float[,] r, NumVector3 v)

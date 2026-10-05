@@ -78,6 +78,11 @@ internal sealed class AmbientDirector : ReceiveActor {
             Setting("Classic.AmbientWizardBattles"), Setting("Classic.AmbientWizardStreetFights"),
             Setting("Classic.AmbientWizardHatching"), Setting("Classic.AmbientWizardBazaar")); // CLASSIC (2026-10-04)
         AmbientWizards.Settings = settings;
+        // CLASSIC (2026-10-04): grouping for dungeons (AmbientZone.Dungeons); needs chat (a helper asks, a player may say no).
+        AmbientDungeons.Settings = settings.Enabled && settings.Chat
+            ? DungeonSettings.Parse(Setting("Classic.AmbientWizardDungeons"), Setting("Classic.AmbientWizardDungeonChance"),
+                Setting("Classic.AmbientWizardDungeonHelpers"))
+            : DungeonSettings.Off;
         if (!settings.Enabled) {
             Logger.Information("Ambient wizards are off ([Classic] AmbientWizards).");
             return;

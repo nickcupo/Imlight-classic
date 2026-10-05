@@ -62,8 +62,9 @@ using Imlight.CoreLib.WizardData.Models.Player;
 namespace Imlight.CoreLib.Classic.Ambient;
 
 /// <summary>What an ambient wizard is doing.</summary>
-// CLASSIC (2026-10-04): Hatching = on a Pet Pavilion hatching spot with a player (AmbientHatching).
-internal enum AmbientActivity { Arriving, Idle, Walking, Shopping, Following, Helping, Fighting, Sparring, Away, Hatching }
+// CLASSIC (2026-10-04): Hatching = on a Pet Pavilion hatching spot with a player (AmbientHatching); Dungeon = in a dungeon
+// run with a player (AmbientDungeonParty).
+internal enum AmbientActivity { Arriving, Idle, Walking, Shopping, Following, Helping, Fighting, Sparring, Away, Hatching, Dungeon }
 
 /// <summary>
 /// One ambient wizard: its stored record, its Wizard (never saved), its endpoint actor and its live state. Only its
@@ -86,6 +87,12 @@ internal sealed class AmbientWizard {
 
     /// <summary>CLASSIC (2026-10-04): the AmbientZone actor that drives this wizard (hatch news goes there).</summary>
     public IActorRef Group { get; set; }
+
+    /// <summary>
+    /// CLASSIC (2026-10-04): the actor driving the wizard when it is not its home AmbientZone (a dungeon party), or null.
+    /// The endpoint passes the wizard's messages there.
+    /// </summary>
+    public IActorRef Driver { get; set; }
 
     // Live state, owned by the AmbientZone actor.
     public string Zone { get; set; }
@@ -142,6 +149,19 @@ internal static class AmbientWizards {
 
     /// <summary>The AmbientZone actor driving the ambient wizards of a zone actor.</summary>
     internal static void SetGroup(IActorRef zone, IActorRef group) => s_groups[zone] = group;
+
+    /// <summary>CLASSIC (2026-10-04): the actor driving ambient wizards in <paramref name="zone"/>, if any.</summary>
+    internal static bool TryGetGroup(IActorRef zone, out IActorRef group) {
+        group = null;
+        return zone is not null && !s_groups.IsEmpty && s_groups.TryGetValue(zone, out group);
+    }
+
+    /// <summary>CLASSIC (2026-10-04): <paramref name="group"/> no longer drives anyone in <paramref name="zone"/>.</summary>
+    internal static void ClearGroup(IActorRef zone, IActorRef group) {
+        if (zone is not null) {
+            s_groups.TryRemove(new System.Collections.Generic.KeyValuePair<IActorRef, IActorRef>(zone, group));
+        }
+    }
 
     /// <summary>
     /// A duel in <paramref name="zone"/> started, changed or ended: its zone's ambient wizards may offer help. Free when

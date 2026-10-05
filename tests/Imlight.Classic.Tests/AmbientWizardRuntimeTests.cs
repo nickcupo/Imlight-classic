@@ -39,6 +39,7 @@ using System.Threading.Tasks;
 using Akka.Actor;
 using Imcodec.Math;
 using Imlight.Classic.Ambient;
+using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.Classic.Ambient;
 using Imlight.CoreLib.Shared.Packets;
 using Imlight.CoreLib.WizardData.Models.Player;
@@ -135,6 +136,60 @@ public sealed class AmbientWizardRuntimeTests {
             TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         Assert.Same(ambient.Wizard, answer.Wizard);
+    }
+
+    private sealed class Probe : ReceiveActor {
+        public Probe(TaskCompletionSource<object> got) => ReceiveAny(m => got.TrySetResult(m));
+    }
+
+    [Fact]
+    public async Task InADungeonTheEndpointPassesMessagesToItsParty() {
+        using var system = ActorSystem.Create("ambient-driver", "akka.actor.provider = local");
+        var home = new TaskCompletionSource<object>();
+        var party = new TaskCompletionSource<object>();
+        var ambient = new AmbientWizard(Record(6, 0xA3B1E00000000105), new Wizard { CharId = 0xA3B1E00000000105 });
+        var endpoint = system.ActorOf(AmbientEndpoint.Props(ambient, system.ActorOf(Props.Create(() => new Probe(home)))));
+
+        ambient.Driver = system.ActorOf(Props.Create(() => new Probe(party)));
+        endpoint.Tell(new COMBAT_106_PROTOCOL.MSG_COMBATWIN());
+        var inbox = Assert.IsType<AmbientInbox>(await party.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken));
+        Assert.IsType<COMBAT_106_PROTOCOL.MSG_COMBATWIN>(inbox.Message);
+        Assert.False(home.Task.IsCompleted);
+
+        ambient.Driver = null; // back in its street
+        endpoint.Tell(new COMBAT_106_PROTOCOL.MSG_COMBATWIN());
+        Assert.IsType<AmbientInbox>(await home.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken));
+    }
+
+    [Theory]
+    [InlineData("no", true)]
+    [InlineData("no thanks", true)]
+    [InlineData("i want to solo it", true)]
+    [InlineData("pls leave", true)]
+    [InlineData("go away", true)]
+    [InlineData("sure come", false)]
+    [InlineData("lets go", false)]
+    [InlineData("", false)]
+    public void APlayerCanTellDungeonHelpersNo(string text, bool no) => Assert.Equal(no, AmbientZone.SaysNoToHelpers(text));
+
+    [Fact]
+    public void DungeonCapacityMatchesTheInstanceRules() {
+        Assert.Equal(1, GroupInstances.Capacity(1));
+        Assert.Equal(DungeonManners.Capacity(1), GroupInstances.Capacity(1));
+        Assert.Equal(DungeonManners.Capacity(0), GroupInstances.Capacity(0));
+        Assert.Equal(DungeonManners.Capacity(3), GroupInstances.Capacity(3));
+        Assert.Equal(0, DungeonManners.OpenHelperSlots(1, 0, 1, 3));
+    }
+
+    [Fact]
+    public void APlayerWhoSaidNoGetsNoDungeonHelpersForHalfAnHour() {
+        AmbientDungeons.ClearForTests();
+        var now = new DateTime(2026, 10, 4, 0, 0, 0, DateTimeKind.Utc);
+        Assert.False(AmbientDungeons.WantsNoHelpers(42, now));
+        AmbientDungeons.SaidNo(42, now);
+        Assert.True(AmbientDungeons.WantsNoHelpers(42, now.AddMinutes(29)));
+        Assert.False(AmbientDungeons.WantsNoHelpers(42, now.AddMinutes(31)));
+        Assert.False(AmbientDungeons.WantsNoHelpers(43, now));
     }
 
     [Theory]

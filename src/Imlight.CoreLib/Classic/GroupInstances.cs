@@ -73,10 +73,17 @@ public sealed record SigilTicket(ulong RunId, int Slot, double SecondsLeft, bool
 /// <summary>
 /// CLASSIC: the wizards gathering on one dungeon sigil during its countdown. The first starts the countdown; the
 /// others (up to <see cref="GroupInstances.MaxGroupSize"/> in all) join it and enter the same instance when it ends.
+/// CLASSIC (2026-10-04): ambient wizards may join too (Classic/Ambient: AmbientZone.Dungeons), but a real player always
+/// takes an ambient wizard's place when the group is full, and an ambient wizard can step off again. The zone actor
+/// and the ambient wizards' actors both use a group, so it locks.
 /// </summary>
 public sealed class SigilGroup {
 
+    private readonly object _lock = new();
     private readonly List<ulong> _members = [];
+    private readonly Dictionary<ulong, int> _slots = [];
+    private readonly HashSet<ulong> _ambient = [];
+    private ulong _starter;
 
     public SigilGroup(ulong runId, DateTime startedUtc, double countdownSeconds) {
         RunId = runId;
@@ -88,31 +95,105 @@ public sealed class SigilGroup {
     public DateTime StartedUtc { get; }
     public double CountdownSeconds { get; }
     public DateTime EndsUtc => StartedUtc.AddSeconds(CountdownSeconds);
-    public IReadOnlyList<ulong> Members => _members;
+
+    /// <summary>The wizards on the sigil, in the order they stepped on.</summary>
+    public IReadOnlyList<ulong> Members {
+        get {
+            lock (_lock) {
+                return [.. _members];
+            }
+        }
+    }
+
+    /// <summary>Real players on the sigil.</summary>
+    public int RealCount {
+        get {
+            lock (_lock) {
+                return _members.Count(m => !_ambient.Contains(m));
+            }
+        }
+    }
+
+    /// <summary>Ambient wizards on the sigil.</summary>
+    public int AmbientCount {
+        get {
+            lock (_lock) {
+                return _ambient.Count;
+            }
+        }
+    }
+
+    /// <summary>True when <paramref name="charId"/> is on the sigil.</summary>
+    public bool IsMember(ulong charId) {
+        lock (_lock) {
+            return _slots.ContainsKey(charId);
+        }
+    }
 
     /// <summary>True while wizards may still join: the countdown has not reached zero.</summary>
     public bool IsOpen(DateTime nowUtc) => nowUtc < EndsUtc;
 
     /// <summary>
     /// Takes <paramref name="charId"/> into the group, or gives back its slot if it is already in; null when the
-    /// countdown is over or every slot is taken.
+    /// countdown is over or every slot is taken. A real player at a full group takes the slot of the ambient wizard
+    /// that joined last (<paramref name="bumped"/>); an ambient wizard never takes a real player's.
     /// </summary>
-    public SigilTicket? Join(ulong charId, DateTime nowUtc) {
+    public SigilTicket? Join(ulong charId, DateTime nowUtc, bool ambient = false) => Join(charId, nowUtc, ambient, out _);
+
+    /// <inheritdoc cref="Join(ulong, DateTime, bool)"/>
+    public SigilTicket? Join(ulong charId, DateTime nowUtc, bool ambient, out ulong bumped) {
+        bumped = 0;
         if (!IsOpen(nowUtc)) {
             return null;
         }
 
-        var slot = _members.IndexOf(charId);
-        if (slot < 0) {
-            if (_members.Count >= GroupInstances.MaxGroupSize) {
-                return null;
+        lock (_lock) {
+            if (!_slots.TryGetValue(charId, out var slot)) {
+                if (_members.Count >= GroupInstances.MaxGroupSize) {
+                    var last = ambient ? 0 : _members.LastOrDefault(m => _ambient.Contains(m));
+                    if (last == 0) {
+                        return null;
+                    }
+
+                    slot = _slots[last];
+                    RemoveLocked(last);
+                    bumped = last;
+                }
+                else {
+                    slot = Enumerable.Range(0, GroupInstances.MaxGroupSize).First(i => !_slots.ContainsValue(i));
+                }
+
+                _members.Add(charId);
+                _slots[charId] = slot;
+                if (ambient) {
+                    _ambient.Add(charId);
+                }
+
+                if (_starter == 0) {
+                    _starter = charId;
+                }
             }
 
-            _members.Add(charId);
-            slot = _members.Count - 1;
+            return new SigilTicket(RunId, slot, Math.Max(0.5, (EndsUtc - nowUtc).TotalSeconds), charId == _starter);
         }
+    }
 
-        return new SigilTicket(RunId, slot, Math.Max(0.5, (EndsUtc - nowUtc).TotalSeconds), slot == 0);
+    /// <summary>An ambient wizard steps off the sigil (a real player's place is kept until the countdown ends).</summary>
+    public bool Leave(ulong charId) {
+        lock (_lock) {
+            if (!_ambient.Contains(charId)) {
+                return false;
+            }
+
+            RemoveLocked(charId);
+            return true;
+        }
+    }
+
+    private void RemoveLocked(ulong charId) {
+        _members.Remove(charId);
+        _slots.Remove(charId);
+        _ambient.Remove(charId);
     }
 
 }
