@@ -52,19 +52,20 @@ using Imlight.CoreLib.Shared.Structures;
 using Imcodec.IO;
 using Imcodec.MessageLayer.Generated;
 using Imlight.CoreLib.WizardData.Collections;
+using Imlight.Classic.Net;
 
 namespace Imlight.CoreLib.Game;
 
 public class GameServer : Server {
 
-    private readonly string _sessionKeyHashInput = ConfigurationManager.Settings["Advanced.SessionKeyHashInput"].AsString();
-    private readonly ushort _sessionKeyValidityTime = ConfigurationManager.Settings["Game Server.SessionKeyValidityTime"].AsUShort();
+    // CLASSIC: random attach keys checked against the client's key (Imlight.Classic.Net.GameSessionKeys); the old
+    // SHA256(accountId || SessionKeyHashInput) key was public and never compared (B2/B3).
+    private static GameSessionKeys Keys => Auth.SecuritySettings.GameKeys.Value;
     private readonly ushort _playerLimit = ConfigurationManager.Settings["Game Server.GameServerPlayerLimit"].AsUShort();
 
     private readonly IActorRef _gameWorldRef;
     private readonly IActorRef _commandDispatcherRef;
     private readonly IActorRef _processSupervisorRef;
-    private readonly Cache<ByteString, ulong> _sessionKeys;
     private readonly ListQueue<SessionActor> _playerQueue;
     private readonly ConcurrentDictionary<string, FallbackEntry> _fallbackEntries = [];
 
@@ -72,8 +73,8 @@ public class GameServer : Server {
         : base(serverName, serverPort, GameServiceFactory.Props(),
               ConfigurationManager.Settings["Game Server.GameServerIP"].AsString()) {
         RealmName = realmName ?? serverName;
+        Refs[Self] = true; // CLASSIC: ControlService gives game-server connections a short accept wait
         this._playerQueue = new ListQueue<SessionActor>();
-        this._sessionKeys = new Cache<ByteString, ulong>();
         this.ActiveSessions.CollectionChanged += ActiveSessionsChangedEvent;
 
         // Create actor children.
@@ -104,12 +105,15 @@ public class GameServer : Server {
             Logger.Args(serverName, serverPort));
     }
 
+    /// <summary>CLASSIC: every game server actor of this process.</summary>
+    internal static readonly ConcurrentDictionary<IActorRef, bool> Refs = new();
+
     public static Props Props(string serverName, ushort serverPort, string realmName = null)
         => Akka.Actor.Props.Create(() => new GameServer(serverName, serverPort, realmName));
 
     [MessageHandler(typeof(SERVER_100_PROTOCOL.MSG_CREATEKEY))]
     private void ReceiveCreateKey(SERVER_100_PROTOCOL.MSG_CREATEKEY message) {
-        var key = CreateKey(message.Account.AccountId);
+        var key = CreateKey(message.Account.AccountId, message.Address);
 
         var rsp = new SERVER_100_PROTOCOL.MSG_CREATEKEYRSP() { Key = key };
         Sender.Tell(rsp);
@@ -119,10 +123,12 @@ public class GameServer : Server {
     private void ReceiveCreatePlayerKey(SERVER_100_PROTOCOL.MSG_CREATEPLAYERKEY message) {
         // If this server is the target realm, create the key locally.
         if (message.TargetRealmName == RealmName) {
-            var key = CreateKey(message.Account.AccountId);
+            // CLASSIC: the client attaches to the new realm with the key it already has (MSG_SERVERTRANSFER carries no
+            // string key), and the key store is shared by every game server of the process: re-arm it.
+            Keys.Arm(message.Account.AccountId);
 
             Sender.Tell(new SERVER_100_PROTOCOL.MSG_CREATEPLAYERKEYRSP {
-                Key = key,
+                Key = "",
                 IP = Ip,
                 Port = (ushort) Port,
                 RealmName = RealmName,
@@ -150,32 +156,28 @@ public class GameServer : Server {
 
     [MessageHandler(typeof(SERVER_100_PROTOCOL.MSG_VALIDATESESSIONKEY))]
     private void ReceiveValidateSessionKey(SERVER_100_PROTOCOL.MSG_VALIDATESESSIONKEY message) {
-        // A user has requested to join this server. We're going to check if the session key is valid.
-        // If it is, we'll return the account associated with it. If not, we'll return an error code.
-        var keyTest = SessionKey.GenerateHash(_sessionKeyHashInput, message.UserID);
-
-        foreach (var cachedKey in _sessionKeys) {
-            if (keyTest != cachedKey.Key) {
-                continue;
-            }
-
-            ActiveSessions.Add(message.SessionActor);
-
-            // Get the account associated with this key.
-            var accountId = cachedKey.Value;
-            var account = AccountCollection.GetAccount(accountId);
-
-            // Inform the client that the session key is valid. We'll also send the account associated with it.
-            Sender.Tell(new SERVER_100_PROTOCOL.MSG_VALIDATESESSIONKEYRSP() {
-                ErrorCode = account is null ? 1 : 0,
-                Account = account
-            });
+        // CLASSIC: the key the client sent must be the one issued to the account it names, armed, inside its window and
+        // (by default) from the address that selected the character. It is consumed; transfers re-arm it.
+        var result = Keys.TryConsume(message.Key.ToString(), message.UserID, message.SessionActor?.RemoteIp);
+        if (result != GameKeyResult.Accepted) {
+            Logger.Warning("Attach refused for account {Account} from {Ip}: {Result}",
+                Logger.Args(message.UserID, message.SessionActor?.RemoteIp, result));
+            Sender.Tell(new SERVER_100_PROTOCOL.MSG_VALIDATESESSIONKEYRSP() { ErrorCode = 1 });
 
             return;
         }
 
-        // The session key was not found in the cache. Return an error code.
-        Sender.Tell(new SERVER_100_PROTOCOL.MSG_VALIDATESESSIONKEYRSP() { ErrorCode = 1 });
+        // Get the account associated with this key.
+        var account = AccountCollection.GetAccount(message.UserID);
+        if (account is not null) {
+            ActiveSessions.Add(message.SessionActor);
+        }
+
+        // Inform the client that the session key is valid. We'll also send the account associated with it.
+        Sender.Tell(new SERVER_100_PROTOCOL.MSG_VALIDATESESSIONKEYRSP() {
+            ErrorCode = account is null ? 1 : 0,
+            Account = account
+        });
     }
 
     [MessageHandler(typeof(SERVER_100_PROTOCOL.MSG_PLAYERENQUEUED))]
@@ -319,6 +321,10 @@ public class GameServer : Server {
 
             var newPlayer = _playerQueue.Dequeue();
             ActiveSessions.Add(newPlayer);
+            // CLASSIC: the key in the cached MSG_CHARACTERSELECTED may have outlived its window in the queue.
+            if (newPlayer.GetAssociatedAccount() is { } queuedAccount) {
+                Keys.Arm(queuedAccount.AccountId);
+            }
             Logger.Information("{Name} New connection {RemoteEndPoint}", Logger.Args(Name, newPlayer.RemoteIp));
 
             // Inform the SessionActor that it's finally outside of queue.
@@ -336,16 +342,7 @@ public class GameServer : Server {
         }
     }
 
-    private ByteString CreateKey(ulong accountId) {
-        var key = SessionKey.GenerateHash(_sessionKeyHashInput, accountId);
-
-        // Add this key to the local server. We're going to map the key to an account, that way when a game
-        // client finds its corresponding key, it will get it's account as well.
-        var timeSpan = TimeSpan.FromSeconds(_sessionKeyValidityTime);
-        _sessionKeys.Store(key, accountId, timeSpan);
-
-        return key;
-    }
+    private static ByteString CreateKey(ulong accountId, string address) => Keys.Issue(accountId, address);
 
     private sealed class FallbackEntry {
 

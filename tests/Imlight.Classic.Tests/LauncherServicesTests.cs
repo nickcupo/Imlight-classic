@@ -106,8 +106,12 @@ public sealed class LauncherServicesTests : IDisposable {
         internal readonly Dictionary<string, (ulong, string, bool)> Users = new(StringComparer.Ordinal);
         internal readonly Dictionary<string, (ulong, DateTime)> Tokens = new(StringComparer.Ordinal);
         internal readonly List<(ulong Account, string Key)> Keys = [];
+        internal readonly List<string> KeyAddresses = [];
         public (ulong Id, string PasswordHash, bool Blocked)? Find(string username) => Users.TryGetValue(username, out var u) ? u : null;
-        public void StoreSessionKey(ulong accountId, string sessionKey) => Keys.Add((accountId, sessionKey));
+        public void StoreSessionKey(ulong accountId, string sessionKey, string address) {
+            Keys.Add((accountId, sessionKey));
+            KeyAddresses.Add(address);
+        }
         public void SaveToken(string tokenHash, ulong accountId, DateTime expiresUtc) => Tokens[tokenHash] = (accountId, expiresUtc);
         public (ulong AccountId, DateTime ExpiresUtc)? LoadToken(string tokenHash) => Tokens.TryGetValue(tokenHash, out var t) ? t : null;
         public void DeleteToken(string tokenHash) => Tokens.Remove(tokenHash);
@@ -117,10 +121,10 @@ public sealed class LauncherServicesTests : IDisposable {
     private DateTime _now = new(2026, 10, 1, 12, 0, 0, DateTimeKind.Utc);
     private bool _anyPassword;
 
-    private LauncherLogin Login() {
+    private LauncherLogin Login(Imlight.Classic.Net.LoginThrottle? throttle = null) {
         _accounts.Users["ada"] = (42, LauncherLogin.HashPassword("wand-of-oak"), false);
         _accounts.Users["locked"] = (43, LauncherLogin.HashPassword("pw"), true);
-        return new LauncherLogin(_accounts, () => _anyPassword, () => _now);
+        return new LauncherLogin(_accounts, () => _anyPassword, () => _now, throttle);
     }
 
     private static JsonElement Parse(string json) => JsonDocument.Parse(json).RootElement;
@@ -184,5 +188,24 @@ public sealed class LauncherServicesTests : IDisposable {
         Assert.True(Parse(login.Handle("{\"user\":\"ada\",\"password\":\"wand-of-oak\"}", "10.0.0.10")).GetProperty("ok").GetBoolean());
         _now += TimeSpan.FromMinutes(2);
         Assert.True(Parse(login.Handle("{\"user\":\"ada\",\"password\":\"wand-of-oak\"}", "10.0.0.9")).GetProperty("ok").GetBoolean());
+    }
+
+    [Fact]
+    public void TheLauncherKeyIsBoundToTheSigningInAddress() {
+        Assert.True(Parse(Login().Handle("{\"user\":\"ada\",\"password\":\"wand-of-oak\"}", "10.0.0.2")).GetProperty("ok").GetBoolean());
+        Assert.Equal("10.0.0.2", Assert.Single(_accounts.KeyAddresses));
+    }
+
+    [Fact]
+    public void RepeatedFailuresLockTheAccountForEveryAddress() {
+        var throttle = new Imlight.Classic.Net.LoginThrottle(new Imlight.Classic.Net.LoginThrottleOptions { AccountFailures = 3 });
+        var login = Login(throttle);
+        for (var i = 0; i < 3; i++) {
+            Assert.Equal("bad-login", Parse(login.Handle("{\"user\":\"ada\",\"password\":\"guess\"}", $"10.1.0.{i}")).GetProperty("error").GetString());
+        }
+
+        // Even the right password from a fresh address waits out the lockout.
+        Assert.Equal("busy", Parse(login.Handle("{\"user\":\"ada\",\"password\":\"wand-of-oak\"}", "10.2.0.1")).GetProperty("error").GetString());
+        Assert.Empty(_accounts.Keys);
     }
 }

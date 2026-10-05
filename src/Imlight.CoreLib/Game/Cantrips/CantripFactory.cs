@@ -71,7 +71,8 @@ public class CantripFactory : RootSingleResourceSingleton<CantripFactory>, IMemo
     /// <param name="templateId">The ID of the cantrip template.</param>
     /// <returns>The created cantrip template object.</returns>
     public static CantripsSpellTemplate CreateCantripTemplateFromId(uint templateId) {
-        var template = (CantripsSpellTemplate) CoreObjectFactory.GetCoreTemplate(templateId);
+        // CLASSIC: any template id comes from the client; a hard cast threw for a non-cantrip one (security audit).
+        var template = CoreObjectFactory.GetCoreTemplate(templateId);
 
         if (template == null) {
             Logger.Warning("Tried to create cantrip from non-existent template {0}.", 

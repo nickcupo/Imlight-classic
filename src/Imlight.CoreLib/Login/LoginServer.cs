@@ -50,11 +50,15 @@ public class LoginServer : Server {
 
     public LoginServer(string serverName, ushort serverPort)
         : base(serverName, serverPort, LoginServiceFactory.Props()) {
+        Instance = Self; // CLASSIC: ControlService gives login connections an authentication deadline
         this._gamePoolServer = CreateGameServerPool();
 
         Logger.Information("Login server created with name {Name} under port {Port}.",
             Logger.Args(serverName, serverPort));
     }
+
+    /// <summary>CLASSIC: the login server actor.</summary>
+    public static IActorRef Instance { get; private set; }
 
     public static Props Props(string serverName, ushort serverPort) 
         => Akka.Actor.Props.Create(() => new LoginServer(serverName, serverPort));

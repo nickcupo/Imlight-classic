@@ -101,6 +101,9 @@ public sealed partial class SessionActor : ReceiveActor, IDisposable {
     private readonly Dictionary<Type, List<IActorRef>> _dispatchTable = [];
     private readonly Socket _socket;
     private readonly List<IMessage> _preInitMessages = new();
+    // CLASSIC: [Advanced] PreHandshakeMessageLimit (default 16). The list was unbounded for the whole accept wait.
+    private static readonly int s_preHandshakeLimit = Imlight.CoreLib.Auth.SecuritySettings.Int(
+        "Advanced.PreHandshakeMessageLimit", Imlight.Classic.Net.ConnectionLimits.DefaultPreHandshakeMessages);
     private IActorRef _socketListenerRef;
     private IActorRef _socketSenderRef;
     private volatile bool _isDisposed;
@@ -113,7 +116,10 @@ public sealed partial class SessionActor : ReceiveActor, IDisposable {
     public SessionActor(Socket socket, ushort sessionId, IActorRef server, IActorRef actorFactoryRef = null) {
         this._socket = socket;
         this.Ip = socket.RemoteEndPoint.ToString();
-        this.RemoteIp = socket.RemoteEndPoint.ToString().Split(':')[0];
+        // CLASSIC: the address itself (an IPv6 endpoint "[::ffff:a.b.c.d]:port" split on ':' gave "[" for everyone).
+        this.RemoteIp = Imlight.Classic.Net.GameSessionKeys.NormalizeAddress(
+            (socket.RemoteEndPoint as System.Net.IPEndPoint)?.Address.ToString())
+            ?? socket.RemoteEndPoint.ToString().Split(':')[0];
         this.LocalIp = Imlight.CoreLib.Classic.Launcher.LauncherPatchServer.AddressText(socket.LocalEndPoint); // CLASSIC
         this.SessionID = sessionId;
         this._services = new System.Collections.Concurrent.ConcurrentDictionary<IActorRef, MessageService>();
@@ -464,6 +470,7 @@ public sealed partial class SessionActor : ReceiveActor, IDisposable {
     }
 
     private void SendToSocket(IMessage message) {
+        ObserveOutgoing(message); // CLASSIC: a server teleport re-anchors the movement guard (SessionActor.Movement.cs)
         _socketSenderRef.Forward(message);
     }
 
@@ -475,6 +482,8 @@ public sealed partial class SessionActor : ReceiveActor, IDisposable {
         foreach (var preInitMessage in _preInitMessages) {
             HandlePacket(preInitMessage);
         }
+
+        _preInitMessages.Clear(); // CLASSIC: was kept for the session's lifetime
     }
 
     private void SetServices(List<Type> services) {
@@ -510,11 +519,24 @@ public sealed partial class SessionActor : ReceiveActor, IDisposable {
     }
 
     private void HandlePacket(IMessage packet) {
+        if (_isDisposed) {
+            return; // CLASSIC: closing; nothing more is cached or dispatched
+        }
+
         Interlocked.Exchange(ref _lastPacketReceivedTicks, HeartbeatPolicy.Clock.Ticks); // CLASSIC: ControlService's heartbeat reads it.
 
         // If the session still is not valid (the client hasn't completed the session handshake)
         // we'll cache all non-control messages for later processing.
         if (!SessionValid && packet.ServiceId != 0) {
+            if (!Imlight.Classic.Net.ConnectionLimits.MayCachePreHandshake(_preInitMessages.Count, s_preHandshakeLimit)) {
+                Logger.Warning("SessionActor {Id} ({Ip}) sent more than {Limit} messages before its handshake; closing.",
+                    Logger.Args(SessionID, RemoteIp, s_preHandshakeLimit));
+                _preInitMessages.Clear();
+                Dispose();
+
+                return;
+            }
+
             _preInitMessages.Add(packet);
 
             Logger.Verbose("SessionActor {Id} cached message {MessageName} for later processing.",
@@ -526,6 +548,11 @@ public sealed partial class SessionActor : ReceiveActor, IDisposable {
         // Apply session policy in packet order before forwarding to independently scheduled child services.
         if (packet is EnhancedClassicProtocol.Hello enhancementHello)
             MonstrologySession.Negotiate(enhancementHello.ProtocolVersion, enhancementHello.StrictClassic);
+
+        // CLASSIC: an impossible move reaches no service; the client is put back (SessionActor.Movement.cs).
+        if (packet is Imcodec.MessageLayer.Generated.GAME_5_PROTOCOL.MSG_CLIENTMOVE clientMove && !AdmitClientMove(clientMove)) {
+            return;
+        }
 
         if (_dispatchTable.TryGetValue(packet.GetType(), out var handlers)) {
             foreach (var handler in handlers) {

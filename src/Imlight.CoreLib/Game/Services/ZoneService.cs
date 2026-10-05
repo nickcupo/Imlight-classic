@@ -235,8 +235,29 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
 
     [MessageHandler(typeof(GAME_5_PROTOCOL.MSG_ZONETRANSFERACK))]
     private void ReceiveZoneTransferAck(GAME_5_PROTOCOL.MSG_ZONETRANSFERACK message) {
+        // CLASSIC: only a transfer the server queued (security audit 2026-10-04); an unasked ACK sent the wizard to
+        // whatever zone was queued last.
+        if (!_isTransferQueued) {
+            Logger.Warning("Zone transfer ACK with no transfer queued; ignored.");
+
+            return;
+        }
+
         // The client has accepted the zone transfer. We can now send the server transfer message.
         DoZoneTransfer();
+    }
+
+    /// <summary>CLASSIC: a voluntary teleport (Go Home, Go to Dorm, a world door, a zone hop) is refused in a duel; the
+    /// 2009 client hides those buttons while the duel UI is up (security audit 2026-10-04). Flee keeps its own rules.</summary>
+    private bool RefusedInDuel() {
+        var refusal = Imlight.Classic.Security.VoluntaryTeleport.Check(GetActiveWizard()?.IsInDuel == true);
+        if (refusal == Imlight.Classic.Security.TeleportRefusal.None) {
+            return false;
+        }
+
+        InformGameClient(Imlight.Classic.Security.VoluntaryTeleport.Message(refusal));
+
+        return true;
     }
 
     [MessageHandler(typeof(GAME_5_PROTOCOL.MSG_ZONETRANSFERNACK))]
@@ -351,12 +372,20 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
 
     [MessageHandler(typeof(GAME_5_PROTOCOL.MSG_RETRYTELEPORT))]
     private void ReceiveRetryTeleport(GAME_5_PROTOCOL.MSG_RETRYTELEPORT message) {
+        if (!_isTransferQueued) { // CLASSIC: as the ACK
+            return;
+        }
+
         DoZoneTransfer();
     }
 
     [MessageHandler(typeof(WIZARD2_53_PROTOCOL.MSG_ZONEHOP))]
     private void ReceiveZoneHop(WIZARD2_53_PROTOCOL.MSG_ZONEHOP message) {
         // This message is sent when the client has enabled classic mode and wants to reload their current zone.
+        if (_isTransferQueued || RefusedInDuel()) { // CLASSIC
+            return;
+        }
+
         var character = GetActiveWizard();
 
         _isTransferQueued = true;
@@ -375,6 +404,10 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
     [MessageHandler(typeof(WIZARD_12_PROTOCOL.MSG_GOHOME))]
     private void ReceiveGoHome(WIZARD_12_PROTOCOL.MSG_GOHOME message) {
         // this teleports the wizard to the world hub, NOT their home/dorm. for that you want MSG_GOTODORM. goofy ahh naming scheme
+        if (RefusedInDuel()) { // CLASSIC
+            return;
+        }
+
         var wizard = GetActiveWizard();
         // CLASSIC: go home through the classic zone map (ClassicMode and Housing belong to Wizard City), to the hub of
         // the world the wizard is in (unlocking a world only adds it to the world list; owner 2026-10-01), and refuse a
@@ -407,6 +440,10 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
     private void ReceiveGotoDorm(WIZARD_12_PROTOCOL.MSG_GOTODORM message) {
         // CLASSIC: every 2009 wizard had a Ravenwood dorm room (housing, December 2008). The dorm is the wizard's own
         // private copy of the dorm zone; its door trigger leads back to the Ravenwood dormitory.
+        if (RefusedInDuel()) { // CLASSIC
+            return;
+        }
+
         if (ClassicRuntime.IsActive) {
             if (!ClassicRuntime.Rules.IsFeatureEnabled(ClassicFeatures.Housing)) {
                 ClassicGate.RefuseFeature(ClassicFeatures.Housing, GetActiveWizard().CharId, InformGameClient);
@@ -458,6 +495,10 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
 
             ZoneBroadcast(wizBangMsg, false);
 
+            return;
+        }
+
+        if (RefusedInDuel()) { // CLASSIC
             return;
         }
 
@@ -770,6 +811,7 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
         }
 
         // Send MSG_SERVERTRANSFER to redirect the client to the new game server.
+        Auth.SecuritySettings.GameKeys.Value.Arm(account.AccountId); // CLASSIC: the client attaches with its key again
         var serverTransfer = new GAME_5_PROTOCOL.MSG_SERVERTRANSFER {
             IP = keyRsp.IP,
             TCPPort = keyRsp.Port,
@@ -891,6 +933,7 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
         WizardCollection.UpdateCharacterZone(character, character.Zone, character.ZoneDisplayName);
         WizardCollection.UpdateCharacterLocation(character, character.Location, character.Orientation.Z);
 
+        Auth.SecuritySettings.GameKeys.Value.Arm(account.AccountId); // CLASSIC: the client attaches with its key again
         var serverTransfer = new GAME_5_PROTOCOL.MSG_SERVERTRANSFER() {
             IP = character.GameServerIp,
             TCPPort = character.GameServerPort,

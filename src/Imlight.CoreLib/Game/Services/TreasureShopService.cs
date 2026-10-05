@@ -33,6 +33,8 @@ using Imcodec.Cryptography;
 using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
+using Imlight.Classic.Rules;
+using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.Game.Spells;
 using Imlight.CoreLib.Game.WizBang;
 using Imlight.CoreLib.Game.Zone.Components;
@@ -87,7 +89,17 @@ internal class TreasureShopService(SessionActor sessionActor) : MessageService(s
         var goldCost = vendorComponent.GetSpellPrice(message.TreasureCardID);
 
         // Resolve delivery before any wallet mutation.
-        var quantity = Math.Max(1, message.Quantity);
+        // CLASSIC: the wizard stands by the vendor; 1..99 copies at a real price, and the book has room for them.
+        var quantity = message.Quantity;
+        var held = playerWizard.SpellbookBehavior.TreasureCardTemplateIds?.Count ?? 0;
+        if (!ServiceProximity.IsNear(playerWizard, interactedObject)
+            || !TreasureShopRules.CanBuy(quantity, goldCost, held)) {
+            Logger.Warning("Refused treasure card purchase of {0} x{1} at {2} gold from NPC {3} (book holds {4}).",
+                Logger.Args(message.TreasureCardID, message.Quantity, goldCost, message.npcGlobalID, held));
+            SendToSocket(new WIZARD_12_PROTOCOL.MSG_TREASUREBUYCONFIRM { Failure = 1 });
+
+            return;
+        }
 
         // Resolve the spell template ID from the spell hash for persistence.
         var spellName = vendorComponent.GetSpellName(message.TreasureCardID);

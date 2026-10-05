@@ -97,6 +97,8 @@ public static class ClassicSettingKeys {
     public const string OpenPvp = "OpenPvp";
     public const string PvpCountdownSeconds = "PvpCountdownSeconds";
     public const string PetPavilion = "PetPavilion";
+    public const string MovementGuard = "MovementGuard";
+    public const string MovementMaxSpeed = "MovementMaxSpeed";
 
 }
 
@@ -155,6 +157,12 @@ public sealed class ClassicSettingsStore {
         new(ClassicSettingKeys.PetPavilion, ClassicSettingKind.Bool, "true", "Owner extras",
             "The Pet Pavilion (May 2010, after the 2009 cutoff; owner request): opens the pet park and turns on pet "
             + "leveling, talents, energy and hatching. Zone changes apply at the next zone entry."),
+        new(ClassicSettingKeys.MovementGuard, ClassicSettingKind.Bool, "true", "Security",
+            "Refuse impossible movement (a speed or teleport hack): the wizard is put back where the server last saw "
+            + "them, never kicked. Turn off if legitimate players are pulled back."),
+        new(ClassicSettingKeys.MovementMaxSpeed, ClassicSettingKind.Int, "1500", "Security",
+            "Fastest movement the guard allows, in units per second (2009 run speed is about 600), with a 3 second "
+            + "catch-up after a lag spike.", 600, 20000),
     ];
 
     private static readonly IReadOnlyDictionary<string, ClassicSettingDefinition> s_byKey =

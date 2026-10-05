@@ -53,8 +53,8 @@ namespace Imlight.CoreLib.Classic.MinionHelper;
 
 /// <summary>Where paired helper tokens live (hashes only).</summary>
 internal interface IMinionHelperTokenStore {
-    void Save(string tokenHash, ulong accountId);
-    bool TryLoad(string tokenHash, out ulong accountId);
+    void Save(string tokenHash, ulong accountId, DateTime createdUtc);
+    bool TryLoad(string tokenHash, out ulong accountId, out DateTime createdUtc);
 }
 
 /// <summary>The persisted token record (RavenDB document <c>MinionHelperTokens/&lt;sha256&gt;</c>).</summary>
@@ -67,29 +67,40 @@ internal sealed class MinionHelperToken {
 internal sealed class RavenMinionHelperTokenStore : IMinionHelperTokenStore {
     private static string DocumentId(string tokenHash) => "MinionHelperTokens/" + tokenHash;
 
-    public void Save(string tokenHash, ulong accountId) {
+    public void Save(string tokenHash, ulong accountId, DateTime createdUtc) {
         using var session = PlayerDatabase.Instance.Store.OpenSession();
-        session.Store(new MinionHelperToken { AccountId = accountId, CreatedUtc = DateTime.UtcNow }, DocumentId(tokenHash));
+        session.Store(new MinionHelperToken { AccountId = accountId, CreatedUtc = createdUtc }, DocumentId(tokenHash));
         session.SaveChanges();
     }
 
-    public bool TryLoad(string tokenHash, out ulong accountId) {
+    public bool TryLoad(string tokenHash, out ulong accountId, out DateTime createdUtc) {
         using var session = PlayerDatabase.Instance.Store.OpenSession();
         var record = session.Load<MinionHelperToken>(DocumentId(tokenHash));
         accountId = record?.AccountId ?? 0;
+        createdUtc = record?.CreatedUtc ?? DateTime.MinValue;
         return accountId != 0;
     }
 }
 
 /// <summary>An in-memory store for tests.</summary>
 internal sealed class MemoryMinionHelperTokenStore : IMinionHelperTokenStore {
-    private readonly ConcurrentDictionary<string, ulong> _tokens = new();
-    public void Save(string tokenHash, ulong accountId) => _tokens[tokenHash] = accountId;
-    public bool TryLoad(string tokenHash, out ulong accountId) => _tokens.TryGetValue(tokenHash, out accountId);
+    private readonly ConcurrentDictionary<string, (ulong, DateTime)> _tokens = new();
+    public void Save(string tokenHash, ulong accountId, DateTime createdUtc) => _tokens[tokenHash] = (accountId, createdUtc);
+    public bool TryLoad(string tokenHash, out ulong accountId, out DateTime createdUtc) {
+        var found = _tokens.TryGetValue(tokenHash, out var entry);
+        (accountId, createdUtc) = found ? entry : (0UL, DateTime.MinValue);
+        return found;
+    }
 }
 
 internal sealed class MinionHelperPairing {
     internal static readonly TimeSpan CodeLifetime = TimeSpan.FromMinutes(5);
+    /// <summary>CLASSIC (M6): a paired helper pairs again after this long ([Classic] MinionHelperTokenDays, default 90).</summary>
+    internal static readonly TimeSpan TokenLifetime = TimeSpan.FromDays(Math.Clamp(
+        Imlight.CoreLib.Auth.SecuritySettings.Int("Classic.MinionHelperTokenDays", 90), 1, 3650));
+    /// <summary>CLASSIC (M6): wrong codes from all connections of an address (10 per 15 min, then doubling lockouts),
+    /// and from everyone together (100 per 15 min): a six-digit code cannot be guessed by reconnecting.</summary>
+    internal const string Everyone = "*";
 
     private static readonly Lazy<MinionHelperPairing> s_shared = new(() => new MinionHelperPairing(new RavenMinionHelperTokenStore()));
 
@@ -101,11 +112,20 @@ internal sealed class MinionHelperPairing {
     private readonly object _gate = new();
     private readonly Dictionary<string, (ulong AccountId, DateTime Expires)> _codes = new(StringComparer.Ordinal);
     // Resolved tokens, so a reconnecting helper does not hit the database every time.
-    private readonly ConcurrentDictionary<string, ulong> _resolved = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, (ulong AccountId, DateTime Created)> _resolved = new(StringComparer.Ordinal);
+    private readonly Imlight.Classic.Net.LoginThrottle _wrongCodes;
 
     internal MinionHelperPairing(IMinionHelperTokenStore store, Func<DateTime> clock = null) {
         _store = store;
         _clock = clock ?? (() => DateTime.UtcNow);
+        _wrongCodes = new Imlight.Classic.Net.LoginThrottle(new Imlight.Classic.Net.LoginThrottleOptions {
+            AccountFailures = 100, AddressFailures = 10,
+            Window = TimeSpan.FromMinutes(15), FirstLockout = TimeSpan.FromMinutes(1), MaxLockout = TimeSpan.FromMinutes(30),
+        }, new ClockTime(_clock));
+    }
+
+    private sealed class ClockTime(Func<DateTime> clock) : TimeProvider {
+        public override DateTimeOffset GetUtcNow() => new(DateTime.SpecifyKind(clock(), DateTimeKind.Utc));
     }
 
     /// <summary>A new six-digit code for this account; any older code of the account stops working.</summary>
@@ -124,21 +144,35 @@ internal sealed class MinionHelperPairing {
     }
 
     /// <summary>Trades a live code for a new token (once). False for an unknown or expired code.</summary>
-    internal bool TryRedeem(string code, out string token, out ulong accountId) {
+    internal bool TryRedeem(string code, out string token, out ulong accountId)
+        => TryRedeem(code, null, out token, out accountId);
+
+    /// <summary>As above, from <paramref name="address"/>; wrong codes count against it and against everyone.</summary>
+    internal bool TryRedeem(string code, string address, out string token, out ulong accountId) {
         token = null;
         accountId = 0;
+        if (_wrongCodes.LockedFor(Everyone, address) is not null) return false;
         var normalized = Normalize(code);
-        if (normalized is null) return false;
+        if (normalized is null) {
+            _wrongCodes.Failure(Everyone, address);
+            return false;
+        }
+
         lock (_gate) {
             Prune();
-            if (!_codes.Remove(normalized, out var entry)) return false;
+            if (!_codes.Remove(normalized, out var entry)) {
+                _wrongCodes.Failure(Everyone, address);
+                return false;
+            }
+
             accountId = entry.AccountId;
         }
 
         token = Convert.ToHexString(RandomNumberGenerator.GetBytes(24)).ToLowerInvariant();
         var hash = Hash(token);
-        _store.Save(hash, accountId);
-        _resolved[hash] = accountId;
+        var created = _clock();
+        _store.Save(hash, accountId, created);
+        _resolved[hash] = (accountId, created);
         return true;
     }
 
@@ -147,9 +181,19 @@ internal sealed class MinionHelperPairing {
         accountId = 0;
         if (string.IsNullOrWhiteSpace(token) || token.Length > 128) return false;
         var hash = Hash(token);
-        if (_resolved.TryGetValue(hash, out accountId)) return true;
-        if (!_store.TryLoad(hash, out accountId)) return false;
-        _resolved[hash] = accountId;
+        if (!_resolved.TryGetValue(hash, out var known)) {
+            if (!_store.TryLoad(hash, out var loadedAccount, out var created)) return false;
+            known = (loadedAccount, created);
+            _resolved[hash] = known;
+        }
+
+        // CLASSIC (M6): tokens expire; a record without a creation time is treated as created now's lifetime ago.
+        if (known.Created == DateTime.MinValue || _clock() - known.Created > TokenLifetime) {
+            _resolved.TryRemove(hash, out _);
+            return false;
+        }
+
+        accountId = known.AccountId;
         return true;
     }
 

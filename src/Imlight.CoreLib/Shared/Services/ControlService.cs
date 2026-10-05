@@ -40,6 +40,15 @@ internal class ControlService : MessageService, IHandshakeService {
         ? wait
         : (ushort) 300;
 
+    // CLASSIC: a game-server connection is opened by a running client at attach time and answers at once, so it gets
+    // [Advanced] GameSessionAcceptWaitTime (default 30 s) instead of the long login wait (H5).
+    private static readonly int s_gameAcceptWait = Imlight.CoreLib.Auth.SecuritySettings.Int("Advanced.GameSessionAcceptWaitTime", 30);
+
+    // CLASSIC: a login connection must authenticate within [Login Server] LoginAuthTimeout seconds (default 30) of its
+    // SessionAccept. The client accepts only when the player presses Login (or at once with a launcher key), so the
+    // long accept wait above is idle-at-the-login-screen time, and this one is not (H5).
+    private static readonly int s_loginAuthTimeout = Imlight.CoreLib.Auth.SecuritySettings.Int("Login Server.LoginAuthTimeout", 30);
+
     private bool _sessionValid;
     private readonly Stopwatch _responseStopwatch;
     private readonly HeartbeatPolicy _heartbeat;
@@ -63,6 +72,7 @@ internal class ControlService : MessageService, IHandshakeService {
         Receive<string>(s => s == "KeepAliveHeartbeat", x => SendHeartbeat());
         Receive<string>(s => s == "KeepAliveEndTimes", x => ReceiveKeepAliveEndTimes());
         Receive<string>(s => s == "SessionAcceptTimer", s => SessionAcceptTimer());
+        Receive<string>(s => s == "LoginAuthDeadline", s => LoginAuthDeadline());
 
         base.ConfigureReceivers();
     }
@@ -91,9 +101,14 @@ internal class ControlService : MessageService, IHandshakeService {
         _responseStopwatch.Restart();
 
         // Send a message to ourselves to check if we've received a response.
-        var timer = TimeSpan.FromSeconds(_sessionAcceptWaitTime); // CLASSIC: was _keepAliveRspWaitTime
+        var timer = TimeSpan.FromSeconds(AcceptWait(_sessionAcceptWaitTime, s_gameAcceptWait,
+            SessionActor.ServerRef is { } server && Game.GameServer.Refs.ContainsKey(server))); // CLASSIC: was _keepAliveRspWaitTime
         Timers.StartSingleTimer("SessionAcceptTimer", "SessionAcceptTimer", timer);
     }
+
+    /// <summary>CLASSIC: the first SessionAccept's wait: the login wait, or the shorter game wait for a game server.</summary>
+    internal static int AcceptWait(int loginWait, int gameWait, bool gameServer)
+        => gameServer && gameWait > 0 && gameWait < loginWait ? Math.Max(5, gameWait) : loginWait;
 
     [MessageHandler(typeof(ControlMessageProtocol.SessionAccept))]
     private void ReceiveSessionAccept(ControlMessageProtocol.SessionAccept message) {
@@ -119,6 +134,9 @@ internal class ControlService : MessageService, IHandshakeService {
         // Once the session is created, we need to send a heartbeat to keep it active.
         // To do that. we'll have this actor send a message to itself on interval to check on the heartbeat.
         Timers.Cancel("SessionAcceptTimer"); // CLASSIC: was a periodic SessionAcceptTimer.
+        if (s_loginAuthTimeout > 0 && SessionActor.ServerRef is { } server && server.Equals(Login.LoginServer.Instance)) {
+            Timers.StartSingleTimer("LoginAuthDeadline", "LoginAuthDeadline", TimeSpan.FromSeconds(Math.Max(5, s_loginAuthTimeout)));
+        }
         // CLASSIC: a launcher's patch connection may idle without answering, so it gets no heartbeat, as before.
         if (_heartbeat.IsEnabled && !SessionActor.ServerRef.Equals(PatchServer.Instance)) {
             Timers.StartPeriodicTimer("KeepAliveHeartbeat", "KeepAliveHeartbeat", _heartbeat.Interval, _heartbeat.Interval);
@@ -167,6 +185,16 @@ internal class ControlService : MessageService, IHandshakeService {
 
     [MessageHandler(typeof(GAME_5_PROTOCOL.MSG_CLIENTMOVE))]
     private void ReceiveClientMove(GAME_5_PROTOCOL.MSG_CLIENTMOVE message) => _heartbeat.ClientMoved(); // CLASSIC
+
+    private void LoginAuthDeadline() {
+        if (SessionActor.GetAssociatedAccount() is not null) {
+            return;
+        }
+
+        Logger.Information("Login session {0} ({1}) did not log in within {2} s; closing.",
+            Logger.Args(SessionActor.SessionID, SessionActor.RemoteIp, s_loginAuthTimeout));
+        CloseSession();
+    }
 
     private void SendHeartbeat() {
         if (!_sessionValid) {

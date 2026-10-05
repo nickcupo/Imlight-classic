@@ -50,6 +50,10 @@ internal static class ClientKey {
     /// <param name="timeMillis">The milliseconds into the current second.</param>
     /// <param name="encodedString">The encoded string to compare against.</param>
     /// <returns>True if the hash matches, false otherwise.</returns>
+    /// <summary>CLASSIC: the ClientKey1 a client holding <paramref name="protocolHash"/> sends on this session.</summary>
+    internal static string SaltedClientKey1(string protocolHash, ushort sessionID, uint timeSecs, uint timeMillis)
+        => SecondaryEncrypt(protocolHash, $"{sessionID}{timeSecs}{timeMillis}");
+
     internal static bool VerifyCK1(string input, ushort sessionID, uint timeSecs, uint timeMillis, string encodedString) {
         // Do not do the first pass.
         var salt = $"{sessionID}{timeSecs}{timeMillis}";

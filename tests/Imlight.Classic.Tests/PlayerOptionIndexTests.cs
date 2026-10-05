@@ -83,28 +83,30 @@ public sealed class PlayerOptionIndexTests {
         // B was sent [persona]; then the NPC rebuilt its list for A (A handed in, so [offer]) and the shared map now says 0 -> offer.
         index.Set(b, new Dictionary<int, IServiceComponent> { [0] = persona });
         index.Set(a, new Dictionary<int, IServiceComponent> { [0] = offer });
-        var shared = new Dictionary<int, IServiceComponent> { [0] = offer };
 
-        Assert.True(index.TryResolve(b, 0, shared, out var forB));
+        Assert.True(index.TryResolve(b, 0, out var forB));
         Assert.Same(persona, forB);
-        Assert.True(index.TryResolve(a, 0, shared, out var forA));
+        Assert.True(index.TryResolve(a, 0, out var forA));
         Assert.Same(offer, forA);
     }
 
     [Fact]
-    public void AWizardSentNothingFallsBackToTheSharedMapAndALeaverIsForgotten() {
+    public void AWizardSentNothingOrGoneResolvesNothing() {
+        // CLASSIC (security audit 2026-10-04): no fallback to the NPC's last-built list; a wizard who was never sent
+        // options (or left the range) cannot click through another wizard's list.
         using var system = ActorSystem.Create("option-index-2", "akka.actor.provider = local");
         var a = system.ActorOf(Props.Create<Silent>(), "a");
         var persona = new FakeComponent("QuestPersonaGoalService");
-        var shared = new Dictionary<int, IServiceComponent> { [0] = persona };
         var index = new PlayerOptionIndex();
 
-        Assert.True(index.TryResolve(a, 0, shared, out var c));
+        Assert.False(index.TryResolve(a, 0, out _));
+        index.Set(a, new Dictionary<int, IServiceComponent> { [0] = persona });
+        Assert.True(index.TryResolve(a, 0, out var c));
         Assert.Same(persona, c);
         index.Set(a, new Dictionary<int, IServiceComponent>());
-        Assert.False(index.TryResolve(a, 0, shared, out _));
+        Assert.False(index.TryResolve(a, 0, out _));
         index.Remove(a);
-        Assert.True(index.TryResolve(a, 0, shared, out _));
+        Assert.False(index.TryResolve(a, 0, out _));
     }
 
 }

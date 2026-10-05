@@ -65,7 +65,8 @@ internal partial class QuestService(SessionActor sessionActor) : MessageService(
     private const float DEFAULT_KILL_COLLECT_CHANCE = 0.5f;
     private const string QUEST_COMPLETED_ENTRY = "Complete";
 
-    private readonly List<QuestTemplate> _cachedQuestOffers = [];
+    // CLASSIC: keyed by quest name and capped (it grew with every offer; security audit 2026-10-04).
+    private readonly Imlight.Classic.Security.BoundedOffers<QuestTemplate> _cachedQuestOffers = new();
     private readonly List<QuestTemplate> _cachedQuestTemplates = [];
     private readonly ObjectSerializer _goalSerializer = new(false);
 
@@ -137,7 +138,7 @@ internal partial class QuestService(SessionActor sessionActor) : MessageService(
             return;
         }
 
-        _cachedQuestOffers.Add(quest);
+        _cachedQuestOffers.Add(quest.m_questName ?? "", quest);
     }
 
     [MessageHandler(typeof(CHARACTER_103_PROTOCOL.MSG_COMPLETEPERSONAGOAL))]
@@ -315,8 +316,16 @@ internal partial class QuestService(SessionActor sessionActor) : MessageService(
         var wizard = GetActiveWizard();
 
         // Do we have this quest cached?
-        var questName = message.QuestName;
-        var quest = _cachedQuestOffers.Find(q => q.m_questName == questName);
+        string questName = message.QuestName;
+        var quest = _cachedQuestOffers.Find(questName ?? "");
+        // CLASSIC: an offer is accepted once; a quest already active or done is not started again.
+        if (quest != null && (wizard.HasQuest(quest.m_questName) || wizard.HasCompletedQuest(quest.m_questName))) {
+            _cachedQuestOffers.Remove(quest.m_questName);
+            Logger.Warning("Player '{0}' accepted quest '{1}' again; ignored.", Logger.Args(wizard.CharId, questName));
+
+            return;
+        }
+
         if (quest == null) {
             // There's not really a good reason why a player would send us this and we *don't*
             // have it cached. Log as suspicious activity.
@@ -343,7 +352,7 @@ internal partial class QuestService(SessionActor sessionActor) : MessageService(
         SendQuestStartingMessage(quest, questInstance);
 
         // Remove it from the cached offers now that it's accepted.
-        _cachedQuestOffers.RemoveAll(q => q.m_questName == quest.m_questName);
+        _cachedQuestOffers.Remove(quest.m_questName);
     }
 
     [MessageHandler(typeof(COMBAT_106_PROTOCOL.MSG_COMBATWIN))]
