@@ -122,6 +122,15 @@ public sealed class DatamineGateFixesTests {
         Assert.True(StartSetsEntry(quest, entry));
     }
 
+    [Theory]
+    [InlineData("KT-CRY6-C01-003")] // Tomb Town: KT_DjeseritTomb_T1 'Trigger-OpenDoorway'
+    [InlineData("KT-CRY6-C01-004")] // Dem Bones: KT_AhnicTomb_T2 'Trigger-DoorOpener'
+    public void TombQuestsSetTheirOwnDoorEntry(string quest) {
+        Assert.Contains(Load("QuestTemplates", quest + ".json")["m_startResults"]!["m_results"]!,
+            r => (string?) r["m_entryName"] == "QT-" + quest && (bool?) r["m_isQuestRegistry"] == true
+                && (string?) r["m_questName"] == quest);
+    }
+
     [Fact]
     public void EightLeggedQueenOpensTheCrystalGroveGauntletSigil() {
         Assert.True(StartSetsEntry("DS-ACAD1-C05-003", "QT-ACAD1-C05-003"));
