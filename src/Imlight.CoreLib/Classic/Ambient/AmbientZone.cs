@@ -285,6 +285,7 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
         }
 
         wizard.Grace.Start(now, Num(wizard.Position));
+        Logger.Debug("Ambient wizard {Name}: after-duel grace (translucent while it stands).", Logger.Args(wizard.Name));
         BroadcastEffects(wizard, PostCombatEffects.Put(wizard.Wizard, wizard.Wizard.GameObjectID, wizard.Grace.EffectName,
             wizard.Grace.EndsUtc));
     }
@@ -300,6 +301,7 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
             return;
         }
 
+        Logger.Debug("Ambient wizard {Name}: after-duel grace now {Phase}.", Logger.Args(wizard.Name, wizard.Grace.Phase));
         BroadcastEffects(wizard, wizard.Grace.Protected
             ? PostCombatEffects.Put(wizard.Wizard, wizard.Wizard.GameObjectID, wizard.Grace.EffectName, wizard.Grace.EndsUtc)
             : PostCombatEffects.Take(wizard.Wizard, wizard.Wizard.GameObjectID));
@@ -886,7 +888,8 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
 
     private void StreetFight(AmbientWizard wizard, ZONE_102_PROTOCOL.MSG_QUERYNEARESTDUELTARGETRSP target) {
         if (!AmbientWizards.Settings.StreetFights || wizard.DuelSigil != ulong.MaxValue
-            || wizard.Activity != AmbientActivity.Walking || target.CreatureActor is null || target.CreatureObject is null) {
+            || wizard.Activity != AmbientActivity.Walking || target.CreatureActor is null || target.CreatureObject is null
+            || wizard.Grace.Protected) { // CLASSIC: still translucent from its last duel; the mob does not notice it
             return;
         }
 
