@@ -64,6 +64,12 @@ internal sealed class MinigameProcess : Process {
 
     private bool IsMinigameActive { get; set; }
 
+    // CLASSIC: server-side run state (security audit 2026-10-04). The client reports its own score, so a reward is paid
+    // once per run, not before MinigameRun.MinimumDuration, not twice within the per-wizard cooldown, and the score is
+    // capped (Imlight.Classic.Security.MinigameRun).
+    private readonly Imlight.Classic.Security.MinigameRun _run = new();
+    private static readonly Dictionary<ulong, DateTimeOffset> s_lastPaid = [];
+
     // todo: change this below. The rewards should come from the actual drop tables.
     private static readonly RewardTier[] s_manaTiers = [
         new RewardTier(0, 0),          // No reward for first threshold
@@ -120,6 +126,7 @@ internal sealed class MinigameProcess : Process {
 
     private void HandleConnect() {
         IsMinigameActive = true;
+        _run.Start(DateTimeOffset.UtcNow); // CLASSIC
 
         var msg = new WIZARD_12_PROTOCOL.MSG_ENTERMINIGAME();
         Sender.Tell(msg, Self);
@@ -149,10 +156,27 @@ internal sealed class MinigameProcess : Process {
             return;
         }
 
+        // CLASSIC: the score is the client's word; cap it, and pay one result per run (see _run).
+        score = Imlight.Classic.Security.MinigameRun.ClampScore(score, _minigameInfo.m_scoreThresholds);
+        var decision = _run.Decide(DateTimeOffset.UtcNow, wizard.CharId, s_lastPaid);
+        if (decision != Imlight.Classic.Security.MinigameRewardDecision.Reward) {
+            Logger.Warning("{0} {1}: result of wizard {2} (score {3}) not paid: {4}.",
+                Logger.Args(nameof(MinigameProcess), ProcessName, wizard.CharId, score, decision.ToString()));
+            SendFinalRewardsResponse(score, leaderboard, EmptyLoot(), wizard, recordScore: false);
+
+            return;
+        }
+
         // Generate and send final rewards response.
         var loot = GetLootInfo(score, wizard);
         SendFinalRewardsResponse(score, leaderboard, loot, wizard);
     }
+
+    private static LootInfoList EmptyLoot() => new() {
+        m_goldInfo = new GoldLootInfo(),
+        m_loot = [],
+        m_lootRarityList = new(),
+    };
 
     private void SendLeaderboardResponse(byte[] leaderboardData) {
         var reply = new WIZARD_12_PROTOCOL.MSG_MINIGAMEREWARDS {
@@ -167,7 +191,8 @@ internal sealed class MinigameProcess : Process {
         Sender.Tell(reply, Self);
     }
 
-    private void SendFinalRewardsResponse(int score, ScoreTrackingList leaderboard, LootInfoList loot, Wizard wizard) {
+    private void SendFinalRewardsResponse(int score, ScoreTrackingList leaderboard, LootInfoList loot, Wizard wizard,
+                                          bool recordScore = true) {
         // Track the score for the player.
         var genderString = wizard.PlayerNameBehavior.Gender.ToString();
         genderString = genderString.Replace("eGender.", "");
@@ -179,10 +204,10 @@ internal sealed class MinigameProcess : Process {
             GamerNameOverride = wizard.PlayerNameBehavior.NameOverride,
             GamerGender = genderString
         };
-        ScoreTrackingCollection.AddScoreTracking(scoreTrack);
+        if (recordScore) ScoreTrackingCollection.AddScoreTracking(scoreTrack); // CLASSIC: an unpaid result is not ranked
 
         // Check if the user's score has beaten any of the top scores.
-        for (var i = 0; i < leaderboard.m_scores.Count; i++) {
+        for (var i = 0; recordScore && i < leaderboard.m_scores.Count; i++) {
             if (score > leaderboard.m_scores[i].m_gameScore) {
                 leaderboard.m_scores[i] = scoreTrack.GetClientBehaviorInstance();
                 break;

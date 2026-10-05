@@ -71,6 +71,8 @@ public static class ClassicSettings {
     public static bool OpenPvp => Store.Bool(ClassicSettingKeys.OpenPvp);
     public static int PvpCountdownSeconds => Store.Int(ClassicSettingKeys.PvpCountdownSeconds);
     public static bool PetPavilion => Store.Bool(ClassicSettingKeys.PetPavilion);
+    public static bool MovementGuard => Store.Bool(ClassicSettingKeys.MovementGuard);
+    public static int MovementMaxSpeed => Store.Int(ClassicSettingKeys.MovementMaxSpeed);
 
     /// <summary>Scales a whole reward amount, rounding to the nearest unit (never below 0).</summary>
     public static int Scale(int amount, double multiplier)

@@ -89,10 +89,11 @@ internal sealed class PlayerOptionIndex {
 
     internal void Remove(IActorRef player) => _maps.Remove(player);
 
-    /// <summary>The component for <paramref name="index"/> in the list this wizard was sent; <paramref name="fallback"/> when it was sent none.</summary>
-    internal bool TryResolve(IActorRef player, int index, IReadOnlyDictionary<int, IServiceComponent> fallback, out IServiceComponent component) {
-        var map = _maps.TryGetValue(player, out var own) ? own : fallback;
-        if (map.TryGetValue(index, out var found)) {
+    /// <summary>The component for <paramref name="index"/> in the list this wizard was sent. CLASSIC: none when it was
+    /// sent no list (or has left the NPC's range); the NPC's last-built list was a fallback any wizard could click
+    /// through from anywhere (security audit 2026-10-04).</summary>
+    internal bool TryResolve(IActorRef player, int index, out IServiceComponent component) {
+        if (_maps.TryGetValue(player, out var map) && map.TryGetValue(index, out var found)) {
             component = found;
 
             return true;
@@ -173,6 +174,7 @@ internal sealed class InteractServiceMementoComponent(ZoneEntity entity)
                 break;
             case RangeChange.Left:
                 _sentTeleportOptions.Remove(playerActor); // CLASSIC
+                _playerOptionIndex.Remove(playerActor); // CLASSIC: its options are gone with it
                 SendLeaveServiceRange(playerActor);
                 break;
         }
@@ -200,6 +202,20 @@ internal sealed class InteractServiceMementoComponent(ZoneEntity entity)
             return;
         }
 
+        // CLASSIC: the server's own position of the wizard must be near the NPC (security audit 2026-10-04). Generous
+        // (InteractionRange.Allowed: radius * 1.5 + 150) so a click sent just before a step out still counts.
+        if (playerObject?.m_location is { } playerLocation && Entity.ActiveGameObject is { } npcObject) {
+            var radius = _serviceComponents.Max(c => c.DEFAULT_INTERACTION_RADIUS);
+            var distanceSquared = (playerLocation - npcObject.m_location).LengthSquared();
+            if (!Imlight.Classic.Security.InteractionRange.Within(distanceSquared, radius)) {
+                Logger.Warning("Player {0} interacted with NPC {1} from {2:0} units away (allowed {3:0}); refused.",
+                    Logger.Args(playerActor.Path.Name, npcObject.m_debugName, Math.Sqrt(distanceSquared),
+                        Imlight.Classic.Security.InteractionRange.Allowed(radius)));
+
+                return;
+            }
+        }
+
         // If this is a reinteract scenario, send service range messages first.
         if (reinteract == 2) {
             SendLeaveServiceRange(playerActor);
@@ -210,7 +226,7 @@ internal sealed class InteractServiceMementoComponent(ZoneEntity entity)
         // Using FirstOrDefault by ServiceName is unsafe when multiple components share
         // the same service name (e.g. InteractQuestSelectComponent shadowing WoodenChestComponent).
         // CLASSIC: in the list this wizard was sent, not the one the NPC built for whoever asked last.
-        if (!_playerOptionIndex.TryResolve(playerActor, (int) serviceIndex, _optionIndexToComponent, out var serviceComponent)
+        if (!_playerOptionIndex.TryResolve(playerActor, (int) serviceIndex, out var serviceComponent)
                 && !TryResolveFromCurrentOptions(playerActor, playerCharacter, ref serviceIndex, serviceName, out serviceComponent)) {
             // CLASSIC: the click names an option of a list this wizard no longer has. Send the current list instead of
             // dropping the click silently (the dialog then shows what the NPC offers now).

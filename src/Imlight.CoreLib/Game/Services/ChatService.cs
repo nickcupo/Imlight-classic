@@ -69,6 +69,26 @@ internal class ChatService(SessionActor sessionActor) : MessageService(sessionAc
 
     private readonly IActorRef _dispatcherRef = CommandDispatcher.Instance;
 
+    // CLASSIC: one rate limit for all of a session's chat lines, typed and quick (security audit 2026-10-04).
+    private readonly Imlight.Classic.Security.TokenBucket _chatRate =
+        new(Imlight.Classic.Security.ChatGuard.RateBurst, Imlight.Classic.Security.ChatGuard.RatePerSecond);
+    private DateTimeOffset _lastRateNotice;
+
+    /// <summary>CLASSIC: false (and one notice every few seconds) when the session is chatting too fast.</summary>
+    private bool TakeChatToken() {
+        var now = DateTimeOffset.UtcNow;
+        if (_chatRate.TryTake(now)) {
+            return true;
+        }
+
+        if (now - _lastRateNotice > TimeSpan.FromSeconds(5)) {
+            _lastRateNotice = now;
+            InformGameClient("You are sending messages too quickly.");
+        }
+
+        return false;
+    }
+
     protected static Props Props(SessionActor parentActor)
         => Akka.Actor.Props.Create(() => new ChatService(parentActor));
 
@@ -84,11 +104,22 @@ internal class ChatService(SessionActor sessionActor) : MessageService(sessionAc
             return;
         }
 
+        // CLASSIC: an empty or unusable line is dropped (it closed the session), and what is passed on is filtered,
+        // cut to ChatGuard.MaxLength and rate-limited (security audit 2026-10-04).
+        byte[] rawMessage = message.Message;
+        var sanitized = Imlight.Classic.Security.ChatGuard.SanitizeRadial(rawMessage);
+        if (sanitized is null) {
+            return;
+        }
+
         // Craft the wizard name.
         var byteName = wizard.PlayerNameBehavior.GetWizardNameAsByteHexString();
         var sourceName = DataManipulation.SpacedHexStringToBytes(byteName);
 
-        var cleanedMessage = CleanMessageTrash(message.Message);
+        var cleanedMessage = CleanMessageTrash(rawMessage);
+        if (string.IsNullOrEmpty(cleanedMessage)) {
+            return;
+        }
 
         // Parse in-game chat commands. Do not broadcast it to the zone.
         if (cleanedMessage.StartsWith(CommandPrefix) && account.AuthLevel > AuthLevel.None) {
@@ -97,12 +128,16 @@ internal class ChatService(SessionActor sessionActor) : MessageService(sessionAc
             return;
         }
 
+        if (!TakeChatToken()) {
+            return;
+        }
+
         LogChatMessage(wizard.PlayerNameBehavior.GetWizardName(), cleanedMessage, wizard.Zone);
         SaveChatLog(cleanedMessage, charObj, wizard);
 
         // Broadcast the message to the zone, skipping players who have ignored the sender.
         var msg = new GAME_5_PROTOCOL.MSG_RADIALCHAT {
-            Message = message.Message,
+            Message = new ByteString(sanitized),
             SourceID = charObj.m_globalID,
             SourceName = sourceName,
             Filter = 2,
@@ -116,6 +151,10 @@ internal class ChatService(SessionActor sessionActor) : MessageService(sessionAc
         if (account.InfractionHistory.IsCurrentlyMuted) {
             InformGameClient("You are currently muted.");
 
+            return;
+        }
+
+        if (!TakeChatToken()) { // CLASSIC
             return;
         }
 
@@ -148,7 +187,7 @@ internal class ChatService(SessionActor sessionActor) : MessageService(sessionAc
 
         // Check if the target has ignored the sender.
         var myWizard = GetActiveWizard();
-        if (BuddyRelationshipCollection.HasBlocked(targetID, myWizard.CharId)) {
+        if (BuddyRelationshipCollection.HasBlocked(targetID, myWizard.CharId) || !TakeChatToken()) { // CLASSIC: rate
             return;
         }
         
@@ -189,7 +228,7 @@ internal class ChatService(SessionActor sessionActor) : MessageService(sessionAc
 
         // Check if the target has ignored the sender.
         var myWizard = GetActiveWizard();
-        if (BuddyRelationshipCollection.HasBlocked(targetID, myWizard.CharId)) {
+        if (BuddyRelationshipCollection.HasBlocked(targetID, myWizard.CharId) || !TakeChatToken()) { // CLASSIC: rate
             return;
         }
 
@@ -203,6 +242,11 @@ internal class ChatService(SessionActor sessionActor) : MessageService(sessionAc
         // Send the directed chat to the target player.
         var hexName = myWizard.PlayerNameBehavior.GetWizardNameAsByteHexString();
         var sourceName = DataManipulation.SpacedHexStringToBytes(hexName);
+        byte[] quickExt = message.Message;
+        if (!Imlight.Classic.Security.ChatGuard.AcceptsQuickChatExt(quickExt)) { // CLASSIC: length only
+            return;
+        }
+
         var msg = new GAME_5_PROTOCOL.MSG_DIRECTEDQUICKCHATEXT {
             SourceName = sourceName,
             SourceID = myWizard.CharId,
@@ -230,7 +274,7 @@ internal class ChatService(SessionActor sessionActor) : MessageService(sessionAc
 
         // Check if the target has ignored the sender.
         var myWizard = GetActiveWizard();
-        if (BuddyRelationshipCollection.HasBlocked(targetID, myWizard.CharId)) {
+        if (BuddyRelationshipCollection.HasBlocked(targetID, myWizard.CharId) || !TakeChatToken()) { // CLASSIC: rate
             return;
         }
 
@@ -244,10 +288,17 @@ internal class ChatService(SessionActor sessionActor) : MessageService(sessionAc
         // Send the directed chat to the target player.
         var hexName = myWizard.PlayerNameBehavior.GetWizardNameAsByteHexString();
         var sourceName = DataManipulation.SpacedHexStringToBytes(hexName);
+        // CLASSIC: filtered and cut like typed chat; an empty whisper is dropped (security audit 2026-10-04).
+        string whisper = message.Message;
+        var cleanWhisper = Imlight.Classic.Security.ChatGuard.SanitizeText(whisper);
+        if (cleanWhisper is null) {
+            return;
+        }
+
         var msg = new GAME_5_PROTOCOL.MSG_DIRECTEDCHAT {
             SourceName = sourceName,
             SourceID = myWizard.CharId,
-            Message = message.Message,
+            Message = cleanWhisper,
             Filter = 0
         };
 
@@ -290,19 +341,20 @@ internal class ChatService(SessionActor sessionActor) : MessageService(sessionAc
         _selectedAccount = selectedAccount;
     }
 
-    private static string CleanMessageTrash(ByteString message) {
-        if (message == null) {
+    private static string CleanMessageTrash(byte[] message) {
+        // CLASSIC: an empty line (or only the prefix byte) has nothing to clean; [1..] on it threw.
+        if (message is null || message.Length == 0) {
             return null;
         }
 
         // Remove the first byte, unless it's the command prefix.
-        if (!message.ToString().StartsWith(CommandPrefix)) {
-            message = ((byte[])message)[1..];
+        if (message[0] != (byte) '.') {
+            message = message[1..];
         }
 
         // Define a regular expression pattern to keep alphanumeric characters and punctuation
         string validCharactersPattern = MessageRegex; // \p{P} matches any punctuation character
-        var cleanedMessage = Regex.Replace(message.ToString(), validCharactersPattern, "").Trim();
+        var cleanedMessage = Regex.Replace(new ByteString(message).ToString() ?? "", validCharactersPattern, "").Trim();
 
         return cleanedMessage;
     }

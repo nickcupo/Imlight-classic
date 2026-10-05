@@ -60,7 +60,16 @@ internal class SpellbookService(SessionActor sessionActor) : MessageService(sess
     [MessageHandler(typeof(WIZARD_12_PROTOCOL.MSG_ADDSPELLTODECK))]
     private void ReceiveAddSpellToDeck(WIZARD_12_PROTOCOL.MSG_ADDSPELLTODECK message) {
         var wizard = GetActiveWizard();
-        var deckAddSuccess = wizard.AddSpellToDeck((uint) message.SpellID, message.DeckID);
+        // CLASSIC: only a learned, non-treasure spell (security audit 2026-10-04; Classic/DeckEditGuard.cs).
+        var spellTemplateId = (uint) message.SpellID;
+        var refusal = Classic.DeckEditGuard.CanAddSpell(CoreObjectFactory.GetCoreTemplate(spellTemplateId) as SpellTemplate,
+            wizard.SpellbookBehavior.HasSpell(spellTemplateId));
+        if (refusal != Classic.DeckEditRefusal.None) {
+            Logger.Warning("Wizard {0} deck add of spell {1} refused: {2}.",
+                Logger.Args(wizard.CharId, spellTemplateId, refusal.ToString()));
+        }
+
+        var deckAddSuccess = refusal == Classic.DeckEditRefusal.None && wizard.AddSpellToDeck(spellTemplateId, message.DeckID);
 
         SendToSocket(new WIZARD_12_PROTOCOL.MSG_ADDSPELLTODECK() {
             SpellID = message.SpellID,

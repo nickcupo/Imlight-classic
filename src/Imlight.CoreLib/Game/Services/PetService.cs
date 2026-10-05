@@ -152,8 +152,14 @@ internal class PetService(SessionActor sessionActor) : MessageService(sessionAct
             return;
         }
 
-        // TODO: validate gold cost against message.Gold
-        // For now, just hatch immediately.
+        // CLASSIC: no free skip of the incubation (security audit 2026-10-04); paying to hatch early is not offered, so
+        // an egg hatches here only once its timer is done (the timer hatches it anyway).
+        if (!Imlight.Classic.Security.EggHatch.Ready(egg.m_timeFinished, DateTimeOffset.UtcNow.ToUnixTimeSeconds())) {
+            InformGameClient("Your egg isn't ready to hatch yet.");
+
+            return;
+        }
+
         HatchEgg(wizard, egg);
     }
 

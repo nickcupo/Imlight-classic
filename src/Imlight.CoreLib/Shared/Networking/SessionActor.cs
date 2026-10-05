@@ -470,6 +470,7 @@ public sealed partial class SessionActor : ReceiveActor, IDisposable {
     }
 
     private void SendToSocket(IMessage message) {
+        ObserveOutgoing(message); // CLASSIC: a server teleport re-anchors the movement guard (SessionActor.Movement.cs)
         _socketSenderRef.Forward(message);
     }
 
@@ -547,6 +548,11 @@ public sealed partial class SessionActor : ReceiveActor, IDisposable {
         // Apply session policy in packet order before forwarding to independently scheduled child services.
         if (packet is EnhancedClassicProtocol.Hello enhancementHello)
             MonstrologySession.Negotiate(enhancementHello.ProtocolVersion, enhancementHello.StrictClassic);
+
+        // CLASSIC: an impossible move reaches no service; the client is put back (SessionActor.Movement.cs).
+        if (packet is Imcodec.MessageLayer.Generated.GAME_5_PROTOCOL.MSG_CLIENTMOVE clientMove && !AdmitClientMove(clientMove)) {
+            return;
+        }
 
         if (_dispatchTable.TryGetValue(packet.GetType(), out var handlers)) {
             foreach (var handler in handlers) {
