@@ -214,6 +214,7 @@ public sealed class InstanceResetRuntimeTests : IDisposable {
         OnlinePlayerCollection.RemoveVirtualOnlinePlayer(AccountB);
         InstanceResets.ClearForTests();
         ActiveDuels.Release(A);
+        ActiveDuels.Release(B);
         foreach (var run in _runs) {
             GroupInstances.EndRun(run);
         }
@@ -266,8 +267,12 @@ public sealed class InstanceResetRuntimeTests : IDisposable {
         var now = DateTime.UtcNow;
         ActiveDuels.Hold(new HeldSeat(A, Floor3, A, now.AddMinutes(5)));
 
-        Assert.False(InstanceResets.ResetOnLogin(A, Floor3, A, now));
+        Assert.False(InstanceResets.ResetOnLogin(A, Floor3, A, now));     // a dropped connection rejoins its fight
+        Assert.True(InstanceResets.ResetOnEntry(A, Court, Floor1, A, now));       // walked out of it: a new trip
+
+        ActiveDuels.Hold(new HeldSeat(B, Floor3, A, now.AddMinutes(5)));      // a grouped wizard's fight is not wiped
         Assert.False(InstanceResets.ResetOnEntry(A, Court, Floor1, A, now));
+        ActiveDuels.Release(B);
     }
 
     [Fact]

@@ -80,9 +80,22 @@ internal static class InstanceResets {
         }
 
         s_departures.TryGetValue(charId, out var departure);
+        // The entering wizard's own held seat does not count: they walked out of that fight (a gauntlet resets "for any
+        // reason"), and coming in from outside starts over. Another wizard's seat does.
+        var occupied = IsOccupied(owner, group, charId, nowUtc, countOwnSeat: false);
+        var reset = InstanceResetPolicy.ResetsOnEntry(group, fromZone, owner == charId, occupied, departure, owner, nowUtc,
+            InstanceGroups.Rules.ReturnWindow);
+        Imlight.Common.Logger.Information("Dungeon {Dungeon} ({Kind}): {Char} enters from {From} into copy {Owner}: {Decision}.",
+            Imlight.Common.Logger.Args(group.Id, group.Kind, charId, fromZone ?? "?", owner,
+                reset ? "fresh copy" : owner != charId ? "joins that copy" : occupied ? "someone is inside, kept"
+                    : "returns within the window, kept"));
 
-        return InstanceResetPolicy.ResetsOnEntry(group, fromZone, owner == charId, IsOccupied(owner, group, charId, nowUtc),
-            departure, owner, nowUtc, InstanceGroups.Rules.ReturnWindow);
+        // The wizard's own seat in a fight of the old copy goes with it.
+        if (reset && ActiveDuels.HeldFor(charId, nowUtc) is { } seat && seat.InstanceOwnerId == owner && group.Contains(seat.Zone)) {
+            ActiveDuels.Release(charId);
+        }
+
+        return reset;
     }
 
     /// <summary>
@@ -120,9 +133,15 @@ internal static class InstanceResets {
 
         s_departures.TryRemove(charId, out _);
         var group = InstanceGroups.GroupOf(zone);
+        if (group is null) {
+            return false;
+        }
 
-        return group is not null
-            && InstanceResetPolicy.ResetsOnLogin(group, owner == charId, IsOccupied(owner, group, charId, nowUtc));
+        var reset = InstanceResetPolicy.ResetsOnLogin(group, owner == charId, IsOccupied(owner, group, charId, nowUtc));
+        Imlight.Common.Logger.Information("Dungeon {Dungeon}: {Char} logs in inside copy {Owner}: {Decision}.",
+            Imlight.Common.Logger.Args(group.Id, charId, owner, reset ? "fresh copy" : "kept (a held seat, someone inside, or not the wizard's copy)"));
+
+        return reset;
     }
 
     /// <summary>
@@ -144,10 +163,11 @@ internal static class InstanceResets {
     internal static InstanceDeparture? DepartureOf(ulong charId) => s_departures.GetValueOrDefault(charId);
 
     /// <summary>
-    /// True when anyone but <paramref name="exceptCharId"/> is inside copy <paramref name="owner"/> of
+    /// True when anyone but <paramref name="exceptCharId"/> (whose own held seat counts only with
+    /// <paramref name="countOwnSeat"/>) is inside copy <paramref name="owner"/> of
     /// <paramref name="group"/>: online in one of its zones, on the way into one, or holding a seat in a fight there.
     /// </summary>
-    internal static bool IsOccupied(ulong owner, InstanceGroup group, ulong exceptCharId, DateTime nowUtc) {
+    internal static bool IsOccupied(ulong owner, InstanceGroup group, ulong exceptCharId, DateTime nowUtc, bool countOwnSeat = true) {
         if (owner == 0) {
             return false;
         }
@@ -164,7 +184,7 @@ internal static class InstanceResets {
             }
         }
 
-        return ActiveDuels.AnyHeldSeat(owner, group.Contains, nowUtc);
+        return ActiveDuels.AnyHeldSeat(owner, group.Contains, nowUtc, countOwnSeat ? 0 : exceptCharId);
     }
 
     /// <summary>
