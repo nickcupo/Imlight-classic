@@ -100,7 +100,6 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
     private IActorRef _currentDuelActor;
     private bool _cheatInstantCinematics;
     private bool _cheatNoFizzle;
-    private ulong _cachedMountId;
 
     protected static Props Props(SessionActor parentActor)
         => Akka.Actor.Props.Create(() => new CombatService(parentActor));
@@ -192,6 +191,7 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
         }
 
         wizard.IsInDuel = false;
+        EquipMount(); // CLASSIC: the mount taken off for the fight goes back on, as after any duel.
         if (wizard.GameStats.m_currentHitpoints <= 0) {
             wizard.UpdateHealth(1);
             SendToSocket(new WIZARD_12_PROTOCOL.MSG_UPDATEHEALTH {
@@ -673,73 +673,59 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
         _currentDuelActor?.Tell(message, SessionActor.ActorRef);
     }
 
+    // CLASSIC: the mount taken off for the duel is saved on the wizard (CombatStowedMountId), not only held here: a
+    // session that ended mid-fight (logout, a dropped client, a restart) lost it, and the wizard found the mount in
+    // the backpack at every next login. EquipmentService puts a saved one back at attach.
     private void EquipMount() {
-        if (_cachedMountId == 0) {
-            // We don't have a cached mount.
-            return;
-        }
-
         var wizard = GetActiveWizard();
-        var wizEquipmentBehavior = wizard.EquipmentBehavior;
-        var slot = wizEquipmentBehavior.GetSlotOfItem(_cachedMountId);
-
-        // We can discard the removed effects because we know for sure they are not present.
-        if (!wizard.InventoryToEquipmentTransfer(_cachedMountId, out var addedEffects, out var _)) {
-            // If this fails, there is perhaps desync between the server and the client.
-            // Send a message to the client to assure them that the server does not have the item equipped.
-            SendUnequipItem("Mount", slot, _cachedMountId);
-
-            Logger.Warning("Equip failed on item {0}", Logger.Args(_cachedMountId));
+        if (wizard is null || wizard.CombatStowedMountId == 0) {
             return;
         }
 
-        var item = wizEquipmentBehavior.GetItemInSlot(EquipmentSlotType.Mount);
+        var mountId = wizard.CombatStowedMountId;
+        if (!wizard.RestoreDuelStowedMount(ZoneDisallowsMounts(), out var addedEffects)) {
+            if (wizard.EquipmentBehavior.GetItemInSlot(EquipmentSlotType.Mount) is null) {
+                // The client may still show it worn; tell it the server does not have it equipped.
+                SendUnequipItem("Mount", 255, mountId);
+            }
 
-        SendEquipItem(item, "Mount");
+            return;
+        }
+
+        var item = wizard.EquipmentBehavior.GetItemInSlot(EquipmentSlotType.Mount);
+        if (item is not null) {
+            SendEquipItem(item, "Mount");
+        }
         SendAddEffects(addedEffects);
-        _cachedMountId = 0;
     }
 
     private void EquipMountSubtle() {
-        // If we have a cached mount, equip it.
-        // Don't inform the client of it.
-        if (_cachedMountId == 0) {
-            return;
-        }
-
-        var wizard = GetActiveWizard();
-        if (!wizard.InventoryToEquipmentTransfer(_cachedMountId, out var _, out var _)) {
-            Logger.Warning("Equip failed on item {0}", Logger.Args(_cachedMountId));
-            return;
-        }
-
-        _cachedMountId = 0;
+        // Put the stowed mount back without telling the client (a defeat sends the wizard home, a fresh attach).
+        GetActiveWizard()?.RestoreDuelStowedMount(false, out _);
     }
 
     private void UnEquipMount() {
         var wizard = GetActiveWizard();
-        var wizEquipmentBehavior = wizard.EquipmentBehavior;
+        if (wizard is null || wizard.EquipmentBehavior.GetItemInSlot(EquipmentSlotType.Mount) is null) {
+            return; // not mounted (or a rejoin: the dropped session's stow is already saved)
+        }
 
-        var item = wizEquipmentBehavior.GetItemInSlot(EquipmentSlotType.Mount);
-        if (item == null) {
-            // We don't have a mount equipped.
+        var mountId = wizard.StowMountForDuel(out var slot, out var removedEffects);
+        if (mountId == 0) {
+            Logger.Warning("Unequip failed on the mount of {0}", Logger.Args(wizard.CharId));
+
             return;
         }
 
-        _cachedMountId = item.m_globalID;
-        var slot = wizEquipmentBehavior.GetSlotOfItem(_cachedMountId);
-
-        if (!wizard.EquipmentToInventoryTransfer(_cachedMountId, out var removedEffects)) {
-            // If this fails, there is perhaps desync between the server and the client.
-            // Send a message to the client to assure them that the server does not have the item equipped.
-            SendUnequipItem("Mount", slot, _cachedMountId);
-
-            Logger.Warning("Unequip failed on item {0}", Logger.Args(_cachedMountId));
-            return;
+        SendUnequipItem("Mount", slot, mountId);
+        if (removedEffects is not null) {
+            SendRemoveEffects(removedEffects);
         }
+    }
 
-        SendUnequipItem("Mount", slot, _cachedMountId);
-        SendRemoveEffects(removedEffects);
+    private bool ZoneDisallowsMounts() {
+        var zoneActor = SessionActor.GetZoneActor();
+        return zoneActor is not null && Classic.ZoneDataDirectory.TryGet(zoneActor, out var data) && (data?.m_noMounts ?? false);
     }
 
     private void SendEquipItem(WizClientObjectItem item, string slotName) {

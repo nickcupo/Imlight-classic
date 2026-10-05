@@ -504,6 +504,15 @@ public static class WizardCollection {
     }
 
     /// <summary>
+    /// CLASSIC: persists <see cref="Wizard.CombatStowedMountId"/>, the mount taken off for a duel, the moment it
+    /// changes: a session can end mid-fight.
+    /// </summary>
+    public static void UpdateCharacterCombatStowedMount(Wizard wizard) {
+        UpdateCharacter(wizard.CharId, existingCharacter =>
+            existingCharacter.CombatStowedMountId = wizard.CombatStowedMountId);
+    }
+
+    /// <summary>
     /// Updates the character badge override for a wizard.
     /// </summary>
     /// <param name="wizard">The wizard object containing the updated character badge override.</param>
