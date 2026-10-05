@@ -200,6 +200,8 @@ public sealed class AmbientChatNaturalTests {
     [InlineData("anyone wanna help me with rattlebones", true)]
     [InlineData("hi all", true)]
     [InlineData("hello", true)]
+    [InlineData("where is lady blackhope", true)]
+    [InlineData("how r you", true)]
     [InlineData("i love this game", false)]
     [InlineData("brb", false)]
     public void OpenCalls(string text, bool open) => Assert.Equal(open, AmbientChatBrain.IsOpenCall(text));

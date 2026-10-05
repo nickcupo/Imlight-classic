@@ -79,7 +79,7 @@ public static class AmbientLinePool {
     public static readonly string[] MenuIdle = [
         "Hello!", "Hi!", "Hi everyone!", "Is anyone here?", "Does anyone want to go questing?", "Let's go questing!",
         "I like your outfit!", "Nice hat!", "I like your wand!", "Want to be friends?", "Where are you going?", "Follow me!",
-        "Wait for me!", "I'll be right back.", "I'm back!", "This is fun!", "Let's team up!", "Does anyone need help?",
+        "Wait for me!", "This is fun!", "Let's team up!", "Does anyone need help?",
         "Good luck!", "Have fun!", "Goodbye!", "See you later!", "I have to go.", "Let's go!",
     ];
 
@@ -494,7 +494,6 @@ public static class AmbientLinePool {
             "B:the shopping district|it dropped from a boss|i dont remember lol"]),
         new("lost", [], ["A:where do i go now|im lost", "B:follow your quest arrow|check your map|what quest",
             "A:ok ty|oh ok thanks|lol ok"]),
-        new("brb", [], ["A:brb", "B:k|ok", "A:back", "B:welcome back|ok"]),
         new("duel", ["WC_Hub", "WC_OldeTown"], ["A:anyone wanna duel|wanna practice duel", "B:sure|ok|lol i would lose",
             "A:meet me at the arena|ok come on", "B:ok|on my way"]),
         new("level", [], ["A:what level are you", "B:not very high|almost done with wizard city|pretty low lol",
@@ -512,8 +511,10 @@ public static class AmbientLinePool {
         new("unicorn", ["WC_Unicorn"], ["A:where is the haunted cave", "B:down the street|follow the arrow|near lady oriel",
             "A:ty|ok thanks"]),
         new("krok", ["KT_"], ["A:the pyramid is so long", "B:yeah|i know right|it took me forever", "A:lol"]),
-        new("new", ["WC_Hub", "WC_Ravenwood", "WC_Unicorn"], ["A:im new", "B:welcome|hi welcome|cool what school",
-            "A:{aschool}|ty|thanks"]),
+        new("new", ["WC_Hub", "WC_Ravenwood", "WC_Unicorn"], ["A:im new|im new here", "B:welcome|hi welcome|welcome to wizard city",
+            "A:ty|thanks|thx"]),
+        new("new-school", ["WC_Hub", "WC_Ravenwood", "WC_Unicorn"], ["A:im new", "B:cool what school", "A:{aschool}|{aschool} you",
+            "B:{bschool}|im {bschool}|nice"]),
     ];
 
     // ---- lookups --------------------------------------------------------------------------------

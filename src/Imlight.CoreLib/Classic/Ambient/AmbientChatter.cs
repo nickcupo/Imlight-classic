@@ -316,14 +316,16 @@ internal sealed class AmbientChatter {
             answerer = _wizards.FirstOrDefault(w => w.Present && AmbientChatBrain.Mentions(text, w.Name.Split(' ')[0]))
                        ?? _wizards.FirstOrDefault(w => w.Present && StateOf(w).TalkingWith == speakerId && now < StateOf(w).TalkingUntil
                                                        && (at is null || Distance(w.Position, at.Value) < NearForTalk));
-            if (answerer is null && AmbientChatBrain.IsOpenCall(text) && at is { } spot) {
+            if (answerer is null && AmbientChatBrain.IsOpenCall(text)) {
+                // Chat reaches the whole zone: a wizard nearby is likelier to answer, but one down the street may too.
                 addressed = false;
-                var near = _wizards.Where(w => w.Present && w.Activity != AmbientActivity.Away && StateOf(w).BackAt == default
-                                               && Distance(w.Position, spot) < NearForTalk).ToList();
-                var chance = near.Count == 0 ? 0 : 0.55;
-                if (near.Count > 0 && _rng.NextDouble() < chance) {
-                    var pick = AmbientChatPlanner.PickSpeaker(near.Select(w => (w.Identity.Temper, DateTime.MinValue, true)).ToList(), now, _rng);
-                    answerer = pick >= 0 ? near[pick] : null;
+                var willing = _wizards.Where(w => w.Present && w.Activity != AmbientActivity.Away && StateOf(w).BackAt == default).ToList();
+                var near = at is { } spot ? willing.Where(w => Distance(w.Position, spot) < NearForTalk).ToList() : [];
+                var pool = near.Count > 0 ? near : willing;
+                var chance = near.Count > 0 ? 0.6 : 0.35;
+                if (pool.Count > 0 && _rng.NextDouble() < chance) {
+                    var pick = AmbientChatPlanner.PickSpeaker(pool.Select(w => (w.Identity.Temper, DateTime.MinValue, true)).ToList(), now, _rng);
+                    answerer = pick >= 0 ? pool[pick] : null;
                 }
             }
         }

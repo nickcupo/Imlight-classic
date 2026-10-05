@@ -167,10 +167,11 @@ public static class AmbientChatBrain {
     ];
 
     private static readonly Regex s_openCall = new(
-        @"\b(anyone|anybody|any1|everyone|everybody|someone|somebody|who wants|who wanna|lfg|lfm|guys|all)\b|^\s*(hi+|hello|hey+|hiya|heya)\s*!*$",
+        @"\b(anyone|anybody|any1|everyone|everybody|someone|somebody|who wants|who wanna|lfg|lfm|guys|all)\b|^\s*(hi+|hello|hey+|hiya|heya)\s*!*$"
+        + @"|^\s*(where|how|what|who|which|does|do|can|is|are)\b.*\??\s*$",
         Options);
 
-    /// <summary>True for a Say to everyone around ("anyone wanna help", "hi all", a bare "hello").</summary>
+    /// <summary>True for a Say to everyone around ("anyone wanna help", "hi all", a bare "hello", a question to the street).</summary>
     public static bool IsOpenCall(string? text) => !string.IsNullOrWhiteSpace(text) && s_openCall.IsMatch(text);
 
     /// <summary>True when <paramref name="text"/> uses <paramref name="firstName"/>.</summary>
