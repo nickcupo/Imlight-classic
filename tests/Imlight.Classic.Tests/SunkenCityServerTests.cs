@@ -112,7 +112,7 @@ public sealed class SunkenCityServerTests : IDisposable {
         Assert.False(Meets(quest.m_requirements, wizard));
         Assert.False(Meets(Sigil(), wizard)); // the sigil stays dark
 
-        Complete(wizard, "WC-CLASSIC-SIDE-059");
+        Complete(wizard, "WC-ST07-C01-001");
         Assert.True(Meets(quest.m_requirements, wizard));
 
         var start = Assert.IsType<ResModifyEntry>(Assert.Single(quest.m_startResults.m_results));

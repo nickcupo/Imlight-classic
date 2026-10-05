@@ -811,6 +811,14 @@ public static class WizardCollection {
                 .Where(q => q.OwnerCharId == wizard.CharId)
                 .ToList();
 
+            // CLASSIC: an instance still under an old (made-up) quest name (the start-up migration was off or
+            // failed) is read under the quest's KingsIsle name; it is saved that way on its next update.
+            foreach (var quest in myQuests) {
+                if (quest is not null && Imlight.Classic.Quests.QuestNameAliases.Current.NewNameOf(quest.QuestName) is { } renamed) {
+                    quest.QuestName = renamed;
+                }
+            }
+
             wizard.QuestBehavior.CurrentQuestInstances = myQuests;
         }
 

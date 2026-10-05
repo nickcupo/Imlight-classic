@@ -72,9 +72,9 @@ public sealed class GolemTowerTests {
     private static JToken[] Requirements(JObject quest) => [.. quest["m_requirements"]!["m_requirements"]!];
 
     [Theory]
-    [InlineData("WC-CLASSIC-SIDE-056", "QuestTitle_9589", "WC-ST01-C01-006", "Wooden_Construct", 1)]
-    [InlineData("WC-CLASSIC-SIDE-057", "QuestTitle_958A", "WC-CLASSIC-SIDE-056", "Clockwork_Golem", 3)]
-    [InlineData("WC-CLASSIC-SIDE-058", "QuestTitle_13D92", "WC-CLASSIC-SIDE-057", "Iron_Golem", 5)]
+    [InlineData("WC-MISC-C05-001", "QuestTitle_9589", "WC-ST01-C01-006", "Wooden_Construct", 1)]
+    [InlineData("WC-MISC-C05-002", "QuestTitle_958A", "WC-MISC-C05-001", "Clockwork_Golem", 3)]
+    [InlineData("WC-MISC-C05-003", "QuestTitle_13D92", "WC-MISC-C05-002", "Iron_Golem", 5)]
     public void ReginaSendsTheWizardUpTheTowerOneTripAtATime(string name, string title, string after, string mob, int floor) {
         var quest = Quest(name);
         Assert.Equal(title, (string?) quest["m_questTitle"]);
@@ -100,7 +100,7 @@ public sealed class GolemTowerTests {
     [InlineData(4, false)]
     [InlineData(5, true)]
     public void ScienceFairOpensAtLevelFiveAfterUnicornWay(int level, bool offered) {
-        var requirement = Assert.Single(Requirements(Quest("WC-CLASSIC-SIDE-056")), r => ((string?) r["$type"])!.Contains("ReqMagicLevel"));
+        var requirement = Assert.Single(Requirements(Quest("WC-MISC-C05-001")), r => ((string?) r["$type"])!.Contains("ReqMagicLevel"));
         Assert.Equal(offered, NumericRequirement.Meets(level,
             (string?) requirement["m_operatorType"], (float) requirement["m_numericValue"]!));
     }
@@ -108,7 +108,7 @@ public sealed class GolemTowerTests {
     [Fact]
     public void TheFinalPieceGivesItsTwoTreasureCards() {
         var cards = QuestCardRewardsLoader.Load(Path.Combine(ClassicDataFixture.Root, "quests", "cards-2009.yaml"));
-        Assert.Equal(["Ghoul", "Blood Bat"], cards.CardsFor("WC-CLASSIC-SIDE-058", "Storm").Select(c => c.Name));
+        Assert.Equal(["Ghoul", "Blood Bat"], cards.CardsFor("WC-MISC-C05-003", "Storm").Select(c => c.Name));
     }
 
     [Fact]
@@ -159,7 +159,7 @@ public sealed class GolemTowerTests {
 
     [Fact]
     public void TheTowerFloorsAreTheOnesTheQuestsSendTheWizardTo() {
-        var goalZones = new[] { "WC-CLASSIC-SIDE-056", "WC-CLASSIC-SIDE-057", "WC-CLASSIC-SIDE-058", "WC-STRM-C02-001", "WC-LIFE-C02-001" }
+        var goalZones = new[] { "WC-MISC-C05-001", "WC-MISC-C05-002", "WC-MISC-C05-003", "WC-STRM-C02-001", "WC-LIFE-C02-001" }
             .SelectMany(q => Quest(q)["m_goals"]!.Select(g => (string?) g["m_destinationZone"]))
             .Where(z => z is not null && z.StartsWith(Floors, StringComparison.Ordinal));
         Assert.All(goalZones, z => Assert.Contains(z!, Gauntlets.GolemTower));

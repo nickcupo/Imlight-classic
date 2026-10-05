@@ -180,7 +180,7 @@ public sealed class BadgeRulesTests {
 
         var seraph = Assert.Single(cards.CardsFor("WC-ST01-C01-002", "Ice"));
         Assert.Equal(("Seraph", 1792941517u, 1), (seraph.Name, seraph.Template, seraph.Count));
-        Assert.Equal(["Ghoul", "Blood Bat"], cards.CardsFor("WC-CLASSIC-SIDE-058", "Life").Select(c => c.Name));
+        Assert.Equal(["Ghoul", "Blood Bat"], cards.CardsFor("WC-MISC-C05-003", "Life").Select(c => c.Name));
         Assert.Equal("Scald", Assert.Single(cards.CardsFor("MB-MUSEHub-C03-002", "Fire")).Name);
         Assert.Equal("Bladestorm", Assert.Single(cards.CardsFor("MB-MUSEHub-C03-002", "Balance")).Name);
         Assert.Empty(cards.CardsFor("MB-MUSEHub-C03-002", "Ice"));

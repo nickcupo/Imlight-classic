@@ -66,7 +66,7 @@ public sealed class DatamineGateFixesTests {
 
     [Fact]
     public void SealTheDealSetsTheEntryItsTowerSigilsCheck() {
-        Assert.True(StartSetsEntry("WC-CLASSIC-SIDE-037", "QT-WC-ST06-C01-006"));
+        Assert.True(StartSetsEntry("WC-ST06-C01-006", "QT-WC-ST06-C01-006"));
     }
 
     [Theory]
@@ -78,7 +78,7 @@ public sealed class DatamineGateFixesTests {
     }
 
     [Theory]
-    [InlineData("WC-CLASSIC-SIDE-037", "WizQst952A_00000020")] // Seal the Deal: "Have you defeated both Gobbler barons?"
+    [InlineData("WC-ST06-C01-006", "WizQst952A_00000020")] // Seal the Deal: "Have you defeated both Gobbler barons?"
     [InlineData("WC-ICE-C02-001", "WizQst13CCC_00000001")]
     [InlineData("GH-FORT-C01-002", "WizQst2A449_00000000")]
     [InlineData("MS-MAIN-C02-001", "WizQst9C21_00000002")]

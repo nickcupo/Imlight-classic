@@ -186,7 +186,7 @@ public sealed class SunkenCityTests {
         var quest = QuestJson(ToSunkenCity);
         var requirement = Assert.Single(quest["m_requirements"]!["m_requirements"]!);
         Assert.EndsWith("ReqHasEntry, Imcodec.ObjectProperty", (string?) requirement["$type"]);
-        Assert.Equal("WC-CLASSIC-SIDE-059", (string?) requirement["m_questName"]); // The Looking Glass as served
+        Assert.Equal("WC-ST07-C01-001", (string?) requirement["m_questName"]); // The Looking Glass as served
         Assert.Equal("Complete", (string?) requirement["m_entryName"]);
 
         Assert.Equal(["WizQst140B8_00000002"], Dialog(quest, "Prep").Select(e => (string) e["m_dialog"]!));

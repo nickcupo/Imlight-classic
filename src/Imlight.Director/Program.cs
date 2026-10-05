@@ -181,6 +181,16 @@ internal static class Program {
             Serilog.Log.Error(ex, "Ignore migration failed; old ignored rows are read the same way in memory until it runs.");
         }
 
+        // CLASSIC (player data schema 4): quests first served under made-up names carry their KingsIsle names now
+        // (classic-data/quests/quest-name-aliases.yaml); rename those names in saved quest instances and registry keys
+        // (QuestNameMigration; [Classic] QuestNameMigration = apply | dry-run | off). Idempotent.
+        try {
+            Imlight.CoreLib.WizardData.Collections.QuestNameMigration.RunConfigured(PlayerDatabase.Instance.Store);
+        }
+        catch (Exception ex) {
+            Serilog.Log.Error(ex, "Quest name migration failed; old quest names are still resolved to the new ones in memory until it runs.");
+        }
+
         var loginServer = StartLoginServer();
         StartGameServers(loginServer);
 

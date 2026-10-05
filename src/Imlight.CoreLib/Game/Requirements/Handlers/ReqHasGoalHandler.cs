@@ -38,6 +38,8 @@ internal sealed class ReqHasGoalHandler : BaseRequirementHandler<ReqHasGoal> {
             return false;
         }
 
+        questName = Imlight.Classic.Quests.QuestNameAliases.Current.Canonical(questName); // CLASSIC: old name -> KingsIsle name
+
         var goalName = Requirement.m_goalName;
         if (string.IsNullOrEmpty(goalName)) {
             return false;
@@ -73,6 +75,12 @@ internal sealed class ReqHasGoalHandler : BaseRequirementHandler<ReqHasGoal> {
         var template = QuestTemplateCollection.GetQuestByName(questName);
         if (template?.m_goals is null) {
             return null;
+        }
+
+        // CLASSIC: the goal whose id is StringHash of the KingsIsle name ("Goal 6" of KT-CRY7-C02-002), as the client's
+        // quest-helper table numbers it, before the position guess below.
+        if (KingsIsleGoalIds.GoalById(template, goalName) is { } byId && byId.m_goalName != goalName) {
+            return quest.GoalProgress.FirstOrDefault(g => g.GoalName == byId.m_goalName);
         }
 
         var resolved = KingsIsleGoalNames.Resolve(questName, template.m_goals.Select(g => g?.m_goalName).ToList(), goalName);

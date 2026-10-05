@@ -37,6 +37,13 @@
  *   3  2026-10-05 per-owner ignores: Relationship.BlockedBy on BuddyRelationships
  *      rows (an older build's friend/ignore writes would drop it); old ignored
  *      rows are migrated at start-up (MigrateIgnoresToPerOwner)
+ *   4  2026-10-05 quest real names: quests first served under made-up names
+ *      (WC-CLASSIC-SIDE-059 ...) carry their KingsIsle names (WC-ST07-C01-001)
+ *      so the client's quest arrow finds them; QuestInstances.QuestName and the
+ *      quest-named Wizard registry keys are renamed at start-up
+ *      (QuestNameMigration). An older build would not know the new names: the
+ *      renamed active quests and completions would vanish from its view and be
+ *      re-offered, so it must not run on a migrated database.
  * Rolling back past a bump needs the pre-deploy backup restored
  * (deploy/linux/deploy-from-mac.sh --rollback --restore-backup).
  * The marker is the same for every rules profile.
@@ -64,7 +71,7 @@ public enum SchemaVerdict {
 public static class PlayerDataSchema {
 
     /// <summary>The version this build writes.</summary>
-    public const int Current = 3;
+    public const int Current = 4;
 
     /// <summary>The marker document's id.</summary>
     public const string DocumentId = "Meta/PlayerDataSchema";

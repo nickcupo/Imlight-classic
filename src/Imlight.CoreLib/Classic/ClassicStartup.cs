@@ -124,6 +124,14 @@ public static class ClassicStartup {
             ClassicRuntime.Initialize(rules, new LoggerAuditSink(), auditVerbose);
             s_classicDataRoot = classicDataRoot;
 
+            // CLASSIC: quests first served under made-up names keep resolving by those names (quest arrows need the
+            // KingsIsle names); QuestNameMigration renames them in saved characters after the schema check.
+            if (classicDataRoot is not null) {
+                Imlight.Classic.Quests.QuestNameAliases.Current = Imlight.Classic.Quests.QuestNameAliasesLoader.LoadFromRoot(classicDataRoot);
+                Logger.Information("Quest name aliases: {Count} old quest names resolve to their KingsIsle names ({File}).",
+                    Logger.Args(Imlight.Classic.Quests.QuestNameAliases.Current.Count, Imlight.Classic.Quests.QuestNameAliasesLoader.RelativePath));
+            }
+
             Logger.Information("Classic profile chain: {Chain}.", Logger.Args(string.Join(" -> ", profile.SourceFiles)));
             if (profile.IsUnrestricted) {
                 Logger.Information("Classic zone map not loaded: profile {Profile} is unrestricted.", Logger.Args(profile.Id));
