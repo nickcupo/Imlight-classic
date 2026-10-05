@@ -40,7 +40,8 @@ internal sealed class ReqHasQuestHandler : BaseRequirementHandler<ReqHasQuest> {
             return false;
         }
 
-        return HasQuestActiveOrCompleted(wizard, questName);
+        // CLASSIC: an old (made-up) quest name means the quest's KingsIsle name.
+        return HasQuestActiveOrCompleted(wizard, Imlight.Classic.Quests.QuestNameAliases.Current.Canonical(questName));
     }
 
     private static bool HasQuestActiveOrCompleted(Wizard wizard, string questName) {

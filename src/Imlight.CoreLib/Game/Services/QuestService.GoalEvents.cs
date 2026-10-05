@@ -76,7 +76,8 @@ internal partial class QuestService {
             .ToList() ?? [];
         var names = new[] { goalTemplate.m_goalName }
             .Concat(KingsIsleGoalNames.AliasesOf(questName, goalNames, goalTemplate.m_goalName))
-            .Distinct();
+            .Concat(Imlight.CoreLib.Classic.KingsIsleGoalIds.NumberedNameOf(goalTemplate.m_goalNameID) is { } kiName ? [kiName] : [])
+            .Distinct(); // CLASSIC: also the KingsIsle name the goal's id is the hash of
 
         foreach (var name in names) {
             zoneActor.Tell(new ZONE_102_PROTOCOL.MSG_POSTEVENT {

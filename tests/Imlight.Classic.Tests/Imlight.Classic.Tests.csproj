@@ -69,6 +69,10 @@
   <ItemGroup>
     <ServerIntegrationTest Include="SecurityServerTests.cs" />
   </ItemGroup>
+  <!-- quest-real-names -->
+  <ItemGroup>
+    <ServerIntegrationTest Include="QuestNameAliasServerTests.cs" />
+  </ItemGroup>
   <!-- security-economy -->
   <ItemGroup>
     <ServerIntegrationTest Include="EquipRulesTests.cs" />

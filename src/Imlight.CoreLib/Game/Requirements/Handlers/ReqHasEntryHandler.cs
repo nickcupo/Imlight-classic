@@ -69,6 +69,7 @@ internal sealed class ReqHasEntryHandler : BaseRequirementHandler<ReqHasEntry> {
             return false;
         }
 
+        questName = QuestNameAliases.Current.Canonical(questName); // CLASSIC: QT-<old name> means the renamed quest
         return wizard.QuestBehavior?.CurrentQuestInstances?.Any(q => q.QuestName == questName) == true
             || wizard.HasQuestRegistryValue(questName, QUEST_COMPLETED_ENTRY);
     }

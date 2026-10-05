@@ -244,13 +244,19 @@ public static partial class SpiralDB {
             return null;
         }
 
-        s_questTemplatesByName.TryGetValue(questName, out var quest);
+        // CLASSIC: an old (made-up) quest name finds the quest under its KingsIsle name (QuestNameAliases).
+        if (!s_questTemplatesByName.TryGetValue(questName, out var quest)
+                && Imlight.Classic.Quests.QuestNameAliases.Current.NewNameOf(questName) is { } renamed) {
+            s_questTemplatesByName.TryGetValue(renamed, out quest);
+        }
 
         return quest;
     }
 
     public static bool QuestExists(string questName)
-        => s_questTemplatesByName.ContainsKey(questName);
+        => questName is not null && (s_questTemplatesByName.ContainsKey(questName) // CLASSIC: or an old name of one
+            || Imlight.Classic.Quests.QuestNameAliases.Current.NewNameOf(questName) is { } renamed
+                && s_questTemplatesByName.ContainsKey(renamed));
 
     public static WizardZoneData GetZoneData(string zoneName) {
         s_zoneData.TryGetValue(zoneName, out var zone);

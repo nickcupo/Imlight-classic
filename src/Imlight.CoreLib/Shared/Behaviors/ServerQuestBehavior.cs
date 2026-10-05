@@ -41,6 +41,11 @@ public class ServerQuestBehavior : IClientBehaviorProvider<ServerQuestBehavior> 
 
     public readonly ConcurrentDictionary<string, ulong> Registry = new(); // CLASSIC: was Dictionary.
 
+    // CLASSIC: an old (made-up) quest name, alone or in a registry key ("QT-old", "old_Complete"), means the quest's
+    // KingsIsle name (Imlight.Classic.Quests.QuestNameAliases); saved characters are migrated at start-up.
+    private static string Q(string questName) => Imlight.Classic.Quests.QuestNameAliases.Current.Canonical(questName);
+    private static string E(string entryName) => Imlight.Classic.Quests.QuestNameAliases.Current.CanonicalEntry(entryName);
+
     // In database, only store the quest IDs to reduce storage size.
     // The quest instances are loaded from the quest instance database on demand.
     public List<ulong> CurrentQuestIDs { get; set; } = []; // CLASSIC: replaced, never changed in place.
@@ -90,6 +95,7 @@ public class ServerQuestBehavior : IClientBehaviorProvider<ServerQuestBehavior> 
             return false;
         }
 
+        questName = Q(questName); // CLASSIC
         var quest = CurrentQuestInstances.Find(q => q?.QuestName == questName);
         if (quest == null) {
             return false;
@@ -123,6 +129,7 @@ public class ServerQuestBehavior : IClientBehaviorProvider<ServerQuestBehavior> 
             return false;
         }
 
+        questName = Q(questName); // CLASSIC
         var quest = CurrentQuestInstances.Find(q => q.QuestName == questName);
         if (quest == null) {
             return false;
@@ -167,6 +174,8 @@ public class ServerQuestBehavior : IClientBehaviorProvider<ServerQuestBehavior> 
             return false;
         }
 
+        questName = Q(questName); // CLASSIC
+
         return CurrentQuestInstances.Any(q => q.QuestName == questName);
     }
 
@@ -177,7 +186,7 @@ public class ServerQuestBehavior : IClientBehaviorProvider<ServerQuestBehavior> 
 
         // Check the registry to find the completed quest key:
         // <quest_name>_Complete
-        var completedKey = $"{questName}_Complete";
+        var completedKey = $"{Q(questName)}_Complete"; // CLASSIC: Q
 
         return Registry.TryGetValue(completedKey, out var completed) && completed > 0; // CLASSIC: one read.
     }
@@ -187,6 +196,7 @@ public class ServerQuestBehavior : IClientBehaviorProvider<ServerQuestBehavior> 
             return false;
         }
 
+        questName = Q(questName); // CLASSIC
         var quest = CurrentQuestInstances.Find(q => q.QuestName == questName);
         if (quest == null) {
             return false;
@@ -202,6 +212,7 @@ public class ServerQuestBehavior : IClientBehaviorProvider<ServerQuestBehavior> 
             return false;
         }
 
+        questName = Q(questName); // CLASSIC
         var quest = CurrentQuestInstances.Find(q => q.QuestName == questName);
         if (quest == null) {
             return false;
@@ -217,6 +228,7 @@ public class ServerQuestBehavior : IClientBehaviorProvider<ServerQuestBehavior> 
             return false;
         }
 
+        questName = Q(questName); // CLASSIC
         var quest = CurrentQuestInstances.Find(q => q.QuestName == questName);
         if (quest == null) {
             return false;
@@ -232,7 +244,7 @@ public class ServerQuestBehavior : IClientBehaviorProvider<ServerQuestBehavior> 
             return false;
         }
 
-        Registry.TryAdd(entryName, value); // CLASSIC: keeps an existing value, atomically.
+        Registry.TryAdd(E(entryName), value); // CLASSIC: keeps an existing value, atomically; E
 
         return true;
     }
@@ -253,7 +265,7 @@ public class ServerQuestBehavior : IClientBehaviorProvider<ServerQuestBehavior> 
             return false;
         }
 
-        return Registry.TryRemove(entryName, out _); // CLASSIC
+        return Registry.TryRemove(E(entryName), out _); // CLASSIC: E
     }
 
     public bool RemoveFromQuestRegistry(string questName, string entryName) {
@@ -271,7 +283,7 @@ public class ServerQuestBehavior : IClientBehaviorProvider<ServerQuestBehavior> 
             return false;
         }
 
-        Registry[entryName] = value;
+        Registry[E(entryName)] = value; // CLASSIC: E
 
         return true;
     }
@@ -281,7 +293,7 @@ public class ServerQuestBehavior : IClientBehaviorProvider<ServerQuestBehavior> 
             return false;
         }
 
-        var fullEntryName = $"{questName}_{entryName}";
+        var fullEntryName = E($"{questName}_{entryName}"); // CLASSIC: E
         Registry[fullEntryName] = value;
 
         return true;
@@ -292,7 +304,7 @@ public class ServerQuestBehavior : IClientBehaviorProvider<ServerQuestBehavior> 
             return false;
         }
 
-        return Registry.ContainsKey(key);
+        return Registry.ContainsKey(E(key)); // CLASSIC: E
     }
 
     public bool HasQuestRegistryValue(string questName, string entryName) {
@@ -310,7 +322,7 @@ public class ServerQuestBehavior : IClientBehaviorProvider<ServerQuestBehavior> 
             return 0;
         }
 
-        return Registry.TryGetValue(key, out var value) ? value : 0;
+        return Registry.TryGetValue(E(key), out var value) ? value : 0; // CLASSIC: E
     }
 
     public ulong GetQuestRegistryValue(string questName, string entryName) {

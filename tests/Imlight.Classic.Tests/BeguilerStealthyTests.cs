@@ -61,7 +61,7 @@ namespace Imlight.Classic.Tests;
 [Collection(nameof(ClassicRuntimeCollection))]
 public sealed class BeguilerStealthyTests : IDisposable {
 
-    private const string DangerBeware = "KT-CLASSIC-SIDE-060";
+    private const string DangerBeware = "KT-CRY7-C01-001";
     private const string TombEntry = "QT-KT-CRY7-INSTANCE";
     private const string StealthyStuff = "MB-MUSE3-C03-001";
     private const string BigBen = "Marleybone/MB_BigBen/MB_BigBen";
