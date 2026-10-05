@@ -79,9 +79,16 @@ public class ReceiveProtocolDispatcher : ReceiveActor {
 
     /// <summary>
     /// CLASSIC: a client message that reached a service with no handler for it is warned about once per message type per
-    /// process (it is a spinner or a hang for the player); server-internal messages stay with Akka's default.
+    /// process (it is a spinner or a hang for the player); server-internal messages stay with Akka's default. Only a
+    /// session's services count: zone entities are also told the zone's broadcasts (combat, aggro, objects) and ignore
+    /// the ones they don't need, which is not a missing handler.
     /// </summary>
     protected override void Unhandled(object message) {
+        if (this is not MessageService) {
+            base.Unhandled(message);
+            return;
+        }
+
         if (message is Imcodec.MessageLayer.IMessage and not IServerMessage && Classic.UnhandledMessageLog.FirstTime(message.GetType())) {
             Logger.Warning("{Actor} received client message {Type} and has no handler for it (first of its type; later ones at Verbose).",
                 Logger.Args(GetType().Name, message.GetType().Name));
