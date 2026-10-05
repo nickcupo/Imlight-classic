@@ -953,6 +953,53 @@ internal class FriendsService(SessionActor sessionActor) : MessageService(sessio
         SendToSocket(completeMsg);
     }
 
+    /// <summary>How long after a session goes away a wizard still not back online counts as offline to friends.</summary>
+    internal static readonly TimeSpan OfflineGrace = TimeSpan.FromSeconds(10);
+
+    // CLASSIC: friends heard "offline" only from the client's own logout or disconnect packet, so a wizard whose game
+    // crashed, whose network dropped, or whose session the server closed (a restart) stayed "online" on every friend's
+    // list until the friend logged out (rig-mp fo1). A zone change also closes the session, so the check waits
+    // OfflineGrace and tells friends only if the wizard has not come back online by then.
+    protected override void OnPreDispose() {
+        try {
+            // Never a blocking ask while the session is going away: the wizard this session played, if any.
+            var charId = Classic.ActiveWizardDirectory.TryGet(SessionActor?.ActorRef, out var wizard, out _) ? wizard?.CharId ?? 0 : 0;
+            var system = Context.System;
+            if (charId != 0) {
+                _ = System.Threading.Tasks.Task.Delay(OfflineGrace).ContinueWith(_ => TellFriendsIfStillOffline(system, charId),
+                    System.Threading.Tasks.TaskScheduler.Default);
+            }
+        }
+        catch (Exception ex) {
+            Logger.Warning("Could not schedule the offline notice for friends: {0}", Logger.Args(ex.Message));
+        }
+
+        base.OnPreDispose();
+    }
+
+    private static void TellFriendsIfStillOffline(ActorSystem system, ulong charId) {
+        try {
+            if (OnlinePlayerCollection.GetOnlinePlayer(charId) is not null) {
+                return; // back (a zone change) or never gone
+            }
+
+            foreach (var buddy in BuddyRelationshipCollection.GetBuddiesForWizard(charId).Where(buddy => buddy != null)) {
+                if (OnlinePlayerCollection.GetOnlinePlayer(buddy.CharId) is { ActorPath: { Length: > 0 } path } online) {
+                    system.ActorSelection(path).Tell(new GAME_5_PROTOCOL.MSG_BUDDYSTATUSUPDATE {
+                        ListOwnerGID = buddy.GameObjectID,
+                        EntryGID = charId,
+                        Status = OFFLINE_STATUS_CODE,
+                        ZoneName = online.CurrentZoneDisplayName,
+                        RealmName = online.CurrentRealm,
+                    });
+                }
+            }
+        }
+        catch (Exception ex) {
+            Logger.Warning("Could not tell friends that {0} went offline: {1}", Logger.Args(charId, ex.Message));
+        }
+    }
+
     private void InformBuddiesOfStatusChange(bool isOnline) {
         var ownerWizard = GetActiveWizard();
         var charID = ownerWizard.CharId;
