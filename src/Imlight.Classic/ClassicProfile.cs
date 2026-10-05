@@ -200,6 +200,12 @@ public sealed class ProfileRules {
     public string? BossCheats { get; init; }
 
     /// <summary>
+    /// Path under classic-data of the dungeon reset rules (which zones form one dungeon, when a copy starts fresh), if
+    /// any; null keeps the built-in Golem Tower rule. CLASSIC.
+    /// </summary>
+    public string? InstanceResets { get; init; }
+
+    /// <summary>
     /// The rank from which power pips appear; null when unset or set to null.
     /// </summary>
     public string? PowerPipsFromRank { get; init; }

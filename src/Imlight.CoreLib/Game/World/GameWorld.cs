@@ -117,10 +117,9 @@ public class GameWorld : ReceiveProtocolDispatcher, IWithTimers {
             // A fresh SIGIL entry starts a NEW run: drop any stale copy of this zone so the transfer below
             // builds a FRESH one.
             if (message.ResetInstance) {
-                // CLASSIC: entering a gauntlet from outside resets every zone of it, not just the first.
-                var gauntlet = Imlight.Classic.Travel.Gauntlets.ZonesOf(message.DestinationZone);
-                IEnumerable<string> zonesToDrop = gauntlet.IsEmpty ? [message.DestinationZone] : gauntlet;
-                foreach (var zoneName in zonesToDrop) {
+                // CLASSIC: a dungeon resets as a whole: every zone of its group (Classic.InstanceResets), not just the
+                // first. The session decided the reset after checking nobody is inside.
+                foreach (var zoneName in Classic.InstanceResets.ZonesToDrop(message.DestinationZone)) {
                     instanceContainer.Tell(new ZONE_102_PROTOCOL.MSG_DROPINSTANCEZONE {
                         ZoneName = zoneName,
                     });

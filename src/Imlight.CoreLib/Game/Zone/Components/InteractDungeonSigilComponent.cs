@@ -167,7 +167,17 @@ internal sealed partial class InteractDungeonSigilComponent(ZoneEntity entity)
                     return; // every slot is taken
                 }
 
-                _group = new SigilGroup(GroupInstances.NewRunId(now), now, GroupInstances.SigilCountdownSeconds);
+                // CLASSIC: the wizard who starts the countdown goes back to the copy of this dungeon they left "another
+                // way" within the return window (2009: "Leaving any other way gives you 30 minutes to return before it
+                // resets"; Classic.InstanceResets); otherwise the sigil starts a new copy.
+                var resumed = InstanceResets.ResumableRun(playerCharacter.CharId, sigil.DestinationZone, now);
+                if (resumed != 0) {
+                    Logger.Information("Dungeon sigil -> '{0}': {1} returns to sigil run {2}.",
+                        Logger.Args(sigil.DestinationZone, playerCharacter.CharId, resumed));
+                }
+
+                _group = new SigilGroup(resumed != 0 ? resumed : GroupInstances.NewRunId(now), now,
+                    GroupInstances.SigilCountdownSeconds);
                 ticket = _group.Join(playerCharacter.CharId, now);
             }
 

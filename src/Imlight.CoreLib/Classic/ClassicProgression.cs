@@ -224,6 +224,15 @@ public static class ClassicProgression {
                 Logger.Args(s_bossCheats.Id, s_bossCheats.Count, s_bossCheats.DungeonZone));
         }
 
+        // CLASSIC: the dungeons and their reset rule; a profile without the file keeps the built-in Golem Tower rule.
+        if (profile.Rules.InstanceResets is { } instanceResets && File.Exists(Path.Combine(classicDataRoot, instanceResets))) {
+            var resets = InstanceResetRulesLoader.Load(Path.Combine(classicDataRoot, instanceResets));
+            Imlight.Classic.Travel.InstanceGroups.Use(resets);
+            Logger.Information("Classic instance resets {Table}: {Groups} dungeons ({Multi} with several zones, {Gauntlets} gauntlets); empty copies kept {Empty} min, left copies {Window} min.",
+                Logger.Args(resets.Id, resets.Groups.Length, resets.Groups.Count(g => g.Zones.Length > 1),
+                    resets.Groups.Count(g => g.Kind == InstanceKind.Gauntlet), resets.EmptyLifetime.TotalMinutes, resets.ReturnWindow.TotalMinutes));
+        }
+
         if (profile.Rules.CrownShop is { } crownShop && File.Exists(Path.Combine(classicDataRoot, crownShop))) {
             s_crownShop = CrownShopCatalogLoader.Load(Path.Combine(classicDataRoot, crownShop));
             Logger.Information("Classic Crown Shop {Table}: {Count} items.", Logger.Args(s_crownShop.Id, s_crownShop.Items.Length));
