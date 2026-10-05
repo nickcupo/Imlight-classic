@@ -43,17 +43,132 @@ public class SecurityAuthTests {
     }
 
     [Fact]
-    public void A_key_is_consumed_by_its_attach_and_rearmed_only_by_a_server_transfer() {
+    public void A_key_is_consumed_by_its_attach_and_rearmed_only_after_a_failed_attach() {
         var keys = new GameSessionKeys(TimeSpan.FromMinutes(5));
         var key = keys.Issue(7, "10.0.0.2");
         Assert.Equal(GameKeyResult.Accepted, keys.TryConsume(key, 7, "10.0.0.2"));
         Assert.Equal(GameKeyResult.NotArmed, keys.TryConsume(key, 7, "10.0.0.2"));
 
-        // A zone change (MSG_SERVERTRANSFER): the client attaches again with the same key.
+        // MSG_ATTACHFAILED after the key check (or the login queue): the client falls back with the same key.
         Assert.True(keys.Arm(7));
         Assert.Equal(GameKeyResult.Accepted, keys.TryConsume(key, 7, "10.0.0.2"));
         Assert.Equal(GameKeyResult.NotArmed, keys.TryConsume(key, 7, "10.0.0.2"));
         Assert.False(keys.Arm(8));
+    }
+
+    // Live 2026-10-05: walking into WizardCity/WC_Duel_Arena (any zone change) disconnected the r806919 client with
+    // "failed to validate their login key" (UnknownKey). The client turns MSG_SERVERTRANSFER into a new
+    // MSG_CHARACTERSELECTED and sends the transfer's INT Key as LoginKey ("%d"); the server sent Key = 0 and re-armed
+    // the select key, so the client attached with "0".
+    [Fact]
+    public void A_server_transfer_issues_a_fresh_single_use_key_the_client_sends_as_decimal_text() {
+        var keys = new GameSessionKeys(TimeSpan.FromMinutes(5));
+        var select = keys.Issue(7, "10.0.0.2");
+        Assert.Equal(GameKeyResult.Accepted, keys.TryConsume(select, 7, "10.0.0.2"));
+
+        var transfer = keys.IssueTransfer(7, "10.0.0.2");
+        Assert.InRange(transfer, 1, int.MaxValue);
+        var text = GameSessionKeys.TransferKeyText(transfer);
+        Assert.Equal(transfer.ToString(System.Globalization.CultureInfo.InvariantCulture), text);
+
+        // The old bug: Key = 0 in the transfer. And the select key is not re-armed or reusable.
+        Assert.Equal(GameKeyResult.UnknownKey, keys.TryConsume("0", 7, "10.0.0.2"));
+        Assert.Equal(GameKeyResult.UnknownKey, keys.TryConsume(select, 7, "10.0.0.2"));
+        // Bound to the address and the account.
+        Assert.Equal(GameKeyResult.WrongAddress, keys.TryConsume(text, 7, "10.0.0.9"));
+        Assert.Equal(GameKeyResult.WrongAccount, keys.TryConsume(text, 8, "10.0.0.2"));
+
+        Assert.Equal(GameKeyResult.Accepted, keys.TryConsume(text, 7, "::ffff:10.0.0.2"));
+        Assert.Equal(GameKeyResult.NotArmed, keys.TryConsume(text, 7, "10.0.0.2"));
+
+        // The next zone change gets a new key; the used one is gone.
+        var next = keys.IssueTransfer(7, "10.0.0.2");
+        Assert.NotEqual(transfer, next);
+        Assert.Equal(GameKeyResult.UnknownKey, keys.TryConsume(text, 7, "10.0.0.2"));
+        Assert.Equal(GameKeyResult.Accepted, keys.TryConsume(GameSessionKeys.TransferKeyText(next), 7, "10.0.0.2"));
+        Assert.Equal(1, keys.Count);
+
+        // A failed attach after the key check re-arms the transfer key for the client's fallback attach.
+        Assert.True(keys.Arm(7));
+        Assert.Equal(GameKeyResult.Accepted, keys.TryConsume(GameSessionKeys.TransferKeyText(next), 7, "10.0.0.2"));
+
+        // A new character select replaces a transfer key.
+        var again = keys.IssueTransfer(7, "10.0.0.2");
+        var reselect = keys.Issue(7, "10.0.0.2");
+        Assert.Equal(GameKeyResult.UnknownKey, keys.TryConsume(GameSessionKeys.TransferKeyText(again), 7, "10.0.0.2"));
+        Assert.Equal(GameKeyResult.Accepted, keys.TryConsume(reselect, 7, "10.0.0.2"));
+    }
+
+    [Fact]
+    public void A_transfer_key_expires_and_a_few_wrong_guesses_disarm_it() {
+        var clock = new ManualClock();
+        var keys = new GameSessionKeys(TimeSpan.FromMinutes(5), time: clock);
+        var key = GameSessionKeys.TransferKeyText(keys.IssueTransfer(7, "10.0.0.2"));
+        clock.Now += TimeSpan.FromMinutes(6);
+        Assert.Equal(GameKeyResult.Expired, keys.TryConsume(key, 7, "10.0.0.2"));
+
+        key = GameSessionKeys.TransferKeyText(keys.IssueTransfer(7, "10.0.0.2"));
+        for (var i = 0; i < GameSessionKeys.MaxTransferFailures; i++) {
+            Assert.Equal(GameKeyResult.UnknownKey, keys.TryConsume((1000 + i).ToString(), 7, "10.0.0.2"));
+        }
+
+        Assert.Equal(GameKeyResult.NotArmed, keys.TryConsume(key, 7, "10.0.0.2"));
+
+        // Wrong guesses naming another account do not touch this one's key.
+        key = GameSessionKeys.TransferKeyText(keys.IssueTransfer(7, "10.0.0.2"));
+        for (var i = 0; i < GameSessionKeys.MaxTransferFailures; i++) {
+            keys.TryConsume("12345", 9, "10.0.0.2");
+        }
+
+        Assert.Equal(GameKeyResult.Accepted, keys.TryConsume(key, 7, "10.0.0.2"));
+    }
+
+    [Fact]
+    public void The_attach_timeout_fallback_needs_a_transfer_to_the_same_address() {
+        var keys = new GameSessionKeys(TimeSpan.FromMinutes(5));
+        keys.Issue(7, "10.0.0.2");
+        Assert.False(keys.HasTransferKeyFor(7, "10.0.0.2")); // only a select key
+        keys.IssueTransfer(7, "10.0.0.2");
+        Assert.True(keys.HasTransferKeyFor(7, "::ffff:10.0.0.2"));
+        Assert.False(keys.HasTransferKeyFor(7, "10.0.0.9"));
+        Assert.False(keys.HasTransferKeyFor(8, "10.0.0.2"));
+    }
+
+    /// <summary>
+    /// Every MSG_SERVERTRANSFER the server builds (zone change, realm transfer, attach fallback: every door, sigil,
+    /// arena match, Go Home, teleport to a friend) must carry a key from IssueTransfer, never Key = 0 or a re-armed key.
+    /// </summary>
+    [Fact]
+    public void Every_server_transfer_carries_a_fresh_transfer_key() {
+        var dir = new System.IO.DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null && !System.IO.Directory.Exists(System.IO.Path.Combine(dir.FullName, "src", "Imlight.CoreLib"))) {
+            dir = dir.Parent;
+        }
+
+        Assert.NotNull(dir);
+        var builds = 0;
+        foreach (var file in System.IO.Directory.EnumerateFiles(System.IO.Path.Combine(dir!.FullName, "src"), "*.cs",
+                     System.IO.SearchOption.AllDirectories)) {
+            if (file.Contains($"{System.IO.Path.DirectorySeparatorChar}obj{System.IO.Path.DirectorySeparatorChar}")) {
+                continue;
+            }
+
+            var text = System.IO.File.ReadAllText(file);
+            var at = 0;
+            while ((at = text.IndexOf("new GAME_5_PROTOCOL.MSG_SERVERTRANSFER", at, StringComparison.Ordinal)) >= 0) {
+                builds++;
+                var end = text.IndexOf("};", at, StringComparison.Ordinal);
+                var body = text[at..end];
+                var before = text[Math.Max(0, at - 1200)..at];
+                var name = System.IO.Path.GetFileName(file);
+                Assert.True(body.Contains("Key = transferKey,") && body.Contains("FallbackKey = transferKey,"),
+                    $"{name}: a MSG_SERVERTRANSFER without the transfer key");
+                Assert.True(before.Contains("IssueTransfer("), $"{name}: transferKey does not come from IssueTransfer");
+                at = end;
+            }
+        }
+
+        Assert.Equal(3, builds); // ZoneService (zone change, realm transfer), AttachService (attach-timeout fallback)
     }
 
     [Fact]

@@ -433,11 +433,24 @@ internal class AttachService(SessionActor sessionActor) : MessageService(session
             Logger.Information("Fallback found for {RemoteIp} — redirecting to zone {Zone}.",
                 Logger.Args(SessionActor.RemoteIp, rsp.FallbackZone));
 
-            Auth.SecuritySettings.GameKeys.Value.Arm(rsp.UserId); // CLASSIC: the client attaches with its key again
+            // CLASSIC: this connection never attached, so it proves nothing: it gets a key only when the account was
+            // just transferred to this address (the fallback entry is keyed by address), and a fresh one.
+            var keys = Auth.SecuritySettings.GameKeys.Value;
+            if (!keys.HasTransferKeyFor(rsp.UserId, SessionActor.RemoteIp)) {
+                Logger.Warning("Fallback for {RemoteIp} refused: account {Account} has no transfer to this address.",
+                    Logger.Args(SessionActor.RemoteIp, rsp.UserId));
+                SessionActor.ServerRef.Tell(new SERVICE_101_PROTOCOL.MSG_REMOVE_FALLBACK { RemoteIp = SessionActor.RemoteIp });
+                CloseSession();
+                return;
+            }
+
+            var transferKey = keys.IssueTransfer(rsp.UserId, SessionActor.RemoteIp);
             var serverTransfer = new GAME_5_PROTOCOL.MSG_SERVERTRANSFER {
                 IP = rsp.GameServerIp,
                 TCPPort = rsp.GameServerPort,
                 UDPPort = rsp.GameServerPort,
+                Key = transferKey,
+                FallbackKey = transferKey,
                 UserID = rsp.UserId,
                 CharID = rsp.CharId,
                 ZoneName = rsp.FallbackZone,

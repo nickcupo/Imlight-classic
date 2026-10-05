@@ -31,17 +31,25 @@
  *
  * Now the key is 32 random bytes, looked up by the key the client sends, and
  * must belong to the account the attach names (constant-time compare). An
- * attach consumes it. The r806919 client keeps the key from character select
- * and sends it again on every MSG_SERVERTRANSFER (zone change, realm
- * transfer, attach fallback) because MSG_SERVERTRANSFER has no string key, so
- * the server re-arms the key exactly when it sends a transfer, for one more
- * attach within the validity window. A new character select replaces the
- * account's key. The key can also be bound to the address that selected the
- * character.
+ * attach consumes it. A new character select replaces the account's key. The
+ * key can also be bound to the address that selected the character.
+ *
+ * Transfers (MSG_SERVERTRANSFER: zone change, realm transfer, attach
+ * fallback): the r806919 client handles the transfer as a new
+ * MSG_CHARACTERSELECTED and fills MSG_ATTACH.LoginKey from the transfer's INT
+ * Key field, formatted "%d" (GameClient::AppSessionEstablished,
+ * DMLField::ToStr). It does not resend the character-select key. So every
+ * transfer issues a fresh random positive 31-bit key for the account
+ * (IssueTransfer), sent as Key and FallbackKey, replacing the previous key.
+ * It is single-use, armed for the validity window, bound to the address and
+ * the account like the select key, and a few wrong guesses naming the
+ * account disarm it (MaxTransferFailures). Re-arming the old key for a
+ * transfer (the 2026-10-05 scheme) made the client attach with "0" and every
+ * zone change disconnect.
  *
  * Created by: Nick with Claude Code (claude-opus-5-5)
  * Version: KALI 1.0
- * Last Updated: 10/04/2026
+ * Last Updated: 10/05/2026
  */
 
 using System;
@@ -77,7 +85,12 @@ public sealed class GameSessionKeys {
         public string? Address;
         public DateTimeOffset? ArmedUntil;
         public DateTimeOffset LastActivity;
+        public bool IsTransfer;
+        public int Failures;
     }
+
+    /// <summary>Wrong keys naming an account that disarm its armed transfer key (it has only 31 random bits).</summary>
+    public const int MaxTransferFailures = 3;
 
     private readonly TimeProvider _time;
     private readonly Lock _lock = new();
@@ -146,7 +159,61 @@ public sealed class GameSessionKeys {
     }
 
     /// <summary>
-    /// Allows one more attach with the account's current key (the server is about to send it a MSG_SERVERTRANSFER).
+    /// A fresh key for a MSG_SERVERTRANSFER (its INT Key and FallbackKey), armed for one attach; the account's previous
+    /// key (from character select or an earlier transfer) stops working. The client attaches with it as decimal text.
+    /// </summary>
+    /// <param name="accountId">The account.</param>
+    /// <param name="address">The client's address (no port); the previous key's address when null.</param>
+    /// <returns>A random key in 1..int.MaxValue (the same text signed or unsigned).</returns>
+    public int IssueTransfer(ulong accountId, string? address) {
+        lock (_lock) {
+            Prune();
+            string? previousAddress = null;
+            if (_byAccount.TryGetValue(accountId, out var old)) {
+                if (_byKeyHash.Remove(old, out var previous)) {
+                    previousAddress = previous.Address;
+                }
+            }
+
+            int value;
+            string text, hash;
+            do {
+                value = RandomNumberGenerator.GetInt32(1, int.MaxValue);
+                text = TransferKeyText(value);
+                hash = HashOf(text);
+            } while (_byKeyHash.ContainsKey(hash));
+
+            _byKeyHash[hash] = new Entry {
+                Key = Encoding.UTF8.GetBytes(text),
+                AccountId = accountId,
+                Address = NormalizeAddress(address) ?? previousAddress,
+                ArmedUntil = _time.GetUtcNow() + Validity,
+                LastActivity = _time.GetUtcNow(),
+                IsTransfer = true,
+            };
+            _byAccount[accountId] = hash;
+            return value;
+        }
+    }
+
+    /// <summary>The LoginKey text the r806919 client sends for a transfer key: DMLField::ToStr of an INT ("%d").</summary>
+    public static string TransferKeyText(int key) => key.ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+    /// <summary>
+    /// Whether the account's current key is a transfer key issued to <paramref name="address"/> (the attach-timeout
+    /// fallback only redirects a connection from the address the account was just transferred to).
+    /// </summary>
+    public bool HasTransferKeyFor(ulong accountId, string? address) {
+        lock (_lock) {
+            return _byAccount.TryGetValue(accountId, out var hash) && _byKeyHash.TryGetValue(hash, out var entry)
+                && entry.IsTransfer && (!BindAddress || entry.Address is null || entry.Address == NormalizeAddress(address));
+        }
+    }
+
+    /// <summary>
+    /// Allows one more attach with the account's current key: the attach it just made failed after the key check
+    /// (MSG_ATTACHFAILED, the client falls back with the same key), or it waited in the login queue. Transfers do not
+    /// re-arm: they issue a new key (<see cref="IssueTransfer"/>).
     /// </summary>
     /// <returns>False when the account has no key.</returns>
     public bool Arm(ulong accountId) {
@@ -183,10 +250,12 @@ public sealed class GameSessionKeys {
         var given = Encoding.UTF8.GetBytes(key);
         lock (_lock) {
             if (!_byKeyHash.TryGetValue(hash, out var entry) || !CryptographicOperations.FixedTimeEquals(entry.Key, given)) {
+                CountTransferFailure(accountId);
                 return GameKeyResult.UnknownKey;
             }
 
             if (entry.AccountId != accountId) {
+                CountTransferFailure(accountId);
                 return GameKeyResult.WrongAccount;
             }
 
@@ -206,6 +275,14 @@ public sealed class GameSessionKeys {
             entry.ArmedUntil = null;
             entry.LastActivity = _time.GetUtcNow();
             return GameKeyResult.Accepted;
+        }
+    }
+
+    /// <summary>A wrong key naming an account with an armed transfer key; enough of them disarm it.</summary>
+    private void CountTransferFailure(ulong accountId) {
+        if (_byAccount.TryGetValue(accountId, out var hash) && _byKeyHash.TryGetValue(hash, out var entry)
+                && entry.IsTransfer && entry.ArmedUntil is not null && ++entry.Failures >= MaxTransferFailures) {
+            entry.ArmedUntil = null;
         }
     }
 
