@@ -631,6 +631,33 @@ public sealed class OwnedMinionDuelTests : IDisposable {
         Assert.False(StageActive());
     }
 
+    [Theory]
+    [InlineData(MagicSchool.Life, 5, 0)]  // owner 2026-10-05 01:52: a Life Monstrology minion's Centaur, Myth owner
+    [InlineData(MagicSchool.Myth, 1, 2)]  // a Myth minion: the window shows its own pips, the client doubles Myth power
+    public void AMinionCastsWhatItsOwnersCardWindowShowsCastable(MagicSchool minionSchool, int shownGeneric, int shownPower) {
+        // A real creature's stats carry no m_schoolID (JsonIgnore, set only for wizards); the fixture's Myth hid it.
+        _minion.ParticipantGameStats.m_schoolID = 0;
+        _owner.CombatParticipant.m_primaryMagicSchoolID = (int) MagicSchool.Myth;
+        _minion.CombatParticipant.m_primaryMagicSchoolID = (int) minionSchool;
+        _minion.CombatParticipant.m_pipCount = new PipCount { m_genericPips = 1, m_powerPips = 2 };
+        _spell.m_magicSchoolID = (uint) minionSchool;
+        _spell.m_pipCost.m_spellRank = 5; // Centaur: 1 pip + 2 power pips of the minion's school
+
+        Assert.Equal(((byte) shownGeneric, (byte) shownPower), CombatDuelComponent.MinionPipsForOwnerWindow(_owner, _minion));
+        Assert.Equal(OwnedMinionStatus.Accepted,
+            _duel.ValidateOwnedMinionOrder(_minion, new OwnedMinionOrder((byte) CombatMoveType.Attack, 0, 0), out _, out _));
+
+        _minion.DeductPips(minionSchool, 5);
+        Assert.Equal(0, (int) _minion.CombatParticipant.m_pipCount.m_genericPips);
+        Assert.Equal(0, (int) _minion.CombatParticipant.m_pipCount.m_powerPips);
+
+        // Another school's card still counts the minion's power pips one each, as the server always did.
+        _minion.CombatParticipant.m_pipCount = new PipCount { m_genericPips = 1, m_powerPips = 2 };
+        _spell.m_magicSchoolID = (uint) MagicSchool.Storm;
+        Assert.Equal(OwnedMinionStatus.InsufficientPips,
+            _duel.ValidateOwnedMinionOrder(_minion, new OwnedMinionOrder((byte) CombatMoveType.Attack, 0, 0), out _, out _));
+    }
+
     [Fact]
     public void ANewRoundWithEmptyCirclesResetsTheMinionHandWithoutThrowing() {
         // Rig mp1: an empty circle's null participant object as a dictionary key stopped every duel's MSG_NEWROUND.

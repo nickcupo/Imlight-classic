@@ -88,6 +88,7 @@ public static class ClassicSettingKeys {
     public const string TeleportToFriendAnywhere = "TeleportToFriendAnywhere";
     public const string CombatRejoinSeconds = "CombatRejoinSeconds";
     public const string RestartMaxWaitMinutes = "RestartMaxWaitMinutes";
+    public const string ZoneTransferDelayMs = "ZoneTransferDelayMs";
     public const string HolidayEvents = "HolidayEvents";
     public const string HolidayDateOverride = "HolidayDateOverride";
     public const string BazaarStocked = "BazaarStocked";
@@ -96,6 +97,8 @@ public static class ClassicSettingKeys {
     public const string OpenPvp = "OpenPvp";
     public const string PvpCountdownSeconds = "PvpCountdownSeconds";
     public const string PetPavilion = "PetPavilion";
+    public const string MovementGuard = "MovementGuard";
+    public const string MovementMaxSpeed = "MovementMaxSpeed";
 
 }
 
@@ -132,6 +135,10 @@ public sealed class ClassicSettingsStore {
             + "fight has dropped, it waits. 0 removes them at once, as a flee.", 0, 1800),
         new(ClassicSettingKeys.RestartMaxWaitMinutes, ClassicSettingKind.Int, "10", "Reliability",
             "A safe restart waits until no one is in a fight, but never longer than this after the warning ends.", 0, 120),
+        new(ClassicSettingKeys.ZoneTransferDelayMs, ClassicSettingKind.Int, "250", "Performance",
+            "Milliseconds between the old zone letting a wizard go and the server transfer to the new zone (upstream "
+            + "waited 1000 \"so the client can finish tearing down zone objects\"; the removals reach the client first "
+            + "either way). Raise it back to 1000 if zone changes misbehave.", 0, 5000),
         new(ClassicSettingKeys.HolidayEvents, ClassicSettingKind.Bool, "true", "Events",
             "Run the 2009 holiday events (classic-data/holidays) on their real calendar dates."),
         new(ClassicSettingKeys.HolidayDateOverride, ClassicSettingKind.Int, "0", "Events",
@@ -150,6 +157,12 @@ public sealed class ClassicSettingsStore {
         new(ClassicSettingKeys.PetPavilion, ClassicSettingKind.Bool, "true", "Owner extras",
             "The Pet Pavilion (May 2010, after the 2009 cutoff; owner request): opens the pet park and turns on pet "
             + "leveling, talents, energy and hatching. Zone changes apply at the next zone entry."),
+        new(ClassicSettingKeys.MovementGuard, ClassicSettingKind.Bool, "true", "Security",
+            "Refuse impossible movement (a speed or teleport hack): the wizard is put back where the server last saw "
+            + "them, never kicked. Turn off if legitimate players are pulled back."),
+        new(ClassicSettingKeys.MovementMaxSpeed, ClassicSettingKind.Int, "1500", "Security",
+            "Fastest movement the guard allows, in units per second (2009 run speed is about 600), with a 3 second "
+            + "catch-up after a lag spike.", 600, 20000),
     ];
 
     private static readonly IReadOnlyDictionary<string, ClassicSettingDefinition> s_byKey =

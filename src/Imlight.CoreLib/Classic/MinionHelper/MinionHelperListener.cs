@@ -54,6 +54,7 @@
  */
 
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
@@ -83,14 +84,16 @@ internal sealed class MinionHelperSession : IMinionHelperConnection {
     private readonly Action<string> _send;
     private readonly MinionHelperHub _hub;
     private readonly MinionHelperPairing _pairing;
+    private readonly string _address; // CLASSIC (M6): wrong codes count per address across connections
     private int _badCodes;
 
     internal ulong AccountId { get; private set; }
 
-    internal MinionHelperSession(Action<string> send, MinionHelperHub hub, MinionHelperPairing pairing) {
+    internal MinionHelperSession(Action<string> send, MinionHelperHub hub, MinionHelperPairing pairing, string address = null) {
         _send = send;
         _hub = hub;
         _pairing = pairing;
+        _address = address;
     }
 
     public void Send(string line) {
@@ -162,7 +165,7 @@ internal sealed class MinionHelperSession : IMinionHelperConnection {
             return true;
         }
 
-        if (!_pairing.TryRedeem(code, out var token, out var accountId)) {
+        if (!_pairing.TryRedeem(code, _address, out var token, out var accountId)) {
             _badCodes++;
             Error("That code is wrong or expired. Type .minions in game chat for a new one.");
             return _badCodes < MaxBadCodes;
@@ -294,9 +297,41 @@ internal static class MinionHelperListener {
                 continue;
             }
 
-            _ = Task.Run(() => Serve(client));
+            // CLASSIC (M7): at most MaxConnections at once and MaxPerAddress per client address (loopback exempt: a
+            // local tunnel or proxy in front of the page shows every visitor as loopback).
+            var address = Imlight.Classic.Net.GameSessionKeys.NormalizeAddress(
+                (client.Client.RemoteEndPoint as System.Net.IPEndPoint)?.Address.ToString()) ?? "?";
+            var refusal = Imlight.Classic.Net.ConnectionLimits.Refuse(address, s_perAddress.GetValueOrDefault(address),
+                Volatile.Read(ref s_open), MaxPerAddress, MaxConnections, limitLoopback: false);
+            if (refusal is not null) {
+                if (Interlocked.Increment(ref s_refused) % 100 == 1) {
+                    Logger.Warning("Minion Helper port refused {0}: {1}", Logger.Args(address, refusal));
+                }
+
+                client.Dispose();
+                continue;
+            }
+
+            Interlocked.Increment(ref s_open);
+            s_perAddress.AddOrUpdate(address, 1, (_, n) => n + 1);
+            _ = Task.Run(async () => {
+                try {
+                    await Serve(client);
+                } finally {
+                    Interlocked.Decrement(ref s_open);
+                    if (s_perAddress.AddOrUpdate(address, 0, (_, n) => n - 1) <= 0) {
+                        s_perAddress.TryRemove(new KeyValuePair<string, int>(address, 0));
+                    }
+                }
+            });
         }
     }
+
+    private const int MaxConnections = 128;
+    private const int MaxPerAddress = 16;
+    private static int s_open;
+    private static long s_refused;
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, int> s_perAddress = new(StringComparer.Ordinal);
 
     private static async Task Serve(TcpClient client) {
         using var _ = client;
@@ -304,7 +339,8 @@ internal static class MinionHelperListener {
         var stream = client.GetStream();
         var remote = client.Client.RemoteEndPoint?.ToString();
         var outbox = Channel.CreateBounded<string>(new BoundedChannelOptions(512) { FullMode = BoundedChannelFullMode.DropOldest });
-        var session = new MinionHelperSession(line => outbox.Writer.TryWrite(line), MinionHelperHub.Shared, MinionHelperPairing.Shared);
+        var session = new MinionHelperSession(line => outbox.Writer.TryWrite(line), MinionHelperHub.Shared, MinionHelperPairing.Shared,
+            Imlight.Classic.Net.GameSessionKeys.NormalizeAddress((client.Client.RemoteEndPoint as System.Net.IPEndPoint)?.Address.ToString()));
         try {
             // A browser (the helper page or its WebSocket) starts with "GET "; the line protocol starts with "{".
             var head = new byte[MinionHelperSession.MaxLineBytes];

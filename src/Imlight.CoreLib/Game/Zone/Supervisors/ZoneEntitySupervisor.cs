@@ -46,6 +46,7 @@ internal abstract class ZoneEntitySupervisor(Core.Zone zone) : ReceiveProtocolDi
     protected readonly List<IActorRef> EntityActors = [];
 
     private readonly Dictionary<IActorRef, string> _loadingEntities = [];
+    private readonly Dictionary<IActorRef, (string Description, DateTime Since)> _lateEntities = []; // CLASSIC
     private readonly Stopwatch _loadTimer = new();
     private bool _awaitingLoadedEntities;
     private int _startedEntityCount;
@@ -133,20 +134,32 @@ internal abstract class ZoneEntitySupervisor(Core.Zone zone) : ReceiveProtocolDi
 
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_ZONEOBJECTLOADRESULTS))]
     protected void ReceiveEntityLoaded() {
+        // CLASSIC: an entity that missed the load budget still counts once it answers.
+        if (_lateEntities.Remove(Sender, out var late)) {
+            Logger.Information("Zone {Zone}: {Kind} {Name} loaded late, after {Ms} ms.",
+                Logger.Args(Zone.ZoneName, nameof(CoreTemplate), late.Description, (long) (DateTime.UtcNow - late.Since).TotalMilliseconds + OBJECT_CREATION_TIMEOUT_IN_MS));
+
+            return;
+        }
+
         if (_loadingEntities.Remove(Sender) && _awaitingLoadedEntities && _loadingEntities.Count == 0) {
             ReportLoaded();
         }
     }
 
+    /// <summary>
+    /// The load budget ran out. CLASSIC: the zone goes on without the entities that have not answered yet, but they are
+    /// kept and counted when their late answer comes. Stopping them dropped mobs and quest bosses for good whenever the
+    /// machine was busy (64 times across 7 rigs on 2026-10-04, GH-Boar-4-GHBoss-R4 among them). An entity's load
+    /// catches its components' exceptions and always answers, so a missing answer means slow, not broken.
+    /// </summary>
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_ENTITYLOADTIMEOUT))]
     protected void ReceiveEntityLoadTimeout() {
+        var now = DateTime.UtcNow;
         foreach (var (entityActor, description) in _loadingEntities) {
-            Logger.Error("Failed to create entity actor for {Kind} {Name} (no load reply within {Timeout} ms).",
-                Logger.Args(nameof(CoreTemplate), description, OBJECT_CREATION_TIMEOUT_IN_MS));
-
-            EntityActors.Remove(entityActor);
-            OnEntityLoadFailed(entityActor);
-            Context.Stop(entityActor);
+            Logger.Warning("Zone {Zone}: {Kind} {Name} has not answered its load within {Timeout} ms; the zone goes on and it joins when it answers.",
+                Logger.Args(Zone.ZoneName, nameof(CoreTemplate), description, OBJECT_CREATION_TIMEOUT_IN_MS));
+            _lateEntities[entityActor] = (description, now);
         }
 
         _loadingEntities.Clear();
@@ -154,6 +167,9 @@ internal abstract class ZoneEntitySupervisor(Core.Zone zone) : ReceiveProtocolDi
             ReportLoaded();
         }
     }
+
+    /// <summary>CLASSIC: entities past their load budget, still expected (tests read it).</summary>
+    internal int LateEntityCount => _lateEntities.Count;
 
     /// <summary>
     /// Creates a new entity actor for the given core object and template.

@@ -108,6 +108,18 @@ internal class AuctionHouseService(SessionActor sessionActor) : MessageService(s
             return;
         }
 
+        // CLASSIC: the Bazaar serves only a wizard standing by it (the request's NPC, or the Bazaar last opened).
+        if (message.Command is 0 or 1 or 2 or 3
+            && ServiceProximity.FindNear<Zone.Components.InteractAuctionHouseComponent>(GetActiveWizard(), message.npcGlobalID, GetZoneObject) is null) {
+            Logger.Warning("{0} sent Bazaar command {1} away from the Bazaar.",
+                Logger.Args(GetActiveWizard()?.CharId, message.Command));
+            if (message.Command == 3) {
+                SendBuyFailure();
+            }
+
+            return;
+        }
+
         switch (message.Command) {
             case 0:
                 SendAuctionHouseContents(message.npcGlobalID, message.category, message.key);
@@ -184,6 +196,14 @@ internal class AuctionHouseService(SessionActor sessionActor) : MessageService(s
             return;
         }
 
+        // CLASSIC: never take the stock or the gold for an item the backpack cannot take.
+        var isItem = coreTemplate is not (SpellTemplate or ReagentItemTemplate);
+        if (isItem && (coreTemplate is not WizItemTemplate || wizard.InventoryBehavior.IsFull)) {
+            SendBuyFailure();
+
+            return;
+        }
+
         // CLASSIC: one lock from reading the stock to saving it (other players and the restock timer change it too); a
         // wizard who cannot pay is refused; with classic Bazaar rules the price follows the copies left.
         int goldCost;
@@ -196,8 +216,10 @@ internal class AuctionHouseService(SessionActor sessionActor) : MessageService(s
                 return;
             }
 
+            // CLASSIC: paid here, checked and spent in one save, before the stock moves or anything is given; two buys
+            // sent together could both pass a check of the live gold and drive it below zero.
             goldCost = entry.m_buyPrice;
-            if (ClassicRuntime.IsActive && wizard.GameStats.m_currentGold < goldCost) {
+            if (!wizard.RemoveGold(goldCost)) {
                 SendBuyFailure();
 
                 return;
@@ -237,10 +259,11 @@ internal class AuctionHouseService(SessionActor sessionActor) : MessageService(s
                 break;
             default: {
                 var item = (WizClientObjectItem) CoreObjectFactory.FinalizeCoreObject(templateId);
-                item.m_primaryColor = texture;
-                item.m_secondaryColor = decal;
+                ShopService.ApplyBuyDyes(item, (WizItemTemplate) coreTemplate, texture, decal); // CLASSIC
                 if (!_itemSerializer.Serialize(item, 1, out var itemData)) {
                     Logger.Error("Failed to serialize item data.");
+                    wizard.RefundGold(goldCost); // CLASSIC: paid but not given.
+                    SendBuyFailure();
 
                     return;
                 }
@@ -251,7 +274,15 @@ internal class AuctionHouseService(SessionActor sessionActor) : MessageService(s
                 });
 
                 // Add item to inventory after message to prevent crashes.
-                wizard.AddItemToInventory(item);
+                if (!wizard.AddItemToInventory(item)) {
+                    // CLASSIC: paid but not given: the gold goes back. (Restocking is the full-backpack fix's.)
+                    wizard.RefundGold(goldCost);
+                    SendToSocket(new GAME_5_PROTOCOL.MSG_INVENTORYBEHAVIOR_REMOVEITEM { GlobalID = wizard.GameObjectID, ItemID = item.m_globalID });
+                    SendToSocket(new WIZARD_12_PROTOCOL.MSG_UPDATEGOLD { Gold = wizard.GameStats.m_currentGold, MaxGold = wizard.GameStats.m_baseGoldPouch });
+                    SendBuyFailure();
+
+                    return;
+                }
                 SendToSocket(new WIZARD2_53_PROTOCOL.MSG_ITEMACQUISITION {
                     ItemGlobalID = item.m_globalID,
                     ItemTemplateID = (uint) item.m_templateID,
@@ -261,8 +292,7 @@ internal class AuctionHouseService(SessionActor sessionActor) : MessageService(s
             }
         }
 
-        // Update gold balances.
-        wizard.RemoveGold(goldCost);
+        // Update gold balances (already spent above).
         var goldUpdateMsg = new WIZARD_12_PROTOCOL.MSG_UPDATEGOLD {
             Gold = wizard.GameStats.m_currentGold,
             MaxGold = wizard.GameStats.m_baseGoldPouch
@@ -298,9 +328,11 @@ internal class AuctionHouseService(SessionActor sessionActor) : MessageService(s
             return;
         }
 
-        var template = (WizItemTemplate) CoreObjectFactory.GetCoreTemplate(item.m_templateID);
+        var template = CoreObjectFactory.GetCoreTemplate(item.m_templateID) as WizItemTemplate;
 
-        var isNoAuction = template.m_adjectiveList.Any(x => x == "FLAG_NoAuction");
+        // CLASSIC: no NoAuction, NoTrade, NoSell or Crowns item (ClassicBazaar.KindOf is null for them).
+        var isNoAuction = template is null || ClassicBazaar.KindOf(template) is null
+            || template.m_adjectiveList.Any(x => x == "FLAG_NoAuction");
         if (isNoAuction) { // The item cannot be sold to the bazaar.
             // Todo: respond with error
             var auctionRspErrorMsg = new WIZARD_12_PROTOCOL.MSG_AUCTIONRESPONSE {
@@ -333,6 +365,22 @@ internal class AuctionHouseService(SessionActor sessionActor) : MessageService(s
         if (ClassicBazaar.Rules is { } bazaar) {
             var held = AuctionHouseCollection.GetAuctionHouseEntry(item.m_templateID)?.m_numForSale ?? 0;
             gold = bazaar.SellPrice((int) template.m_baseCost, held, ClassicBazaar.KindOf(template) ?? BazaarKind.Gear);
+        }
+
+        // CLASSIC: the item leaves the backpack first, and a sale whose removal fails stops here. Another actor (the
+        // bank, a vendor sale) could take the same item between the check above and this point; the Bazaar used to
+        // stock and pay for it anyway. The sold item's document is deleted with it.
+        if (!wizard.DestroyInventoryItem(itemGlobalId)) {
+            Logger.Warning("Bazaar sale of item {0} by {1} refused: it is no longer in the backpack.",
+                Logger.Args(itemGlobalId, wizard.CharId));
+            SendToSocket(new WIZARD_12_PROTOCOL.MSG_AUCTIONRESPONSE {
+                Command = 5,
+                ItemTemplateID = item.m_templateID,
+                Cost = 0,
+                ReturnCode = 0
+            });
+
+            return;
         }
 
         var auctionRspMsg = new WIZARD_12_PROTOCOL.MSG_AUCTIONRESPONSE {
@@ -371,8 +419,7 @@ internal class AuctionHouseService(SessionActor sessionActor) : MessageService(s
             }
         }
 
-        // Remove item from inventory.
-        var removedItemSuccess = wizard.RemoveItemFromInventory(itemGlobalId);
+        ClassicBazaar.NoteRealSale(item.m_templateID); // CLASSIC (2026-10-04): ambient wizards leave it for players a while
 
         // Inform of update.
         var houseEntryData = WriteAuctionBlob(0, [entry]);

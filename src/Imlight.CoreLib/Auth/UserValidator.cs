@@ -73,6 +73,7 @@ internal static class UserValidator {
         internal Account _account;
         internal string _sessionKey;
         internal UserValidateResult _result;
+        internal bool _closeSession; // CLASSIC: a failed validate ends the connection
 
     }
 
@@ -86,10 +87,22 @@ internal static class UserValidator {
     internal static ValidationDetails Validate(SessionActor sessionActor, MSG_USER_VALIDATE validateMessage) {
         var details = new ValidationDetails();
 
+        // CLASSIC: failed validates count against the address (the key is 256 bits, so this only stops floods).
+        var throttle = SecuritySettings.Logins.Value;
+        var address = sessionActor.RemoteIp;
+        if (throttle.LockedFor(null, address) is not null) {
+            details._result = UserValidateResult.ValidateFailed;
+            details._closeSession = true;
+
+            return details;
+        }
+
         // Try getting the account from the message's UserID.
         var matchedAccount = AccountCollection.GetAccount(validateMessage.UserID);
         if (matchedAccount is null) {
+            throttle.Failure(null, address);
             details._result = UserValidateResult.ValidateFailed;
+            details._closeSession = true;
 
             return details;
         }
@@ -122,8 +135,10 @@ internal static class UserValidator {
         }
 
         // Validation happens after authentication, so we need to check if the session key matches.
-        var sessionKey = ClientKeyCollection.GetSessionKey(matchedAccount.AccountId, validateMessage.MachineID);
+        var sessionKey = ClientKeyCollection.GetSessionKey(matchedAccount.AccountId, validateMessage.MachineID, address);
         if (string.IsNullOrEmpty(sessionKey)) {
+            throttle.Failure(null, address);
+            details._closeSession = true;
             // CLASSIC: say why, so a client started with a ticket from another program (-U ..USERID KEY) can be diagnosed.
             Logger.Debug("Validate: no session key for account {0} on machine {1}",
                 Logger.Args(matchedAccount.AccountId.ToString(), validateMessage.MachineID.ToString()));
@@ -145,12 +160,17 @@ internal static class UserValidator {
 #endif
 
         if (!doesSessionMatch) {
+            throttle.Failure(null, address);
+            Logger.Warning("Validate failed for account {0} from {1}: wrong PassKey3",
+                Logger.Args(matchedAccount.AccountId, address));
             details._result = UserValidateResult.ValidateFailed;
+            details._closeSession = true;
 
             return details;
         }
 
         // If we've made it this far, the user is valid.
+        ClientKeyCollection.Touch(matchedAccount.AccountId); // CLASSIC: the key stays valid another idle window
         matchedAccount.LastLoginMachineId = validateMessage.MachineID;
         matchedAccount.LastLoginTime = DateTime.UtcNow;
         matchedAccount.LastLoginIp = sessionActor.Ip;

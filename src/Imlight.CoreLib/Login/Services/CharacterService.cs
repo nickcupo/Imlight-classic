@@ -38,11 +38,13 @@ using Akka.Actor;
 using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty;
 using Imcodec.ObjectProperty.TypeCache;
+using Imlight.Classic.Rules;
 using Imlight.Common;
 using Imlight.CoreLib.Shared.Behaviors;
 using Imlight.CoreLib.Shared.Character;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;
+using Imlight.CoreLib.Shared.Resources;
 using Imlight.CoreLib.WizardData.Collections;
 using Imlight.CoreLib.WizardData.Implementations;
 
@@ -80,13 +82,25 @@ internal class CharacterService(SessionActor parentActor) : MessageService(paren
                 throw new SessionFatalException("Failed to deserialize character creation data.");
             }
 
+            // CLASSIC: a player school, a known gender, and a name from the creation tables; else the normal
+            // failure reply, and the session stays.
+            var gender = charData.m_avatarBehavior?.m_eGender;
+            if (!CharacterCreationRules.IsPlayerSchool(charData.m_schoolOfFocus)
+                || gender is not (eGender.Male or eGender.Female)
+                || !WizardNameBank.IsValidCreationName(charData.m_nameIndices, gender.Value)) {
+                Logger.Warning("Account {0} sent invalid character creation data (school {1}, name keys {2}).",
+                    Logger.Args(account.Username, charData.m_schoolOfFocus, charData.m_nameIndices));
+                SendToSocket(new LOGIN_7_PROTOCOL.MSG_CREATECHARACTERRESPONSE { ErrorCode = 1 });
+
+                return;
+            }
+
             var newCharacter = CharacterHelper.CreateCharacterFromCreationInfo(charData);
             var createdCharacter = account.AddCharacter(newCharacter);
 
             // Craft log arguments.
             var wizardName = newCharacter.PlayerNameBehavior.GetWizardName();
             var school = (MagicSchool) charData.m_schoolOfFocus;
-            var gender = charData.m_avatarBehavior.m_eGender;
             var logs = Logger.Args(account.Username, wizardName, charData);
 
             if (createdCharacter) {

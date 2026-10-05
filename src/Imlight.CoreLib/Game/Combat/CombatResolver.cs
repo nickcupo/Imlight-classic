@@ -233,6 +233,15 @@ public class CombatResolver(Duel duel, CombatDuelSubCircle[] actorSubCircles) {
         var instantCinematics = _subCircles[0]._duelActor.CheatInstantCinematics;
 
         foreach (var action in _queuedCombatActions) {
+            // A caster who left the duel mid-round (fled, logged out, minion removed) has no CombatParticipant any
+            // more. Their queued action is void; resolving it would throw and hang the whole duel (audit 2026-10-04).
+            if (action.SpellCaster is null || action.SpellCaster.CombatParticipant is null) {
+                Logger.Debug("Duel {0} | Slot {1} | Caster left the duel. Skipping action.",
+                    Logger.Args(_duel.m_duelID.Full, action.SpellCaster?.SlotIndex ?? -1));
+
+                continue;
+            }
+
             // If the caster is dead, skip this action.
             if (!action.SpellCaster.IsAlive) {
                 Logger.Debug("Duel {0} | Slot {1} | Caster is dead. Skipping action.",
@@ -397,11 +406,17 @@ public class CombatResolver(Duel duel, CombatDuelSubCircle[] actorSubCircles) {
     }
 
     private float InvokeOverTimeEffects(CombatDuelSubCircle caster) {
+        // No participant (left mid-round): nothing hangs on them, and _hangingEffects is null.
+        var hanging = caster._hangingEffects;
+        if (hanging is null) {
+            return 0;
+        }
+
         // Get all DoT and HoT effects. Clone the list to avoid concurrent modification.
-        var dotEffects = caster._hangingEffects
+        var dotEffects = hanging
             .Where(x => x.m_effectType == kSpellEffects.kDamageOverTime)
             .ToList();
-        var hotEffects = caster._hangingEffects
+        var hotEffects = hanging
             .Where(x => x.m_effectType == kSpellEffects.kHealOverTime)
             .ToList();
         var cinematicTime = (dotEffects.Count + hotEffects.Count) * OVER_TIME_ACTIVATION_TIME;
@@ -591,7 +606,8 @@ public class CombatResolver(Duel duel, CombatDuelSubCircle[] actorSubCircles) {
                 var deckSlot = caster._wizard.EquipmentBehavior.SlotList
                     .FirstOrDefault(s => s.SlotType == EquipmentSlotType.Deck);
                 if (deckSlot?.ItemId != null) {
-                    caster._wizard.RemoveSpellFromDeck(consumedTemplateId, deckSlot.ItemId.Value);
+                    // CLASSIC: spent from the deck's Treasure Card ledger (Wizard.ConsumeDeckTreasureCard).
+                    caster._wizard.ConsumeDeckTreasureCard(consumedTemplateId, deckSlot.ItemId.Value);
 
                     // Tell the client to remove the TC from the deck UI.
                     var spellTemplate = CoreObjectFactory.GetCoreTemplate(consumedTemplateId) as SpellTemplate;

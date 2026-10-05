@@ -111,6 +111,11 @@ public class Zone : ReceiveProtocolDispatcher, IWithTimers {
     // id a second time; and the REMOVEPLAYER of the player who emptied the zone never reached the player supervisor,
     // because the count was lowered before the broadcast that checks it.
     private readonly HashSet<IActorRef> _players = [];
+
+    // CLASSIC: what a REMOVEPLAYER for each player needs, kept from its ADDPLAYER. The zone watches its players' session
+    // actors: a session that stopped without its REMOVEPLAYER (its ZoneService had no game object to name, or a crash)
+    // stayed in the zone, and the zone's triggers kept asking it for its wizard (live 2026-10-01).
+    private readonly Dictionary<IActorRef, ZONE_102_PROTOCOL.MSG_ADDPLAYER> _playerAdds = [];
     private int _playerCount => _players.Count;
     private readonly List<ZONE_102_PROTOCOL.MSG_PLAYERMOVE> _pendingPlayerMoves = [];
     private readonly List<ZONE_102_PROTOCOL.MSG_CREATUREMOVE> _pendingCreatureMoves = [];
@@ -308,6 +313,7 @@ public class Zone : ReceiveProtocolDispatcher, IWithTimers {
         }
 
         _players.Add(message.PlayerActor); // CLASSIC: was _playerCount++.
+        WatchPlayer(message.PlayerActor, message); // CLASSIC
         UpdateEmptyRunTimer(); // CLASSIC
         InformZoneSupervisors(message.PlayerActor, message);
         
@@ -344,9 +350,55 @@ public class Zone : ReceiveProtocolDispatcher, IWithTimers {
         _pendingPlayerMoves.RemoveAll(move => Equals(move.PlayerActor, message.PlayerActor));
         InformZoneSupervisors(message.PlayerActor, message);
         _players.Remove(message.PlayerActor);
+        _playerAdds.Remove(message.PlayerActor); // CLASSIC
         ReleaseObjectIdentifier(message.MobileId);
         Sender.Tell(new ZONE_102_PROTOCOL.MSG_REMOVEPLAYERRSP());
         DropIfEmptyAfterLoss(); // CLASSIC
+    }
+
+    // CLASSIC: see _playerAdds.
+    private void WatchPlayer(IActorRef playerActor, ZONE_102_PROTOCOL.MSG_ADDPLAYER add) {
+        if (playerActor is null || playerActor.IsNobody()) {
+            return;
+        }
+
+        _playerAdds[playerActor] = add;
+        try {
+            Context.Watch(playerActor);
+        }
+        catch (Exception ex) {
+            Logger.Debug("Zone {Zone} could not watch {Player}: {Error}", Logger.Args(ZonePath, playerActor.Path.Name, ex.Message));
+        }
+    }
+
+    /// <summary>
+    /// CLASSIC: a player's session stopped while the player was still in this zone: remove the player as its own
+    /// REMOVEPLAYER would have.
+    /// </summary>
+    [MessageHandler(typeof(Terminated))]
+    protected void ReceivePlayerTerminated(Terminated message) {
+        if (!_playerAdds.TryGetValue(message.ActorRef, out var add)) {
+            return;
+        }
+
+        if (!_players.Contains(message.ActorRef)) {
+            _playerAdds.Remove(message.ActorRef);
+
+            return;
+        }
+
+        Logger.Information("Zone {Zone}: session {Player} stopped without leaving the zone; removing it.",
+            Logger.Args(ZonePath, message.ActorRef.Path.Name));
+        var remove = new ZONE_102_PROTOCOL.MSG_REMOVEPLAYER {
+            AttachGeneration = add.AttachGeneration,
+            PlayerActor = message.ActorRef,
+        };
+        if (add.PlayerObject is { } playerObject) {
+            remove.GlobalId = playerObject.m_globalID;
+            remove.MobileId = playerObject.m_nMobileID;
+        }
+
+        ReceiveRemovePlayer(remove);
     }
 
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_PLAYERMOVE))]
@@ -615,6 +667,7 @@ public class Zone : ReceiveProtocolDispatcher, IWithTimers {
             }
             else if (pendingEvent is ZONE_102_PROTOCOL.MSG_ADDPLAYER addPlayer) {
                 _players.Add(playerActor); // CLASSIC: was _playerCount++.
+                WatchPlayer(playerActor, addPlayer); // CLASSIC
                 UpdateEmptyRunTimer(); // CLASSIC
                 InformZoneSupervisors(playerActor, addPlayer);
                 

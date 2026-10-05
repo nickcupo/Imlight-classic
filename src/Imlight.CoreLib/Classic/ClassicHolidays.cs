@@ -120,7 +120,7 @@ public static class ClassicHolidays {
                 s_active.Count == 0 ? "none" : string.Join(", ", s_active.Select(holiday => holiday.Name))));
     }
 
-    /// <summary>The date the events follow: today, or [Classic] HolidayDateOverride.</summary>
+    /// <summary>The date the events follow: today in [Classic] GameTimeZone, or [Classic] HolidayDateOverride.</summary>
     public static DateOnly Today {
         get {
             var forced = ClassicSettings.HolidayDateOverride;
@@ -129,7 +129,7 @@ public static class ClassicHolidays {
                 return date;
             }
 
-            return DateOnly.FromDateTime(DateTime.Now);
+            return ClassicTime.Today; // CLASSIC: [Classic] GameTimeZone (the container itself stays on UTC)
         }
     }
 

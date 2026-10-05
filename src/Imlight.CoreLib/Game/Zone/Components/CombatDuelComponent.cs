@@ -481,8 +481,15 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
     [MessageHandler(typeof(COMBAT_106_PROTOCOL.MSG_ACTORCOMBATMOVE))]
     private void ReceiveCombatMove(COMBAT_106_PROTOCOL.MSG_ACTORCOMBATMOVE message) {
         // Find which sub circle this is.
-        var caster = SubCircles.FirstOrDefault(x => x.ParticipantActor == message.Actor)
-            ?? throw new Exception("Combat move received from an actor that is not in the duel.");
+        // CLASSIC: a move from an actor not in this duel is dropped; throwing restarted the duel's actor (security
+        // audit 2026-10-04).
+        var caster = SubCircles.FirstOrDefault(x => x.ParticipantActor == message.Actor);
+        if (caster is null) {
+            Logger.Warning("Duel {0} | Combat move received from an actor that is not in the duel; dropped.",
+                Logger.Args(Duel.m_duelID.Full));
+
+            return;
+        }
 
         // Tutorial duels script the golems' moves server-side; drop their own AI moves so a pass cannot
         // overwrite the scripted attack. Player moves still flow through normally.
@@ -503,7 +510,7 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
         }
         if (!_awaitingCombatMoves && !(_ownedMinionEarlyFinishScheduled
             && !caster.IsSummonedMinion && _ownedMinionControl.IsOptedIn(caster.ParticipantObject))) {
-            Logger.Warning("Duel {0} | Slot {1} | Received combat move while not expecting it.",
+            Logger.Debug("Duel {0} | Slot {1} | Received combat move while not expecting it.", // CLASSIC: a late click
                 Logger.Args(Duel.m_duelID.Full, caster.SlotIndex));
 
             return;
@@ -972,6 +979,10 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
 
         AssignParticipantToSubCircle(subCircle, participantActor, participantObject);
         PublishActiveDuel(); // CLASSIC
+        // CLASSIC: a wizard walking into a duel that waits for dropped wizards gets it going again (zombie duel fix).
+        if (isPlayer && _isActive) {
+            ResumeIfNoLongerWaiting();
+        }
 
         Logger.Debug("Duel {0} | Slot {1} | Participant {2} joined",
             Logger.Args(Duel.m_duelID.Full, subCircle.SlotIndex, participantObject.m_debugName));
@@ -1269,7 +1280,7 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
                 // CLASSIC: only the deck's copy (it left the book when it went into the deck); see DoSpellCastConsequences.
                 var deckSlot = wizard.EquipmentBehavior.SlotList.FirstOrDefault(s => s.SlotType == EquipmentSlotType.Deck);
                 if (deckSlot?.ItemId is { } deckId) {
-                    wizard.RemoveSpellFromDeck(consumedId, deckId);
+                    wizard.ConsumeDeckTreasureCard(consumedId, deckId); // CLASSIC: from the deck's Treasure Card ledger
                     if (CoreObjectFactory.GetCoreTemplate(consumedId) is SpellTemplate template) {
                         caster.ParticipantActor.Tell(new WIZARD_12_PROTOCOL.MSG_REMOVETREASURESPELLFROMDECK {
                             SpellID = (int) StringHash.Compute(template.m_name), EnchantmentID = 0,
@@ -1334,7 +1345,7 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
         }
 
         if (!caster.HasPipsForSpell(spell)) {
-            Logger.Warning("Duel {0} | Slot {1} | Participant does not have enough pips for spell {2}",
+            Logger.Debug("Duel {0} | Slot {1} | Participant does not have enough pips for spell {2}", // CLASSIC: validation working
                 Logger.Args(Duel.m_duelID.Full, caster.SlotIndex, spell.m_templateID));
 
             CombatResolver.AddCombatMove(CombatMoveType.Pass, caster, null, null);
@@ -1349,9 +1360,16 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
         // If the spell doesn't have a target like for AoE spells or self-heals,
         // the value will be the integer cap.
         var target = caster;
-        if (spellTarget < SubCircles.Length) {
-            // The client sends raw sigil slots for spell targets (see GetUpFirstSigilSlot).
-            target = SubCircles[spellTarget];
+        // The client sends raw sigil slots for spell targets (see GetUpFirstSigilSlot). CLASSIC: an empty circle is no
+        // target (the caster, as for a card without one); the client only offers wizards and creatures (security audit).
+        var targetSlot = Imlight.Classic.Security.CombatTargets.Resolve(spellTarget, SubCircles.Length,
+            slot => SubCircles[slot].Occupied || SubCircles[slot].CombatParticipant is not null);
+        if (targetSlot >= 0) {
+            target = SubCircles[targetSlot];
+        }
+        else if (spellTarget < SubCircles.Length) {
+            Logger.Warning("Duel {0} | Slot {1} | Spell target {2} is an empty circle; cast on the caster instead.",
+                Logger.Args(Duel.m_duelID.Full, caster.SlotIndex, spellTarget));
         }
 
         // CLASSIC: a card the classic values made single-target (Orthrus) is cast by a client without the card overlay

@@ -62,7 +62,8 @@ using Imlight.CoreLib.WizardData.Models.Player;
 namespace Imlight.CoreLib.Classic.Ambient;
 
 /// <summary>What an ambient wizard is doing.</summary>
-internal enum AmbientActivity { Arriving, Idle, Walking, Shopping, Following, Helping, Fighting, Sparring, Away }
+// CLASSIC (2026-10-04): Hatching = on a Pet Pavilion hatching spot with a player (AmbientHatching).
+internal enum AmbientActivity { Arriving, Idle, Walking, Shopping, Following, Helping, Fighting, Sparring, Away, Hatching }
 
 /// <summary>
 /// One ambient wizard: its stored record, its Wizard (never saved), its endpoint actor and its live state. Only its
@@ -83,6 +84,9 @@ internal sealed class AmbientWizard {
     public string Name => Wizard.PlayerNameBehavior.GetWizardName();
     public IActorRef Endpoint { get; set; }
 
+    /// <summary>CLASSIC (2026-10-04): the AmbientZone actor that drives this wizard (hatch news goes there).</summary>
+    public IActorRef Group { get; set; }
+
     // Live state, owned by the AmbientZone actor.
     public string Zone { get; set; }
     public string ZoneDisplayName { get; set; } = "";
@@ -97,6 +101,13 @@ internal sealed class AmbientWizard {
     /// <summary>CLASSIC (2026-10-03): the turns still ahead on the current walk (NavGrid), Target being the next.</summary>
     public Queue<Vector3> Route { get; } = new();
 
+    /// <summary>
+    /// CLASSIC (2026-10-04): the straight run under way (to Target), or null between runs. The client was sent its far
+    /// end once; <see cref="LegId"/> tells the leg's end timer from a later leg's.
+    /// </summary>
+    public WalkLeg? Leg { get; set; }
+    public int LegId { get; set; }
+
     /// <summary>A short stop at a corner of the walk, until then.</summary>
     public DateTime PauseUntil { get; set; }
     public DateTime Until { get; set; }
@@ -108,6 +119,9 @@ internal sealed class AmbientWizard {
     public AmbientChatLimiter Limiter { get; } = new();
     public DateTime NextIdleLine { get; set; }
     public DateTime NextLook { get; set; }
+
+    /// <summary>CLASSIC (2026-10-04): the after-duel protection, as a player's (translucent until it walks off, then 6 s).</summary>
+    public Imlight.Classic.Quests.PostCombatGrace Grace { get; } = new();
 
     public FriendMemory FriendOf(ulong charId)
         => Record.Friends.FirstOrDefault(f => f.CharId == charId)?.ToMemory();

@@ -164,6 +164,14 @@ internal class CommandDispatcher : ReceiveProtocolDispatcher {
             SelectedAccount = message.SelectedAccount
         };
 
+        // CLASSIC: a command from a session with no account or wizard yet is dropped here, before anything reads them
+        // (this actor is shared by every session).
+        if (accountContext is null || characterContext is null) {
+            Logger.Warning("Dropped a command from a session without an account or wizard.");
+
+            return;
+        }
+
         Logger.Information("{0} Uses command: {1}", Logger.Args(accountContext.Username, message.CommandText));
 
         // Log the use of this command to the database.
@@ -186,14 +194,13 @@ internal class CommandDispatcher : ReceiveProtocolDispatcher {
             Logger.Error("Command dispatcher threw exception running command. Exception: {0} {1}",
                 Logger.Args(exception.Message, exception.StackTrace));
 
-            // Inform the client of the error. We'll want to prettify the exception message and stack trace.
-            var prettyTrace = PrettifyStackTrace(exception.StackTrace);
-
-            InformSenderClientImportant(context,
-                                        $"An error occurred while executing the command. " +
-                                        $"Exception: {exception.Message}<br><br> {prettyTrace}");
+            // CLASSIC: the player gets a plain line; the exception and its trace stay in the server log.
+            InformSenderClient(context, CommandErrorReply);
         }
     }
+
+    // CLASSIC: what a player sees when a command fails, never the exception text or stack trace.
+    internal const string CommandErrorReply = "That command could not be run. Check its arguments and try again.";
 
     private void InformSenderClient(CommandContext context, string reason)
         => context.SessionActor.Tell(Classic.ClassicChat.Line(reason)); // CLASSIC: a chat line, not a "!" alert

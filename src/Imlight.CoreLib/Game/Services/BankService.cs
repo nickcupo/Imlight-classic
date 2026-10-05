@@ -49,6 +49,7 @@ using Imcodec.ObjectProperty;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Classic.Inventory;
 using Imlight.Common;
+using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;
 using Imlight.CoreLib.WizardData.Collections;
@@ -182,6 +183,13 @@ internal class BankService(SessionActor sessionActor) : MessageService(sessionAc
 
         if (!IsOpen(wizard)) {
             Logger.Warning("{0} asked to move item {1} ({2} -> {3}) without an open bank.",
+                Logger.Args(wizard.CharId, itemId, from, to));
+            return default;
+        }
+
+        // CLASSIC: and still standing by the chest it was opened at (InteractService only opens it in range).
+        if (ServiceProximity.FindNear<Zone.Components.InteractBankComponent>(wizard, 0, GetZoneObject) is null) {
+            Logger.Warning("{0} asked to move item {1} ({2} -> {3}) away from the bank chest.",
                 Logger.Args(wizard.CharId, itemId, from, to));
             return default;
         }

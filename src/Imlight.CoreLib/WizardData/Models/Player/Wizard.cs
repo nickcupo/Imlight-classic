@@ -261,7 +261,19 @@ public class Wizard {
         WizardCollection.UpdateCharacterZone(this, zone, zoneDisplayName);
     }
 
-    public bool SetLevel(byte level) {
+    // CLASSIC: XP and level are saved whole from the live wizard (UpdateCharacterLevel); combat loot, quest rewards and
+    // commands change them on different actors. Each change holds the character's write lane, so no change is made
+    // from a read another actor has already moved past (a lost XP gain), and each save sees the change before it.
+    public bool SetLevel(byte level) => WizardCollection.WithCharacterLock(CharId, () => SetLevelLocked(level));
+
+    public int AddExperiencePoints(int xp) => WizardCollection.WithCharacterLock(CharId, () => AddExperiencePointsLocked(xp));
+
+    public void RemoveExperiencePoints(int xp) => WizardCollection.WithCharacterLock(CharId, () => {
+        RemoveExperiencePointsLocked(xp);
+        return true;
+    });
+
+    private bool SetLevelLocked(byte level) {
         // CLASSIC: the one level choke point; never above the profile's cap or below 1.
         level = (byte) ClassicRuntime.Rules.ClampLevel(level, MagicLevelsConfig.MaxLevel);
         var school = MagicSchoolBehavior.MagicSchool;
@@ -289,7 +301,7 @@ public class Wizard {
         return true;
     }
 
-    public int AddExperiencePoints(int xp) {
+    private int AddExperiencePointsLocked(int xp) {
         // CLASSIC: the one XP choke point; XP stops at the level cap's ceiling. Returns the XP applied.
         var applied = ClassicRuntime.Rules.XpToApply(MagicSchoolBehavior.ExperiencePoints, xp, MagicLevelsConfig.MaxLevelXp);
         if (applied == 0 && xp != 0) {
@@ -320,7 +332,7 @@ public class Wizard {
         return xp;
     }
 
-    public void RemoveExperiencePoints(int xp) {
+    private void RemoveExperiencePointsLocked(int xp) {
         MagicSchoolBehavior.ExperiencePoints -= xp;
 
         // If the level at XP is less than the current level, we need to level down.
@@ -368,8 +380,17 @@ public class Wizard {
     public void AddGold(int gold)
         => WizardCollection.ChangeGold(this, gold, capToPouch: true);
 
-    public void RemoveGold(int gold)
-        => WizardCollection.ChangeGold(this, -(long) gold, capToPouch: false);
+    /// <summary>CLASSIC: gives back gold a failed purchase took (not capped at the pouch, so nothing is lost).</summary>
+    public void RefundGold(int gold) {
+        if (gold > 0) {
+            WizardCollection.ChangeGold(this, gold, capToPouch: false);
+        }
+    }
+
+    /// <summary>CLASSIC: spends the gold only if the saved balance covers it (never below zero).</summary>
+    /// <returns>True if it was spent.</returns>
+    public bool RemoveGold(int gold)
+        => WizardCollection.TrySpendGold(this, gold);
 
     public void UpdateHealth(int newHealth) {
         GameStats.m_currentHitpoints = newHealth;
@@ -495,8 +516,8 @@ public class Wizard {
     public bool RemoveItemFromInventory(ulong itemId) {
         var success = InventoryBehavior.RemoveItem(itemId, out var item);
         if (!success) {
-            Logger.Warning("Could not remove item {0} from player {1}'s inventory.",
-                Logger.Args(itemId, PlayerNameBehavior.GetWizardName()));
+            Logger.Warning("Could not remove item {0} from wizard {1}'s inventory.",
+                Logger.Args(itemId, CharId));
 
             return false;
         }
@@ -507,19 +528,55 @@ public class Wizard {
         return true;
     }
 
+    /// <summary>
+    /// CLASSIC: takes an item out of the backpack for good (sold, trashed) and deletes its saved document, which used to
+    /// stay behind forever. False, and nothing deleted, when the backpack no longer holds it: the removal is the check,
+    /// so of two actors spending the same item only one succeeds.
+    /// </summary>
+    public bool DestroyInventoryItem(ulong itemId) {
+        if (!RemoveItemFromInventory(itemId)) {
+            return false;
+        }
+
+        try {
+            if (WizardCollection.TestStoreScope.Value is null) { // a test's fake store has no item documents
+                WizardItemCollection.RemoveItem(CharId, itemId);
+            }
+        }
+        catch (Exception ex) {
+            // The backpack no longer lists it, so a leftover document is harmless; it is only clutter.
+            Logger.Warning("Item {0} left the backpack of {1} but its document was not deleted: {2}",
+                Logger.Args(itemId, CharId, ex.Message));
+        }
+
+        return true;
+    }
+
     public bool InventoryToEquipmentTransfer(ulong itemId, out List<GameEffectBase> equipEffects, out List<GameEffectBase> unequipEffects) {
         equipEffects = null;
         unequipEffects = null;
 
-        // Remove the item from the inventory.
-        if (!InventoryBehavior.RemoveItem(itemId, out var inventoryItem)) {
+        // CLASSIC: find the item's slot before it leaves the backpack; an item with no slot stays where it is.
+        var inventoryItem = InventoryBehavior.GetItem(itemId);
+        if (inventoryItem is null) {
             Logger.Warning("Tried to equip item with global id {0} that does not exist in player inventory.", Logger.Args(itemId));
             return false;
         }
 
         // Get the template for this item. Using this template we can get the slot this object should be on.
         var template = ItemHelper.GetItemTemplate(inventoryItem);
-        var slot = ItemHelper.GetItemSlot(template);
+        var slot = EquipRules.SlotOf(template);
+        if (slot is null) {
+            Logger.Warning("Tried to equip item {0} (template {1}), which has no equipment slot.",
+                Logger.Args(itemId, inventoryItem.m_templateID.Full));
+            return false;
+        }
+
+        // Remove the item from the inventory.
+        if (!InventoryBehavior.RemoveItem(inventoryItem)) {
+            Logger.Warning("Tried to equip item with global id {0} that does not exist in player inventory.", Logger.Args(itemId));
+            return false;
+        }
 
         // Get the item that is currently in the slot, if there is one. We want to remove its effects.
         var replacedItem = EquipmentBehavior.GetItemInSlot(slot.SlotType);
@@ -528,6 +585,7 @@ public class Wizard {
                 Logger.Warning("Could not replace item {0} from slot {1}.",
                     Logger.Args(replacedItem.m_globalID, slot.SlotType));
 
+                InventoryBehavior.AddItem(inventoryItem); // CLASSIC: back to the backpack, not lost.
                 return false;
             }
         }
@@ -538,6 +596,7 @@ public class Wizard {
             Logger.Warning("Tried to equip item with global id {0} that is already equipped.",
                 Logger.Args(itemId));
 
+            InventoryBehavior.AddItem(inventoryItem); // CLASSIC: back to the backpack, not lost.
             return false;
         }
 
@@ -756,7 +815,7 @@ public class Wizard {
 
     public bool LearnSpell(Spell spell) {
         if (SpellbookBehavior.LearnedSpellTemplateIds.Contains(spell.m_templateID)) {
-            Logger.Warning("{0} Tried to learn spell with template ID {1} that is already known.",
+            Logger.Debug("{0} Tried to learn spell with template ID {1} that is already known.", // CLASSIC: harmless
                 Logger.Args(PlayerNameBehavior.GetWizardName(), spell.m_templateID));
 
             return false;
@@ -924,25 +983,21 @@ public class Wizard {
     /// <param name="deckId">The global ID of the deck item.</param>
     /// <returns>True if the card was added successfully.</returns>
     public bool AddTreasureCardToDeck(uint spellTemplateId, ulong deckId) {
-        // Verify the player owns this treasure card.
-        var ownedCount = SpellbookBehavior.TreasureCardCount(spellTemplateId);
-        if (ownedCount <= 0) {
-            Logger.Warning("Player {0} tried to add treasure card {1} to deck but owns none.",
-                Logger.Args(PlayerNameBehavior.GetWizardName(), spellTemplateId));
+        // CLASSIC: the card goes into the deck's Treasure Cards (the ledger, SpellbookBehavior.DeckTreasureCards), not
+        // into the deck's card list, where a Treasure Card of a known spell became a regular card that was never spent
+        // and took no deck place. Book and ledger change in one save; the deck's Treasure Card places are its
+        // template's m_maxTreasureCards.
+        var deck = HeldDeck(deckId);
+        if (deck is null) {
+            Logger.Warning("Player {0} tried to add treasure card {1} to deck {2} they do not hold.",
+                Logger.Args(PlayerNameBehavior.GetWizardName(), spellTemplateId, deckId));
 
             return false;
         }
 
-        // Use the existing spell-to-deck logic, then consume from the book.
-        var addedToDeck = AddSpellToDeck(spellTemplateId, deckId);
-        if (!addedToDeck) {
-            return false;
-        }
+        var places = Classic.ClassicDeckRules.DeckTemplateOf((uint) deck.m_templateID)?.m_maxTreasureCards ?? SpellbookBehavior.MaxTreasureCards;
 
-        // Consume one copy from the treasure card book.
-        WizardCollection.RemoveTreasureCard(this, spellTemplateId);
-
-        return true;
+        return WizardCollection.MoveTreasureCardToDeck(this, deckId, spellTemplateId, places);
     }
 
     /// <summary>
@@ -953,19 +1008,88 @@ public class Wizard {
     /// <param name="deckId">The global ID of the deck item.</param>
     /// <param name="destroy">If true, the card is destroyed instead of returned to the book.</param>
     /// <returns>True if the card was removed successfully.</returns>
-    public bool RemoveTreasureCardFromDeck(uint spellTemplateId, ulong deckId, bool destroy = false) {
-        // Remove from the deck.
-        var removedFromDeck = RemoveSpellFromDeck(spellTemplateId, deckId);
-        if (!removedFromDeck) {
-            return false;
+    public bool RemoveTreasureCardFromDeck(uint spellTemplateId, ulong deckId, bool destroy = false)
+        // CLASSIC: only a card the ledger has in that deck (one that went in as a Treasure Card) comes out, so a regular
+        // deck card can never be turned into a book Treasure Card.
+        => WizardCollection.MoveTreasureCardFromDeck(this, deckId, spellTemplateId, destroy);
+
+    /// <summary>CLASSIC: a Treasure Card of the deck was cast (or spent as an enchantment): it is gone for good.</summary>
+    public bool ConsumeDeckTreasureCard(uint spellTemplateId, ulong deckId)
+        => WizardCollection.MoveTreasureCardFromDeck(this, deckId, spellTemplateId, destroy: true);
+
+    // CLASSIC: a deck item this wizard holds (backpack or equipped), or null.
+    private WizClientObjectItem HeldDeck(ulong deckId) {
+        var item = InventoryBehavior.Items.FirstOrDefault(i => i.m_globalID == deckId)
+            ?? EquipmentBehavior.EquippedItems.FirstOrDefault(i => i.m_globalID == deckId);
+
+        return item is not null && CoreObjectFactory.FindBehaviorInstance<DeckBehavior>(item, out _) ? item : null;
+    }
+
+    /// <summary>
+    /// CLASSIC: once per wizard, moves the Treasure Cards older saves kept inside the card lists of the decks the
+    /// wizard holds into the ledger: entries the client counts as Treasure Cards (template m_Treasure, an enchanted
+    /// entry, a " TC" name) and entries of spells the wizard has not learned (the old server's rule for them). They
+    /// leave the deck's card list, which then holds regular cards only. Returns how many copies moved.
+    /// </summary>
+    internal int MigrateDeckTreasureCards() {
+        if (SpellbookBehavior is null || SpellbookBehavior.DeckTreasureLedgerVersion >= 1) {
+            return 0;
         }
 
-        if (!destroy) {
-            // Return the card to the treasure book.
-            WizardCollection.AddTreasureCard(this, spellTemplateId);
+        var learned = SpellbookBehavior.LearnedSpellTemplateIds;
+        var found = new Dictionary<ulong, Dictionary<uint, int>>();
+        var decks = InventoryBehavior.Items.Concat(EquipmentBehavior.EquippedItems)
+            .Where(item => item is not null).DistinctBy(item => (ulong) item.m_globalID).ToList();
+        foreach (var deck in decks) {
+            if (!CoreObjectFactory.FindBehaviorInstance<DeckBehavior>(deck, out var deckBehavior) || deckBehavior.m_spellList is null) {
+                continue;
+            }
+
+            foreach (var entry in deckBehavior.m_spellList.Where(entry => entry is not null)) {
+                if (!IsLegacyDeckTreasure(entry, learned)) {
+                    continue;
+                }
+
+                var deckId = (ulong) deck.m_globalID;
+                if (!found.TryGetValue(deckId, out var cards)) {
+                    cards = [];
+                    found[deckId] = cards;
+                }
+
+                cards[entry.m_templateID] = (cards.TryGetValue(entry.m_templateID, out var n) ? n : 0) + (int) entry.m_quantity;
+            }
         }
 
-        return true;
+        if (!WizardCollection.RecordMigratedDeckTreasureCards(this, found)) {
+            return 0;
+        }
+
+        var moved = 0;
+        foreach (var (deckId, cards) in found) {
+            foreach (var (templateId, copies) in cards) {
+                for (var i = 0; i < copies; i++) {
+                    RemoveSpellFromDeck(templateId, deckId);
+                    moved++;
+                }
+            }
+        }
+
+        if (moved > 0) {
+            Logger.Information("Wizard {0}: {1} deck Treasure Card(s) moved to the Treasure Card ledger.", Logger.Args(CharId, moved));
+        }
+
+        return moved;
+    }
+
+    // CLASSIC: a deck entry of an older save that was a Treasure Card.
+    internal static bool IsLegacyDeckTreasure(SpellData entry, ICollection<uint> learned, Func<uint, SpellTemplate> lookup = null) {
+        var template = lookup is null ? CoreObjectFactory.GetCoreTemplate(entry.m_templateID) as SpellTemplate : lookup(entry.m_templateID);
+        if (Classic.ClassicDeckRules.IsTreasureEntry(template, entry.m_enchantment)
+            || template?.m_name?.EndsWith(" TC", StringComparison.Ordinal) == true) {
+            return true;
+        }
+
+        return learned is { Count: > 0 } && !learned.Contains(entry.m_templateID);
     }
 
     public ObjState EnterState(string stateName)
@@ -1454,7 +1578,10 @@ public class Wizard {
     private void InitializeMagicSchoolBehavior(MagicSchool school, byte level) {
         MagicSchoolBehavior = new ServerMagicSchoolBehavior {
             MagicSchool = school,
-            ExperiencePoints = 0,
+            // CLASSIC: the XP a wizard of this level starts with (0 at level 1). An ambient wizard is made at its level,
+            // and the stats recalculation inside its construction read XP 0 for level N: 960 "XP/Level mismatch" lines
+            // per start on live.
+            ExperiencePoints = level > 1 ? MagicLevelsConfig.GetExperiencePointsAtLevel(level) : 0,
             Level = level,
             TrainingPoints = 0,
             OverflowXp = 0,

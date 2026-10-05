@@ -61,7 +61,7 @@ internal class AuthenticatorService(SessionActor parentActor) : MessageService(p
         catch (Exception ex) {
             SendToSocket(new LOGIN_7_PROTOCOL.MSG_USER_AUTHEN_RSP {
                 Error = (int) UserAuthenResult.Timeout,
-                Reason = ex.Message,
+                Reason = "", // CLASSIC: was ex.Message (L2)
             });
 
             throw new SessionFatalException("User authentication failed.", ex);
@@ -77,7 +77,7 @@ internal class AuthenticatorService(SessionActor parentActor) : MessageService(p
         catch (Exception ex) {
             SendToSocket(new LOGIN_7_PROTOCOL.MSG_USER_VALIDATE_RSP {
                 Error = (int) UserValidateResult.Timeout,
-                Reason = ex.Message,
+                Reason = "", // CLASSIC: was ex.Message (L2)
             });
 
             throw new SessionFatalException("User validation failed.", ex);
@@ -93,7 +93,12 @@ internal class AuthenticatorService(SessionActor parentActor) : MessageService(p
                 Error = (int) authReply._result,
                 Reason = authReply._result.ToString(),
             });
-            
+
+            // CLASSIC: a wrong password ends the connection (H2); the reply goes out first.
+            if (authReply._closeSession) {
+                CloseSoon();
+            }
+
             return;
         }
 
@@ -121,6 +126,10 @@ internal class AuthenticatorService(SessionActor parentActor) : MessageService(p
                 Reason = validationReply._result.ToString(),
             });
 
+            if (validationReply._closeSession) {
+                CloseSoon();
+            }
+
             return;
         }
 
@@ -138,6 +147,22 @@ internal class AuthenticatorService(SessionActor parentActor) : MessageService(p
         });
     }
 
+    /// <summary>
+    /// CLASSIC: closes the session after the failure reply has had time to reach the socket (stopping the session at
+    /// once can drop it). [Login Server] LoginFailuresPerConnection (default 1) failures are allowed first.
+    /// </summary>
+    private void CloseSoon() {
+        if (++_failures < s_failuresPerConnection) {
+            return;
+        }
+
+        Context.System.Scheduler.ScheduleTellOnce(TimeSpan.FromSeconds(1), SessionActor.ActorRef, "Close", ActorRefs.NoSender);
+    }
+
+    private static readonly int s_failuresPerConnection
+        = Math.Max(1, SecuritySettings.Int("Login Server.LoginFailuresPerConnection", 1));
+    private int _failures;
+
     [MessageHandler(typeof(LOGIN_7_PROTOCOL.MSG_REQUESTCHARACTERLIST))]
     private void ReceiveRequestCharacterList(LOGIN_7_PROTOCOL.MSG_REQUESTCHARACTERLIST message) {
         if (_validatedAccount is null)
@@ -153,7 +178,13 @@ internal class AuthenticatorService(SessionActor parentActor) : MessageService(p
     private bool AdmitClientToLogin(Account account) {
         // Enqueue ourselves to the connected server. Inform the socket if its been placed into a queue and
         // what position it could potentially be in.
-        var serverEnqueueResult = SessionActor.EnqueueToServer();
+        // CLASSIC: logging in again puts the account's game session out (2009: one wizard per account online, the
+        // newest login wins; Game/AccountSessions.cs) and waits for it to stop, so the character list is read after
+        // its last saves. A session that will not stop refuses this login instead.
+        var stillInGame = !Imlight.CoreLib.Game.AccountSessions.CloseAndWait(account.AccountId);
+        var serverEnqueueResult = stillInGame
+            ? new SERVER_100_PROTOCOL.MSG_PLAYERENQUEUEDRSP { Failed = true }
+            : SessionActor.EnqueueToServer();
         if (serverEnqueueResult.Failed) {
             SendToSocket(new LOGIN_7_PROTOCOL.MSG_USER_ADMIT_IND {
                 Status = 0,

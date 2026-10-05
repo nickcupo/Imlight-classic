@@ -156,6 +156,18 @@ internal class MoveService : MessageService {
     private void ReceiveMarkLocation(GAME_5_PROTOCOL.MSG_MARK_LOCATION message) {
         var wizard = GetActiveWizard();
 
+        // CLASSIC: not in a duel, and not inside a private instance (a dungeon run, a dorm, a minigame), whose copy a
+        // later recall could not return to (security audit 2026-10-04).
+        var inInstance = (TryGetOnlinePlayer(wizard.CharId, out var self) && self.InstanceOwnerId != 0)
+            || Minigames.MinigameConfig.IsMinigameZone(wizard.Zone ?? "");
+        var markRefusal = Imlight.Classic.Security.VoluntaryTeleport.CheckMark(wizard.IsInDuel, inInstance);
+        if (markRefusal != Imlight.Classic.Security.TeleportRefusal.None) {
+            InformGameClient(Imlight.Classic.Security.VoluntaryTeleport.Message(markRefusal));
+            SendToSocket(new GAME_5_PROTOCOL.MSG_MARK_LOCATION_RESPONSE { Result = 0, MarkType = "1" });
+
+            return;
+        }
+
         // Determine the mana cost based on the wizard's current mana.
         var manaCost = wizard.GameStats.m_currentMana < 50
             ? MARK_MANA_COST_LESS_THAN_50_MANA
@@ -205,6 +217,15 @@ internal class MoveService : MessageService {
 
     [MessageHandler(typeof(GAME_5_PROTOCOL.MSG_RECALL_LOCATION))]
     private void ReceiveRecallLocation(GAME_5_PROTOCOL.MSG_RECALL_LOCATION message) {
+        // CLASSIC: a recall needs a mark and is refused in a duel (security audit 2026-10-04).
+        var recaller = GetActiveWizard();
+        var recallRefusal = Imlight.Classic.Security.VoluntaryTeleport.CheckRecall(recaller.IsInDuel, recaller.MarkedZone);
+        if (recallRefusal != Imlight.Classic.Security.TeleportRefusal.None) {
+            InformGameClient(Imlight.Classic.Security.VoluntaryTeleport.Message(recallRefusal));
+
+            return;
+        }
+
         var teleportEffectsMsg = new CHARACTER_103_PROTOCOL.MSG_DOTELEPORTEFFECTS();
         TellOtherServices(teleportEffectsMsg);
 
@@ -216,6 +237,11 @@ internal class MoveService : MessageService {
     [MessageHandler(typeof(SERVICE_101_PROTOCOL.MSG_RECALL_DELAY))]
     private void OnRecallDelay(SERVICE_101_PROTOCOL.MSG_RECALL_DELAY _) {
         var wizard = GetActiveWizard();
+        // CLASSIC: checked again after the effects (a duel may have started, or the mark was used meanwhile).
+        if (Imlight.Classic.Security.VoluntaryTeleport.CheckRecall(wizard.IsInDuel, wizard.MarkedZone)
+                != Imlight.Classic.Security.TeleportRefusal.None) {
+            return;
+        }
 
         // If we are in the same zone as the marked location, teleport to it.
         if (wizard.MarkedZone == wizard.Zone) {

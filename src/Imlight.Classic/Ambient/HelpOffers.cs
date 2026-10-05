@@ -61,7 +61,7 @@ public sealed class HelpOffers {
     public static readonly TimeSpan Cooldown = TimeSpan.FromMinutes(3);
 
     private static readonly HashSet<string> s_yes = new(StringComparer.OrdinalIgnoreCase) {
-        "yes", "y", "yeah", "yea", "yep", "yup", "sure", "ok", "okay", "k", "kk", "please", "pls", "plz", "yes please",
+        "yes", "y", "ye", "yeah", "yea", "yah", "yep", "yup", "sure", "ok", "okay", "k", "kk", "please", "pls", "plz", "yes please",
         "sure thing", "ok thanks", "ok thx", "yes plz", "help", "help me", "come", "come help", "of course", "definitely", "ya",
     };
 

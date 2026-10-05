@@ -29,6 +29,12 @@
  *   AmbientWizardChat     = true|false (canned and reply chat)
  *   AmbientWizardBattles  = true|false (ask to help in real players' fights)
  *   AmbientWizardStreetFights = true|false (fight street mobs on their own)
+ *   AmbientWizardHatching = true|false (2026-10-04: have Adult pets in the
+ *                                        Pet Pavilion and hatch with players)
+ *   AmbientWizardBazaar   = true|false (2026-10-04: buy and sell at the
+ *                                        Olde Town Bazaar)
+ * The two 2026-10-04 switches also add their rooms (the Pet Pavilion, the
+ * Bazaar) to the default zones.
  *
  * USAGE EXAMPLE:
  * var settings = AmbientSettings.Parse(count: "4", zones: "", chat: "", battles: "", fights: "");
@@ -57,6 +63,21 @@ public sealed record AmbientSettings(int PerZone, ImmutableArray<(string Zone, i
     public static readonly ImmutableArray<string> DefaultStreetZones =
         ["WizardCity/WC_Hub", "WizardCity/WC_Streets/WC_Unicorn", "WizardCity/WC_Shop_Area"];
 
+    /// <summary>CLASSIC (2026-10-04): the Pet Pavilion (May 2010, owner extra), where ambient wizards hatch with players.</summary>
+    public const string PetPavilionZone = "WizardCity/Interiors/WC_Hatchery";
+
+    /// <summary>CLASSIC (2026-10-04): the Olde Town Bazaar (July 2009), where ambient wizards buy and sell.</summary>
+    public const string BazaarZone = "WizardCity/WC_Streets/Interiors/WC_OldeTown_AuctionHouse";
+
+    /// <summary>Wizards in the Bazaar room by default (a small room; its stock churn does not need a crowd).</summary>
+    public const int BazaarDefaultCount = 3;
+
+    /// <summary>CLASSIC (2026-10-04): Pet Pavilion wizards answer and offer hatches (AmbientWizardHatching).</summary>
+    public bool Hatching { get; init; }
+
+    /// <summary>CLASSIC (2026-10-04): Bazaar wizards buy and sell there (AmbientWizardBazaar).</summary>
+    public bool Bazaar { get; init; }
+
     /// <summary>Hard cap on wizards per zone, whatever the setting says.</summary>
     public const int MaxPerZone = 12;
 
@@ -65,8 +86,9 @@ public sealed record AmbientSettings(int PerZone, ImmutableArray<(string Zone, i
 
     public bool Enabled => PerZone > 0 || Zones.Any(z => z.Count > 0);
 
-    /// <summary>Parses the five settings; blank values take their defaults.</summary>
-    public static AmbientSettings Parse(string? count, string? zones, string? chat, string? battles, string? fights) {
+    /// <summary>Parses the settings; blank values take their defaults (every switch on).</summary>
+    public static AmbientSettings Parse(string? count, string? zones, string? chat, string? battles, string? fights,
+                                        string? hatching = null, string? bazaar = null) {
         var text = (count ?? "").Trim();
         int perZone;
         if (text.Length == 0) {
@@ -93,12 +115,21 @@ public sealed record AmbientSettings(int PerZone, ImmutableArray<(string Zone, i
         }
 
         var usesDefault = list.Count == 0;
+        var hatches = Flag(hatching);
+        var trades = Flag(bazaar);
         if (usesDefault) {
             list.AddRange(DefaultStreetZones.Select(zone => (zone, perZone)));
+            if (hatches) {
+                list.Add((PetPavilionZone, perZone));
+            }
+
+            if (trades) {
+                list.Add((BazaarZone, Math.Min(perZone, BazaarDefaultCount)));
+            }
         }
 
         return new AmbientSettings(perZone, [.. list.DistinctBy(z => z.Item1, StringComparer.OrdinalIgnoreCase)], usesDefault,
-            Flag(chat), Flag(battles), Flag(fights));
+            Flag(chat), Flag(battles), Flag(fights)) { Hatching = hatches, Bazaar = trades };
     }
 
     private static bool Flag(string? value)

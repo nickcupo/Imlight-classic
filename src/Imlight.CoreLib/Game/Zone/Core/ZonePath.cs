@@ -80,6 +80,7 @@ public sealed class ZonePath : ZoneEntity {
     private readonly List<IActorRef> _creatureActors = [];
     private readonly Dictionary<ulong, SpawnObject> _spawnObjectInfo = [];
     private readonly Dictionary<IActorRef, (SpawnObject Spawner, GID ObjectId, string Name)> _loadingCreatures = [];
+    private readonly HashSet<IActorRef> _lateCreatures = []; // CLASSIC: past the load budget, still expected.
     private readonly bool _randomizeCreatures 
         = ConfigurationManager.Settings["April Fools.RandomizeCreatures"].AsBool();
 
@@ -145,24 +146,28 @@ public sealed class ZonePath : ZoneEntity {
 
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_ZONEOBJECTLOADRESULTS))]
     private void ReceiveCreatureLoaded() {
-        if (_loadingCreatures.Remove(Sender)) {
+        if (_loadingCreatures.Remove(Sender, out var creature)) {
             Timers.Cancel(Sender);
+            if (_lateCreatures.Remove(Sender)) {
+                Logger.Information("Path creature {Name} loaded late (after more than {Timeout} ms).",
+                    Logger.Args(creature.Name, OBJECT_CREATION_TIMEOUT_IN_MS));
+            }
         }
     }
 
+    /// <summary>
+    /// CLASSIC: a creature that has not answered its load in time is kept (it keeps its spawner slot) and joins when it
+    /// answers. Stopping it dropped mobs and bosses for good under load (rig audit 2026-10-04); an entity's load catches
+    /// its components' exceptions and always answers, so a missing answer means slow, not broken.
+    /// </summary>
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_ENTITYLOADTIMEOUT))]
     private void ReceiveCreatureLoadTimeout(ZONE_102_PROTOCOL.MSG_ENTITYLOADTIMEOUT message) {
-        if (!_loadingCreatures.Remove(message.Entity, out var creature)) {
+        if (!_loadingCreatures.TryGetValue(message.Entity, out var creature) || !_lateCreatures.Add(message.Entity)) {
             return;
         }
 
-        Logger.Error("Failed to create entity actor for {Kind} {Name} (no load reply within {Timeout} ms).",
-            Logger.Args(nameof(CoreTemplate), creature.Name, OBJECT_CREATION_TIMEOUT_IN_MS));
-
-        _creatureActors.Remove(message.Entity);
-        _spawnObjectInfo.Remove(creature.ObjectId);
-        SetCreatureCount(creature.Spawner, CreatureCount(creature.Spawner) - 1);
-        Context.Stop(message.Entity);
+        Logger.Warning("Path creature {Name} has not answered its load within {Timeout} ms; keeping it until it does.",
+            Logger.Args(creature.Name, OBJECT_CREATION_TIMEOUT_IN_MS));
     }
 
     [MessageHandler(typeof(GAME_5_PROTOCOL.MSG_DELETEOBJECT))]
@@ -176,6 +181,7 @@ public sealed class ZonePath : ZoneEntity {
             if (_loadingCreatures.Remove(Sender)) {
                 Timers.Cancel(Sender);
             }
+            _lateCreatures.Remove(Sender); // CLASSIC
         }
     }
 

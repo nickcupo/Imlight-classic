@@ -39,6 +39,8 @@
  */
 
 using System;
+using System.Security.Cryptography;
+using System.Text;
 using Imcodec.IO;
 using Imlight.Common;
 using Imlight.CoreLib.Shared.Cryptography;
@@ -88,6 +90,7 @@ internal static class UserAuthenticator {
         internal ByteString _sessionKey;
         internal ByteString _rec1;
         internal UserAuthenResult _result;
+        internal bool _closeSession; // CLASSIC: a failed password ends the connection
 
     }
 
@@ -124,10 +127,33 @@ internal static class UserAuthenticator {
             }
         }
 
+        // CLASSIC: brute-force protection (H2): a locked-out account or address gets the plain failure.
+        var throttle = SecuritySettings.Logins.Value;
+        var address = sessionActor.RemoteIp;
+        if (throttle.LockedFor(username, address) is { } wait) {
+            Logger.Warning("Login for {0} from {1} refused: locked out for {2:F0} s after failed logins",
+                Logger.Args(username, address, wait.TotalSeconds));
+            details._result = UserAuthenResult.AuthenFailed;
+            details._closeSession = true;
+
+            return details;
+        }
+
         // Check if we can find the account.
         var matchedAccount = AccountCollection.GetAccount(username);
-        if (matchedAccount is null) {
+
+        // CLASSIC: the password is checked before anything about the account is revealed (L2), against H (the only
+        // thing the client's ClientKey1 can be checked against; see Imlight.Classic.Net.PasswordHashing), in constant
+        // time. An account without H (in-client password login off) never matches.
+        var protocolHash = matchedAccount is null ? null : PasswordStore.ProtocolHashOf(matchedAccount);
+        var doesPasswordMatch = matchedAccount is not null
+            && (s_anyPasswordLogin || ClientKey1Matches(protocolHash, sessionId, offerTime, offerMilli, clientKey1));
+        if (!doesPasswordMatch) {
+            var lockedOut = throttle.Failure(matchedAccount is null ? null : username, address);
+            Logger.Warning("Login failed for {0} from {1}{2}",
+                Logger.Args(username, address, lockedOut ? " (now locked out)" : ""));
             details._result = UserAuthenResult.AuthenFailed;
+            details._closeSession = true;
 
             return details;
         }
@@ -159,30 +185,38 @@ internal static class UserAuthenticator {
         }
 
         details._account = matchedAccount;
-
-        var doesPasswordMatch = s_anyPasswordLogin || ClientKey.VerifyCK1(matchedAccount.PasswordHash, sessionId, offerTime, offerMilli, clientKey1);
-        if (doesPasswordMatch) {
-            // Create a new session key and store it in the database.
-            var sessionKey = ClientKey.HashSessionKey(sessionId, offerTime, offerMilli);
-            ClientKeyCollection.AddSessionKey(matchedAccount.AccountId, authMessage.MachineID, sessionKey);
-            details._sessionKey = sessionKey;
-
-            // todo: these are only ever cached and not ever persistently saved
-            matchedAccount.LastLoginMachineId = authMessage.MachineID;
-            matchedAccount.LastLoginTime = DateTime.UtcNow;
-            matchedAccount.LastLoginIp = sessionActor.Ip;
-
-            // Craft a successful reply and return.
-            var rec1 = Rec1.Encode(sessionKey, sessionId, offerTime, offerMilli);
-            details._rec1 = rec1;
-
-            return details;
+        throttle.Success(username);
+        if (!s_anyPasswordLogin) {
+            PasswordStore.AfterProtocolLogin(matchedAccount);
         }
-        else {
-            details._result = UserAuthenResult.AuthenFailed;
 
-            return details;
+        // Create a new session key and store it in the database.
+        // CLASSIC: 32 random bytes (Base64, the same 44-character form as before); the old key had 31 random bits.
+        ByteString sessionKey = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
+        ClientKeyCollection.AddSessionKey(matchedAccount.AccountId, authMessage.MachineID, sessionKey, address);
+        details._sessionKey = sessionKey;
+
+        // todo: these are only ever cached and not ever persistently saved
+        matchedAccount.LastLoginMachineId = authMessage.MachineID;
+        matchedAccount.LastLoginTime = DateTime.UtcNow;
+        matchedAccount.LastLoginIp = sessionActor.Ip;
+
+        // Craft a successful reply and return.
+        var rec1 = Rec1.Encode(sessionKey, sessionId, offerTime, offerMilli);
+        details._rec1 = rec1;
+
+        return details;
+    }
+
+    /// <summary>CLASSIC: ClientKey1 = Base64(SHA-512(H || salt)), compared in constant time.</summary>
+    internal static bool ClientKey1Matches(string protocolHash, ushort sessionId, uint offerTime, uint offerMilli,
+                                           string clientKey1) {
+        if (protocolHash is null || string.IsNullOrEmpty(clientKey1)) {
+            return false;
         }
+
+        var expected = ClientKey.SaltedClientKey1(protocolHash, sessionId, offerTime, offerMilli);
+        return CryptographicOperations.FixedTimeEquals(Encoding.UTF8.GetBytes(expected), Encoding.UTF8.GetBytes(clientKey1));
     }
 
     private static (ushort, string, string) DecodeRec1(ByteString rec1, SessionActor sessionActor) {

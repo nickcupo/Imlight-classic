@@ -50,6 +50,7 @@ using Imcodec.IO;
 using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty;
 using Imcodec.ObjectProperty.TypeCache;
+using Imlight.Classic.Quests;
 using Imlight.Classic.Rules;
 using Imlight.Common;
 using Imlight.CoreLib.Classic;
@@ -69,14 +70,25 @@ namespace Imlight.CoreLib.Game.Services;
 
 internal class CombatService(SessionActor sessionActor) : MessageService(sessionActor) {
 
-    private const uint NO_AGGRO_EFFECT_STRINGID = 1618528611; // StringHash("PostCombatEffect")
-    // CLASSIC: [Classic] PostCombatGraceSeconds (default 5): how long after a duel monsters leave the wizard alone and
-    // the wizard does not join fights by walking into them. The 2009 value is unsourced (GAP_ANALYSIS C9).
+    // [Classic] PostCombatGraceSeconds (default 5): the fixed grace outside the classic profile.
     private static readonly uint NO_AGGRO_EFFECT_DURATION_IN_SECONDS = GraceSeconds();
 
     private static uint GraceSeconds()
         => uint.TryParse(ConfigurationManager.Settings["Classic.PostCombatGraceSeconds"].AsString(), out var seconds)
             && seconds is > 0 and <= 60 ? seconds : 5;
+
+    // CLASSIC (2026-10-04): under the classic profile the grace is KingsIsle's two effects (PostCombatGrace): up to 30 s
+    // while the wizard stands still after the duel, then 6 s from its first move. [Classic] PostCombatStillSeconds and
+    // PostCombatMoveGraceSeconds override them (tests, playbot).
+    private static readonly TimeSpan StillSeconds = Seconds("Classic.PostCombatStillSeconds", PostCombatGrace.DefaultStill);
+    private static readonly TimeSpan MoveGraceSeconds = Seconds("Classic.PostCombatMoveGraceSeconds", PostCombatGrace.DefaultMoving);
+
+    private static TimeSpan Seconds(string key, TimeSpan fallback)
+        => double.TryParse(ConfigurationManager.Settings[key].AsString(), System.Globalization.NumberStyles.Float,
+               System.Globalization.CultureInfo.InvariantCulture, out var seconds) && seconds is >= 0 and <= 600
+            ? TimeSpan.FromSeconds(seconds) : fallback;
+
+    private readonly PostCombatGrace _grace = new(StillSeconds, MoveGraceSeconds); // CLASSIC
 
     private readonly CoreObjectSerializer _effectSerializer = new(
         behaviors: SerializerFlags.None
@@ -135,6 +147,10 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
 
         // Set the persistent location and orientation of the wizard
         var wizard = GetActiveWizard();
+        if (ClassicQuestEngine.IsActive && wizard.IsInCombatGrace) {
+            RemoveNoAggroEffect(); // CLASSIC: in a duel again (a PvP circle, a scripted fight): no fade at the table.
+        }
+
         wizard.IsInDuel = true;
         wizard.SetPersistentLocation(message.SlotPosition);
 
@@ -187,8 +203,6 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
         }
 
         SetNoAggroGrace();
-        Timers.StartSingleTimer("NoAggroGraceOver", new COMBAT_106_PROTOCOL.MSG_NOAGGROGRACEOVER(),
-            TimeSpan.FromSeconds(NO_AGGRO_EFFECT_DURATION_IN_SECONDS));
         if (message.Fought) {
             InformGameClient(message.Won ? "Your side won the duel!" : "Your side lost the duel.");
         }
@@ -216,13 +230,6 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
         PushHelperIdle();
         EquipMount();
         SetNoAggroGrace();
-
-        // Send a message to ourselves to end the no aggro grace period.
-        var noAggroGraceOverMsg = new COMBAT_106_PROTOCOL.MSG_NOAGGROGRACEOVER();
-        Timers.StartSingleTimer(
-            "NoAggroGraceOver",
-            noAggroGraceOverMsg,
-            TimeSpan.FromSeconds(NO_AGGRO_EFFECT_DURATION_IN_SECONDS));
 
         ClassicBadges.MobsDefeated(GetActiveWizard(), message.MobTemplateIds, SendToSocket); // CLASSIC: kill badges.
         RecordSecondChanceWin(message.MobTemplateIds); // CLASSIC: opens a beaten boss's Second Chance chest.
@@ -576,7 +583,11 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
     [MessageHandler(typeof(DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_COMBATMOVE))]
     private void ReceiveCombatMove(DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_COMBATMOVE message) {
         if (_currentDuelActor == null) {
-            throw new Exception("Combat move received without a duel actor.");
+            // CLASSIC: a stray move (a late packet after the duel, or a forged one) is dropped; throwing closed the
+            // session (security audit 2026-10-04).
+            Logger.Debug("Combat move received without a duel actor; dropped.");
+
+            return;
         }
 
         _currentDuelActor.Tell(TranslateCombatMove(message, SessionActor.ActorRef));
@@ -599,8 +610,40 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
     }
 
     [MessageHandler(typeof(COMBAT_106_PROTOCOL.MSG_NOAGGROGRACEOVER))]
-    private void ReceiveNoAggroGraceOver()
-        => RemoveNoAggroEffect();
+    private void ReceiveNoAggroGraceOver() {
+        // CLASSIC: the still effect running out swaps in the 6 s one ("PostCombatRemoved"); that one ends the grace
+        // ("ReAggro").
+        if (ClassicQuestEngine.IsActive && _grace.Protected) {
+            if (_grace.Advance(DateTime.UtcNow) == PostCombatPhase.Moving) {
+                PutGraceEffect();
+                return;
+            }
+        }
+
+        RemoveNoAggroEffect();
+    }
+
+    // CLASSIC: the first move off the duel spot ends the still effect; the wizard stays safe 6 s more.
+    [MessageHandler(typeof(GAME_5_PROTOCOL.MSG_CLIENTMOVE))]
+    private void ReceiveClientMoveForGrace(GAME_5_PROTOCOL.MSG_CLIENTMOVE message) {
+        if (!ClassicQuestEngine.IsActive || _grace.Phase != PostCombatPhase.Still) {
+            return;
+        }
+
+        // As WizardService reads it: compressed by 4, signed.
+        var location = new System.Numerics.Vector3(unchecked((short) message.LocationX * 4),
+            unchecked((short) message.LocationY * 4), unchecked((short) message.LocationZ * 4));
+        if (_grace.Moved(location, DateTime.UtcNow)) {
+            Logger.Debug("{Wizard} moved after the duel; translucent {Seconds} s more.",
+                Logger.Args(GetActiveWizard()?.CharId, MoveGraceSeconds.TotalSeconds));
+            if (_grace.Protected) {
+                PutGraceEffect();
+            }
+            else {
+                RemoveNoAggroEffect();
+            }
+        }
+    }
 
     [MessageHandler(typeof(GAME_5_PROTOCOL.MSG_CLIENT_DISCONNECT))]
     private void ReceiveClientDisconnect(GAME_5_PROTOCOL.MSG_CLIENT_DISCONNECT message) {
@@ -789,56 +832,47 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
     /// PostCombat, AddTranslucentEffect / RemoveTranslucentEffect, public) makes the wizard translucent. The effect is
     /// looked up by name, so it carries no override name (the old "NoAggro" override named no template, and the
     /// client dropped the effect: no fade). It is public, so everyone in the zone sees the wizard fade, as retail did.
+    /// Under the classic profile it lasts while the wizard stands still (up to 30 s), then PostCombatEffect2 (6 s)
+    /// from its first move; elsewhere it is a fixed PostCombatGraceSeconds.
     /// </summary>
     private void SetNoAggroGrace() {
-        var wizard = GetActiveWizard();
-        var charObjId = GetActiveGameObject().m_globalID;
-        RemoveNoAggroEffect(); // a second duel inside the grace: one effect at a time
-        var effectInternalId = wizard.GameEffects.Count + 1;
-
-        var epoch = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-        var endTime = epoch + NO_AGGRO_EFFECT_DURATION_IN_SECONDS;
-
-        var effect = new NamedEffect {
-            m_effectNameID = NO_AGGRO_EFFECT_STRINGID,
-            m_internalID = effectInternalId,
-            m_endTime = (uint) endTime,
-        };
-
-        wizard.GameEffects.Add(effect);
-        wizard.IsInCombatGrace = true;
-
-        // The client reads MSG_ADDEFFECT with Transmit | AuthorityTransmit (GameClient::MSG_AddEffect).
-        if (!_effectSerializer.Serialize(effect, PropertyFlags.Prop_Transmit | PropertyFlags.Prop_AuthorityTransmit,
-                out var effectSerializedData)) {
-            Logger.Error("Failed to serialize effect {0}", Logger.Args(effect.m_effectNameID));
-
-            return;
+        var now = DateTime.UtcNow;
+        if (ClassicQuestEngine.IsActive) {
+            var at = GetActiveWizard().Location;
+            _grace.Start(now, new System.Numerics.Vector3(at.X, at.Y, at.Z));
+        }
+        else {
+            _grace.Clear();
         }
 
-        ZoneBroadcast(new GAME_5_PROTOCOL.MSG_ADDEFFECT() {
-            GameObjectID = charObjId,
-            EffectData = effectSerializedData
-        }, isSelfless: false);
+        var end = ClassicQuestEngine.IsActive ? _grace.EndsUtc : now.AddSeconds(NO_AGGRO_EFFECT_DURATION_IN_SECONDS);
+        PutEffect(PostCombatGrace.StillEffectName, end);
+    }
+
+    // CLASSIC: the effect for the grace's phase, and a timer for its end.
+    private void PutGraceEffect() => PutEffect(_grace.EffectName, _grace.EndsUtc);
+
+    private void PutEffect(string name, DateTime endUtc) {
+        var wizard = GetActiveWizard();
+        foreach (var message in PostCombatEffects.Put(wizard, GetActiveGameObject().m_globalID, name, endUtc)) {
+            ZoneBroadcast(message, isSelfless: false);
+        }
+
+        Timers.StartSingleTimer("NoAggroGraceOver", new COMBAT_106_PROTOCOL.MSG_NOAGGROGRACEOVER(),
+            endUtc - DateTime.UtcNow is var left && left > TimeSpan.Zero ? left : TimeSpan.Zero);
     }
 
     private void RemoveNoAggroEffect() {
+        _grace.Clear();
+        Timers.Cancel("NoAggroGraceOver");
         var wizard = GetActiveWizard();
-        var charObjId = GetActiveGameObject().m_globalID;
-
-        var effect = wizard.GameEffects.Find(e => e.m_effectNameID == NO_AGGRO_EFFECT_STRINGID);
-        if (effect is null) {
+        if (wizard is null) {
             return;
         }
 
-        wizard.GameEffects.Remove(effect);
-        wizard.IsInCombatGrace = false;
-
-        ZoneBroadcast(new GAME_5_PROTOCOL.MSG_REMOVEEFFECT() {
-            GameObjectID = charObjId,
-            EffectNameID = effect.m_effectNameID,
-            InternalID = effect.m_internalID,
-        }, isSelfless: false);
+        foreach (var message in PostCombatEffects.Take(wizard, GetActiveGameObject().m_globalID)) {
+            ZoneBroadcast(message, isSelfless: false);
+        }
     }
 
 }

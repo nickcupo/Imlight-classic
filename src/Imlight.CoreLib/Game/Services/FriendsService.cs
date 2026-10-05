@@ -127,6 +127,9 @@ internal class FriendsService(SessionActor sessionActor) : MessageService(sessio
     private const byte OFFLINE_STATUS_CODE = 1;
     private const byte ONLINE_STATUS_CODE = 4;
     private const float QUERY_TELEPORT_WIZARD_TIMEOUT_IN_SECONDS = 2;
+
+    // CLASSIC: each stat lookup reads the database; a burst of 10, then 2 a second (security audit 2026-10-04).
+    private readonly Imlight.Classic.Security.TokenBucket _buddyStatsRate = new(capacity: 10, refillPerSecond: 2);
     private readonly uint _englishLocaleHash = StringHash.Compute("English");
 
     protected static Props Props(SessionActor parentActor)
@@ -190,6 +193,21 @@ internal class FriendsService(SessionActor sessionActor) : MessageService(sessio
             return;
         }
 
+        // CLASSIC: oneself, a friend or a wizard in the same zone, and rate-limited (security audit 2026-10-04).
+        var self = GetActiveWizard();
+        if (!_buddyStatsRate.TryTake(DateTimeOffset.UtcNow)) {
+            return;
+        }
+
+        self.FriendsBehavior.TryGetRelationship(buddyCharID, out var statsRelationship);
+        var sameZone = TryGetOnlinePlayer(buddyCharID, out var statsTarget) && statsTarget.CurrentZone == self.Zone;
+        if (!FriendRules.MayViewStats(self.CharId, buddyCharID, statsRelationship, sameZone)) {
+            Logger.Debug("{0} asked for the stats of character {1}, who is neither a friend nor nearby.",
+                Logger.Args(self.CharId, buddyCharID));
+
+            return;
+        }
+
         // TODO: Imlight currently doesn't care about the CRC. It will send the stats regardless.
         var buddyFromDatabase = WizardCollection.GetCharacter(buddyCharID);
         if (buddyFromDatabase is null) {
@@ -247,6 +265,14 @@ internal class FriendsService(SessionActor sessionActor) : MessageService(sessio
         var wizard = GetActiveWizard();
 
         if (!Wizard.TryGetCharacterId(message.EntryGID, out var buddyCharID) || buddyCharID == wizard.CharId) {
+            return;
+        }
+
+        // CLASSIC: no request between two wizards when either has ignored the other (security audit 2026-10-04).
+        if (BuddyRelationshipCollection.HasBlocked(buddyCharID, wizard.CharId)
+                || BuddyRelationshipCollection.HasBlocked(wizard.CharId, buddyCharID)) {
+            Logger.Debug("{0} friend request to {1} dropped: ignored.", Logger.Args(wizard.CharId, buddyCharID));
+
             return;
         }
 
@@ -565,6 +591,25 @@ internal class FriendsService(SessionActor sessionActor) : MessageService(sessio
     private void ReceiveGoToPlayer(GAME_5_PROTOCOL.MSG_GOTOPLAYER message) {
         var targetID = message.TargetCharacterID;
 
+        // CLASSIC: only to a friend, not out of a duel, not into a minigame (security audit 2026-10-04).
+        var me = GetActiveWizard();
+        me.FriendsBehavior.TryGetRelationship(targetID, out var goToRelationship);
+        var targetInMinigame = TryGetOnlinePlayer(targetID, out var goToTarget)
+            && Minigames.MinigameConfig.IsMinigameZone(goToTarget.CurrentZone ?? "");
+        var goToRefusal = FriendRules.CheckGoTo(me.CharId, targetID, goToRelationship, me.IsInDuel, targetInMinigame);
+        if (goToRefusal != GoToPlayerRefusal.None) {
+            Logger.Information("{0} teleport to character {1} refused: {2}.",
+                Logger.Args(me.CharId, targetID, goToRefusal.ToString()));
+            if (goToRefusal == GoToPlayerRefusal.InDuel) {
+                InformGameClient(Imlight.Classic.Security.VoluntaryTeleport.Message(Imlight.Classic.Security.TeleportRefusal.InDuel));
+            }
+            SendToSocket(new GAME_5_PROTOCOL.MSG_GOTOPLAYERRESP {
+                Error = 1
+            });
+
+            return;
+        }
+
         // Check if the target is online.
         if (!TryGetOnlinePlayer(targetID, out var onlinePlayer)) {
             Logger.Debug("Player {0} tried to teleport to character ID {1}, but the character is not online.",
@@ -600,6 +645,9 @@ internal class FriendsService(SessionActor sessionActor) : MessageService(sessio
                 failure: ex => new GoToPlayerAnswer(targetID, zone, null, ex, instanceOwner));
     }
 
+    /// <summary>CLASSIC: told to a wizard whose teleport-to-friend got no answer from the friend's session.</summary>
+    internal const string FriendNotAvailableMessage = "Your friend is not available.";
+
     /// <summary>CLASSIC: the target's answer to a teleport-to-friend question.</summary>
     internal sealed record GoToPlayerAnswer(ulong TargetId, string Zone, CHARACTER_103_PROTOCOL.MSG_CHARACTER Answer,
                                             Exception Error = null, ulong InstanceOwner = 0);
@@ -607,8 +655,10 @@ internal class FriendsService(SessionActor sessionActor) : MessageService(sessio
     [MessageHandler(typeof(GoToPlayerAnswer))]
     private void ReceiveGoToPlayerAnswer(GoToPlayerAnswer answer) {
         if (answer.Error is not null) {
-            // The blocking version let the timeout escape the handler; log it instead.
-            Logger.Error("Failed to query the target wizard for teleportation: {0}", Logger.Args(answer.Error.Message));
+            // The blocking version let the timeout escape the handler; log it instead. The friend's session is gone or
+            // stuck (rig-pg-ms 2026-10-04: 13 silent timeouts against a partner disposed 6 s earlier): say so.
+            Logger.Warning("Failed to query the target wizard for teleportation: {0}", Logger.Args(answer.Error.Message));
+            InformGameClient(FriendNotAvailableMessage);
 
             return;
         }
@@ -637,7 +687,8 @@ internal class FriendsService(SessionActor sessionActor) : MessageService(sessio
                 refuseWhenFull: inInstance
             );
         } else {
-            Logger.Error("Failed to query the target wizard for teleportation.");
+            Logger.Warning("Failed to query the target wizard for teleportation.");
+            InformGameClient(FriendNotAvailableMessage);
         }
     }
 
@@ -648,6 +699,13 @@ internal class FriendsService(SessionActor sessionActor) : MessageService(sessio
         var targetCharID = message.CharacterGID;
 
         if (targetCharID == 0 || targetCharID == wizard.CharId) {
+            return;
+        }
+
+        // CLASSIC: the ignore list is capped (every entry is a database row; security audit 2026-10-04).
+        if (!FriendRules.MayIgnoreAnother(wizard.FriendsBehavior.Relationships?.Count(r => r.Blocked) ?? 0)) {
+            InformGameClient($"Your ignore list is full ({FriendRules.MaxIgnored}).");
+
             return;
         }
 

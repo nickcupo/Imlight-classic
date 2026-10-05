@@ -201,6 +201,26 @@ internal static class PerfMonitor {
         }
     }
 
+    private static readonly GCKind[] s_gcKinds = [GCKind.Ephemeral, GCKind.FullBlocking, GCKind.Background];
+    private static readonly long[] s_lastGcIndex = new long[3];
+    private static double s_maxGcPauseMs;
+
+    /// <summary>The longest single GC pause: the latest GC of each kind, sampled five times a second (a GC that is
+    /// followed by another of its kind within 200 ms is missed).</summary>
+    private static void SampleGcPause() {
+        for (var i = 0; i < s_gcKinds.Length; i++) {
+            var info = GC.GetGCMemoryInfo(s_gcKinds[i]);
+            if (info.Index == 0 || info.Index == s_lastGcIndex[i]) {
+                continue;
+            }
+
+            s_lastGcIndex[i] = info.Index;
+            foreach (var pause in info.PauseDurations) {
+                s_maxGcPauseMs = Math.Max(s_maxGcPauseMs, pause.TotalMilliseconds);
+            }
+        }
+    }
+
     private static void Run(IActorRef probe, TimeSpan interval) {
         var next = DateTime.UtcNow + interval;
         var gen = new[] { GC.CollectionCount(0), GC.CollectionCount(1), GC.CollectionCount(2) };
@@ -213,6 +233,7 @@ internal static class PerfMonitor {
             var queued = Stopwatch.GetTimestamp();
             ThreadPool.UnsafeQueueUserWorkItem(_ => s_pool.Record(Ms(queued, Stopwatch.GetTimestamp())), null);
             probe.Tell(Stopwatch.GetTimestamp());
+            SampleGcPause();
             Thread.Sleep(200);
             if (DateTime.UtcNow < next) {
                 continue;
@@ -233,6 +254,8 @@ internal static class PerfMonitor {
             s_combat = new LatencyHistogram();
             s_byKind = new ConcurrentDictionary<(Type, Type), HandlerStat>();
             var backlog = Interlocked.Exchange(ref s_zoneBacklogMax, 0);
+            var maxGcPause = s_maxGcPauseMs;
+            s_maxGcPauseMs = 0;
 
             var slow = byKind.OrderByDescending(kv => kv.Value.MaxTicks).Take(4)
                 .Select(kv => $"{kv.Key.Actor.Name}/{kv.Key.Message.Name} max={kv.Value.MaxTicks * 1000.0 / Stopwatch.Frequency:0.#}");
@@ -247,6 +270,7 @@ internal static class PerfMonitor {
                 .Append($"pool[{pool.Describe()} threads={ThreadPool.ThreadCount} busy={maxWorkers - freeWorkers} queued={ThreadPool.PendingWorkItemCount}] ")
                 .Append($"akka[{akka.Describe()}] combat[{combat.Describe()}] ")
                 .Append($"gc[g0={gen2[0] - gen[0]} g1={gen2[1] - gen[1]} g2={gen2[2] - gen[2]} pause={(pause2 - pause).TotalMilliseconds:0}ms ")
+                .Append($"maxpause={maxGcPause:0.#}ms ")
                 .Append($"heap={info.HeapSizeBytes / 1048576}MB alloc={(allocated2 - allocated) / 1048576.0 / seconds:0.0}MB/s] ")
                 .Append($"slowest[{string.Join("; ", slow)}] busiest[{string.Join("; ", busy)}]");
             Logger.Information(line.ToString().Replace("{", "{{").Replace("}", "}}"));

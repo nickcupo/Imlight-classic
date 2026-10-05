@@ -146,14 +146,13 @@ public static class LootGranter {
             return;
         }
 
-        // Set the new amount of training points for the wizard.
-        var oldTP = wizard.MagicSchoolBehavior.TrainingPoints;
-        var newTP = Math.Max(0, oldTP + tpDelta);
-        if (newTP == oldTP) {
+        // CLASSIC: a change of the saved count (WizardCollection.ChangeTrainingPoints), not a write of this actor's read
+        // of the live count: training runs on another actor and the two used to overwrite each other.
+        if (!WizardData.Collections.WizardCollection.ChangeTrainingPoints(wizard, tpDelta)) {
             return;
         }
 
-        wizard.UpdateTrainingPoints(newTP);
+        var newTP = wizard.MagicSchoolBehavior.TrainingPoints;
 
         // Inform the game client of the new TP amount.
         var msg = new WIZARD_12_PROTOCOL.MSG_UPDATETRAINING() {

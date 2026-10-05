@@ -41,6 +41,7 @@ using Akka.Actor;
 using Imcodec.Cryptography;
 using Imcodec.MessageLayer.Generated;
 using Imlight.Common;
+using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.Game.WizBang;
 using Imlight.CoreLib.Game.Zone.Components;
 using Imlight.CoreLib.Shared.Networking;
@@ -91,6 +92,19 @@ internal class InteractService(SessionActor sessionActor) : MessageService(sessi
             return;
         }
 
+        // CLASSIC: a shop, trainer, bank or Bazaar opens only for a wizard standing by it, and is remembered for the
+        // requests that follow (some carry no NPC id).
+        if (IsEconomyService(npc)) {
+            if (!ServiceProximity.IsNear(wizard, npc)) {
+                Logger.Warning("{0} asked for the service of {1} from out of range.",
+                    Logger.Args(wizard.CharId, getObjectId(message)));
+
+                return;
+            }
+
+            ServiceProximity.Record(wizard, getObjectId(message));
+        }
+
         var actor = SessionActor.ActorRef;
         var gameObj = GetActiveGameObject();
 
@@ -105,6 +119,17 @@ internal class InteractService(SessionActor sessionActor) : MessageService(sessi
         };
         serviceMementoComponent.ActorRef.Tell(msg);
     }
+
+    // CLASSIC: the services that spend or move gold, items, training points or bank storage.
+    private static bool IsEconomyService(Imlight.CoreLib.Game.Zone.Core.ZoneEntity npc)
+        => npc.GetComponentOfType<InteractBankComponent>() is not null
+        || npc.GetComponentOfType<InteractVendorComponent>() is not null
+        || npc.GetComponentOfType<InteractTreasureVendorComponent>() is not null
+        || npc.GetComponentOfType<InteractPotionShopComponent>() is not null
+        || npc.GetComponentOfType<InteractAuctionHouseComponent>() is not null
+        || npc.GetComponentOfType<InteractTrainerComponent>() is not null
+        || npc.GetComponentOfType<InteractDyeShopComponent>() is not null
+        || npc.GetComponentOfType<InteractReagentComponent>() is not null;
 
     private void CloseShop(ulong gameObjectId) {
         var enableMovementStateMsg = new GAME_5_PROTOCOL.MSG_ENTERSTATE() {

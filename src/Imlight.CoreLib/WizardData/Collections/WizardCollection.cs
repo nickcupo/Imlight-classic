@@ -83,11 +83,24 @@ public static class WizardCollection {
                                             Action<Wizard> afterCommit)
         => CommitCharacterMutation(charId, operation, afterCommit);
 
+    /// <summary>
+    /// CLASSIC: test seam, scoped to the calling test's async flow (threads and tasks it starts inherit it): the store
+    /// the character writes use when no session is passed in.
+    /// </summary>
+    internal static readonly System.Threading.AsyncLocal<TestStore> TestStoreScope = new();
+
+    internal sealed record TestStore(Func<IDocumentSession> Open, Func<IDocumentSession, ulong, Wizard> Load);
+
     internal static bool CommitCharacterMutation(ulong charId, Func<IDocumentSession, Wizard, bool> operation,
         Action<Wizard> afterCommit, Func<IDocumentSession> openSession = null,
         Func<IDocumentSession, ulong, Wizard> loadWizard = null) {
         if (Classic.Ambient.AmbientWizards.IsAmbientChar(charId)) {
             return false; // CLASSIC: an ambient wizard has no character document.
+        }
+
+        if (openSession is null && TestStoreScope.Value is { } test) {
+            openSession = test.Open;
+            loadWizard ??= test.Load;
         }
 
         return WithWriteLane(charId, () => {
@@ -193,20 +206,60 @@ public static class WizardCollection {
         return CommitCharacterMutation(liveWizard.CharId, (_, persisted) => {
             var gold = persisted.GameStats.m_currentGold + delta;
             if (capToPouch && gold > persisted.GameStats.m_baseGoldPouch) gold = persisted.GameStats.m_baseGoldPouch;
-            persisted.GameStats.m_currentGold = checked((int) gold);
+            // CLASSIC: gold never goes below zero; a debit the saved balance cannot cover changes nothing (fails).
+            if (gold < 0 || gold > int.MaxValue) return false;
+            persisted.GameStats.m_currentGold = (int) gold;
             return true;
         }, persisted => liveWizard.GameStats.m_currentGold = persisted.GameStats.m_currentGold,
             openSession, loadWizard);
     }
+
+    /// <summary>
+    /// CLASSIC: spends <paramref name="amount"/> gold only if the saved balance holds it, checked and debited in one
+    /// save under the character's write lane; the live balance follows. Every purchase debits through here before it
+    /// grants anything, so two purchases sent together from different actors cannot both pass a check of the live
+    /// gold and drive it below zero.
+    /// </summary>
+    internal static bool TrySpendGold(Wizard liveWizard, int amount,
+        Func<IDocumentSession> openSession = null, Func<IDocumentSession, ulong, Wizard> loadWizard = null) {
+        if (liveWizard is null || amount < 0) return false;
+        if (amount == 0) return true;
+        return ChangeGold(liveWizard, -(long) amount, capToPouch: false, openSession, loadWizard);
+    }
+
+    /// <summary>
+    /// CLASSIC: adds <paramref name="delta"/> training points to the saved count (a negative delta spends them and
+    /// fails, changing nothing, if the count cannot cover it), then publishes the count to the live wizard. Loot,
+    /// quest rewards and training run on different actors; each used to write its own read of the live count back.
+    /// </summary>
+    internal static bool ChangeTrainingPoints(Wizard liveWizard, int delta,
+        Func<IDocumentSession> openSession = null, Func<IDocumentSession, ulong, Wizard> loadWizard = null) {
+        if (liveWizard is null) return false;
+        return CommitCharacterMutation(liveWizard.CharId, (_, persisted) => {
+            var points = (long) persisted.MagicSchoolBehavior.TrainingPoints + delta;
+            if (points < 0 || points > int.MaxValue) return false;
+            persisted.MagicSchoolBehavior.TrainingPoints = (int) points;
+            return true;
+        }, persisted => liveWizard.MagicSchoolBehavior.TrainingPoints = persisted.MagicSchoolBehavior.TrainingPoints,
+            openSession, loadWizard);
+    }
+
+    /// <summary>
+    /// CLASSIC: runs <paramref name="change"/> holding the character's write lane, so changes to the live wizard that
+    /// are then saved whole (XP and level) are made one at a time even when they come from different actors; the
+    /// saves inside take the same lane again.
+    /// </summary>
+    internal static T WithCharacterLock<T>(ulong charId, Func<T> change) => WithWriteLane(charId, change);
 
     private static bool UpdateCharacter(ulong charId, Action<Wizard> update) {
         if (Classic.Ambient.AmbientWizards.IsAmbientChar(charId)) {
             return false; // CLASSIC: an ambient wizard has no character document.
         }
 
+        var test = TestStoreScope.Value;
         return WithWriteLane(charId, () => {
-            using var session = s_store.OpenSession();
-            var existingCharacter = GetCharacterByCharId(session, charId);
+            using var session = test is null ? s_store.OpenSession() : test.Open();
+            var existingCharacter = test is null ? GetCharacterByCharId(session, charId) : test.Load(session, charId);
             if (existingCharacter is null) {
                 return false;
             }
@@ -576,8 +629,65 @@ public static class WizardCollection {
         }, persisted => PublishTreasureCards(wizard, persisted), openSession, loadWizard);
     }
 
-    private static void PublishTreasureCards(Wizard liveWizard, Wizard persisted)
-        => liveWizard.SpellbookBehavior.TreasureCardTemplateIds = persisted.SpellbookBehavior.TreasureCardTemplateIds?.ToList() ?? [];
+    private static void PublishTreasureCards(Wizard liveWizard, Wizard persisted) {
+        liveWizard.SpellbookBehavior.TreasureCardTemplateIds = persisted.SpellbookBehavior.TreasureCardTemplateIds?.ToList() ?? [];
+        // CLASSIC: the deck Treasure Card ledger is saved with the book and published with it.
+        liveWizard.SpellbookBehavior.DeckTreasureCards = ServerWizSpellbookBehavior.CopyLedger(persisted.SpellbookBehavior.DeckTreasureCards);
+        liveWizard.SpellbookBehavior.DeckTreasureLedgerVersion = persisted.SpellbookBehavior.DeckTreasureLedgerVersion;
+    }
+
+    /// <summary>
+    /// CLASSIC: moves one Treasure Card from the book into a deck's Treasure Cards, in one save: refused when the saved
+    /// book has none of it or the deck already holds <paramref name="maxInDeck"/> Treasure Cards.
+    /// </summary>
+    internal static bool MoveTreasureCardToDeck(Wizard liveWizard, ulong deckId, uint templateId, int maxInDeck,
+        Func<IDocumentSession> openSession = null, Func<IDocumentSession, ulong, Wizard> loadWizard = null) {
+        if (liveWizard is null || templateId == 0) return false;
+        return CommitCharacterMutation(liveWizard.CharId, (_, persisted) => {
+            var book = persisted.SpellbookBehavior;
+            if (book.TreasureCardCount(templateId) < 1 || book.DeckTreasureTotal(deckId) >= maxInDeck) return false;
+            book.RemoveTreasureCard(templateId);
+            return book.ChangeDeckTreasure(deckId, templateId, +1);
+        }, persisted => PublishTreasureCards(liveWizard, persisted), openSession, loadWizard);
+    }
+
+    /// <summary>
+    /// CLASSIC: takes one Treasure Card out of a deck's Treasure Cards, in one save: back into the book, or spent
+    /// (<paramref name="destroy"/>: cast, or used as an enchantment). Refused when the saved ledger has none of it in
+    /// that deck, so only a card that went in as a Treasure Card can come out as one.
+    /// </summary>
+    internal static bool MoveTreasureCardFromDeck(Wizard liveWizard, ulong deckId, uint templateId, bool destroy,
+        Func<IDocumentSession> openSession = null, Func<IDocumentSession, ulong, Wizard> loadWizard = null) {
+        if (liveWizard is null || templateId == 0) return false;
+        return CommitCharacterMutation(liveWizard.CharId, (_, persisted) => {
+            var book = persisted.SpellbookBehavior;
+            if (!book.ChangeDeckTreasure(deckId, templateId, -1)) return false;
+            if (!destroy) book.AddTreasureCard(templateId);
+            return true;
+        }, persisted => PublishTreasureCards(liveWizard, persisted), openSession, loadWizard);
+    }
+
+    /// <summary>
+    /// CLASSIC: once per wizard, records the Treasure Cards older saves kept inside deck card lists (see
+    /// Wizard.MigrateDeckTreasureCards) in the ledger. No-op when already done.
+    /// </summary>
+    internal static bool RecordMigratedDeckTreasureCards(Wizard liveWizard,
+        IReadOnlyDictionary<ulong, Dictionary<uint, int>> found,
+        Func<IDocumentSession> openSession = null, Func<IDocumentSession, ulong, Wizard> loadWizard = null) {
+        if (liveWizard is null) return false;
+        return CommitCharacterMutation(liveWizard.CharId, (_, persisted) => {
+            var book = persisted.SpellbookBehavior;
+            if (book.DeckTreasureLedgerVersion >= 1) return false;
+            foreach (var (deckId, cards) in found) {
+                foreach (var (templateId, copies) in cards) {
+                    if (copies > 0) book.ChangeDeckTreasure(deckId, templateId, copies);
+                }
+            }
+
+            book.DeckTreasureLedgerVersion = 1;
+            return true;
+        }, persisted => PublishTreasureCards(liveWizard, persisted), openSession, loadWizard);
+    }
 
     /// <summary>
     /// Removes a treasure card from the spellbook of a wizard.

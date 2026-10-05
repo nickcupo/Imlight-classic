@@ -29,11 +29,9 @@ namespace Imlight.CoreLib.WizardData.Collections;
 public static class AccountCollection {
     
     public const string CollectionName = "Accounts";
-    private static readonly IDocumentStore s_store;
-
-    static AccountCollection() {
-        s_store = PlayerDatabase.Instance.Store;
-    }
+    // CLASSIC: lazy, as WizardCollection's, so the Crowns transactions can be tested with a session double.
+    private static readonly Lazy<IDocumentStore> s_storeSource = new(() => PlayerDatabase.Instance.Store);
+    private static IDocumentStore s_store => s_storeSource.Value;
 
     private const int WriteLaneCount = 1 << 6; // 64 lanes
     private const ulong WriteLaneMask = WriteLaneCount - 1;
@@ -89,12 +87,30 @@ public static class AccountCollection {
         });
     }
 
-    // CLASSIC: saves the Crowns balance (ClassicCrowns).
-    public static bool UpdateCrowns(ulong accountId, int crowns, int startingCrownsGiven)
-        => UpdateAccount(accountId, account => {
-            account.Crowns = crowns;
-            account.StartingCrownsGiven = startingCrownsGiven;
+    /// <summary>
+    /// CLASSIC: one read-modify-write of the saved account under its write lane (optimistic concurrency on): the
+    /// saved copy is loaded, <paramref name="operation"/> changes it (false: nothing is saved), and only after the
+    /// save does <paramref name="afterCommit"/> publish the result to the live objects. Crowns go through here, as
+    /// gold goes through WizardCollection.CommitCharacterMutation, so no live copy is ever written over the database.
+    /// </summary>
+    internal static bool CommitAccountMutation(ulong accountId, Func<Account, bool> operation, Action<Account> afterCommit,
+        Func<IDocumentSession> openSession = null, Func<IDocumentSession, ulong, Account> loadAccount = null) {
+        return WithWriteLane(accountId, () => {
+            using var session = openSession is null ? s_store.OpenSession() : openSession();
+            session.Advanced.OptimisticConcurrencyMode = OptimisticConcurrencyMode.Writes;
+            var persisted = loadAccount is null
+                ? session.Query<Account>(collectionName: CollectionName).FirstOrDefault(account => account.AccountId == accountId)
+                : loadAccount(session, accountId);
+            if (persisted is null || !operation(persisted)) {
+                return false;
+            }
+
+            session.SaveChanges();
+            afterCommit?.Invoke(persisted);
+
+            return true;
         });
+    }
 
     private static ulong? GetAccountId(string username) {
         using var session = s_store.OpenSession();
@@ -252,11 +268,33 @@ public static class AccountCollection {
     /// <param name="newPassword">The new password.</param>
     /// <returns>True if the password was successfully changed, false otherwise.</returns>
     public static bool ChangePassword(string username, string newPassword) {
-        return UpdateAccount(username, account => {
-            var passwordHash = DatabaseUtilities.CreateHashedPassword(newPassword);
+        // CLASSIC: a PBKDF2 verifier plus the (sealed) client protocol hash, see Auth/PasswordStore.
+        var (passwordHash, verifier) = Imlight.CoreLib.Auth.PasswordStore.Records(newPassword);
+        var changed = UpdateAccount(username, account => {
             account.PasswordHash = passwordHash;
+            account.PasswordVerifier = verifier;
         });
+
+        // CLASSIC: a new password ends the old login and attach keys.
+        if (changed && GetAccountId(username) is { } accountId) {
+            try {
+                ClientKeyCollection.Revoke(accountId);
+                Imlight.CoreLib.Auth.SecuritySettings.GameKeys.Value.Revoke(accountId);
+            }
+            catch (Exception) {
+                // the keys expire on their own
+            }
+        }
+
+        return changed;
     }
+
+    /// <summary>CLASSIC: stores upgraded password records (Auth/PasswordStore).</summary>
+    public static bool UpdatePasswordRecords(ulong accountId, string passwordHash, string verifier)
+        => UpdateAccount(accountId, account => {
+            account.PasswordHash = passwordHash;
+            account.PasswordVerifier = verifier;
+        });
 
     /// <summary>
     /// Updates the authentication level of an account.

@@ -70,6 +70,36 @@ internal class CantripService(SessionActor sessionActor) : MessageService(sessio
     protected static Props Props(SessionActor parentActor)
         => Akka.Actor.Props.Create(() => new CantripService(parentActor));
 
+    // CLASSIC: the server's own cooldowns (security audit 2026-10-04); the client's were the only ones.
+    private readonly Imlight.Classic.Security.CooldownTracker _cooldowns = new();
+
+    /// <summary>CLASSIC: the cantrip the client names, if it is one this wizard has learned and may cast now.</summary>
+    private CantripsSpellTemplate ValidCantrip(Wizard wizard, uint templateId) {
+        var cantrip = CantripFactory.CreateCantripTemplateFromId(templateId);
+        if (cantrip is null || wizard is null) {
+            return null;
+        }
+
+        if (!wizard.SpellbookBehavior.HasSpell(templateId)) {
+            Imlight.Common.Logger.Warning("Wizard {0} cast cantrip {1} without knowing it.", Imlight.Common.Logger.Args(wizard.CharId, templateId));
+
+            return null;
+        }
+
+        if (!_cooldowns.IsReady(templateId, DateTimeOffset.UtcNow)) {
+            return null;
+        }
+
+        if (cantrip.m_cantripsSpellEffect == CantripsSpellEffect.CSE_Teleport
+                && Imlight.Classic.Security.VoluntaryTeleport.Check(wizard.IsInDuel) != Imlight.Classic.Security.TeleportRefusal.None) {
+            InformGameClient(Imlight.Classic.Security.VoluntaryTeleport.Message(Imlight.Classic.Security.TeleportRefusal.InDuel));
+
+            return null;
+        }
+
+        return cantrip;
+    }
+
     [MessageHandler(typeof(CANTRIPSMESSAGES_57_PROTOCOL.MSG_CANTRIPSSPELLCAST))]
     private void ReceiveCantripSpellCast(CANTRIPSMESSAGES_57_PROTOCOL.MSG_CANTRIPSSPELLCAST message) {
         // CLASSIC: casting follows the profile's cantrips switch; the client names any spell template.
@@ -80,7 +110,10 @@ internal class CantripService(SessionActor sessionActor) : MessageService(sessio
         }
 
         var wizard = GetActiveWizard();
-        CantripsSpellTemplate cantrip = CantripFactory.CreateCantripTemplateFromId(message.SpellTemplateID);
+        var cantrip = ValidCantrip(wizard, message.SpellTemplateID); // CLASSIC
+        if (cantrip is null) {
+            return;
+        }
 
         // Rituals require a target to be selected first, so don't use energy here
         if (cantrip.m_cantripsSpellEffect != CantripsSpellEffect.CSE_Ritual) {
@@ -123,6 +156,12 @@ internal class CantripService(SessionActor sessionActor) : MessageService(sessio
         if (!ClassicRuntime.Rules.IsFeatureEnabled(ClassicFeatures.Cantrips)) {
             ClassicGate.RefuseFeature(ClassicFeatures.Cantrips, GetActiveWizard()?.CharId, InformGameClient);
 
+            return;
+        }
+
+        // CLASSIC: a ritual is a cantrip the wizard knows (a bad id threw).
+        var ritual = ValidCantrip(GetActiveWizard(), (uint) message.SpellTemplateID);
+        if (ritual is null || ritual.m_cantripsSpellEffect != CantripsSpellEffect.CSE_Ritual) {
             return;
         }
 
@@ -208,16 +247,25 @@ internal class CantripService(SessionActor sessionActor) : MessageService(sessio
     private bool CastCantrip(uint spellTemplateID) {
         var wizard = GetActiveWizard();
         CantripsSpellTemplate cantrip = CantripFactory.CreateCantripTemplateFromId(spellTemplateID);
+        if (cantrip is null) {
+            return false;
+        }
 
-        bool hasEnergy = UseEnergy(wizard, cantrip.m_energyCost);
+        // CLASSIC: never a negative cost (it paid energy), and the shared template is not changed (it was set to 0
+        // on a failed cast, making the cantrip free for everyone afterwards).
+        var energyCost = Math.Max(0, cantrip.m_energyCost);
+        bool hasEnergy = UseEnergy(wizard, energyCost);
         byte outOfEnergy = 0;
         if (!hasEnergy) {
-            cantrip.m_energyCost = 0;
+            energyCost = 0;
             outOfEnergy = 1;
+        }
+        else {
+            _cooldowns.Start(spellTemplateID, DateTimeOffset.UtcNow, TimeSpan.FromSeconds(Math.Max(0, cantrip.m_cooldownSeconds)));
         }
 
         var cantripResponse = new CANTRIPSMESSAGES_57_PROTOCOL.MSG_CANTRIPSRESPONSE {
-            EnergyUsed = (uint) cantrip.m_energyCost,
+            EnergyUsed = (uint) energyCost,
             CooldownSeconds = (uint) cantrip.m_cooldownSeconds,
             OutOfEnergy = outOfEnergy
         };

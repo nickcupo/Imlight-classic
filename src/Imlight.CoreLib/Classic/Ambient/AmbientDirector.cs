@@ -75,7 +75,8 @@ internal sealed class AmbientDirector : ReceiveActor {
     internal static void StartIfEnabled(IUntypedActorContext context, IActorRef server) {
         var settings = AmbientSettings.Parse(
             Setting("Classic.AmbientWizards"), Setting("Classic.AmbientWizardZones"), Setting("Classic.AmbientWizardChat"),
-            Setting("Classic.AmbientWizardBattles"), Setting("Classic.AmbientWizardStreetFights"));
+            Setting("Classic.AmbientWizardBattles"), Setting("Classic.AmbientWizardStreetFights"),
+            Setting("Classic.AmbientWizardHatching"), Setting("Classic.AmbientWizardBazaar")); // CLASSIC (2026-10-04)
         AmbientWizards.Settings = settings;
         if (!settings.Enabled) {
             Logger.Information("Ambient wizards are off ([Classic] AmbientWizards).");
@@ -83,6 +84,7 @@ internal sealed class AmbientDirector : ReceiveActor {
         }
 
         AmbientChat.System = context.System;
+        AmbientZone.ConfigureChat(Setting); // CLASSIC (2026-10-05): chat word lists, optional local LLM
         context.ActorOf(Akka.Actor.Props.Create(() => new AmbientDirector(server)), "AmbientWizards");
     }
 

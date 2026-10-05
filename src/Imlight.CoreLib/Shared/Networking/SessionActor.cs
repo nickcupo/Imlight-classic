@@ -41,6 +41,7 @@
  */
 
 using System;
+using System.Threading.Tasks;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net.Sockets;
@@ -81,6 +82,12 @@ public sealed partial class SessionActor : ReceiveActor, IDisposable {
     public long Ping                                         { get; private set; }
     public TimeSpan LastPacketReceivedAt                     => TimeSpan.FromTicks(Interlocked.Read(ref _lastPacketReceivedTicks)); // CLASSIC: a HeartbeatPolicy.Clock reading.
 
+    // CLASSIC: set when this session has sent the client to another zone (MSG_SERVERTRANSFER); a newer login of the
+    // account then closes it without the "logged in elsewhere" notice (Game/AccountSessions.cs).
+    private volatile bool _transferringOut;
+    internal bool TransferringOut => _transferringOut;
+    internal void MarkTransferringOut() => _transferringOut = true;
+
     public string Ip;
     public string RemoteIp;
     // CLASSIC: the server address this client connected to (KingsIsle's launcher is sent URLs on it).
@@ -94,16 +101,25 @@ public sealed partial class SessionActor : ReceiveActor, IDisposable {
     private readonly Dictionary<Type, List<IActorRef>> _dispatchTable = [];
     private readonly Socket _socket;
     private readonly List<IMessage> _preInitMessages = new();
+    // CLASSIC: [Advanced] PreHandshakeMessageLimit (default 16). The list was unbounded for the whole accept wait.
+    private static readonly int s_preHandshakeLimit = Imlight.CoreLib.Auth.SecuritySettings.Int(
+        "Advanced.PreHandshakeMessageLimit", Imlight.Classic.Net.ConnectionLimits.DefaultPreHandshakeMessages);
     private IActorRef _socketListenerRef;
     private IActorRef _socketSenderRef;
-    private bool _isDisposed;
+    private volatile bool _isDisposed;
+
+    /// <summary>CLASSIC: true once Dispose ran; a service that adds this session somewhere checks it afterwards.</summary>
+    internal bool IsDisposed => _isDisposed;
     private long _lastPacketReceivedTicks;
 
     // ctor
     public SessionActor(Socket socket, ushort sessionId, IActorRef server, IActorRef actorFactoryRef = null) {
         this._socket = socket;
         this.Ip = socket.RemoteEndPoint.ToString();
-        this.RemoteIp = socket.RemoteEndPoint.ToString().Split(':')[0];
+        // CLASSIC: the address itself (an IPv6 endpoint "[::ffff:a.b.c.d]:port" split on ':' gave "[" for everyone).
+        this.RemoteIp = Imlight.Classic.Net.GameSessionKeys.NormalizeAddress(
+            (socket.RemoteEndPoint as System.Net.IPEndPoint)?.Address.ToString())
+            ?? socket.RemoteEndPoint.ToString().Split(':')[0];
         this.LocalIp = Imlight.CoreLib.Classic.Launcher.LauncherPatchServer.AddressText(socket.LocalEndPoint); // CLASSIC
         this.SessionID = sessionId;
         this._services = new System.Collections.Concurrent.ConcurrentDictionary<IActorRef, MessageService>();
@@ -203,33 +219,58 @@ public sealed partial class SessionActor : ReceiveActor, IDisposable {
     }
 
     /// <summary>
-    /// Dispatches a <see cref="IServerMessage"/> to any service that can handle the message. Awaits a response
-    /// with a timeout of 2 seconds.
+    /// Dispatches a <see cref="IServerMessage"/> to any service that can handle the message and waits for the answer.
     /// </summary>
-    /// <param name="msg"></param>
-    /// <typeparam name="T"></typeparam>
-    /// <returns></returns>
+    /// <remarks>
+    /// This blocks the calling service (not this SessionActor) until the answer or the timeout. CLASSIC: new code uses
+    /// <see cref="HandleInternalAskAsync{T}"/> with PipeTo instead. A disposed session's siblings are stopping, so the
+    /// wait there is short: a disposed session's ZoneService used to sit out the full 20 s (live 2026-10-01).
+    /// </remarks>
     public T HandleInternalAsk<T>(IServerMessage msg)
         where T : IServerMessage {
+        var timeout = _isDisposed ? DisposedAskTimeout : InternalAskTimeout;
+        var task = HandleInternalAskAsync<T>(msg, timeout);
+        try {
+            return task.Result;
+        }
+        catch (Exception ex) {
+            Logger.Warning("SessionActor {0} service asked another service with {1}, but got no answer{2}: {3}",
+                Logger.Args(SessionID, msg.GetType().Name, _isDisposed ? " (session disposing)" : "", ex.GetBaseException().Message));
+
+            return default;
+        }
+    }
+
+    /// <summary>CLASSIC: how long an internal Ask waits for a sibling service.</summary>
+    internal static readonly TimeSpan InternalAskTimeout = TimeSpan.FromSeconds(20);
+
+    /// <summary>CLASSIC: how long it waits once the session is disposing.</summary>
+    internal static readonly TimeSpan DisposedAskTimeout = TimeSpan.FromSeconds(2);
+
+    /// <summary>
+    /// CLASSIC: the non-blocking internal Ask. The task completes with the first handling service's answer, or with
+    /// default when no other service handles <paramref name="msg"/>; it faults on timeout. Pipe it to the asking actor
+    /// (<c>PipeTo(Self, ...)</c>) rather than waiting on it.
+    /// </summary>
+    public Task<T> HandleInternalAskAsync<T>(IServerMessage msg, TimeSpan? timeout = null)
+        where T : IServerMessage {
+        // Sender is only meaningful on this actor's own thread; services call this from theirs, where it is NoSender.
+        IActorRef asker = null;
+        try { asker = Sender; } catch (NotSupportedException) { }
+
         if (_dispatchTable.TryGetValue(msg.GetType(), out var handlers)) {
             foreach (var handler in handlers) {
-                if (handler == Sender) {
+                if (handler == asker || handler is IInternalActorRef { IsTerminated: true }) {
                     continue;
                 }
 
-                try {
-                    return handler.Ask<T>(msg, timeout: TimeSpan.FromSeconds(20)).Result;
-                }
-                catch (Exception ex) {
-                    Logger.Error("SessionActor service attempted to ask another service with {0}, but the timeout " +
-                              "was exceeded. {1}", Logger.Args(msg.GetType(), ex.Message));
-                }
+                return handler.Ask<T>(msg, timeout: timeout ?? InternalAskTimeout);
             }
         }
 
         Unhandled(msg);
 
-        return default(T);
+        return Task.FromResult(default(T));
     }
 
     /// <summary>
@@ -297,6 +338,12 @@ public sealed partial class SessionActor : ReceiveActor, IDisposable {
         Logger.Debug("SessionActor {Id} disposing.", Logger.Args(SessionID));
         _isDisposed = true;
 
+        // CLASSIC: the session is gone for everyone at once. Zone triggers stop asking it for its wizard (each Ask
+        // waited 5 s, one after another: 40 s of stalled triggers on live 2026-10-01), and it leaves the online list
+        // (a teleport-to-friend asked a partner disposed seconds earlier, rig-pg-ms 2026-10-04).
+        Classic.PlayerQuery.MarkGone(ActorRef);
+        Imlight.CoreLib.WizardData.Collections.OnlinePlayerCollection.RemoveSessionByActorPath(ActorRef?.Path.ToString());
+
         // Send a message to the server to deallocate this SessionActor.
         var msg = new SERVER_100_PROTOCOL.MSG_DEALLOCATESOCKET() {
             Id = SessionID,
@@ -358,15 +405,39 @@ public sealed partial class SessionActor : ReceiveActor, IDisposable {
         base.PreStart();
     }
 
+    internal const string AccountSessionsCloseSoon = "CloseAfterNotice";
+
+    // CLASSIC: every service has stopped by now, so nothing of this session writes any more: a newer login of the
+    // account waiting for it (Game/AccountSessions.cs) may load the account.
+    protected override void PostStop() {
+        try {
+            Imlight.CoreLib.Game.AccountSessions.Release(this);
+        }
+        finally {
+            base.PostStop();
+        }
+    }
+
     protected override void Unhandled(object message) {
-        // Bump this up to warning on release builds.
+        // CLASSIC: a client request no service handles is a silent spinner or hang for the player. Warn once per message
+        // type per process, so one play session lists the real missing handlers; the rest stay at Verbose.
+        if (message is not IServerMessage && Classic.UnhandledMessageLog.FirstTime(message?.GetType())) {
+            Logger.Warning("SessionActor {Id} received unhandled message of type {Type} (first of its type; later ones at Verbose).",
+                Logger.Args(SessionID, message?.GetType().Name));
+
+            return;
+        }
+
         Logger.Verbose("SessionActor {Id} received unhandled message of type {Type}.",
-            Logger.Args(SessionID, message.GetType()));
+            Logger.Args(SessionID, message?.GetType()));
     }
 
     private void ConfigureReceivers() {
         // Specific message handlers.
         Receive<string>(x => x == "Close", x => Dispose());
+        // CLASSIC: closed by a newer login of the account; the notice it was just sent gets half a second to go out.
+        Receive<string>(x => x == AccountSessionsCloseSoon, x => Context.System.Scheduler.ScheduleTellOnce(
+            TimeSpan.FromMilliseconds(500), Self, "Close", ActorRefs.NoSender));
         Receive<string>(x => x == "Identify", x => Sender.Tell(this));
         Receive<SERVICE_101_PROTOCOL.MSG_GETALLSERVICES>(InitializeActiveSession);
         Receive<SERVER_100_PROTOCOL.MSG_PING>(x => this.Ping = x.Ping);
@@ -399,6 +470,7 @@ public sealed partial class SessionActor : ReceiveActor, IDisposable {
     }
 
     private void SendToSocket(IMessage message) {
+        ObserveOutgoing(message); // CLASSIC: a server teleport re-anchors the movement guard (SessionActor.Movement.cs)
         _socketSenderRef.Forward(message);
     }
 
@@ -410,6 +482,8 @@ public sealed partial class SessionActor : ReceiveActor, IDisposable {
         foreach (var preInitMessage in _preInitMessages) {
             HandlePacket(preInitMessage);
         }
+
+        _preInitMessages.Clear(); // CLASSIC: was kept for the session's lifetime
     }
 
     private void SetServices(List<Type> services) {
@@ -445,11 +519,24 @@ public sealed partial class SessionActor : ReceiveActor, IDisposable {
     }
 
     private void HandlePacket(IMessage packet) {
+        if (_isDisposed) {
+            return; // CLASSIC: closing; nothing more is cached or dispatched
+        }
+
         Interlocked.Exchange(ref _lastPacketReceivedTicks, HeartbeatPolicy.Clock.Ticks); // CLASSIC: ControlService's heartbeat reads it.
 
         // If the session still is not valid (the client hasn't completed the session handshake)
         // we'll cache all non-control messages for later processing.
         if (!SessionValid && packet.ServiceId != 0) {
+            if (!Imlight.Classic.Net.ConnectionLimits.MayCachePreHandshake(_preInitMessages.Count, s_preHandshakeLimit)) {
+                Logger.Warning("SessionActor {Id} ({Ip}) sent more than {Limit} messages before its handshake; closing.",
+                    Logger.Args(SessionID, RemoteIp, s_preHandshakeLimit));
+                _preInitMessages.Clear();
+                Dispose();
+
+                return;
+            }
+
             _preInitMessages.Add(packet);
 
             Logger.Verbose("SessionActor {Id} cached message {MessageName} for later processing.",
@@ -461,6 +548,11 @@ public sealed partial class SessionActor : ReceiveActor, IDisposable {
         // Apply session policy in packet order before forwarding to independently scheduled child services.
         if (packet is EnhancedClassicProtocol.Hello enhancementHello)
             MonstrologySession.Negotiate(enhancementHello.ProtocolVersion, enhancementHello.StrictClassic);
+
+        // CLASSIC: an impossible move reaches no service; the client is put back (SessionActor.Movement.cs).
+        if (packet is Imcodec.MessageLayer.Generated.GAME_5_PROTOCOL.MSG_CLIENTMOVE clientMove && !AdmitClientMove(clientMove)) {
+            return;
+        }
 
         if (_dispatchTable.TryGetValue(packet.GetType(), out var handlers)) {
             foreach (var handler in handlers) {

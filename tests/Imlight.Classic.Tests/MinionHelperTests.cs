@@ -65,7 +65,35 @@ public sealed class MinionHelperTests : IDisposable {
         Assert.True(restarted.TryResolve(token, out var again));
         Assert.Equal(77UL, again);
         Assert.False(restarted.TryResolve(token + "x", out _));
-        Assert.False(_store.TryLoad(token, out _));
+        Assert.False(_store.TryLoad(token, out _, out _));
+    }
+
+    [Fact]
+    public void WrongCodesCountPerAddressAcrossConnectionsAndForEveryone() {
+        var code = _pairing.IssueCode(9);
+        for (var i = 0; i < 10; i++) Assert.False(_pairing.TryRedeem("000000", "203.0.113.9", out _, out _));
+        // That address is locked out, even with the right code, on any new connection.
+        Assert.False(_pairing.TryRedeem(code, "203.0.113.9", out _, out _));
+        Assert.True(_pairing.TryRedeem(code, "203.0.113.10", out _, out var account));
+        Assert.Equal(9UL, account);
+
+        // A distributed guess (many addresses) hits the global limit.
+        var other = new MinionHelperPairing(_store, () => _now);
+        var real = other.IssueCode(10);
+        for (var i = 0; i < 100; i++) other.TryRedeem("111111", $"198.51.{i / 200}.{i % 200}", out _, out _);
+        Assert.False(other.TryRedeem(real, "192.0.2.1", out _, out _));
+        _now += TimeSpan.FromMinutes(2);
+        Assert.True(other.TryRedeem(real, "192.0.2.1", out _, out _));
+    }
+
+    [Fact]
+    public void PairedTokensExpire() {
+        Assert.True(_pairing.TryRedeem(_pairing.IssueCode(11), out var token, out _));
+        Assert.True(_pairing.TryResolve(token, out _));
+        _now += MinionHelperPairing.TokenLifetime + TimeSpan.FromMinutes(1);
+        Assert.False(_pairing.TryResolve(token, out var none));
+        Assert.Equal(0UL, none);
+        Assert.False(new MinionHelperPairing(_store, () => _now).TryResolve(token, out _));
     }
 
     [Fact]

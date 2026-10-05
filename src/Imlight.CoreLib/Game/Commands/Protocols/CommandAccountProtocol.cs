@@ -33,9 +33,8 @@ internal class CommandAccountProtocol : CommandProtocol {
     [Command("create")]
     [AuthRequired(AuthLevel.HallMonitor)]
     private void CreateAccountCommand(string username, string password) {
-        var passwordHash = DatabaseUtilities.CreateHashedPassword(password);
-        var newAccount = new Account(username, "", passwordHash);
-        var createdSuccess = AccountCollection.CreateAccount(newAccount);
+        // CLASSIC: the PBKDF2 verifier and sealed protocol hash (Auth/PasswordStore).
+        var createdSuccess = DatabaseUtilities.CreateEmbeddedDatabaseAccount(username, "", password) is not null;
 
         var reply = createdSuccess ? "Account created successfully." : "Account creation failed.";
         InformSenderClient(reply);
@@ -225,6 +224,16 @@ internal class CommandAccountProtocol : CommandProtocol {
     [Command("infractions")]
     [Alias("warns", "warnings")]
     private void GetAccountInfractionsCommand(string username) {
+        // CLASSIC: a moderator reads any account's history; anyone else only their own (and learns nothing about
+        // which other usernames exist).
+        var caller = Context.Account;
+        if (!Imlight.Classic.Rules.InfractionAccess.CanView(caller?.Username,
+                caller is not null && caller.AuthLevel >= AuthLevel.HallMonitor, username)) {
+            InformSenderClient("You can only view your own infractions.");
+
+            return;
+        }
+
         var account = AccountCollection.GetAccount(username);
         if (account is null) {
             InformSenderClient("Account not found.");

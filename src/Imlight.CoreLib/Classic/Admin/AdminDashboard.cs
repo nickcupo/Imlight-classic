@@ -294,7 +294,8 @@ public static class AdminDashboard {
             return false;
         }
 
-        return PasswordMatches(account.PasswordHash, password);
+        // CLASSIC: the PBKDF2 verifier (old accounts: the protocol hash, then upgraded), Auth/PasswordStore.
+        return Auth.PasswordStore.Verify(account, password);
     }
 
     /// <summary>Compares a password with an account's stored hash in constant time.</summary>

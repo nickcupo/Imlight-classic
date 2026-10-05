@@ -133,7 +133,7 @@ internal sealed class TutorialDuelDirector {
             return;
         }
 
-        var recipient = _duel.SubCircles.FirstOrDefault(x => x.ParticipantActor == sender);
+        var recipient = _duel.SubCircles.FirstOrDefault(x => x is not null && x.ParticipantActor == sender);
         if (message.RecipientTemplateId != 1) {
             recipient = _duel.SubCircles.FirstOrDefault(x => x is not null && x.ParticipantObject is not null
                 && x.ParticipantObject.m_templateID == message.RecipientTemplateId);
@@ -148,7 +148,9 @@ internal sealed class TutorialDuelDirector {
         // Player grants that land mid-execution are queued to the next planning phase so the card does not
         // flash during the current cast; creature grants apply now (the round script reads them at planning).
         if (message.RecipientTemplateId == 1 && _duel.Duel.m_duelPhase != kDuelPhase.kPhase_Planning) {
-            _pendingHandGrant = [.. _pendingHandGrant, .. message.SpellIdsToGrant];
+            // The first pending grant of a phase finds no list yet (spreading null threw: rig-final 2026-10-04,
+            // "player damage 1" lost its card).
+            _pendingHandGrant = [.. _pendingHandGrant ?? [], .. message.SpellIdsToGrant];
 
             return;
         }
@@ -162,7 +164,7 @@ internal sealed class TutorialDuelDirector {
             return;
         }
 
-        var caster = _duel.SubCircles.FirstOrDefault(x => x.ParticipantActor == sender);
+        var caster = _duel.SubCircles.FirstOrDefault(x => x is not null && x.ParticipantActor == sender);
         if (caster is null) {
             Logger.Warning("Duel {0} | Tutorial pip grant from an actor that is not in the duel.",
                 Logger.Args(_duel.Duel.m_duelID.Full));

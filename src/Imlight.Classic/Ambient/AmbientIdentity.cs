@@ -164,6 +164,9 @@ public sealed record AmbientIdentity(int Seed, uint NameKeys, AmbientSchool Scho
             "marleybone" => (20, 30),
             "mooshu" => (30, 40),
             "dragonspire" => (40, 50),
+            // CLASSIC (2026-10-04): the Pet Pavilion and the Bazaar drew wizards of every level (hatching costs 20,000+ gold).
+            _ when zone.Contains("WC_Hatchery", StringComparison.OrdinalIgnoreCase) => (10, 45),
+            _ when zone.Contains("AuctionHouse", StringComparison.OrdinalIgnoreCase) => (5, 35),
             _ => zone.Contains("WC_Hub", StringComparison.OrdinalIgnoreCase) ? (1, 20) : (1, 12),
         };
         var cap = Math.Max(1, levelCap);

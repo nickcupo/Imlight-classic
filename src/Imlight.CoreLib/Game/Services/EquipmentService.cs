@@ -51,6 +51,7 @@ using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
+using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.Shared.Items;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Resources;
@@ -130,6 +131,16 @@ internal class EquipmentService(SessionActor sessionActor) : MessageService(sess
             return;
         }
 
+        // CLASSIC: the item must have a slot, the wizard must meet its equip requirements, and gear does not change
+        // during a duel.
+        var refusal = EquipRules.Check(wizard, ItemHelper.GetItemTemplate(item));
+        if (refusal != EquipRefusal.None) {
+            Logger.Warning("{0} tried to equip item {1} ({2}): refused, {3}.",
+                Logger.Args(wizard.CharId, itemId, item.m_templateID.Full, refusal));
+
+            return;
+        }
+
         // Check to see if the player already has this item equipped. If they do, broadcast the removal of it.
         // We don't have to remove it here because the InventoryToEquipmentTransfer method will do that for us.
         if (wizard.EquipmentBehavior.SlotInUse(message.SlotName, out var index)) {
@@ -184,6 +195,13 @@ internal class EquipmentService(SessionActor sessionActor) : MessageService(sess
             Logger.Warning("Player tried to unequip item {0} that they do not have in their inventory."
                         + " This has been logged as a suspicious behavior infraction.",
                 Logger.Args(itemId));
+
+            return;
+        }
+
+        // CLASSIC: gear does not change during a duel (the server's own mount stow does not come through here).
+        if (wizard.IsInDuel) {
+            Logger.Warning("{0} tried to unequip item {1} during a duel.", Logger.Args(wizard.CharId, itemId));
 
             return;
         }

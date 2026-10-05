@@ -62,6 +62,7 @@ public static class ClassicSettings {
     public static bool TeleportToFriendAnywhere => Store.Bool(ClassicSettingKeys.TeleportToFriendAnywhere);
     public static int CombatRejoinSeconds => Store.Int(ClassicSettingKeys.CombatRejoinSeconds);
     public static int RestartMaxWaitMinutes => Store.Int(ClassicSettingKeys.RestartMaxWaitMinutes);
+    public static int ZoneTransferDelayMs => Store.Int(ClassicSettingKeys.ZoneTransferDelayMs);
     public static bool HolidayEvents => Store.Bool(ClassicSettingKeys.HolidayEvents);
     public static int HolidayDateOverride => Store.Int(ClassicSettingKeys.HolidayDateOverride);
     public static bool BazaarStocked => Store.Bool(ClassicSettingKeys.BazaarStocked);
@@ -70,6 +71,8 @@ public static class ClassicSettings {
     public static bool OpenPvp => Store.Bool(ClassicSettingKeys.OpenPvp);
     public static int PvpCountdownSeconds => Store.Int(ClassicSettingKeys.PvpCountdownSeconds);
     public static bool PetPavilion => Store.Bool(ClassicSettingKeys.PetPavilion);
+    public static bool MovementGuard => Store.Bool(ClassicSettingKeys.MovementGuard);
+    public static int MovementMaxSpeed => Store.Int(ClassicSettingKeys.MovementMaxSpeed);
 
     /// <summary>Scales a whole reward amount, rounding to the nearest unit (never below 0).</summary>
     public static int Scale(int amount, double multiplier)

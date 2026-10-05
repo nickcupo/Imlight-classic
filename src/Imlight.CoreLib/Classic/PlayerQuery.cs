@@ -68,6 +68,38 @@ internal static class PlayerQuery {
     // or stuck session otherwise blocked the whole zone for 5 s on every music and ambient trigger (2026-10-01).
     private static readonly ConcurrentDictionary<IActorRef, DateTime> s_unresponsive = new();
 
+    /// <summary>How long a disposed session is skipped without asking (well past any trigger that names it).</summary>
+    internal static readonly TimeSpan GoneFor = TimeSpan.FromMinutes(10);
+
+    // CLASSIC: sessions that disposed. The actor is still alive for a moment after Dispose (and its PoisonPill), so the
+    // IsTerminated check below missed it and every trigger of the zone asked it in turn, 5 s each (live 2026-10-01).
+    private static readonly ConcurrentDictionary<IActorRef, DateTime> s_gone = new();
+
+    /// <summary>
+    /// CLASSIC: the session disposed. Queries about it answer null at once, with no Ask and no warning.
+    /// </summary>
+    internal static void MarkGone(IActorRef player) {
+        if (player is null || player.IsNobody()) {
+            return;
+        }
+
+        if (s_gone.Count > 10_000) {
+            var now = DateTime.UtcNow;
+            foreach (var (actor, until) in s_gone) {
+                if (until <= now) {
+                    s_gone.TryRemove(actor, out _);
+                }
+            }
+        }
+
+        s_gone[player] = DateTime.UtcNow + GoneFor;
+        s_unresponsive.TryRemove(player, out _);
+    }
+
+    /// <summary>True when <paramref name="player"/> disposed within <see cref="GoneFor"/>.</summary>
+    internal static bool IsGone(IActorRef player)
+        => player is not null && s_gone.TryGetValue(player, out var until) && DateTime.UtcNow < until;
+
     /// <summary>
     /// The player's active wizard, or null when the session does not answer within <see cref="Timeout"/>.
     /// </summary>
@@ -121,7 +153,7 @@ internal static class PlayerQuery {
     internal static bool TryActiveWizard(IActorRef player, TimeSpan timeout, out Wizard wizard, out Exception error) {
         wizard = null;
         error = null;
-        if (player is null || player.IsNobody() || player is IInternalActorRef { IsTerminated: true }) {
+        if (player is null || player.IsNobody() || player is IInternalActorRef { IsTerminated: true } || IsGone(player)) {
             return false; // A session that has shut down has no wizard; asking it only waits out the timeout.
         }
 

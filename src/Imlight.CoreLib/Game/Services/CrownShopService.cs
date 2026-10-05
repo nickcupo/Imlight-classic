@@ -27,12 +27,13 @@
  * NOTE:
  * The message flow (segmentation data first, then the list; a price lock
  * before a purchase; the balance re-sent afterwards) follows Revive101's
- * feat/crown-shop branch (Phill030). A henchman is bought only during a duel
- * and is charged once the duel confirms it joined (MSG_HENCHMANHIRED).
+ * feat/crown-shop branch (Phill030). A henchman is bought only during a duel;
+ * it is paid when asked for and refunded unless the duel confirms it joined
+ * (MSG_HENCHMANHIRED) within 15 s.
  *
  * Created by: Nick with Claude Code (claude-opus-5-5), after Phill030's upstream service
  * Version: KALI 1.0
- * Last Updated: 09/28/2026
+ * Last Updated: 10/04/2026
  */
 
 using Akka.Actor;
@@ -165,27 +166,33 @@ internal class CrownShopService(SessionActor sessionActor) : MessageService(sess
             return;
         }
 
-        if (!CanPay(wizard, item, payWithGold)) {
+        if (item.Category == CrownShopCategories.Henchmen && _pendingHire is not null) {
+            Fail(message, "a henchman is already being hired");
+
+            return;
+        }
+
+        // CLASSIC: paid first, checked and spent in one save (TrySpend: never below zero, no clamping), and given only
+        // once paid; refunded if it cannot be given. A Crowns or gold spend elsewhere between a check and a later
+        // charge used to make the item cheaper, or let two purchases share one balance.
+        if (!TryPay(wizard, item, payWithGold)) {
             Fail(message, "cannot afford it");
 
             return;
         }
 
         if (item.Category == CrownShopCategories.Henchmen) {
-            if (_pendingHire is not null) {
-                Fail(message, "a henchman is already being hired");
-
-                return;
-            }
-
-            // Charged once the duel confirms the henchman joined (ReceiveHenchmanHired).
+            // Paid now; the duel confirms the henchman joined (ReceiveHenchmanHired) or the payment is refunded, also
+            // when no answer comes (the duel ended first).
             _pendingHire = new PendingHire(message, item, payWithGold);
+            Timers.StartSingleTimer(HireTimeoutKey, new HireTimedOut(_pendingHire), HireTimeout);
             TellOtherServices(new COMBAT_106_PROTOCOL.MSG_HIREHENCHMAN { CreatureTid = (uint) item.Template });
 
             return;
         }
 
         if (!wizard.AddItemToInventory(item.Template, out var added)) {
+            Refund(wizard, item, payWithGold);
             Fail(message, "the backpack refused it");
 
             return;
@@ -203,15 +210,22 @@ internal class CrownShopService(SessionActor sessionActor) : MessageService(sess
         Complete(wizard, message, item, payWithGold);
     }
 
+    private const string HireTimeoutKey = "henchman-hire-timeout";
+    private static readonly TimeSpan HireTimeout = TimeSpan.FromSeconds(15);
+
+    private sealed record HireTimedOut(PendingHire Hire);
+
     [MessageHandler(typeof(COMBAT_106_PROTOCOL.MSG_HENCHMANHIRED))]
     private void ReceiveHenchmanHired(COMBAT_106_PROTOCOL.MSG_HENCHMANHIRED message) {
         var pending = _pendingHire;
-        _pendingHire = null;
         if (pending is null || pending.Item.Template != message.CreatureTid || GetActiveWizard() is not { } wizard) {
             return;
         }
 
+        _pendingHire = null;
+        Timers.Cancel(HireTimeoutKey);
         if (!message.Success) {
+            Refund(wizard, pending.Item, pending.PayWithGold);
             Fail(pending.Request, "henchmen are hired during a duel with a free place on your side");
 
             return;
@@ -220,19 +234,48 @@ internal class CrownShopService(SessionActor sessionActor) : MessageService(sess
         Complete(wizard, pending.Request, pending.Item, pending.PayWithGold);
     }
 
-    private static bool CanPay(Wizard wizard, CrownShopEntry item, bool payWithGold)
-        => payWithGold ? item.Gold > 0 && wizard.GameStats.m_currentGold >= item.Gold : item.Crowns > 0 && wizard.Account.Crowns >= item.Crowns;
-
-    private void Complete(Wizard wizard, WIZARD_12_PROTOCOL.MSG_PCS_PURCHASE_REQUEST request, CrownShopEntry item, bool payWithGold) {
-        int cost;
-        if (payWithGold) {
-            cost = item.Gold;
-            wizard.AddGold(-cost);
-            SendToSocket(new WIZARD_12_PROTOCOL.MSG_UPDATEGOLD { Gold = wizard.GameStats.m_currentGold, MaxGold = wizard.GameStats.m_baseGoldPouch });
+    [MessageHandler(typeof(HireTimedOut))]
+    private void ReceiveHireTimedOut(HireTimedOut message) {
+        if (!ReferenceEquals(_pendingHire, message.Hire) || GetActiveWizard() is not { } wizard) {
+            return;
         }
-        else {
-            cost = item.Crowns;
-            ClassicCrowns.Add(wizard.Account, -cost);
+
+        _pendingHire = null;
+        Refund(wizard, message.Hire.Item, message.Hire.PayWithGold);
+        Fail(message.Hire.Request, "the duel did not answer");
+    }
+
+    // A hire still waiting when the session closes is refunded.
+    protected override void OnDispose() {
+        if (_pendingHire is { } pending && GetActiveWizard() is { } wizard) {
+            _pendingHire = null;
+            Refund(wizard, pending.Item, pending.PayWithGold);
+        }
+
+        base.OnDispose();
+    }
+
+    private static bool TryPay(Wizard wizard, CrownShopEntry item, bool payWithGold)
+        => payWithGold
+            ? item.Gold > 0 && wizard.RemoveGold(item.Gold)
+            : item.Crowns > 0 && wizard.Account is { } account && ClassicCrowns.TrySpend(account, item.Crowns);
+
+    private static void Refund(Wizard wizard, CrownShopEntry item, bool payWithGold) {
+        if (payWithGold) {
+            wizard.RefundGold(item.Gold);
+        }
+        else if (wizard.Account is { } account) {
+            ClassicCrowns.Add(account, item.Crowns);
+        }
+
+        Logger.Information("[CROWNSHOP] {0} refunded for {1}.", Logger.Args(wizard.CharId, item.Name));
+    }
+
+    // The purchase is paid already; tells the client.
+    private void Complete(Wizard wizard, WIZARD_12_PROTOCOL.MSG_PCS_PURCHASE_REQUEST request, CrownShopEntry item, bool payWithGold) {
+        var cost = payWithGold ? item.Gold : item.Crowns;
+        if (payWithGold) {
+            SendToSocket(new WIZARD_12_PROTOCOL.MSG_UPDATEGOLD { Gold = wizard.GameStats.m_currentGold, MaxGold = wizard.GameStats.m_baseGoldPouch });
         }
 
         SendToSocket(new WIZARD_12_PROTOCOL.MSG_PCS_PURCHASE_RESPONSE {
@@ -252,9 +295,26 @@ internal class CrownShopService(SessionActor sessionActor) : MessageService(sess
     private static (FrozenDictionary<ulong, CrownShopEntry>, ByteString) BuildCatalog() {
         var offered = ClassicProgression.CrownShop?.Offered(ClassicRuntime.Rules.IsFeatureEnabled)
             ?? FrozenDictionary<ulong, CrownShopEntry>.Empty;
+        var shown = ForClient(offered.Values).ToFrozenDictionary(item => item.Template);
 
-        return (offered, SerializeCatalog(offered.Values));
+        return (shown, SerializeCatalog(shown.Values));
     }
+
+    /// <summary>
+    /// CLASSIC: the catalog as the r806919 client can show it (owner client log 2026-10-04 03:12, Crown Shop open).
+    /// <list type="bullet">
+    /// <item>Henchmen are left out: the client's PermanentShop rejects every henchman template ("templateID N not
+    /// found"; it lists items, and a henchman is a creature), and the client has no other way to hire one (no henchman
+    /// message in its protocol), so an offered henchman could never be seen or bought.</item>
+    /// <item>A gold-only item (the 2009 1-day mount rentals) gets a Crowns price: the client drops a row without one
+    /// ("Invalid Crowns Price Recieved!"). It is the gold price / 10, rounded up: the ratio of every 2009 rental sold
+    /// for both (7-day Enchanted Broom 1,000 Crowns or 10,000 gold). The gold price stays as 2009 had it.</item>
+    /// </list>
+    /// </summary>
+    internal static IEnumerable<CrownShopEntry> ForClient(IEnumerable<CrownShopEntry> offered)
+        => offered
+            .Where(item => item.Category != CrownShopCategories.Henchmen)
+            .Select(item => item.Crowns <= 0 && item.Gold > 0 ? item with { Crowns = (item.Gold + 9) / 10 } : item);
 
     // The client's CrownShopData for these items.
     internal static ByteString SerializeCatalog(IEnumerable<CrownShopEntry> offered) {
