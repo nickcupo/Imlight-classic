@@ -75,7 +75,8 @@ internal sealed class AmbientDirector : ReceiveActor {
     internal static void StartIfEnabled(IUntypedActorContext context, IActorRef server) {
         var settings = AmbientSettings.Parse(
             Setting("Classic.AmbientWizards"), Setting("Classic.AmbientWizardZones"), Setting("Classic.AmbientWizardChat"),
-            Setting("Classic.AmbientWizardBattles"), Setting("Classic.AmbientWizardStreetFights"));
+            Setting("Classic.AmbientWizardBattles"), Setting("Classic.AmbientWizardStreetFights"),
+            Setting("Classic.AmbientWizardHatching"), Setting("Classic.AmbientWizardBazaar")); // CLASSIC (2026-10-04)
         AmbientWizards.Settings = settings;
         if (!settings.Enabled) {
             Logger.Information("Ambient wizards are off ([Classic] AmbientWizards).");

@@ -396,6 +396,8 @@ internal class AuctionHouseService(SessionActor sessionActor) : MessageService(s
             }
         }
 
+        ClassicBazaar.NoteRealSale(item.m_templateID); // CLASSIC (2026-10-04): ambient wizards leave it for players a while
+
         // Inform of update.
         var houseEntryData = WriteAuctionBlob(0, [entry]);
         var auctionUpdateMsg = new GAME_5_PROTOCOL.MSG_AUCTIONHOUSEUPDATE {

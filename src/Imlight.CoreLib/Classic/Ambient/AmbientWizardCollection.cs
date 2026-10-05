@@ -86,6 +86,9 @@ public sealed class AmbientWizardRecord {
     public DateTime CreatedUtc { get; set; }
     public List<AmbientFriendRecord> Friends { get; set; } = [];
 
+    /// <summary>CLASSIC (2026-10-04): when its pet last hatched (Unix seconds; 0 never): once every 24 hours.</summary>
+    public long PetLastHatchUnix { get; set; }
+
     internal static AmbientWizardRecord From(AmbientIdentity identity, ulong charId) => new() {
         Id = $"{AmbientWizardCollection.CollectionName}/{charId}",
         CharId = charId,
@@ -169,6 +172,7 @@ public static class AmbientWizardCollection {
         Id = r.Id, CharId = r.CharId, Seed = r.Seed, HomeZone = r.HomeZone, NameKeys = r.NameKeys, Female = r.Female,
         School = r.School, Level = r.Level, HairModel = r.HairModel, HairColor = r.HairColor, SkinColor = r.SkinColor,
         Face = r.Face, ClothingColor = r.ClothingColor, TrimColor = r.TrimColor, Temper = r.Temper, CreatedUtc = r.CreatedUtc,
+        PetLastHatchUnix = r.PetLastHatchUnix,
         Friends = [.. r.Friends.Select(f => new AmbientFriendRecord {
             CharId = f.CharId, Name = f.Name, LastZone = f.LastZone, LastQuest = f.LastQuest,
             LastPlayedTogether = f.LastPlayedTogether, TimesHelped = f.TimesHelped,
