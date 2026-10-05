@@ -38,6 +38,7 @@
 using Akka.Actor;
 using Imcodec.MessageLayer.Generated;
 using Imlight.Common;
+using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.WizardData.Models.Player;
 using System;
@@ -141,6 +142,14 @@ internal class PotionService(SessionActor sessionActor) : MessageService(session
     private void ReceivePotionBuyRequest(WIZARD_12_PROTOCOL.MSG_POTIONBUYREQUEST message) {
         var wizard = GetActiveWizard();
         if (wizard is null) {
+            return;
+        }
+
+        // CLASSIC: only by the potion vendor (the request's NPC, or the shop last opened).
+        if (ServiceProximity.FindNear<Zone.Components.InteractPotionShopComponent>(wizard, message.npcGlobalID, GetZoneObject) is null) {
+            Logger.Warning("Wizard {0} asked for potions away from the potion shop.", Logger.Args(wizard.CharId));
+            SendToSocket(new WIZARD_12_PROTOCOL.MSG_POTIONBUYCONFIRM { Failure = 1 });
+
             return;
         }
 

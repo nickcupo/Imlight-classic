@@ -139,6 +139,14 @@ public class WizardNameBank : RootSingleResourceSingleton<WizardNameBank>, IMemo
     /// appending, so each list's first alphabetical run (English names) is the original set. Middle and last tables
     /// start with an empty entry, which is not counted.
     /// </summary>
+    /// <summary>
+    /// CLASSIC: whether packed name keys from the creation screen point into the human name tables for the gender.
+    /// </summary>
+    internal static bool IsValidCreationName(uint nameKeys, eGender gender)
+        => Imlight.Classic.Rules.CharacterCreationRules.IsValidName(nameKeys,
+            GetTableSize(gender == eGender.Male ? FirstNameHumanMaleTableName : FirstNameHumanFemaleTableName),
+            GetTableSize(MiddleNameHumanTableName), GetTableSize(LastNameHumanTableName));
+
     internal static (int FirstBoy, int FirstGirl, int Middle, int Last) ClassicCreationNameCounts()
         => (AlphabeticalRun(FirstNameHumanMaleTableName, 0), AlphabeticalRun(FirstNameHumanFemaleTableName, 0),
             AlphabeticalRun(MiddleNameHumanTableName, 1), AlphabeticalRun(LastNameHumanTableName, 1));

@@ -224,6 +224,16 @@ internal class CommandAccountProtocol : CommandProtocol {
     [Command("infractions")]
     [Alias("warns", "warnings")]
     private void GetAccountInfractionsCommand(string username) {
+        // CLASSIC: a moderator reads any account's history; anyone else only their own (and learns nothing about
+        // which other usernames exist).
+        var caller = Context.Account;
+        if (!Imlight.Classic.Rules.InfractionAccess.CanView(caller?.Username,
+                caller is not null && caller.AuthLevel >= AuthLevel.HallMonitor, username)) {
+            InformSenderClient("You can only view your own infractions.");
+
+            return;
+        }
+
         var account = AccountCollection.GetAccount(username);
         if (account is null) {
             InformSenderClient("Account not found.");

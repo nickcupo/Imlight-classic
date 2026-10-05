@@ -556,15 +556,27 @@ public class Wizard {
         equipEffects = null;
         unequipEffects = null;
 
-        // Remove the item from the inventory.
-        if (!InventoryBehavior.RemoveItem(itemId, out var inventoryItem)) {
+        // CLASSIC: find the item's slot before it leaves the backpack; an item with no slot stays where it is.
+        var inventoryItem = InventoryBehavior.GetItem(itemId);
+        if (inventoryItem is null) {
             Logger.Warning("Tried to equip item with global id {0} that does not exist in player inventory.", Logger.Args(itemId));
             return false;
         }
 
         // Get the template for this item. Using this template we can get the slot this object should be on.
         var template = ItemHelper.GetItemTemplate(inventoryItem);
-        var slot = ItemHelper.GetItemSlot(template);
+        var slot = EquipRules.SlotOf(template);
+        if (slot is null) {
+            Logger.Warning("Tried to equip item {0} (template {1}), which has no equipment slot.",
+                Logger.Args(itemId, inventoryItem.m_templateID.Full));
+            return false;
+        }
+
+        // Remove the item from the inventory.
+        if (!InventoryBehavior.RemoveItem(inventoryItem)) {
+            Logger.Warning("Tried to equip item with global id {0} that does not exist in player inventory.", Logger.Args(itemId));
+            return false;
+        }
 
         // Get the item that is currently in the slot, if there is one. We want to remove its effects.
         var replacedItem = EquipmentBehavior.GetItemInSlot(slot.SlotType);
@@ -573,6 +585,7 @@ public class Wizard {
                 Logger.Warning("Could not replace item {0} from slot {1}.",
                     Logger.Args(replacedItem.m_globalID, slot.SlotType));
 
+                InventoryBehavior.AddItem(inventoryItem); // CLASSIC: back to the backpack, not lost.
                 return false;
             }
         }
@@ -583,6 +596,7 @@ public class Wizard {
             Logger.Warning("Tried to equip item with global id {0} that is already equipped.",
                 Logger.Args(itemId));
 
+            InventoryBehavior.AddItem(inventoryItem); // CLASSIC: back to the backpack, not lost.
             return false;
         }
 

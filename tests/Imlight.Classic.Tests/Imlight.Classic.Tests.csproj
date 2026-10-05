@@ -67,6 +67,10 @@
   <ItemGroup>
     <ServerIntegrationTest Include="SecurityServerTests.cs" />
   </ItemGroup>
+  <!-- security-economy -->
+  <ItemGroup>
+    <ServerIntegrationTest Include="EquipRulesTests.cs" />
+  </ItemGroup>
   <PropertyGroup>
     <_TypeInputPath>$(MSBuildThisFileDirectory)../../submodule/Imcodec/src/Imcodec.ObjectProperty/GeneratorInput</_TypeInputPath>
     <_MessageInputPath>$(MSBuildThisFileDirectory)../../submodule/Imcodec/src/Imcodec.MessageLayer/GeneratorInput</_MessageInputPath>
