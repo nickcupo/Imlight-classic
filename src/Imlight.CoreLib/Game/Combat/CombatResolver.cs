@@ -122,7 +122,7 @@ public class CombatResolver(Duel duel, CombatDuelSubCircle[] actorSubCircles) {
         AddCasterPassActionIfNeeded();
         SortQueuedActions();
         // CLASSIC: a listed boss's extra casts follow its own card (Briskbreeze Tower, October 2009).
-        if (ClassicRuntime.IsActive) {
+        if (ClassicRuntime.IsInitialized && ClassicRuntime.IsActive) {
             BossCheats?.AddExtraCasts(_queuedCombatActions);
         }
 
@@ -240,7 +240,7 @@ public class CombatResolver(Duel duel, CombatDuelSubCircle[] actorSubCircles) {
     private float ProcessQueuedActions(CombatActionListObj combatActionList) {
         var cinematicTime = 0.0f;
         var instantCinematics = _subCircles[0]._duelActor.CheatInstantCinematics;
-        var bossCheats = ClassicRuntime.IsActive ? BossCheats : null; // CLASSIC
+        var bossCheats = ClassicRuntime.IsInitialized && ClassicRuntime.IsActive ? BossCheats : null; // CLASSIC
 
         // CLASSIC: an index loop, because a boss's out-of-turn casts go in right after the spell that set them off.
         for (var actionIndex = 0; actionIndex < _queuedCombatActions.Count; actionIndex++) {

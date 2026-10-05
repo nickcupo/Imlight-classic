@@ -60,7 +60,7 @@ internal sealed partial class CombatDuelComponent {
     /// each fight.
     /// </summary>
     private void BeginBossCheatRound(int round) {
-        if (!ClassicRuntime.IsActive || BossCheatCount == 0) {
+        if (!ClassicRuntime.IsInitialized || !ClassicRuntime.IsActive || BossCheatCount == 0) {
             return;
         }
 
