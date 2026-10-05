@@ -68,6 +68,7 @@ public static class ClassicProgression {
     private static volatile CreatureDecks s_creatureDecks = CreatureDecks.Empty; // CLASSIC
     private static volatile PotionRules? s_potions; // CLASSIC
     private static volatile SecondChanceRules? s_secondChance; // CLASSIC
+    private static volatile BossCheats s_bossCheats = BossCheats.Empty; // CLASSIC
 
     /// <summary>
     /// The profile's XP table, or null for the client's curve.
@@ -128,6 +129,14 @@ public static class ClassicProgression {
     /// The profile's Second Chance chests, or null for none. CLASSIC.
     /// </summary>
     public static SecondChanceRules? SecondChance => s_secondChance;
+
+    /// <summary>
+    /// The profile's scripted boss cheats (Briskbreeze Tower); empty when the profile names no file. CLASSIC.
+    /// </summary>
+    public static BossCheats BossCheats => s_bossCheats;
+
+    /// <summary>CLASSIC: test hook.</summary>
+    internal static void UseBossCheatsForTests(BossCheats? cheats) => s_bossCheats = cheats ?? BossCheats.Empty;
 
     /// <summary>CLASSIC: test hook.</summary>
     internal static void UseForTests(PotionRules? potions, SecondChanceRules? secondChance) {
@@ -207,6 +216,12 @@ public static class ClassicProgression {
             s_secondChance = SecondChanceRulesLoader.Load(Path.Combine(classicDataRoot, secondChance)); // CLASSIC
             Logger.Information("Classic Second Chance {Table}: {Count} chests, {First} Crowns +{Step} a use, {Uses} uses a day.",
                 Logger.Args(s_secondChance.Id, s_secondChance.Chests.Length, s_secondChance.FirstCost, s_secondChance.CostStep, s_secondChance.DailyUses));
+        }
+
+        if (profile.Rules.BossCheats is { } bossCheats && File.Exists(Path.Combine(classicDataRoot, bossCheats))) {
+            s_bossCheats = BossCheatsLoader.Load(Path.Combine(classicDataRoot, bossCheats)); // CLASSIC
+            Logger.Information("Classic boss cheats {Table}: {Count} scripted bosses in {Dungeon}.",
+                Logger.Args(s_bossCheats.Id, s_bossCheats.Count, s_bossCheats.DungeonZone));
         }
 
         if (profile.Rules.CrownShop is { } crownShop && File.Exists(Path.Combine(classicDataRoot, crownShop))) {

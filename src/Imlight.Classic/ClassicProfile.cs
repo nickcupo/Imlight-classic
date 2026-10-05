@@ -194,6 +194,12 @@ public sealed class ProfileRules {
     public string? SecondChance { get; init; }
 
     /// <summary>
+    /// Path under classic-data of the scripted boss cheats (Briskbreeze Tower, October 2009), if any; null in a profile
+    /// that switches them off. CLASSIC.
+    /// </summary>
+    public string? BossCheats { get; init; }
+
+    /// <summary>
     /// The rank from which power pips appear; null when unset or set to null.
     /// </summary>
     public string? PowerPipsFromRank { get; init; }
