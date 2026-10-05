@@ -30,8 +30,8 @@
  * RefreshTowerGuide(); // after anything that may set QT-WC-GNT-C01-001
  *
  * NOTE:
- * The client's ? button sends MSG_REQUESTQUESTDIALOG for any quest; only the
- * guide answers. Other quests' dialogue review is not served (as before).
+ * The client's ? button sends MSG_REQUESTQUESTDIALOG for any quest; the
+ * handler (QuestService.DialogReview.cs) asks the guide first.
  *
  * Created by: Nick with Claude Code (claude-opus-5-5)
  * Version: KALI 1.0
@@ -75,14 +75,17 @@ internal partial class QuestService {
         }
     }
 
-    [MessageHandler(typeof(WIZARD_12_PROTOCOL.MSG_REQUESTQUESTDIALOG))]
-    private void ReceiveRequestQuestDialog(WIZARD_12_PROTOCOL.MSG_REQUESTQUESTDIALOG message) {
-        if (message.QuestNameID != TowerGuide.QuestNameId || !_towerGuideShown
-            || TowerGuide.DialogMessage(ClassicProgression.BossCheats) is not { } dialog) {
-            return;
+    // The ? button on the guide's card (QuestService.DialogReview.cs asks first): true when the request was the guide's.
+    private bool TryAnswerTowerGuideDialog(uint questNameId) {
+        if (questNameId != TowerGuide.QuestNameId) {
+            return false;
         }
 
-        SendToSocket(dialog);
+        if (_towerGuideShown && TowerGuide.DialogMessage(ClassicProgression.BossCheats) is { } dialog) {
+            SendToSocket(dialog);
+        }
+
+        return true;
     }
 
 }
