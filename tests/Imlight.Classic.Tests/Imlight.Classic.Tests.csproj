@@ -13,6 +13,7 @@
     <_PrivateTypes Include="../../submodule/Imcodec/src/Imcodec.ObjectProperty/GeneratorInput/*.json" />
     <_PrivateMessages Include="../../submodule/Imcodec/src/Imcodec.MessageLayer/GeneratorInput/*Messages*.xml" />
     <ServerIntegrationTest Include="AmbientNavDataTests.cs" />
+    <ServerIntegrationTest Include="LostLieutenantServerTests.cs" />
     <ServerIntegrationTest Include="ArcFinalReviewTests.cs" />
     <ServerIntegrationTest Include="EnhancedProtocolTests.cs" />
     <ServerIntegrationTest Include="ExcludedEnemyDespawnTests.cs" />

@@ -144,6 +144,7 @@ public static partial class SpiralDB {
             filesLoaded += LoadOverlays(overlayRoots, spellbooks, dropTables, globalRegistry, npcInventories,
                 npcSpellInventories, npcDropTables, treasureCardInventories, questTemplates, questTemplatesByName,
                 zoneData);
+            ApplyProfileDisabledQuests(questTemplatesByName); // CLASSIC: the profile's disabled_quests (SpiralDB.Overlay.cs).
             questTemplates = RebuildQuestList(questTemplates, questTemplatesByName);
 
             // Atomically swap.

@@ -28,7 +28,8 @@
  * var profile = ClassicProfileLoader.Load("/opt/w101c/classic-data/profiles", "late-2009");
  * 
  * NOTE:
- * Only cutoff, level_cap, worlds, features and rules are inherited. Maps
+ * Only cutoff, level_cap, worlds, features, rules, world_unlocks and
+ * disabled_quests are inherited. Maps
  * merge recursively; scalars, lists and explicit nulls replace. Metadata
  * (id, title, description, status, notes, extends) is never inherited.
  * 
@@ -57,9 +58,9 @@ public static class ClassicProfileLoader {
 
     internal static readonly FrozenSet<string> s_rootKeys = FrozenSet.Create(StringComparer.Ordinal,
         "id", "title", "description", "status", "extends", "cutoff", "level_cap", "worlds", "features", "rules", "notes",
-        "world_unlocks");
+        "world_unlocks", "disabled_quests");
     private static readonly string[] s_requiredKeys = ["id", "title", "cutoff", "status"];
-    private static readonly string[] s_inheritedKeys = ["cutoff", "level_cap", "worlds", "features", "rules", "world_unlocks"];
+    private static readonly string[] s_inheritedKeys = ["cutoff", "level_cap", "worlds", "features", "rules", "world_unlocks", "disabled_quests"];
     internal static readonly FrozenSet<string> s_worldUnlockKeys = FrozenSet.Create(StringComparer.Ordinal, "any_of", "source", "notes");
     private static readonly FrozenSet<string> s_ruleKeys = FrozenSet.Create(StringComparer.Ordinal,
         "accuracy_table", "xp_table", "player_health", "mob_rewards", "badges", "quest_cards", "treasure_prices", "mob_stats", "crown_shop", "later_objects", "creature_decks", "power_pips_from_rank", "dragonspyre_difficulty", "tutorial",
@@ -211,6 +212,9 @@ public static class ClassicProfileLoader {
                 case "world_unlocks":
                     ValidateWorldUnlocks(value, diagnostics);
                     break;
+                case "disabled_quests": // CLASSIC
+                    ValidateDisabledQuests(value, diagnostics);
+                    break;
             }
         }
 
@@ -238,6 +242,29 @@ public static class ClassicProfileLoader {
             }
             else if (!seen.Add(world)) {
                 diagnostics.At(list.Items[i], path, $"world '{world}' is listed twice");
+            }
+        }
+    }
+
+    // CLASSIC: quest names, each listed once.
+    private static void ValidateDisabledQuests(YNode value, YamlDiagnostics diagnostics) {
+        if (diagnostics.ReadList(value, "disabled_quests") is not { } list) {
+            return;
+        }
+
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        for (var i = 0; i < list.Items.Length; i++) {
+            var path = YamlTree.Index("disabled_quests", i);
+            if (diagnostics.ReadString(list.Items[i], path) is not { } quest) {
+                continue;
+            }
+
+            if (quest.Length == 0 || !char.IsAsciiLetterOrDigit(quest[0])
+                    || !quest.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_')) {
+                diagnostics.At(list.Items[i], path, $"'{quest}' is not a quest name");
+            }
+            else if (!seen.Add(quest)) {
+                diagnostics.At(list.Items[i], path, $"quest '{quest}' is listed twice");
             }
         }
     }
@@ -450,6 +477,9 @@ public static class ClassicProfileLoader {
                 TeleportStones = ScalarOf(rules, "teleport_stones"),
             },
             WorldUnlocks = BuildWorldUnlocks(merged.Find("world_unlocks")?.Value as YMap),
+            DisabledQuests = merged.Find("disabled_quests")?.Value is YSeq disabled // CLASSIC
+                ? [.. disabled.Items.Cast<YScalar>().Select(quest => quest.Value)]
+                : [],
             Notes = child.Find("notes")?.Value is YSeq notes
                 ? [.. notes.Items.Cast<YScalar>().Select(note => note.Value)]
                 : [],
