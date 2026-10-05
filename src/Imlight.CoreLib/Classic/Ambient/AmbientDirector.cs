@@ -84,6 +84,7 @@ internal sealed class AmbientDirector : ReceiveActor {
         }
 
         AmbientChat.System = context.System;
+        AmbientZone.ConfigureChat(Setting); // CLASSIC (2026-10-05): chat word lists, optional local LLM
         context.ActorOf(Akka.Actor.Props.Create(() => new AmbientDirector(server)), "AmbientWizards");
     }
 
