@@ -85,7 +85,7 @@ internal sealed class AmbientEndpoint : UntypedActor {
             case COMBAT_106_PROTOCOL.MSG_COMBATDEFEAT:
             case COMBAT_106_PROTOCOL.MSG_COMBATDEATH:
             case AmbientSparringSeat:
-                _group.Tell(new AmbientInbox(_wizard, message, Sender));
+                (_wizard.Driver ?? _group).Tell(new AmbientInbox(_wizard, message, Sender)); // CLASSIC: a dungeon party
                 break;
 
             default:

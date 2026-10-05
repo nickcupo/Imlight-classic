@@ -629,9 +629,12 @@ public class Zone : ReceiveProtocolDispatcher, IWithTimers {
 
         // CLASSIC: up to four wizards in an instance; a friend teleporting into a full one is refused (2009:
         // "Your friend is in a full instance"; Classic.GroupInstances).
-        if (message.RefuseWhenFull && InstanceOwnerId != 0 && Classic.GroupInstances.IsFull(_playerCount, hardLimit)) {
+        // CLASSIC (2026-10-04): ambient wizards do not count; one leaves when a real player's friend comes in.
+        var realPlayers = Classic.Ambient.AmbientWizards.Count == 0 ? _playerCount
+            : _players.Count(p => !Classic.Ambient.AmbientWizards.IsAmbient(p));
+        if (message.RefuseWhenFull && InstanceOwnerId != 0 && Classic.GroupInstances.IsFull(realPlayers, hardLimit)) {
             Logger.Information("Zone {Zone} (instance of {Owner}) is full ({Players}); a teleport-in was refused.",
-                Logger.Args(ZonePath, InstanceOwnerId, _playerCount));
+                Logger.Args(ZonePath, InstanceOwnerId, realPlayers));
             sender.Tell(new ZONE_102_PROTOCOL.MSG_ZONETRANSFERRSP {
                 ErrorCode = Imcodec.Cryptography.StringHash.Compute(Classic.GroupInstances.FullInstanceError),
                 ErrorMessage = Classic.GroupInstances.FullInstanceMessage,

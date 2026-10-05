@@ -1201,7 +1201,7 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
         gameObj.m_orientation = new Imcodec.Math.Vector3(0, 0, faceYaw);
     }
 
-    private static bool TryGetSigilFaceSlot(ZONE_102_PROTOCOL.MSG_STARTSIGILENTRY entry,
+    internal static bool TryGetSigilFaceSlot(ZONE_102_PROTOCOL.MSG_STARTSIGILENTRY entry,
                                             out Imcodec.Math.Vector3 pos, out float yaw) {
         pos = default;
         yaw = 0f;

@@ -39,9 +39,11 @@
  * Last Updated: 10/01/2026
  */
 
+using System;
 using System.Linq;
 using Akka.Actor;
 using Imcodec.ObjectProperty.TypeCache;
+using Imlight.Classic.Ambient;
 using Imlight.Common;
 using Imlight.CoreLib.Classic.Ambient;
 using Imlight.CoreLib.Game.Combat;
@@ -61,6 +63,7 @@ internal sealed partial class CombatDuelComponent {
             return;
         }
 
+        NotifyAmbientWizards(); // CLASSIC (2026-10-04): each round, so onlookers see how the duel is going.
         foreach (var circle in SubCircles.Where(c => IsAmbientCircle(c) && c.IsAlive && c.AddedToDuel)) {
             Timers.StartSingleTimer($"ambient-turn-{circle.SlotIndex}", new AmbientTurn(circle.SlotIndex, Duel.m_roundNum),
                 AmbientCombat.ThinkingTime(circle.SlotIndex, Duel.m_roundNum));
@@ -121,7 +124,32 @@ internal sealed partial class CombatDuelComponent {
 
         var pvp = SubCircles.Any(c => c is { Occupied: true } && c.OccupiedTeam == CombatTeam.Monster && c.ParticipantObject.m_templateID == 1);
         AmbientWizards.NotifyDuel(Entity.ZoneRef, new AmbientDuelNotice(SigilId, Entity.ActiveGameObject.m_location, players,
-            4 - PlayerCount, active && _isActive, pvp));
+            4 - PlayerCount, active && _isActive, pvp, pvp ? null : AmbientOdds()));
+    }
+
+    /// <summary>
+    /// CLASSIC (2026-10-04): how the duel looks to an onlooker: enemies standing, their health left as a share of their
+    /// total, and the lowest real player's health share (Imlight.Classic.Ambient.HelpManners).
+    /// </summary>
+    private DuelOdds AmbientOdds() {
+        double enemyNow = 0, enemyMax = 0, lowest = 1;
+        var standing = 0;
+        foreach (var circle in SubCircles.Where(c => c is { Occupied: true, AddedToDuel: true })) {
+            var stats = circle.ParticipantGameStats;
+            var max = Math.Max(1, stats?.m_baseHitpoints ?? 1);
+            var now = Math.Max(0, stats?.m_currentHitpoints ?? 0);
+            if (circle.OccupiedTeam == CombatTeam.Monster) {
+                enemyNow += circle.IsAlive ? now : 0;
+                enemyMax += max;
+                standing += circle.IsAlive ? 1 : 0;
+            }
+            else if (circle.ParticipantObject.m_templateID == 1 && !circle.IsSummonedMinion
+                     && !AmbientWizards.IsAmbient(circle.ParticipantActor)) {
+                lowest = Math.Min(lowest, circle.IsAlive ? (double) now / max : 0);
+            }
+        }
+
+        return enemyMax <= 0 ? DuelOdds.Unknown : new DuelOdds(standing, enemyNow / enemyMax, lowest);
     }
 
 }

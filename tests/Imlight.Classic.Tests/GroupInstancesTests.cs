@@ -87,6 +87,47 @@ public sealed class GroupInstancesTests {
     }
 
     [Fact]
+    public void ARealPlayerTakesAnAmbientWizardsPlaceOnAFullSigil() {
+        var group = new SigilGroup(7, T0, 10);
+        group.Join(1, T0);
+        group.Join(2, T0.AddSeconds(1));
+        var helper = group.Join(900, T0.AddSeconds(2), ambient: true)!;
+        group.Join(901, T0.AddSeconds(3), ambient: true);
+        Assert.Equal(2, group.RealCount);
+        Assert.Equal(2, group.AmbientCount);
+
+        // An ambient wizard never bumps anyone.
+        Assert.Null(group.Join(902, T0.AddSeconds(4), ambient: true));
+
+        // A real player takes the last ambient wizard's face.
+        var player = group.Join(3, T0.AddSeconds(5), false, out var bumped)!;
+        Assert.Equal(901UL, bumped);
+        Assert.Equal(3, player.Slot);
+        Assert.False(group.IsMember(901));
+        Assert.True(group.IsMember(900));
+        Assert.Equal(2, helper.Slot);
+        Assert.Equal(3, group.RealCount);
+
+        // Four real players and nobody else: a fifth real player is still refused.
+        group.Join(4, T0.AddSeconds(6));
+        Assert.Equal(0, group.AmbientCount);
+        Assert.Null(group.Join(5, T0.AddSeconds(7)));
+    }
+
+    [Fact]
+    public void AnAmbientWizardStepsOffAndItsFaceIsFreeAgain() {
+        var group = new SigilGroup(7, T0, 10);
+        group.Join(1, T0);
+        group.Join(900, T0.AddSeconds(1), ambient: true);
+        Assert.False(group.Leave(1)); // a real player's place is kept
+        Assert.True(group.Leave(900));
+        Assert.False(group.IsMember(900));
+        Assert.Equal(1, group.Join(2, T0.AddSeconds(2))!.Slot);
+        Assert.False(group.Join(2, T0.AddSeconds(3))!.Started);
+        Assert.True(group.Join(1, T0.AddSeconds(3))!.Started);
+    }
+
+    [Fact]
     public void TheGroupClosesWhenTheCountdownReachesZero() {
         var group = new SigilGroup(7, T0, 10);
         group.Join(1, T0);
