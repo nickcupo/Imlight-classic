@@ -185,6 +185,13 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
         if (ClassicRuntime.IsActive) {
             message.OwnerCharId = GroupInstances.OwnerForTransfer(message.OwnerCharId, message.KeepInstance,
                 _currentInstanceOwner);
+
+            // CLASSIC: a gauntlet (the Golem Tower) resets whenever its wizard leaves it, so a trip in from outside
+            // starts a fresh one (Classic.Travel.Gauntlets).
+            if (message.SendToClient && Imlight.Classic.Travel.Gauntlets.EntersFromOutside(GetActiveWizard()?.Zone,
+                    message.DestinationZone)) {
+                message.ResetInstance = true;
+            }
         }
 
         // Sending the server transfer request to the server will allocate and load the zone.
