@@ -77,6 +77,42 @@ public sealed class DatamineGateFixesTests {
         Assert.Equal(destination, (string?) Teleport(Colossus, sigil)["m_destinationZone"]);
     }
 
+    [Theory]
+    [InlineData("WC-CLASSIC-SIDE-037", "WizQst952A_00000020")] // Seal the Deal: "Have you defeated both Gobbler barons?"
+    [InlineData("WC-ICE-C02-001", "WizQst13CCC_00000001")]
+    [InlineData("GH-FORT-C01-002", "WizQst2A449_00000000")]
+    [InlineData("MS-MAIN-C02-001", "WizQst9C21_00000002")]
+    [InlineData("DS-NEC-C01-001", "WizQst1ED25_00000001")]
+    public void GiversRemindWithTheirOwnUnderwayLine(string quest, string key) {
+        var dialogs = Load("QuestTemplates", quest + ".json")["m_dialogList"]!["m_dialogs"]!;
+        var prep = dialogs.Single(d => (string?) d["m_dialogTag"] == "Prep")["m_dialogEntries"]![0]!;
+        var underway = dialogs.Single(d => (string?) d["m_dialogTag"] == "Underway")["m_dialogEntries"]!.Single();
+
+        Assert.Equal(key, (string?) underway["m_dialog"]);
+        Assert.Equal((string?) prep["m_personaName"], (string?) underway["m_personaName"]);
+        Assert.Equal((int?) prep["m_actorTemplateID"], (int?) underway["m_actorTemplateID"]);
+        Assert.Equal("", (string?) underway["m_soundFile"]);
+    }
+
+    [Fact]
+    public void EveryOverlayUnderwayLineComesFromTheQuestsOwnTable() {
+        var bad = Directory.GetFiles(Path.Combine(ClassicDataFixture.Root, "spiraldb-overlay", "QuestTemplates"), "*.json")
+            .Select(f => (File: Path.GetFileName(f), Quest: JObject.Parse(File.ReadAllText(f))))
+            .Where(q => q.Quest["m_dialogList"] is JObject list && list["m_dialogs"] is JArray)
+            .SelectMany(q => {
+                var dialogs = (JArray) q.Quest["m_dialogList"]!["m_dialogs"]!;
+                var tables = dialogs.Where(d => (string?) d["m_dialogTag"] == "Prep")
+                    .SelectMany(d => d["m_dialogEntries"]!).Select(e => ((string?) e["m_dialog"])?.Split('_')[0]).ToHashSet();
+                return dialogs.Where(d => (string?) d["m_dialogTag"] == "Underway")
+                    .SelectMany(d => d["m_dialogEntries"]!)
+                    .Where(e => tables.Count > 0 && !tables.Contains(((string?) e["m_dialog"])?.Split('_')[0]))
+                    .Select(e => $"{q.File}: {(string?) e["m_dialog"]}");
+            })
+            .ToList();
+
+        Assert.Empty(bad);
+    }
+
     [Fact]
     public void EightLeggedQueenOpensTheCrystalGroveGauntletSigil() {
         Assert.True(StartSetsEntry("DS-ACAD1-C05-003", "QT-ACAD1-C05-003"));
