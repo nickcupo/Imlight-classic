@@ -50,6 +50,10 @@ public sealed partial class SessionActor {
     private readonly MovementGuard _movementGuard = new();
     private Wizard _movementWizard;
     private string _movementZone;
+    private bool _movementUnguardedLogged;
+    // When MSG_LOGINCOMPLETE went out: the entry grace runs from the zone entry, not from the first move (a client that
+    // idles first must not get a free teleport).
+    private DateTimeOffset? _movementEnteredAt;
 
     private static bool MovementGuardOn() {
         try {
@@ -82,6 +86,11 @@ public sealed partial class SessionActor {
     private bool AdmitClientMove(GAME_5_PROTOCOL.MSG_CLIENTMOVE move) {
         if (!MovementGuardOn() || !ActiveWizardDirectory.TryGet(Self, out var wizard, out var gameObject)
                 || wizard is null || gameObject is null) {
+            if (!_movementUnguardedLogged) {
+                _movementUnguardedLogged = true;
+                Logger.Debug("MovementGuard: session {0} moves unchecked (guard {1}).", Logger.Args(SessionID, MovementGuardOn()));
+            }
+
             return true;
         }
 
@@ -89,7 +98,7 @@ public sealed partial class SessionActor {
         if (!ReferenceEquals(wizard, _movementWizard) || !string.Equals(wizard.Zone, _movementZone, StringComparison.Ordinal)) {
             _movementWizard = wizard;
             _movementZone = wizard.Zone;
-            _movementGuard.Reset(now);
+            _movementGuard.Reset(_movementEnteredAt is { } entered && entered <= now ? entered : now);
         }
 
         if (InMinigameZone(wizard.Zone)) {
@@ -100,6 +109,9 @@ public sealed partial class SessionActor {
         var y = unchecked((short) move.LocationY) * 4.0;
         var z = unchecked((short) move.LocationZ) * 4.0;
         var verdict = _movementGuard.Check(x, y, z, now, MovementMaxSpeed());
+        if (verdict != MoveVerdict.Accept) {
+            Logger.Debug("MovementGuard: session {0} move to ({1:0}, {2:0}) {3}.", Logger.Args(SessionID, x, y, verdict));
+        }
         if (verdict == MoveVerdict.Accept) {
             return true;
         }
@@ -122,6 +134,12 @@ public sealed partial class SessionActor {
 
     /// <summary>A server teleport of this session's own wizard re-anchors the guard.</summary>
     private void ObserveOutgoing(IMessage message) {
+        if (message is GAME_5_PROTOCOL.MSG_LOGINCOMPLETE) {
+            _movementEnteredAt = DateTimeOffset.UtcNow;
+            _movementWizard = null; // the next move resets the guard from this entry
+            return;
+        }
+
         if (message is not GAME_5_PROTOCOL.MSG_SERVERTELEPORT teleport || !MovementGuardOn()
                 || !ActiveWizardDirectory.TryGet(Self, out _, out var gameObject) || gameObject is null
                 || teleport.MobileID != gameObject.m_nMobileID) {
