@@ -32,10 +32,14 @@
  * run of w101c-backup.service (it stops and starts the server itself);
  * the server never runs privileged commands. Without systemd (the Mac
  * rigs) a restart just exits and a backup request waits for a host.
+ * The nightly backup (backup.sh --scheduled, as root) writes
+ * <ControlDirectory>/backup-schedule when players are connected; the
+ * server takes it (deletes it, which tells the script it was seen) and
+ * schedules a safe backup with the warning minutes the file holds.
  *
  * Created by: Nick with Claude Code (claude-opus-5-5)
  * Version: KALI 1.0
- * Last Updated: 10/01/2026
+ * Last Updated: 10/05/2026
  */
 
 #nullable enable
@@ -79,6 +83,10 @@ public static class ServerAdmin {
     private static RestartPlan? s_plan;
     private static string s_requestedBy = "";
     private static string s_state = "";
+    private static DateTime s_nextSchedulePoll;
+
+    /// <summary>The file the nightly backup writes to ask for a safe backup.</summary>
+    public const string ScheduleRequestFile = "backup-schedule";
 
     /// <summary>When this server process started.</summary>
     public static DateTime StartedUtc { get; } = DateTime.UtcNow;
@@ -199,7 +207,67 @@ public static class ServerAdmin {
         }
     }
 
+    /// <summary>
+    /// Takes the nightly backup's request from <paramref name="controlDirectory"/>, if there is one: deletes it and
+    /// returns the warning it asks for (the minutes in the file, 0-60; 5 when empty or unreadable).
+    /// </summary>
+    internal static bool TakeScheduleRequest(string controlDirectory, out TimeSpan warning) {
+        warning = TimeSpan.FromMinutes(5);
+        var path = Path.Combine(controlDirectory, ScheduleRequestFile);
+        if (!File.Exists(path)) {
+            return false;
+        }
+
+        try {
+            var text = File.ReadAllText(path).Trim();
+            File.Delete(path);
+            if (int.TryParse(text, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture,
+                    out var minutes) && minutes <= 60) {
+                warning = TimeSpan.FromMinutes(minutes);
+            }
+
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+            Logger.Warning("[ADMIN] Could not take the nightly backup request {Path}: {Error}", Logger.Args(path, ex.Message));
+
+            return false;
+        }
+    }
+
+    private static void PollScheduleRequest() {
+        var now = DateTime.UtcNow;
+        if (now < s_nextSchedulePoll) {
+            return;
+        }
+
+        s_nextSchedulePoll = now.AddSeconds(5);
+        if (!TakeScheduleRequest(ControlDirectory, out var warning)) {
+            return;
+        }
+
+        if (Status() is { } existing) {
+            Logger.Information("[ADMIN] The nightly backup asked for a backup, but a {Kind} is already scheduled; "
+                               + "the nightly timer tries again later.", Logger.Args(existing.Kind));
+
+            return;
+        }
+
+        if (OnlinePlayerCollection.GetOnlinePlayers().All(player => player.CharacterId == 0)) {
+            warning = TimeSpan.Zero; // no wizard in the world: nothing to warn
+        }
+
+        Schedule(RestartKind.Backup, warning, "nightly backup", "nightly backup timer");
+    }
+
     private static void Tick() {
+        try {
+            PollScheduleRequest();
+        }
+        catch (Exception ex) {
+            Logger.Error("[ADMIN] Nightly backup request failed: {Error}", Logger.Args(ex));
+        }
+
         RestartPlan? plan;
         lock (s_lock) {
             plan = s_plan;

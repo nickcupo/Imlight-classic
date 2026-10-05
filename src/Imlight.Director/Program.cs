@@ -163,6 +163,15 @@ internal static class Program {
         // =============================================================
         // SERVERS
         // =============================================================
+        // CLASSIC: open the player database before anyone can connect, and refuse a database a newer build wrote
+        // (an older build drops the fields it does not know on save; see PlayerDataSchema). Exit 78 stops systemd
+        // restarting it (RestartPreventExitStatus), so the unit fails and the owner is alerted.
+        if (!Imlight.CoreLib.Classic.Admin.PlayerDataSchemaGate.Check(PlayerDatabase.Instance.Store)) {
+            Imlight.CoreLib.WizardData.Implementations.EmbeddedDatabaseManager.Shutdown(TimeSpan.FromSeconds(30));
+            Serilog.Log.CloseAndFlush();
+            Environment.Exit(Imlight.Classic.Admin.PlayerDataSchema.RefusedExitCode);
+        }
+
         var loginServer = StartLoginServer();
         StartGameServers(loginServer);
 

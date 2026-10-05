@@ -27,18 +27,21 @@
  * "Simply use the chest after your initial duel, pay a few Crowns and you are given a second chance at the exact
  * same rewards the boss drops normally. These chests can only be used a certain number of times per day per
  * character." (October 2009 Update Notes). A win counts for the zone and instance it happened in, and is forgotten
- * when the wizard wins elsewhere or after WinLifetime. Uses are counted per UTC day in memory: a server restart
- * gives a wizard the day's uses again (documented in the session report).
+ * when the wizard wins elsewhere or after WinLifetime. Uses are counted per game day ([Classic] GameTimeZone) and
+ * saved (SecondChanceUses/{CharId}, one document per wizard holding only its latest day), so a server restart does
+ * not give the day's uses back. Wins and open chest windows stay in memory: a restart forgets them (the wizard beats
+ * the boss again). The memory keeps only today's uses: a new day drops the old ones.
  *
  * Created by: Nick with Claude Code (claude-opus-5-5)
  * Version: KALI 1.0
- * Last Updated: 10/04/2026
+ * Last Updated: 10/05/2026
  */
 
 using System;
 using System.Collections.Generic;
 using System.Linq;
 using Imlight.Classic.Rules;
+using Imlight.Common;
 
 namespace Imlight.CoreLib.Game.SecondChance;
 
@@ -57,13 +60,80 @@ internal sealed class SecondChanceChests {
     private readonly Dictionary<ulong, Win> _wins = [];
     private readonly Dictionary<(ulong CharId, ulong Chest, DateOnly Day), int> _uses = [];
     private readonly Dictionary<ulong, (ulong ChestGid, SecondChanceChest Chest)> _prompts = [];
+    private readonly HashSet<(ulong CharId, DateOnly Day)> _loaded = [];
     private readonly Func<DateTime> _now;
+    private readonly ISecondChanceUseStore _store;
+    private readonly Func<DateTime, DateOnly> _dayOf;
+    private DateOnly _usesDay;
 
-    public SecondChanceChests(Func<DateTime> now = null) => _now = now ?? (() => DateTime.UtcNow);
+    /// <param name="now">The clock (UTC).</param>
+    /// <param name="store">Where the day's uses are saved; null keeps them in memory only.</param>
+    /// <param name="dayOf">The game day of an instant; null: its UTC date.</param>
+    public SecondChanceChests(Func<DateTime> now = null, ISecondChanceUseStore store = null, Func<DateTime, DateOnly> dayOf = null) {
+        _now = now ?? (() => DateTime.UtcNow);
+        _store = store;
+        _dayOf = dayOf ?? DateOnly.FromDateTime;
+    }
 
-    public static SecondChanceChests Instance { get; } = new();
+    public static SecondChanceChests Instance { get; }
+        = new(store: new RavenSecondChanceUseStore(), dayOf: Imlight.CoreLib.Classic.ClassicTime.DayOf);
 
-    private DateOnly Today => DateOnly.FromDateTime(_now());
+    private DateOnly Today => _dayOf(_now());
+
+    /// <summary>
+    /// The uses of <paramref name="charId"/>'s chests on <paramref name="day"/>, read from the store once per wizard
+    /// and day. A new day first drops every older day's uses from memory. Call under _gate.
+    /// </summary>
+    private int UsesOn(ulong charId, ulong chest, DateOnly day) {
+        if (day != _usesDay) {
+            foreach (var old in _uses.Keys.Where(key => key.Day != day).ToList()) {
+                _uses.Remove(old);
+            }
+
+            _loaded.RemoveWhere(key => key.Day != day);
+            _usesDay = day;
+        }
+
+        if (_store is not null && _loaded.Add((charId, day))) {
+            try {
+                foreach (var (template, count) in _store.Load(charId, day)) {
+                    var key = (charId, template, day);
+                    _uses[key] = Math.Max(_uses.GetValueOrDefault(key), count);
+                }
+            }
+            catch (Exception ex) {
+                Logger.Warning("Second Chance: could not read the uses of {0} for {1}: {2}", Logger.Args(charId, day, ex.Message));
+            }
+        }
+
+        return _uses.GetValueOrDefault((charId, chest, day));
+    }
+
+    /// <summary>Saves <paramref name="charId"/>'s uses on <paramref name="day"/>. Call under _gate.</summary>
+    private void SaveUses(ulong charId, DateOnly day) {
+        if (_store is null) {
+            return;
+        }
+
+        var uses = _uses.Where(entry => entry.Key.CharId == charId && entry.Key.Day == day)
+            .ToDictionary(entry => entry.Key.Chest, entry => entry.Value);
+        try {
+            _store.Save(charId, day, uses);
+        }
+        catch (Exception ex) {
+            // The use stays counted in memory; only a restart today would give it back.
+            Logger.Warning("Second Chance: could not save the uses of {0} for {1}: {2}", Logger.Args(charId, day, ex.Message));
+        }
+    }
+
+    /// <summary>The wizards and days whose uses are held in memory (tests).</summary>
+    internal int UsesHeld {
+        get {
+            lock (_gate) {
+                return _uses.Count;
+            }
+        }
+    }
 
     /// <summary>A won duel: <paramref name="mobTemplates"/> were defeated in this zone and instance.</summary>
     public void RecordWin(ulong charId, string zone, ulong instance, IEnumerable<ulong> mobTemplates) {
@@ -98,14 +168,14 @@ internal sealed class SecondChanceChests {
     /// <summary>Uses of <paramref name="chest"/> left today.</summary>
     public int UsesLeft(ulong charId, SecondChanceChest chest, SecondChanceRules rules) {
         lock (_gate) {
-            return Math.Max(0, rules.DailyUses - _uses.GetValueOrDefault((charId, chest.Template, Today)));
+            return Math.Max(0, rules.DailyUses - UsesOn(charId, chest.Template, Today));
         }
     }
 
     /// <summary>The Crowns the next use costs.</summary>
     public int NextCost(ulong charId, SecondChanceChest chest, SecondChanceRules rules) {
         lock (_gate) {
-            return rules.CostOfUse(_uses.GetValueOrDefault((charId, chest.Template, Today)));
+            return rules.CostOfUse(UsesOn(charId, chest.Template, Today));
         }
     }
 
@@ -148,8 +218,9 @@ internal sealed class SecondChanceChests {
             }
 
             chest = prompt.Chest;
-            var key = (charId, chest.Template, Today);
-            var used = _uses.GetValueOrDefault(key);
+            var day = Today;
+            var key = (charId, chest.Template, day);
+            var used = UsesOn(charId, chest.Template, day);
             var now = _now();
             if (!_wins.TryGetValue(charId, out var win) || !SameVisit(win, zone, instance) || now - win.At >= WinLifetime
                 || !chest.BossTemplates.Any(win.Templates.Contains)) {
@@ -166,6 +237,7 @@ internal sealed class SecondChanceChests {
             }
 
             _uses[key] = used + 1;
+            SaveUses(charId, day);
 
             return ChestRefusal.None;
         }
