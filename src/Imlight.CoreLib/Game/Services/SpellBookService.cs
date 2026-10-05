@@ -245,6 +245,17 @@ internal class SpellbookService(SessionActor sessionActor) : MessageService(sess
     [MessageHandler(typeof(SERVICE_101_PROTOCOL.MSG_ATTACHCOMPLETE))]
     private void ReceiveAttachComplete(SERVICE_101_PROTOCOL.MSG_ATTACHCOMPLETE message) {
         var wizard = GetActiveWizard();
+        if (wizard is null) {
+            return;
+        }
+
+        // CLASSIC: an older save's deck Treasure Cards move into the ledger once (Wizard.MigrateDeckTreasureCards).
+        try {
+            wizard.MigrateDeckTreasureCards();
+        }
+        catch (Exception ex) {
+            Logger.Error("Wizard {0}: moving deck Treasure Cards to the ledger failed: {1}", Logger.Args(wizard.CharId, ex.Message));
+        }
 
         // Find the equipped deck.
         var deckSlot = wizard.EquipmentBehavior.SlotList
@@ -281,28 +292,15 @@ internal class SpellbookService(SessionActor sessionActor) : MessageService(sess
             }
         }
 
-        var spellList = deckBehavior.m_spellList;
-
-        if (spellList is null) {
-            return;
-        }
-
-        // Send MSG_ADDTREASURESPELLTODECK for each treasure card in the deck.
-        foreach (var spellData in spellList) {
-            var template = CoreObjectFactory.GetCoreTemplate(spellData.m_templateID);
-            if (template is not SpellTemplate spellTemplate) {
-                continue;
-            }
-
-            // Only send treasure cards — regular spells are handled separately.
-            if (!spellTemplate.m_Treasure) {
+        // CLASSIC: the client learns the deck's Treasure Cards from MSG_ADDTREASURESPELLTODECK, one per copy; they are
+        // the ledger's for this deck (the deck's own card list holds regular cards only).
+        foreach (var (templateId, copies) in wizard.SpellbookBehavior.DeckTreasureCardsOf(deckItem.m_globalID)) {
+            if (CoreObjectFactory.GetCoreTemplate(templateId) is not SpellTemplate spellTemplate) {
                 continue;
             }
 
             var spellHash = StringHash.Compute(spellTemplate.m_name);
-
-            // Send one message per copy.
-            for (var i = 0; i < spellData.m_quantity; i++) {
+            for (var i = 0; i < copies; i++) {
                 SendToSocket(new WIZARD_12_PROTOCOL.MSG_ADDTREASURESPELLTODECK() {
                     SpellID = (int) spellHash,
                     EnchantmentID = 0,

@@ -231,7 +231,7 @@ internal sealed partial class CombatDuelComponent {
 
         Logger.Information("Duel {0} | Slot {1} | wizard {2} did not come back; seat released.",
             Logger.Args(Duel.m_duelID.Full, circle.SlotIndex, message.CharacterId));
-        ReleaseHeldSeat(circle);
+        ReleaseHeldSeat(circle, walkedAway: true);
 
         if (PlayerCount == 0) {
             AbandonDuel();
@@ -249,9 +249,10 @@ internal sealed partial class CombatDuelComponent {
 
     /// <summary>
     /// Takes a held seat out of the duel. A wizard defeated while away comes back at the world's commons with
-    /// 1 health, as a defeat in person would (owner ruling 2026-10-01).
+    /// 1 health, as a defeat in person would (owner ruling 2026-10-01). A wizard still standing whose seat ran out
+    /// (<paramref name="walkedAway"/>: the hold expired, or the duel was abandoned) pays what fleeing costs: all mana.
     /// </summary>
-    private void ReleaseHeldSeat(CombatDuelSubCircle circle) {
+    private void ReleaseHeldSeat(CombatDuelSubCircle circle, bool walkedAway = false) {
         if (_pvp) {
             PvpReleaseSeat(circle, won: false, fought: true); // CLASSIC: no defeat penalty in open PvP
 
@@ -272,6 +273,15 @@ internal sealed partial class CombatDuelComponent {
                 wizard.SetPersistentLocation(default);
             }
         }
+        else if (wizard is not null && walkedAway) {
+            // CLASSIC: closing the client instead of fleeing no longer keeps the mana. 2009: "If you flee from a duel,
+            // your mana also goes down to zero" (Fandom Health and Mana, oldid 4804, 2009-01-23, unchanged to oldid
+            // 41879, 2009-09-13); the same as HandleFlee. The wizard's live copy, if they are back online elsewhere,
+            // is the one changed (and saved).
+            ApplyWalkAwayPenalty(wizard);
+            Logger.Information("Duel {0} | Slot {1} | wizard {2} did not come back: mana drained as for a flee.",
+                Logger.Args(Duel.m_duelID.Full, circle.SlotIndex, wizard.CharId));
+        }
 
         circle.RemoveParticipant();
         if (participantId != 0) {
@@ -280,6 +290,17 @@ internal sealed partial class CombatDuelComponent {
                 ParticipantID = participantId,
             });
         }
+    }
+
+    /// <summary>
+    /// CLASSIC: what a flee costs (all mana), for a wizard whose held seat ran out. Applied to the wizard's live copy
+    /// when they are back online elsewhere, else to the copy the seat held; either saves it.
+    /// </summary>
+    internal static Wizard ApplyWalkAwayPenalty(Wizard held) {
+        var target = ActiveWizardDirectory.TryGetByCharId(held.CharId, out var live) && live is not null ? live : held;
+        target.UpdateMana(0);
+
+        return target;
     }
 
     /// <summary>
@@ -292,7 +313,7 @@ internal sealed partial class CombatDuelComponent {
         FinishMonstrologyDuel(false);
         _tutorialDirector.OnDuelEnded();
         foreach (var circle in SubCircles.Where(circle => circle is { Occupied: true, Disconnected: true })) {
-            ReleaseHeldSeat(circle);
+            ReleaseHeldSeat(circle, walkedAway: true);
         }
 
         ResetCreatures();

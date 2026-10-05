@@ -729,9 +729,8 @@ internal class CommandModifyProtocol : CommandProtocol {
             return;
         }
 
-        var currentTrainingPoints = Context.Character.MagicSchoolBehavior.TrainingPoints;
-        var newTrainingPoints = currentTrainingPoints + trainingPointsInt;
-        Context.Character.UpdateTrainingPoints(newTrainingPoints);
+        WizardData.Collections.WizardCollection.ChangeTrainingPoints(Context.Character, trainingPointsInt);
+        var newTrainingPoints = Context.Character.MagicSchoolBehavior.TrainingPoints;
 
         var networkMessage = new WIZARD_12_PROTOCOL.MSG_UPDATETRAINING() {
             TrainingPoints = newTrainingPoints
@@ -844,7 +843,7 @@ internal class CommandModifyProtocol : CommandProtocol {
         }
 
         var account = Context.Character.Account;
-        Classic.ClassicCrowns.Add(account, amount - account.Crowns);
+        Classic.ClassicCrowns.Set(account, amount);
         Context.SessionActor.Tell(Classic.ClassicCrowns.BalanceMessage(account, Context.Character.CharId), Akka.Actor.ActorRefs.NoSender);
         InformSenderClient($"Crowns set to {account.Crowns}.");
     }

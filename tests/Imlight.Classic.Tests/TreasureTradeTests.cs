@@ -323,6 +323,41 @@ public sealed class TreasureTradeTests {
         Assert.False(WizardCollection.HoldsWriteLane);
     }
 
+    [Fact]
+    public async Task ATradeBeingSavedHoldsUpNoOtherTradeAndCannotBeCancelledHalfway() {
+        // L8: the save used to run inside the one lock every trade on the server shares.
+        var w = Opened(out var m);
+        w.Friends.Add((C, A));
+        w.Book(A, Fire);
+        w.Book(B, Storm);
+        m.ChangeItem(A, Gid(B), Fire, 0, 1);
+        m.ChangeItem(B, Gid(A), Storm, 0, 1);
+        m.Ready(A, Gid(B), 1);
+        m.Ready(B, Gid(A), 1);
+        m.Ready(A, Gid(B), 2);
+
+        using var inCommit = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        w.DuringCommit = () => { inCommit.Set(); release.Wait(TimeSpan.FromSeconds(10)); };
+        var saving = Task.Factory.StartNew(() => m.Ready(B, Gid(A), 2), TaskCreationOptions.LongRunning);
+        Assert.True(inCommit.Wait(TimeSpan.FromSeconds(10)));
+
+        // Another player's trade request is handled while the save runs, and the saving pair cannot leave or restart.
+        var other = Task.Run(() => { m.Create(C, Gid(A)); m.Leave(A); m.Create(A, Gid(B)); return m.IsTrading(C); });
+        Assert.Same(other, await Task.WhenAny(other, Task.Delay(TimeSpan.FromSeconds(5))));
+        Assert.Equal(TradeStatus.AlreadyTrading, w.Of<WIZARD_12_PROTOCOL.MSG_TRADE_RESULT>(C).Single().Status);
+        Assert.True(m.IsTrading(A));
+
+        release.Set();
+        await saving.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal(1, w.Commits);
+        Assert.Equal(TradeStatus.Done, w.Of<WIZARD_12_PROTOCOL.MSG_TRADE_RESULT>(A).Single().Status);
+        Assert.Equal([Storm], w.Saved(A));
+        Assert.Equal([Fire], w.Saved(B));
+        Assert.False(m.IsTrading(A));
+        Assert.False(m.IsTrading(B));
+    }
+
     private static World Opened(out TreasureTradeManager manager) {
         var w = new World();
         manager = w.Manager;
@@ -384,7 +419,10 @@ public sealed class TreasureTradeTests {
 
         public void Send(ulong charId, IMessage message) => Sent.Enqueue((charId, message));
 
+        internal Action? DuringCommit;
+
         public bool Commit(Wizard first, IReadOnlyList<uint> firstGives, Wizard second, IReadOnlyList<uint> secondGives) {
+            DuringCommit?.Invoke();
             var ok = WizardCollection.CommitTreasureCardTrade(first, firstGives, second, secondGives, Store.Open, Store.Load);
             if (ok) {
                 Interlocked.Increment(ref Commits);

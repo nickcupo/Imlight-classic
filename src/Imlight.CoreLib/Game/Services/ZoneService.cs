@@ -791,6 +791,7 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
             FallbackZone = wizard.Zone,
             FallbackZoneID = new Imcodec.Types.GID((ulong) keyRsp.Port)
         };
+        SessionActor.MarkTransferringOut(); // CLASSIC: Game/AccountSessions.cs
         SendToSocket(serverTransfer);
     }
 
@@ -909,6 +910,7 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
             FallbackZone = character.Zone,
             FallbackZoneID = _currentDynamicZoneId
         };
+        SessionActor.MarkTransferringOut(); // CLASSIC: Game/AccountSessions.cs
         SendToSocket(serverTransfer);
 
         // Register fallback data on the GameServer so the new session can

@@ -18,6 +18,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using Newtonsoft.Json;
 using Imlight.CoreLib.Game.Spells;
 using Imlight.Common;
@@ -42,6 +43,63 @@ public class ServerWizSpellbookBehavior : ServerSpellbookBehavior {
     [JsonIgnore] public DeckBehaviorTemplate DeckTemplate { get; set; }
 
     public Dictionary<ulong, HashSet<uint>> ExcludedItemSpellIds { get; set; } = [];
+
+    /// <summary>
+    /// CLASSIC: the Treasure Cards this wizard put in each deck: deck item id, then spell template id, then copies.
+    /// They are kept apart from the deck's own card list (DeckBehavior.m_spellList, regular cards only), so a Treasure
+    /// Card of a spell the wizard knows stays a Treasure Card (spent when cast, in a Treasure Card place) and only the
+    /// cards recorded here go back to the book. The ledger is the wizard's, not the deck's: a deck handed to another
+    /// wizard through the shared bank carries no Treasure Cards, and they are there again when it comes back.
+    /// Changed only on the saved copy (WizardCollection.MoveTreasureCardToDeck and FromDeck) and then published here
+    /// as a new dictionary, so a reader never sees one half-changed.
+    /// </summary>
+    public Dictionary<ulong, Dictionary<uint, int>> DeckTreasureCards { get; set; } = [];
+
+    /// <summary>CLASSIC: 1 once the deck Treasure Cards of older saves were moved into <see cref="DeckTreasureCards"/>.</summary>
+    public int DeckTreasureLedgerVersion { get; set; }
+
+    /// <summary>CLASSIC: copies of <paramref name="templateId"/> this wizard has as Treasure Cards in the deck.</summary>
+    public int DeckTreasureCount(ulong deckId, uint templateId)
+        => DeckTreasureCards is { } ledger && ledger.TryGetValue(deckId, out var cards) && cards.TryGetValue(templateId, out var n) ? n : 0;
+
+    /// <summary>CLASSIC: all of this wizard's Treasure Cards in the deck.</summary>
+    public int DeckTreasureTotal(ulong deckId)
+        => DeckTreasureCards is { } ledger && ledger.TryGetValue(deckId, out var cards) ? cards.Values.Sum() : 0;
+
+    /// <summary>CLASSIC: the Treasure Cards in the deck (template id, copies); empty when none.</summary>
+    public IReadOnlyDictionary<uint, int> DeckTreasureCardsOf(ulong deckId)
+        => DeckTreasureCards is { } ledger && ledger.TryGetValue(deckId, out var cards) ? cards : new Dictionary<uint, int>();
+
+    /// <summary>CLASSIC: adds (or, negative, removes) Treasure Cards of a deck in the ledger. For the saved copy.</summary>
+    internal bool ChangeDeckTreasure(ulong deckId, uint templateId, int delta) {
+        DeckTreasureCards ??= [];
+        if (!DeckTreasureCards.TryGetValue(deckId, out var cards)) {
+            cards = [];
+            DeckTreasureCards[deckId] = cards;
+        }
+
+        cards.TryGetValue(templateId, out var have);
+        var now = have + delta;
+        if (now < 0) {
+            return false;
+        }
+
+        if (now == 0) {
+            cards.Remove(templateId);
+            if (cards.Count == 0) {
+                DeckTreasureCards.Remove(deckId);
+            }
+        }
+        else {
+            cards[templateId] = now;
+        }
+
+        return true;
+    }
+
+    /// <summary>CLASSIC: a deep copy of a ledger (publishing the saved one to the live wizard).</summary>
+    internal static Dictionary<ulong, Dictionary<uint, int>> CopyLedger(Dictionary<ulong, Dictionary<uint, int>> ledger)
+        => ledger?.ToDictionary(pair => pair.Key, pair => new Dictionary<uint, int>(pair.Value)) ?? [];
 
     public void InitializeProperties(DeckBehaviorTemplate deckTemplate) {
         SetPropertiesFromDeckTemplate(deckTemplate);

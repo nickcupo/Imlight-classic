@@ -591,7 +591,8 @@ public class CombatResolver(Duel duel, CombatDuelSubCircle[] actorSubCircles) {
                 var deckSlot = caster._wizard.EquipmentBehavior.SlotList
                     .FirstOrDefault(s => s.SlotType == EquipmentSlotType.Deck);
                 if (deckSlot?.ItemId != null) {
-                    caster._wizard.RemoveSpellFromDeck(consumedTemplateId, deckSlot.ItemId.Value);
+                    // CLASSIC: spent from the deck's Treasure Card ledger (Wizard.ConsumeDeckTreasureCard).
+                    caster._wizard.ConsumeDeckTreasureCard(consumedTemplateId, deckSlot.ItemId.Value);
 
                     // Tell the client to remove the TC from the deck UI.
                     var spellTemplate = CoreObjectFactory.GetCoreTemplate(consumedTemplateId) as SpellTemplate;

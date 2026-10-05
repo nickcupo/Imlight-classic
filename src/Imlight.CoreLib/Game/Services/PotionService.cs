@@ -56,11 +56,26 @@ internal class PotionService(SessionActor sessionActor) : MessageService(session
 
     [MessageHandler(typeof(WIZARD_12_PROTOCOL.MSG_USEPOTION))]
     private void UsePotion(WIZARD_12_PROTOCOL.MSG_USEPOTION message) {
+        var wizard = GetActiveWizard();
+        if (wizard is null) {
+            return;
+        }
+
+        // CLASSIC: no potions in a duel. In 2009 a flask was drunk outside combat ("Next to your health and mana globes,
+        // you will find little flasks"; nothing about duels: Fandom Health and Mana, oldid 4804 of 2009-01-23 to oldid
+        // 41879 of 2009-09-13); players fled a fight to drink one and came back (chasingdings.com, 2008-10-21). A
+        // duel's health and mana are the live game stats, so a crafted MSG_USEPOTION healed mid-fight without a turn.
+        // A seat held for a dropped wizard counts as in the duel.
+        if (!MayDrinkNow(wizard, DateTime.UtcNow)) {
+            Logger.Information("Potion use by {0} refused: in a duel.", Logger.Args(wizard.CharId));
+
+            return;
+        }
+
         // Inform the player's game client they're using a potion.
         var usePotionMsg = new WIZARD_12_PROTOCOL.MSG_USEPOTION() { };
         SendToSocket(usePotionMsg);
 
-        var wizard = GetActiveWizard();
         var potionCharge = wizard.GameStats.m_potionCharge;
         var potionMax = wizard.GameStats.m_potionMax;
 
@@ -118,6 +133,10 @@ internal class PotionService(SessionActor sessionActor) : MessageService(session
         wizard.UpdatePotions(newPotionCharge, potionMax);
     }
 
+    /// <summary>CLASSIC: false while the wizard is in a duel or a seat is held for them in one.</summary>
+    internal static bool MayDrinkNow(Wizard wizard, DateTime nowUtc)
+        => wizard is not null && !wizard.IsInDuel && Classic.ActiveDuels.HeldFor(wizard.CharId, nowUtc) is null;
+
     [MessageHandler(typeof(WIZARD_12_PROTOCOL.MSG_POTIONBUYREQUEST))]
     private void ReceivePotionBuyRequest(WIZARD_12_PROTOCOL.MSG_POTIONBUYREQUEST message) {
         var wizard = GetActiveWizard();
@@ -145,8 +164,8 @@ internal class PotionService(SessionActor sessionActor) : MessageService(session
         var perPotion = PotionCostPerBottle(level);
         var cost = perPotion * potionsToFill;
 
-        // Can't afford. AddGold only clamps at the pouch max, so a negative delta would dip below zero.
-        if (stats.m_currentGold < cost) {
+        // CLASSIC: checked and spent in one save (never below zero); can't afford otherwise.
+        if (!wizard.RemoveGold(cost)) {
             Logger.Information("Wizard {0} can't afford {1} potion(s): {2} gold needed, {3} held (level {4}).",
                 Logger.Args(wizard.CharId, potionsToFill, cost, stats.m_currentGold, level));
             SendToSocket(new WIZARD_12_PROTOCOL.MSG_POTIONBUYCONFIRM { Failure = 1 });
@@ -154,8 +173,7 @@ internal class PotionService(SessionActor sessionActor) : MessageService(session
             return;
         }
 
-        // Charge gold and echo it.
-        wizard.AddGold(-cost);
+        // Echo the gold already spent.
         SendToSocket(new WIZARD_12_PROTOCOL.MSG_UPDATEGOLD {
             Gold = stats.m_currentGold,
             MaxGold = stats.m_baseGoldPouch,

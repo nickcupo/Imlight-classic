@@ -29,11 +29,9 @@ namespace Imlight.CoreLib.WizardData.Collections;
 public static class AccountCollection {
     
     public const string CollectionName = "Accounts";
-    private static readonly IDocumentStore s_store;
-
-    static AccountCollection() {
-        s_store = PlayerDatabase.Instance.Store;
-    }
+    // CLASSIC: lazy, as WizardCollection's, so the Crowns transactions can be tested with a session double.
+    private static readonly Lazy<IDocumentStore> s_storeSource = new(() => PlayerDatabase.Instance.Store);
+    private static IDocumentStore s_store => s_storeSource.Value;
 
     private const int WriteLaneCount = 1 << 6; // 64 lanes
     private const ulong WriteLaneMask = WriteLaneCount - 1;
@@ -89,12 +87,30 @@ public static class AccountCollection {
         });
     }
 
-    // CLASSIC: saves the Crowns balance (ClassicCrowns).
-    public static bool UpdateCrowns(ulong accountId, int crowns, int startingCrownsGiven)
-        => UpdateAccount(accountId, account => {
-            account.Crowns = crowns;
-            account.StartingCrownsGiven = startingCrownsGiven;
+    /// <summary>
+    /// CLASSIC: one read-modify-write of the saved account under its write lane (optimistic concurrency on): the
+    /// saved copy is loaded, <paramref name="operation"/> changes it (false: nothing is saved), and only after the
+    /// save does <paramref name="afterCommit"/> publish the result to the live objects. Crowns go through here, as
+    /// gold goes through WizardCollection.CommitCharacterMutation, so no live copy is ever written over the database.
+    /// </summary>
+    internal static bool CommitAccountMutation(ulong accountId, Func<Account, bool> operation, Action<Account> afterCommit,
+        Func<IDocumentSession> openSession = null, Func<IDocumentSession, ulong, Account> loadAccount = null) {
+        return WithWriteLane(accountId, () => {
+            using var session = openSession is null ? s_store.OpenSession() : openSession();
+            session.Advanced.OptimisticConcurrencyMode = OptimisticConcurrencyMode.Writes;
+            var persisted = loadAccount is null
+                ? session.Query<Account>(collectionName: CollectionName).FirstOrDefault(account => account.AccountId == accountId)
+                : loadAccount(session, accountId);
+            if (persisted is null || !operation(persisted)) {
+                return false;
+            }
+
+            session.SaveChanges();
+            afterCommit?.Invoke(persisted);
+
+            return true;
         });
+    }
 
     private static ulong? GetAccountId(string username) {
         using var session = s_store.OpenSession();

@@ -21,7 +21,9 @@
  *
  * PURPOSE:
  * CLASSIC: treasure card trading between two friends standing close together, as in 2009. One lock holds every
- * trade's state; the swap itself is one save of both books (WizardCollection.CommitTreasureCardTrade).
+ * trade's state (quick, in-memory steps only); the swap itself is one save of both books
+ * (WizardCollection.CommitTreasureCardTrade), made outside that lock under the two wizards' write lanes, so one
+ * pair's save no longer holds up every other trade on the server.
  *
  * The protocol is the r806919 client's (WizardGraphicalClient.exe, read with capstone; see the session report
  * playbot-reports/trade-potions.md):
@@ -109,7 +111,7 @@ internal sealed class TreasureTradeManager {
     /// </summary>
     public const float MaxDistance = 400f;
 
-    private enum Phase { Requested, Open }
+    private enum Phase { Requested, Open, Committing }
 
     private sealed class Side {
 
@@ -159,6 +161,11 @@ internal sealed class TreasureTradeManager {
     public void Create(ulong requester, ulong targetGid) {
         lock (_gate) {
             if (!Wizard.TryGetCharacterId(targetGid, out var target) || target == requester) {
+                return;
+            }
+
+            // CLASSIC: not while this player's trade is being saved.
+            if (_byChar.TryGetValue(requester, out var current) && current.Phase == Phase.Committing) {
                 return;
             }
 
@@ -260,6 +267,8 @@ internal sealed class TreasureTradeManager {
 
     // MSG_TRADE_READY_STATUS from either player.
     public void Ready(ulong charId, ulong targetGid, int playerStatus) {
+        Trade committing;
+        Pending pending;
         lock (_gate) {
             if (!OpenTradeOf(charId, targetGid, out var trade)) {
                 return;
@@ -273,15 +282,38 @@ internal sealed class TreasureTradeManager {
             }
 
             me.Ready = status;
-            if (me.Ready == 2 && partner.Ready == 2) {
-                ExecuteLocked(trade);
+            if (me.Ready != 2 || partner.Ready != 2) {
+                SendReadyBoth(trade);
 
                 return;
             }
 
-            SendReadyBoth(trade);
+            if (!PrepareLocked(trade, out pending)) {
+                return;
+            }
+
+            committing = trade;
+        }
+
+        // CLASSIC: the save runs outside the manager's lock (it used to hold every trade on the server while one
+        // pair's books were saved). The trade is Committing meanwhile: its offers, Ready boxes and a Leave cannot
+        // change it, and neither player can start another; the two write lanes keep the save itself atomic.
+        bool saved;
+        try {
+            saved = _world.Commit(pending.A, pending.AGives, pending.B, pending.BGives);
+        }
+        catch (Exception ex) {
+            Logger.Error("Trade: saving the trade of {0} and {1} failed: {2}",
+                Logger.Args(committing.Requester.CharId, committing.Target.CharId, ex.Message));
+            saved = false;
+        }
+
+        lock (_gate) {
+            FinishLocked(committing, pending, saved);
         }
     }
+
+    private sealed record Pending(Wizard A, List<uint> AGives, Wizard B, List<uint> BGives);
 
     // MSG_TRADE_CHANGE_MONEY: gold is never traded in 2009.
     public void ChangeMoney(ulong charId, ulong targetGid) {
@@ -324,13 +356,15 @@ internal sealed class TreasureTradeManager {
         return wizard.SpellbookBehavior.TreasureCardCount(template) > offered;
     }
 
-    private void ExecuteLocked(Trade trade) {
+    // Checks a trade both sides confirmed and marks it Committing; false (the trade failed) when it cannot go ahead.
+    private bool PrepareLocked(Trade trade, out Pending pending) {
+        pending = null;
         var a = trade.Requester;
         var b = trade.Target;
         if (CheckPair(a.CharId, b.CharId, requireLocation: true) is { } refusal) {
             FailLocked(trade, refusal);
 
-            return;
+            return false;
         }
 
         var partyA = _world.Party(a.CharId);
@@ -340,18 +374,18 @@ internal sealed class TreasureTradeManager {
         if (aGives.Contains(0u) || bGives.Contains(0u)) {
             FailLocked(trade, TradeStatus.Failed);
 
-            return;
+            return false;
         }
 
-        bool saved;
-        try {
-            saved = _world.Commit(partyA.Wizard, aGives, partyB.Wizard, bGives);
-        }
-        catch (Exception ex) {
-            Logger.Error("Trade: saving the trade of {0} and {1} failed: {2}", Logger.Args(a.CharId, b.CharId, ex.Message));
-            saved = false;
-        }
+        trade.Phase = Phase.Committing;
+        pending = new Pending(partyA.Wizard, aGives, partyB.Wizard, bGives);
 
+        return true;
+    }
+
+    private void FinishLocked(Trade trade, Pending pending, bool saved) {
+        var a = trade.Requester;
+        var b = trade.Target;
         if (!saved) {
             FailLocked(trade, TradeStatus.Failed);
 
@@ -360,9 +394,10 @@ internal sealed class TreasureTradeManager {
 
         EndLocked(trade);
         Logger.Information("Trade: {0} gave {1} [{2}], {3} gave {4} [{5}].",
-            Logger.Args(a.CharId, aGives.Count, string.Join(",", aGives), b.CharId, bGives.Count, string.Join(",", bGives)));
-        SendResult(a.CharId, b.CharId, TradeStatus.Done, (uint) bGives.Count, (uint) aGives.Count);
-        SendResult(b.CharId, a.CharId, TradeStatus.Done, (uint) aGives.Count, (uint) bGives.Count);
+            Logger.Args(a.CharId, pending.AGives.Count, string.Join(",", pending.AGives), b.CharId, pending.BGives.Count,
+                string.Join(",", pending.BGives)));
+        SendResult(a.CharId, b.CharId, TradeStatus.Done, (uint) pending.BGives.Count, (uint) pending.AGives.Count);
+        SendResult(b.CharId, a.CharId, TradeStatus.Done, (uint) pending.AGives.Count, (uint) pending.BGives.Count);
     }
 
     // The two may trade: online, both trading allowed, friends, same zone and instance, and (once the target has
@@ -406,7 +441,8 @@ internal sealed class TreasureTradeManager {
     }
 
     private void LeaveLocked(ulong charId) {
-        if (!_byChar.TryGetValue(charId, out var trade)) {
+        // CLASSIC: a trade being saved finishes (FinishLocked ends it and tells both players).
+        if (!_byChar.TryGetValue(charId, out var trade) || trade.Phase == Phase.Committing) {
             return;
         }
 

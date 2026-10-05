@@ -83,17 +83,10 @@ public class LoginServer : Server {
     private void ReceivePlayerEnqueued(SERVER_100_PROTOCOL.MSG_PLAYERENQUEUED message) {
         var rsp = new SERVER_100_PROTOCOL.MSG_PLAYERENQUEUEDRSP();
 
-#if !DEBUG
-        // If this IP is already in the login server or any game server, deny entry.
-        //var findPlayerMsg = new SERVER_100_PROTOCOL.MSG_FINDPLAYER() { Ip = message.SessionActor.RemoteIp };
-        //var foundPlayerRsp = _gamePoolServer.Ask<SERVER_100_PROTOCOL.MSG_PLAYERFOUND>(findPlayerMsg).Result.Found;
-        //if (ActiveSessions.Any(x => x.RemoteIp == message.SessionActor.RemoteIp) || foundPlayerRsp) {
-        //    rsp.Failed = true;
-        //    Sender.Tell(rsp);
-
-        //    return;
-        //}
-#endif
+        // CLASSIC: the "already logged in" check is per account, not per IP (a household's accounts share one IP; 2009
+        // family plans had several accounts in one house, Fandom Account oldid 67863): AuthenticatorService.AdmitClientToLogin closes the account's
+        // game session before this, and the game server lets one session per account attach (Game/AccountSessions.cs).
+        // The old commented-out IP check, which also blocked on an Ask inside this actor, is gone.
 
         // The login server does not have a queue. For now. >:(
         ActiveSessions.Add(message.SessionActor);

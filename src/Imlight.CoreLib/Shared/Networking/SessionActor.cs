@@ -81,6 +81,12 @@ public sealed partial class SessionActor : ReceiveActor, IDisposable {
     public long Ping                                         { get; private set; }
     public TimeSpan LastPacketReceivedAt                     => TimeSpan.FromTicks(Interlocked.Read(ref _lastPacketReceivedTicks)); // CLASSIC: a HeartbeatPolicy.Clock reading.
 
+    // CLASSIC: set when this session has sent the client to another zone (MSG_SERVERTRANSFER); a newer login of the
+    // account then closes it without the "logged in elsewhere" notice (Game/AccountSessions.cs).
+    private volatile bool _transferringOut;
+    internal bool TransferringOut => _transferringOut;
+    internal void MarkTransferringOut() => _transferringOut = true;
+
     public string Ip;
     public string RemoteIp;
     // CLASSIC: the server address this client connected to (KingsIsle's launcher is sent URLs on it).
@@ -358,6 +364,19 @@ public sealed partial class SessionActor : ReceiveActor, IDisposable {
         base.PreStart();
     }
 
+    internal const string AccountSessionsCloseSoon = "CloseAfterNotice";
+
+    // CLASSIC: every service has stopped by now, so nothing of this session writes any more: a newer login of the
+    // account waiting for it (Game/AccountSessions.cs) may load the account.
+    protected override void PostStop() {
+        try {
+            Imlight.CoreLib.Game.AccountSessions.Release(this);
+        }
+        finally {
+            base.PostStop();
+        }
+    }
+
     protected override void Unhandled(object message) {
         // Bump this up to warning on release builds.
         Logger.Verbose("SessionActor {Id} received unhandled message of type {Type}.",
@@ -367,6 +386,9 @@ public sealed partial class SessionActor : ReceiveActor, IDisposable {
     private void ConfigureReceivers() {
         // Specific message handlers.
         Receive<string>(x => x == "Close", x => Dispose());
+        // CLASSIC: closed by a newer login of the account; the notice it was just sent gets half a second to go out.
+        Receive<string>(x => x == AccountSessionsCloseSoon, x => Context.System.Scheduler.ScheduleTellOnce(
+            TimeSpan.FromMilliseconds(500), Self, "Close", ActorRefs.NoSender));
         Receive<string>(x => x == "Identify", x => Sender.Tell(this));
         Receive<SERVICE_101_PROTOCOL.MSG_GETALLSERVICES>(InitializeActiveSession);
         Receive<SERVER_100_PROTOCOL.MSG_PING>(x => this.Ping = x.Ping);
