@@ -336,7 +336,17 @@ internal sealed class ArenaMatchmaker {
     /// <summary>Leave (the status window's Leave, or the window's own leave): out of a match that has not started.</summary>
     public void Leave(ulong charId) {
         lock (_gate) {
-            LeaveLocked(charId, quiet: false);
+            if (LeaveLocked(charId, quiet: false)) {
+                return;
+            }
+
+            // The match has gone to its arena: the fight decides (a flee is a loss). The client cleared its PvP status when
+            // it sent the leave (PvPClientManager::ClearPvPStatus), so it gets the match status back: the HUD PvP button
+            // still shows this match until the result comes.
+            if (_matchOf.TryGetValue(charId, out var id) && _matches.TryGetValue(id, out var match)
+                && _players.GetValueOrDefault(charId) is { } player) {
+                SendStatus(charId, player, match, match.SideOf(charId), 11);
+            }
         }
     }
 

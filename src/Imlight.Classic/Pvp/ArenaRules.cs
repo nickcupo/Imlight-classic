@@ -61,8 +61,9 @@ namespace Imlight.Classic.Pvp;
 public sealed record ArenaZone(string Zone, float X, float Y, float Z, float Yaw);
 
 /// <summary>
-/// An item an Arena Ticket vendor sells: its template, the rank it needs (null: none) and the tickets it costs (null: the
-/// template's own m_arenaPointCost, which the client's shop window shows).
+/// An item an Arena Ticket vendor sells: its template, the rank it needs (null: none) and the tickets it costs: the 2009
+/// price (price_2009, which the patched client template shows too), or null for the template's own m_arenaPointCost
+/// (what the shop window reads for a ticket shop, m_shopType 1).
 /// </summary>
 public sealed record ArenaVendorItem(uint Template, string? Rank, int? Price);
 
@@ -479,7 +480,11 @@ public static class ArenaLoader {
                             d.At(item, itemPath, $"rank '{rank}' is not one of the ranks");
                         }
 
-                        int? price = item.Find("price") is { } pr ? d.ReadInt(pr.Value, YamlTree.Join(itemPath, "price"), 0) : null;
+                        // price: an explicit charge; price_2009: the dated 2009 price where the client's template carries a
+                        // later one (the client step "tickets" puts it in the template too, so the shop window shows it).
+                        int? price = item.Find("price") is { } pr ? d.ReadInt(pr.Value, YamlTree.Join(itemPath, "price"), 0)
+                            : item.Find("price_2009") is { } p09 ? d.ReadInt(p09.Value, YamlTree.Join(itemPath, "price_2009"), 0)
+                            : null;
                         if (template is not null) {
                             items.Add(new ArenaVendorItem((uint) template.Value, rank, price));
                         }
