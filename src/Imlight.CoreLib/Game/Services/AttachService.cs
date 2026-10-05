@@ -88,6 +88,8 @@ internal class AttachService(SessionActor sessionActor) : MessageService(session
         // zone, or create a new one. This is an internal zone transfer that does not involve the client.
         var zoneDetails = InternalZoneTransfer(message.ZoneName, message.Location);
         if (zoneDetails is null || zoneDetails.ErrorCode != 0) {
+            // CLASSIC: the client falls back and attaches again with the same key.
+            Auth.SecuritySettings.GameKeys.Value.Arm(_account.AccountId);
             SendToSocket(new GAME_5_PROTOCOL.MSG_ATTACHFAILED {
                 Error = zoneDetails?.ErrorCode ?? 1
             });
@@ -212,6 +214,7 @@ internal class AttachService(SessionActor sessionActor) : MessageService(session
         var addPlayerResponse = AddPlayerToZone(charGameObject, _wizard);
         if (addPlayerResponse.WizardGameObject == null) {
             Logger.Error($"Failed to add player {_wizard.CharId} to zone.");
+            Auth.SecuritySettings.GameKeys.Value.Arm(_account.AccountId); // CLASSIC: the client falls back with its key
             SendToSocket(new GAME_5_PROTOCOL.MSG_ATTACHFAILED {
                 Error = 1
             });
@@ -250,7 +253,7 @@ internal class AttachService(SessionActor sessionActor) : MessageService(session
             });
 
             throw new SessionFatalException(
-                $"User [{message.UserID}] failed to validate login key: {message.LoginKey}.");
+                $"User [{message.UserID}] failed to validate their login key."); // CLASSIC: the key is not logged
         }
         // CLASSIC: one game session (so one wizard) per account. An older session of the account is closed and has
         // stopped, with its last saves in, before this one goes on; the account is loaded again if that session stopped
@@ -278,6 +281,10 @@ internal class AttachService(SessionActor sessionActor) : MessageService(session
             throw new SessionFatalException($"User [{message.UserID}] tried to attach with a character " +
                                             $"they did not have.");
         }
+
+        // CLASSIC: playing keeps the login key alive (back to character select validates with it again).
+        var playingAccountId = account.AccountId;
+        System.Threading.Tasks.Task.Run(() => ClientKeyCollection.Touch(playingAccountId));
 
         // This is the first authentication action the user will send on the game server. Send messages to the
         // other services denoting both the account and character this SessionActor just logged into.
@@ -409,6 +416,7 @@ internal class AttachService(SessionActor sessionActor) : MessageService(session
             Logger.Information("Fallback found for {RemoteIp} — redirecting to zone {Zone}.",
                 Logger.Args(SessionActor.RemoteIp, rsp.FallbackZone));
 
+            Auth.SecuritySettings.GameKeys.Value.Arm(rsp.UserId); // CLASSIC: the client attaches with its key again
             var serverTransfer = new GAME_5_PROTOCOL.MSG_SERVERTRANSFER {
                 IP = rsp.GameServerIp,
                 TCPPort = rsp.GameServerPort,
@@ -442,6 +450,17 @@ internal class AttachService(SessionActor sessionActor) : MessageService(session
         Logger.Warning("No fallback found for {RemoteIp} — closing session.",
             Logger.Args(SessionActor.RemoteIp));
         CloseSession();
+    }
+
+    // CLASSIC: leaving the game (logout to character select, a zone change) keeps the login key alive for another idle
+    // window, so a long stay in one zone does not expire the key the client validates with next.
+    protected override void OnDispose() {
+        if (_account is { } account) {
+            var accountId = account.AccountId;
+            System.Threading.Tasks.Task.Run(() => ClientKeyCollection.Touch(accountId));
+        }
+
+        base.OnDispose();
     }
 
     private static CriticalObjectList GetCriticalObjects(List<GID> objectIDs) => new() { m_objList = objectIDs };

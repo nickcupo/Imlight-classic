@@ -35,6 +35,11 @@ public class ClientKeyPair(ulong accountId, ulong machineId, string clientKey2) 
     public string ClientKey2 { get; set; } = clientKey2 
         ?? throw new ArgumentNullException(nameof(clientKey2));
 
+    // CLASSIC: expiry and address binding (Imlight.Classic.Net.LoginKeyPolicy).
+    public DateTime IssuedUtc { get; set; }
+    public DateTime LastUsedUtc { get; set; }
+    public string Address { get; set; }
+
 }
 
 public static class ClientKeyCollection {
@@ -42,7 +47,12 @@ public static class ClientKeyCollection {
     private const string CollectionName = SessionKeyDocument.CollectionName; // CLASSIC
 
     private static readonly IDocumentStore Store;
-    private const uint KeyExpireTimeInHours = 30;
+
+    // CLASSIC: [Login Server] LoginKeyIdleMinutes (30), LoginKeyMaxHours (12), LoginKeyBindIp (true).
+    internal static readonly Lazy<LoginKeyPolicy> Policy = new(() => LoginKeyPolicy.From(
+        Imlight.CoreLib.Auth.SecuritySettings.Int("Login Server.LoginKeyIdleMinutes", 30),
+        Imlight.CoreLib.Auth.SecuritySettings.Int("Login Server.LoginKeyMaxHours", 12),
+        Imlight.CoreLib.Auth.SecuritySettings.Bool("Login Server.LoginKeyBindIp", true)));
 
     static ClientKeyCollection() {
         Store = PlayerDatabase.Instance.Store;
@@ -54,15 +64,20 @@ public static class ClientKeyCollection {
     /// <param name="accountId"></param>
     /// <param name="machineId"></param>
     /// <param name="key"></param>
-    public static void AddSessionKey(ulong accountId, ulong machineId, string key) {
+    public static void AddSessionKey(ulong accountId, ulong machineId, string key, string address) {
         using var session = Store.OpenSession();
 
         // CLASSIC: one document per account, stored under a fixed id, replaces upstream's asynchronous
         // delete-by-query plus a new random-id document. The delete could still be running when the new
         // key was stored, and GetSessionKey's index query could miss the new key or return an older one,
         // so the validate right after a login failed now and then (ValidateFailed).
-        var pair = new ClientKeyPair(accountId, machineId, key);
-        var expiry = DateTime.UtcNow.AddHours(KeyExpireTimeInHours);
+        var now = DateTime.UtcNow;
+        var pair = new ClientKeyPair(accountId, machineId, key) {
+            IssuedUtc = now,
+            LastUsedUtc = now,
+            Address = GameSessionKeys.NormalizeAddress(address),
+        };
+        var expiry = now + Policy.Value.Max;
 
         // Store and set the metadata of the new document.
         session.Store(pair, SessionKeyDocument.IdFor(accountId)); // CLASSIC: overwrites the previous key.
@@ -79,17 +94,52 @@ public static class ClientKeyCollection {
     /// <param name="accountId"></param>
     /// <param name="machineId"></param>
     /// <returns></returns>
-    public static ByteString GetSessionKey(ulong accountId, ulong machineId) {
+    public static ByteString GetSessionKey(ulong accountId, ulong machineId, string address) {
         using var session = Store.OpenSession();
 
         // CLASSIC: a load by id is ACID in RavenDB, unlike the index query it replaces.
         var pair = session.Load<ClientKeyPair>(SessionKeyDocument.IdFor(accountId));
-        string key = pair is not null
-            && SessionKeyDocument.Answers(pair.AccountId, pair.MachineId, pair.ClientKey2, accountId, machineId)
-            ? pair.ClientKey2
-            : null;
+        if (pair is null
+                || !SessionKeyDocument.Answers(pair.AccountId, pair.MachineId, pair.ClientKey2, accountId, machineId)) {
+            return (string) null;
+        }
 
-        return key;
+        // CLASSIC: expiry and address binding.
+        var refusal = Policy.Value.Check(pair.ClientKey2, pair.IssuedUtc, pair.LastUsedUtc, pair.Address, address,
+            DateTime.UtcNow);
+        if (refusal != LoginKeyRefusal.None) {
+            Imlight.Common.Logger.Information("Validate: session key for account {0} refused ({1}) from {2}",
+                Imlight.Common.Logger.Args(accountId, refusal, address));
+            return (string) null;
+        }
+
+        return pair.ClientKey2;
+    }
+
+    /// <summary>
+    /// CLASSIC: the key was used (a validate or a game attach): it stays valid for another idle window.
+    /// </summary>
+    public static void Touch(ulong accountId) {
+        try {
+            using var session = Store.OpenSession();
+            var pair = session.Load<ClientKeyPair>(SessionKeyDocument.IdFor(accountId));
+            if (pair is null || pair.IssuedUtc == DateTime.MinValue) {
+                return;
+            }
+
+            pair.LastUsedUtc = DateTime.UtcNow;
+            session.SaveChanges();
+        }
+        catch (Exception ex) {
+            Imlight.Common.Logger.Warning("Session key touch for {0} failed: {1}", Imlight.Common.Logger.Args(accountId, ex.Message));
+        }
+    }
+
+    /// <summary>CLASSIC: forgets the account's login key (a password change).</summary>
+    public static void Revoke(ulong accountId) {
+        using var session = Store.OpenSession();
+        session.Delete(SessionKeyDocument.IdFor(accountId));
+        session.SaveChanges();
     }
     
 }

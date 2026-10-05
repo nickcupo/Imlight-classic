@@ -58,7 +58,9 @@ internal static class PassKey3 {
     internal static bool VerifyPK3(string input, ushort sessionID, uint timeSecs, uint timeMillis, string encodedString) {
         var expectedEncodedString = EncodePK3(input, sessionID, timeSecs, timeMillis);
         
-        return encodedString == expectedEncodedString;
+        // CLASSIC: constant-time.
+        return encodedString is not null && System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(
+            System.Text.Encoding.UTF8.GetBytes(encodedString), System.Text.Encoding.UTF8.GetBytes(expectedEncodedString));
     }
 
 }

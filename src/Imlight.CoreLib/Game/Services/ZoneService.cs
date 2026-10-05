@@ -770,6 +770,7 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
         }
 
         // Send MSG_SERVERTRANSFER to redirect the client to the new game server.
+        Auth.SecuritySettings.GameKeys.Value.Arm(account.AccountId); // CLASSIC: the client attaches with its key again
         var serverTransfer = new GAME_5_PROTOCOL.MSG_SERVERTRANSFER {
             IP = keyRsp.IP,
             TCPPort = keyRsp.Port,
@@ -891,6 +892,7 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
         WizardCollection.UpdateCharacterZone(character, character.Zone, character.ZoneDisplayName);
         WizardCollection.UpdateCharacterLocation(character, character.Location, character.Orientation.Z);
 
+        Auth.SecuritySettings.GameKeys.Value.Arm(account.AccountId); // CLASSIC: the client attaches with its key again
         var serverTransfer = new GAME_5_PROTOCOL.MSG_SERVERTRANSFER() {
             IP = character.GameServerIp,
             TCPPort = character.GameServerPort,

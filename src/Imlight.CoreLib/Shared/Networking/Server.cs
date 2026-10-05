@@ -43,6 +43,7 @@
  */
 
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Net.Http;
 using Akka.Actor;
@@ -64,6 +65,15 @@ public abstract class Server : ReceiveProtocolDispatcher {
     private readonly IActorRef _actorFactoryRef;
     private readonly long _serverStartTime;
     private readonly Props _factoryProps;
+
+    // CLASSIC: open connections per client address on this server (H5). [Network] MaxConnectionsPerIp (default 16,
+    // 0 = no limit) and MaxConnections (default 2000); loopback is exempt unless ConnectionLimitLoopback = true.
+    private readonly System.Collections.Generic.Dictionary<string, int> _connectionsPerIp = new(StringComparer.Ordinal);
+    private readonly System.Collections.Generic.Dictionary<IActorRef, string> _connectionIps = new();
+    private readonly int _maxConnectionsPerIp = Auth.SecuritySettings.Int("Network.MaxConnectionsPerIp", 16);
+    private readonly int _maxConnections = Auth.SecuritySettings.Int("Network.MaxConnections", 2000);
+    private readonly bool _limitLoopback = Auth.SecuritySettings.Bool("Network.ConnectionLimitLoopback", false);
+    private long _refusedConnections;
 
     public Server(string name, int port, Props factoryProps, string ip = null) {
         this.Name = name;
@@ -99,12 +109,48 @@ public abstract class Server : ReceiveProtocolDispatcher {
         _actorFactoryRef = CreateActorFactory();
     }
 
+    protected override void ConfigureReceivers() {
+        // CLASSIC: a session actor that stopped (however it stopped) frees its address's connection slot.
+        Receive<Terminated>(terminated => ReleaseConnection(terminated.ActorRef));
+        base.ConfigureReceivers();
+    }
+
     [MessageHandler(typeof(SERVER_100_PROTOCOL.MSG_ALLOCATESOCKET))]
     protected virtual void ReceiveAllocateSocket(SERVER_100_PROTOCOL.MSG_ALLOCATESOCKET message) {
+        // CLASSIC: refuse a connection over the per-address or total limit before any session state exists.
+        var address = Imlight.Classic.Net.GameSessionKeys.NormalizeAddress(
+            (message.Socket.RemoteEndPoint as System.Net.IPEndPoint)?.Address.ToString()) ?? "?";
+        var refusal = Imlight.Classic.Net.ConnectionLimits.Refuse(address, _connectionsPerIp.GetValueOrDefault(address),
+            _connectionIps.Count, _maxConnectionsPerIp, _maxConnections, _limitLoopback);
+        if (refusal is not null) {
+            if (_refusedConnections++ % 100 == 0) {
+                Logger.Warning("{Name} refused a connection from {Ip}: {Reason} ({Count} refused so far)",
+                    Logger.Args(Name, address, refusal, _refusedConnections));
+            }
+
+            try {
+                message.Socket.Close();
+            }
+            catch (Exception) {
+                // already gone
+            }
+
+            return;
+        }
+
         // Create a new child actor, which represents the active socket connection.
         var id = GetNewUniqueId();
+        // CLASSIC: ids come from ActiveSessions, which on the login server holds only enqueued sessions; an id still
+        // used by a child would throw InvalidActorNameException here.
+        for (var tries = 0; !Context.Child($"SessionActor.{id}").IsNobody() && tries < 64; tries++) {
+            id = GetNewUniqueId();
+        }
+
         var sessionProps = SessionActor.Props(message.Socket, id, Context.Self, _actorFactoryRef);
-        Context.ActorOf(sessionProps, $"SessionActor.{id}");
+        var child = Context.ActorOf(sessionProps, $"SessionActor.{id}");
+        Context.Watch(child);
+        _connectionIps[child] = address;
+        _connectionsPerIp[address] = _connectionsPerIp.GetValueOrDefault(address) + 1;
 
         // Logger
         Logger.Debug("{Type} new connection from {RemoteEndPoint} given session ID {Id}",
@@ -164,6 +210,20 @@ public abstract class Server : ReceiveProtocolDispatcher {
                 return Directive.Stop;
             }
         );
+
+    private void ReleaseConnection(IActorRef child) {
+        if (!_connectionIps.Remove(child, out var address)) {
+            return;
+        }
+
+        var left = _connectionsPerIp.GetValueOrDefault(address) - 1;
+        if (left <= 0) {
+            _connectionsPerIp.Remove(address);
+        }
+        else {
+            _connectionsPerIp[address] = left;
+        }
+    }
 
     protected virtual ushort GetNewUniqueId() {
         ushort newId = 0;

@@ -268,11 +268,33 @@ public static class AccountCollection {
     /// <param name="newPassword">The new password.</param>
     /// <returns>True if the password was successfully changed, false otherwise.</returns>
     public static bool ChangePassword(string username, string newPassword) {
-        return UpdateAccount(username, account => {
-            var passwordHash = DatabaseUtilities.CreateHashedPassword(newPassword);
+        // CLASSIC: a PBKDF2 verifier plus the (sealed) client protocol hash, see Auth/PasswordStore.
+        var (passwordHash, verifier) = Imlight.CoreLib.Auth.PasswordStore.Records(newPassword);
+        var changed = UpdateAccount(username, account => {
             account.PasswordHash = passwordHash;
+            account.PasswordVerifier = verifier;
         });
+
+        // CLASSIC: a new password ends the old login and attach keys.
+        if (changed && GetAccountId(username) is { } accountId) {
+            try {
+                ClientKeyCollection.Revoke(accountId);
+                Imlight.CoreLib.Auth.SecuritySettings.GameKeys.Value.Revoke(accountId);
+            }
+            catch (Exception) {
+                // the keys expire on their own
+            }
+        }
+
+        return changed;
     }
+
+    /// <summary>CLASSIC: stores upgraded password records (Auth/PasswordStore).</summary>
+    public static bool UpdatePasswordRecords(ulong accountId, string passwordHash, string verifier)
+        => UpdateAccount(accountId, account => {
+            account.PasswordHash = passwordHash;
+            account.PasswordVerifier = verifier;
+        });
 
     /// <summary>
     /// Updates the authentication level of an account.

@@ -126,6 +126,7 @@ public sealed class SERVER_100_PROTOCOL : IServerProtocol {
         public byte ServiceID { get; } = 100;
 
         public Account Account;
+        public string Address; // CLASSIC: the selecting connection's address; the attach must come from it
 
     }
 

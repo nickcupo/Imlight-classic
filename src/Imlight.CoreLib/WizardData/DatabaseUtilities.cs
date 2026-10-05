@@ -38,8 +38,11 @@ public static class DatabaseUtilities {
                                                         string email,
                                                         string plaintextPassword,
                                                         AuthLevel auth = AuthLevel.None) {
-        var passwordHash = CreateHashedPassword(plaintextPassword);
-        var acc = new Account(username, email, passwordHash) { AuthLevel = auth };
+        // CLASSIC: a PBKDF2 verifier plus the (sealed) client protocol hash, see Auth/PasswordStore.
+        var (passwordHash, verifier) = Imlight.CoreLib.Auth.PasswordStore.Records(plaintextPassword);
+        var acc = new Account(username, email, passwordHash.Length > 0 ? passwordHash : "-") { AuthLevel = auth };
+        acc.PasswordHash = passwordHash;
+        acc.PasswordVerifier = verifier;
 
         // Save the account to the database.
         var sucess = AccountCollection.CreateAccount(acc);

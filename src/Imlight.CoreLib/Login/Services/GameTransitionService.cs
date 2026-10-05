@@ -137,7 +137,8 @@ internal class GameTransitionService(SessionActor sessionActor) : MessageService
 
     private ByteString CreateSessionKey(ICanTell gameServerRef, Account account) {
         var msg = new SERVER_100_PROTOCOL.MSG_CREATEKEY() {
-            Account = account
+            Account = account,
+            Address = SessionActor.RemoteIp, // CLASSIC: the attach must come from this address (GameSessionKeys)
         };
 
         return gameServerRef.Ask<SERVER_100_PROTOCOL.MSG_CREATEKEYRSP>(msg)

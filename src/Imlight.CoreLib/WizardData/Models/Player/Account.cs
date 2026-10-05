@@ -86,6 +86,8 @@ public class Account {
     public string Username { get; private set; }
     public string Email { get; private set; }
     public string PasswordHash { get; set; }
+    // CLASSIC: PBKDF2 verifier of the password (Auth/PasswordStore); PasswordHash is the client protocol hash, sealed.
+    public string PasswordVerifier { get; set; }
     public AuthLevel AuthLevel { get; set; }
     public ChatMode ChatMode { get; set; }
     public List<ulong> CharacterIds { get; private set; } = new();

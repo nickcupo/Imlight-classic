@@ -53,6 +53,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -67,7 +68,12 @@ namespace Imlight.CoreLib.Classic.Launcher;
 internal interface ILauncherAccounts {
     /// <summary>(account id, password hash, locked or banned), or null for no such user.</summary>
     (ulong Id, string PasswordHash, bool Blocked)? Find(string username);
-    void StoreSessionKey(ulong accountId, string sessionKey);
+    /// <summary>CLASSIC: whether the password is the account's (the Raven store checks the PBKDF2 verifier and
+    /// upgrades old records, Auth/PasswordStore); by default against the stored protocol hash.</summary>
+    bool CheckPassword(string username, string password)
+        => Find(username) is { } account && LauncherLogin.FixedTimeEquals(LauncherLogin.HashPassword(password), account.PasswordHash);
+    /// <summary>Stores the login session key the game client validates, bound to the address that signed in.</summary>
+    void StoreSessionKey(ulong accountId, string sessionKey, string address);
     void SaveToken(string tokenHash, ulong accountId, DateTime expiresUtc);
     (ulong AccountId, DateTime ExpiresUtc)? LoadToken(string tokenHash);
     void DeleteToken(string tokenHash);
@@ -90,8 +96,13 @@ internal sealed class RavenLauncherAccounts : ILauncherAccounts {
             account.IsLocked || account.InfractionHistory?.IsCurrentlyBanned == true);
     }
 
-    public void StoreSessionKey(ulong accountId, string sessionKey)
-        => ClientKeyCollection.AddSessionKey(accountId, LauncherLogin.LauncherMachineId, sessionKey);
+    public bool CheckPassword(string username, string password) {
+        var account = AccountCollection.GetAccount(username);
+        return account is not null && Imlight.CoreLib.Auth.PasswordStore.Verify(account, password);
+    }
+
+    public void StoreSessionKey(ulong accountId, string sessionKey, string address)
+        => ClientKeyCollection.AddSessionKey(accountId, LauncherLogin.LauncherMachineId, sessionKey, address);
 
     public void SaveToken(string tokenHash, ulong accountId, DateTime expiresUtc) {
         using var session = PlayerDatabase.Instance.Store.OpenSession();
@@ -120,7 +131,8 @@ internal sealed class LauncherLogin {
     private const int FailuresPerMinute = 10;
 
     private static readonly Lazy<LauncherLogin> s_shared = new(() => new LauncherLogin(new RavenLauncherAccounts(),
-        () => ConfigurationManager.Settings["Classic.AnyPasswordLogin"].AsBool(false)));
+        () => ConfigurationManager.Settings["Classic.AnyPasswordLogin"].AsBool(false),
+        throttle: Imlight.CoreLib.Auth.SecuritySettings.Logins.Value));
 
     internal static LauncherLogin Shared => s_shared.Value;
 
@@ -128,11 +140,15 @@ internal sealed class LauncherLogin {
     private readonly Func<bool> _anyPassword;
     private readonly Func<DateTime> _clock;
     private readonly ConcurrentDictionary<string, Queue<DateTime>> _failures = new(StringComparer.Ordinal);
+    // CLASSIC: per-account lockouts shared with the in-client login (Auth/SecuritySettings.Logins).
+    private readonly Imlight.Classic.Net.LoginThrottle? _throttle;
 
-    internal LauncherLogin(ILauncherAccounts accounts, Func<bool> anyPassword, Func<DateTime>? clock = null) {
+    internal LauncherLogin(ILauncherAccounts accounts, Func<bool> anyPassword, Func<DateTime>? clock = null,
+                           Imlight.Classic.Net.LoginThrottle? throttle = null) {
         _accounts = accounts;
         _anyPassword = anyPassword;
         _clock = clock ?? (() => DateTime.UtcNow);
+        _throttle = throttle;
     }
 
     /// <summary>Answers one request body from <paramref name="remote"/> (an address, for the failure limit).</summary>
@@ -156,6 +172,11 @@ internal sealed class LauncherLogin {
         }
 
         if (Throttled(remote)) return Error("busy");
+        if (_throttle?.LockedFor(user, remote) is not null) {
+            Logger.Information("Launcher: login for {0} from {1} refused (locked out after failures)", Logger.Args(user, remote));
+            return Error("busy");
+        }
+
         var account = _accounts.Find(user);
         ulong accountId = 0;
         string? tokenHash = token.Length > 0 ? Hash(token) : null;
@@ -171,12 +192,16 @@ internal sealed class LauncherLogin {
                 accountId = found.Id;
             }
         } else if (account is { } withPassword && password.Length > 0
-                   && (_anyPassword() || FixedTimeEquals(HashPassword(password), withPassword.PasswordHash))) {
+                   && (_anyPassword() || _accounts.CheckPassword(user, password))) {
             accountId = withPassword.Id;
         }
 
         if (accountId == 0 || account is null) {
             Fail(remote);
+            if (_throttle?.Failure(account is null ? null : user, remote) == true) {
+                Logger.Warning("Launcher: {0} / {1} locked out after repeated failures", Logger.Args(user, remote));
+            }
+
             Logger.Information("Launcher: login for {0} from {1} refused", Logger.Args(user, remote));
             return Error("bad-login");
         }
@@ -186,8 +211,9 @@ internal sealed class LauncherLogin {
             return Error("locked");
         }
 
+        _throttle?.Success(user);
         var sessionKey = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
-        _accounts.StoreSessionKey(accountId, sessionKey);
+        _accounts.StoreSessionKey(accountId, sessionKey, remote);
         string? newToken = null;
         if (remember && tokenHash is null) {
             newToken = Convert.ToHexString(RandomNumberGenerator.GetBytes(24)).ToLowerInvariant();
@@ -208,7 +234,7 @@ internal sealed class LauncherLogin {
     internal static string Hash(string token)
         => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(token))).ToLowerInvariant();
 
-    private static bool FixedTimeEquals(string a, string b)
+    internal static bool FixedTimeEquals(string a, string b)
         => CryptographicOperations.FixedTimeEquals(Encoding.UTF8.GetBytes(a), Encoding.UTF8.GetBytes(b ?? ""));
 
     private bool Throttled(string remote) {
@@ -216,11 +242,29 @@ internal sealed class LauncherLogin {
         lock (times) {
             var cutoff = _clock() - TimeSpan.FromMinutes(1);
             while (times.Count > 0 && times.Peek() < cutoff) times.Dequeue();
+            if (times.Count == 0) {
+                // CLASSIC: forget an address whose failures are over (the table grew without bound).
+                _failures.TryRemove(new KeyValuePair<string, Queue<DateTime>>(remote, times));
+                return false;
+            }
+
             return times.Count >= FailuresPerMinute;
         }
     }
 
     private void Fail(string remote) {
+        if (_failures.Count > 1024) {
+            // CLASSIC: drop addresses with no failure in the last minute, so the table stays small.
+            var cutoff = _clock() - TimeSpan.FromMinutes(1);
+            foreach (var (address, queue) in _failures) {
+                lock (queue) {
+                    if (queue.Count == 0 || queue.Last() < cutoff) {
+                        _failures.TryRemove(new KeyValuePair<string, Queue<DateTime>>(address, queue));
+                    }
+                }
+            }
+        }
+
         var times = _failures.GetOrAdd(remote, _ => new Queue<DateTime>());
         lock (times) times.Enqueue(_clock());
     }

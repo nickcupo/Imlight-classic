@@ -33,9 +33,8 @@ internal class CommandAccountProtocol : CommandProtocol {
     [Command("create")]
     [AuthRequired(AuthLevel.HallMonitor)]
     private void CreateAccountCommand(string username, string password) {
-        var passwordHash = DatabaseUtilities.CreateHashedPassword(password);
-        var newAccount = new Account(username, "", passwordHash);
-        var createdSuccess = AccountCollection.CreateAccount(newAccount);
+        // CLASSIC: the PBKDF2 verifier and sealed protocol hash (Auth/PasswordStore).
+        var createdSuccess = DatabaseUtilities.CreateEmbeddedDatabaseAccount(username, "", password) is not null;
 
         var reply = createdSuccess ? "Account created successfully." : "Account creation failed.";
         InformSenderClient(reply);
