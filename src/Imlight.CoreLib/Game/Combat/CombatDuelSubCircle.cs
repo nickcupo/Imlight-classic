@@ -568,41 +568,41 @@ public class CombatDuelSubCircle {
 
         // Collage spells the player has learned and temporary spells (perhaps from equipment)
         // into one list to create the combat hand. Treasure cards go into a separate vault.
+        // CLASSIC: the deck's card list holds regular cards only; the deck's Treasure Cards are this wizard's ledger for
+        // the equipped deck (SpellbookBehavior.DeckTreasureCards), so a Treasure Card of a known spell is still a
+        // Treasure Card. A card-list entry the wizard has not learned (a deck another wizard filled, through the shared
+        // bank; or one an older save kept as a Treasure Card, moved to the ledger at login) is left out instead of
+        // becoming a free Treasure Card; so is a Treasure Card template in the card list. An empty learned list (no
+        // record of learned spells) keeps the deck as it is.
         var allSpells = new List<CombatDeckSpellData>();
         var vaultSpells = new List<CombatDeckSpellData>();
+        var learned = _wizard.SpellbookBehavior.LearnedSpellTemplateIds;
         if (_wizard.SpellbookBehavior.SpellList is not null) {
             foreach (var spell in _wizard.SpellbookBehavior.SpellList) {
-                var template = CoreObjectFactory.GetCoreTemplate(spell.m_templateID);
-                var isTreasureCard = template is SpellTemplate spellTemplate
-                    && (spellTemplate.m_Treasure || spellTemplate.m_name.EndsWith(" TC"));
-
-                // A deck entry the player hasn't learned can only be a treasure card (item cards live in
-                // TemporarySpells). Guarded on a populated list so an empty list can't misclassify the deck.
-                if (!isTreasureCard
-                    && _wizard.SpellbookBehavior.LearnedSpellTemplateIds is { Count: > 0 }
-                    && !_wizard.SpellbookBehavior.LearnedSpellTemplateIds.Contains(spell.m_templateID)) {
-                    isTreasureCard = true;
+                if (spell is null || Wizard.IsLegacyDeckTreasure(spell, learned)) {
+                    continue;
                 }
 
-                if (isTreasureCard && !Monstrology.MonstrologyCardCatalog.IsUsableCard(spell.m_templateID)) {
+                allSpells.Add(new CombatDeckSpellData {
+                    TemplateId = spell.m_templateID,
+                    Quantity = spell.m_quantity,
+                });
+            }
+        }
+
+        var deckSlotId = _wizard.EquipmentBehavior.SlotList
+            .FirstOrDefault(s => s.SlotType == EquipmentSlotType.Deck)?.ItemId;
+        if (deckSlotId is { } vaultDeckId) {
+            foreach (var (templateId, copies) in _wizard.SpellbookBehavior.DeckTreasureCardsOf(vaultDeckId)) {
+                if (copies <= 0 || !Monstrology.MonstrologyCardCatalog.IsUsableCard(templateId)) {
                     continue; // CLASSIC: a later world's Monstrology card (Monstrology is Arc 1 only).
                 }
 
-                if (isTreasureCard) {
-                    // Treasure cards go to the vault (separate pool, drawn on demand).
-                    vaultSpells.Add(new CombatDeckSpellData {
-                        TemplateId = spell.m_templateID,
-                        Quantity = spell.m_quantity,
-                        IsTreasureCard = true
-                    });
-                }
-                else {
-                    // Regular spells go to the main deck.
-                    allSpells.Add(new CombatDeckSpellData {
-                        TemplateId = spell.m_templateID,
-                        Quantity = spell.m_quantity,
-                    });
-                }
+                vaultSpells.Add(new CombatDeckSpellData {
+                    TemplateId = templateId,
+                    Quantity = (uint) copies,
+                    IsTreasureCard = true
+                });
             }
         }
 

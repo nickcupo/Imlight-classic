@@ -63,14 +63,31 @@ internal class InventoryService(SessionActor sessionActor) : MessageService(sess
     [MessageHandler(typeof(GAME_5_PROTOCOL.MSG_TRASHINVENTORYITEM))]
     private void ReceiveTrashInventoryItem(GAME_5_PROTOCOL.MSG_TRASHINVENTORYITEM message) {
         var wizard = GetActiveWizard();
+        if (wizard is null) {
+            return;
+        }
 
-        wizard.RemoveItemFromInventory(message.GlobalID);
+        // CLASSIC: an item the game will not let you throw away (the template's FLAG_NoDrop) stays;
+        // the client knows the flag (GUI_NoDrop), so this guards against a crafted message. A trashed item's document
+        // is deleted with it.
+        var item = wizard.InventoryBehavior.GetItem(message.GlobalID);
+        if (item is null || IsNoDrop(item) || !wizard.DestroyInventoryItem(message.GlobalID)) {
+            Logger.Information("Trash of item {0} by {1} refused (not in the backpack, or no-discard).",
+                Logger.Args(message.GlobalID, wizard.CharId));
+
+            return;
+        }
 
         SendToSocket(new GAME_5_PROTOCOL.MSG_INVENTORYBEHAVIOR_REMOVEITEM() {
             GlobalID = wizard.GameObjectID,
             ItemID = message.GlobalID
         });
     }
+
+    // CLASSIC: the template's no-discard flag (the client's own FLAG_NoDrop).
+    internal static bool IsNoDrop(WizClientObjectItem item)
+        => CoreObjectFactory.GetCoreTemplate(item.m_templateID) is WizItemTemplate template
+           && template.m_adjectiveList?.Exists(adjective => string.Equals(adjective, "FLAG_NoDrop", StringComparison.OrdinalIgnoreCase)) == true;
 
     [MessageHandler(typeof(GAME_5_PROTOCOL.MSG_FEEDINVENTORYITEM))]
     private void ReceiveFeedInventoryItem(GAME_5_PROTOCOL.MSG_FEEDINVENTORYITEM message) {
@@ -122,7 +139,7 @@ internal class InventoryService(SessionActor sessionActor) : MessageService(sess
                 if (template.m_numPrimaryColors != 1 && template.m_numSecondaryColors != 0)
                     value = Math.Ceiling(value * 1.2275f);
                 return value;
-            }, wizard.RemoveItemFromInventory);
+            }, wizard.DestroyInventoryItem);
             foreach (var sale in sales)
                 SendToSocket(new GAME_5_PROTOCOL.MSG_INVENTORYBEHAVIOR_REMOVEITEM {
                     GlobalID = wizard.GameObjectID, ItemID = sale.Id
@@ -141,7 +158,7 @@ internal class InventoryService(SessionActor sessionActor) : MessageService(sess
             var item = wizard.InventoryBehavior.GetItem(quickSellItem.m_sellItemGID);
             var template = (WizItemTemplate) CoreObjectFactory.GetCoreTemplate(item.m_templateID);
 
-            wizard.RemoveItemFromInventory(item.m_globalID);
+            if (!wizard.DestroyInventoryItem(item.m_globalID)) continue; // CLASSIC: only what really left the backpack pays
 
             // Some items (snack, reagents) are stackable.
             for (int i = 0; i < quickSellItem.m_quantity; i++) {

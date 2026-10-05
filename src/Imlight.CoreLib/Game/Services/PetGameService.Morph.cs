@@ -304,7 +304,18 @@ internal sealed partial class PetGameService {
         // The egg carries what the baby inherited; EnsureInitialized keeps it when the egg hatches.
         b.m_maxStats = [.. baby.MaxStats.Select(kv => new PetStat { m_name = kv.Key, m_statID = PetProgress.StatId(kv.Key), m_value = kv.Value })];
         b.m_allTalents = [.. baby.TalentPool.Select(PetProgress.TalentId)];
-        wizard.RemoveGold(cost);
+        // CLASSIC: checked and spent in one save; a balance spent elsewhere since the check above refuses the hatch.
+        if (!wizard.RemoveGold(cost)) {
+            InformGameClient($"Your pets cannot hatch: hatching costs {cost} gold.");
+            SendToSocket(new PET_9_PROTOCOL.MSG_PETMORPHCANAFFORD { CanAfford = 0 });
+            lock (m.Lobby.Gate) {
+                me.Done = false;
+                me.Ready = false;
+            }
+
+            return;
+        }
+
         wizard.PetOwnerBehavior.PetHatchTimes ??= [];
         wizard.PetOwnerBehavior.PetHatchTimes[me.PetId] = now;
         wizard.AddPetToInventory(egg);

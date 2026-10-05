@@ -1273,7 +1273,7 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
                 // CLASSIC: only the deck's copy (it left the book when it went into the deck); see DoSpellCastConsequences.
                 var deckSlot = wizard.EquipmentBehavior.SlotList.FirstOrDefault(s => s.SlotType == EquipmentSlotType.Deck);
                 if (deckSlot?.ItemId is { } deckId) {
-                    wizard.RemoveSpellFromDeck(consumedId, deckId);
+                    wizard.ConsumeDeckTreasureCard(consumedId, deckId); // CLASSIC: from the deck's Treasure Card ledger
                     if (CoreObjectFactory.GetCoreTemplate(consumedId) is SpellTemplate template) {
                         caster.ParticipantActor.Tell(new WIZARD_12_PROTOCOL.MSG_REMOVETREASURESPELLFROMDECK {
                             SpellID = (int) StringHash.Compute(template.m_name), EnchantmentID = 0,

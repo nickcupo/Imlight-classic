@@ -138,15 +138,22 @@ internal class ShopService(SessionActor sessionActor) : MessageService(sessionAc
         var crownsOnly = template.m_adjectiveList?.Exists(adjective => adjective == "FLAG_CrownsOnly") == true;
         var crownsCost = holidayPrice?.Crowns ?? (int) template.m_creditsCost;
         if (ClassicRuntime.IsActive && crownsCost > 0 && (crownsOnly || message.CurrencyType == 1)) {
+            // CLASSIC: checked and debited in one save first; the item only after the Crowns are spent, refunded if the
+            // backpack refuses it.
             var account = playerWizard.Account;
-            if (account is null || account.Crowns < crownsCost) {
+            if (account is null || !ClassicCrowns.TrySpend(account, crownsCost)) {
                 SendShopDenyMessage();
 
                 return;
             }
 
-            ClassicCrowns.Add(account, -crownsCost);
-            ProcessSuccessfulPurchase(playerWizard, item, itemTemplateID, 0);
+            if (!ProcessSuccessfulPurchase(playerWizard, item, itemTemplateID)) {
+                ClassicCrowns.Add(account, crownsCost);
+                SendShopDenyMessage();
+
+                return;
+            }
+
             SendToSocket(ClassicCrowns.BalanceMessage(account, playerWizard.CharId));
             Logger.Information("{Wizard} bought {Item} for {Crowns} Crowns.", Logger.Args(playerWizard.CharId, itemTemplateID, crownsCost));
 
@@ -155,14 +162,18 @@ internal class ShopService(SessionActor sessionActor) : MessageService(sessionAc
 
         var goldCost = holidayPrice?.Gold ?? CalculateItemCost(template);
 
-        // Check if the user can afford the item.
-        if (playerWizard.GameStats.m_currentGold >= goldCost) {
-            ProcessSuccessfulPurchase(playerWizard, item, itemTemplateID, goldCost);
+        // CLASSIC: the gold is checked and spent in one save before the item is given (two purchases sent together
+        // could both pass a check of the live gold); a backpack that refuses the item gets the gold back.
+        if (!playerWizard.RemoveGold(goldCost)) {
+            SendShopDenyMessage();
 
             return;
         }
 
-        SendShopDenyMessage();
+        if (!ProcessSuccessfulPurchase(playerWizard, item, itemTemplateID)) {
+            playerWizard.RefundGold(goldCost);
+            SendShopDenyMessage();
+        }
     }
 
     [MessageHandler(typeof(WIZARD_12_PROTOCOL.MSG_SHOPSELLREQUEST))]
@@ -177,7 +188,7 @@ internal class ShopService(SessionActor sessionActor) : MessageService(sessionAc
             return;
         }
 
-        var removedItemSuccess = wizard.RemoveItemFromInventory(message.GlobalID);
+        var removedItemSuccess = wizard.DestroyInventoryItem(message.GlobalID);
         if (!removedItemSuccess) {
             Logger.Warning("Failed to find item {0} in inventory for shop sell", Logger.Args(message.GlobalID));
             ProcessFailedSale();
@@ -231,16 +242,15 @@ internal class ShopService(SessionActor sessionActor) : MessageService(sessionAc
             return;
         }
 
+        // CLASSIC: checked and spent in one save (never below zero).
         var dyeCost = PriceModifiersConfig.GetDyeCost(template, message.texture, message.decal);
-        if (dyeCost > wizard.GameStats.m_currentGold) {
+        if (!wizard.RemoveGold(dyeCost)) {
             var dyeDenyMsg = new WIZARD_12_PROTOCOL.MSG_DYECONFIRM { Failure = 1 };
             SendToSocket(dyeDenyMsg);
             
             return;
         }
 
-        // Deduct the cost from the player
-        wizard.RemoveGold(dyeCost);
         var goldUpdateMsg = new WIZARD_12_PROTOCOL.MSG_UPDATEGOLD {
             Gold = wizard.GameStats.m_currentGold,
             MaxGold = wizard.GameStats.m_baseGoldPouch
@@ -304,10 +314,18 @@ internal class ShopService(SessionActor sessionActor) : MessageService(sessionAc
             return;
         }
 
+        // CLASSIC: paid (checked and spent in one save) before the name is saved; refunded if the save fails.
+        if (!wizard.RemoveGold(renameCost)) {
+            SendPetRenameDeny();
+
+            return;
+        }
+
         if (!WizardItemCollection.ApplyPetName(pet, message.petName)) {
             Logger.Error("Failed to save name keys {0} for pet {1}",
                 Logger.Args(message.petName, pet.m_globalID));
 
+            wizard.RefundGold(renameCost);
             SendPetRenameDeny();
 
             return;
@@ -315,7 +333,6 @@ internal class ShopService(SessionActor sessionActor) : MessageService(sessionAc
 
         PetFactory.TrySetPetName(pet, message.petName);
 
-        wizard.RemoveGold(renameCost);
         SendToSocket(new WIZARD_12_PROTOCOL.MSG_UPDATEGOLD {
             Gold = wizard.GameStats.m_currentGold,
             MaxGold = wizard.GameStats.m_baseGoldPouch
@@ -467,14 +484,21 @@ internal class ShopService(SessionActor sessionActor) : MessageService(sessionAc
             return;
         }
 
-        var hadStack = wizard.PetSnackBehavior.GetSnack(template.m_templateID) is not null;
-        if (!wizard.AddSnack(template.m_templateID, out var snack)) {
+        // CLASSIC: paid first (checked and spent in one save), refunded if the snack bag refuses the snack.
+        if (!wizard.RemoveGold(cost)) {
             SendShopDenyMessage();
 
             return;
         }
 
-        wizard.RemoveGold(cost);
+        var hadStack = wizard.PetSnackBehavior.GetSnack(template.m_templateID) is not null;
+        if (!wizard.AddSnack(template.m_templateID, out var snack)) {
+            wizard.RefundGold(cost);
+            SendShopDenyMessage();
+
+            return;
+        }
+
         var stack = wizard.PetSnackBehavior.GetSnack(template.m_templateID) ?? snack;
         // As .mod addsnack does: a new stack is MSG_PETSNACKADD, and every buy ends with the stack's MSG_PETSNACKUPDATE.
         if (!hadStack && s_snackSerializer.Serialize(stack, (PropertyFlags) 24, out var data)) {
@@ -495,7 +519,9 @@ internal class ShopService(SessionActor sessionActor) : MessageService(sessionAc
 
     private static readonly CoreObjectSerializer s_snackSerializer = new(behaviors: Imcodec.ObjectProperty.SerializerFlags.None);
 
-    private void ProcessSuccessfulPurchase(Wizard playerWizard, WizClientObjectItem item, uint itemTemplateID, int goldCost) {
+    // CLASSIC: gives a bought item that is already paid for; false (nothing sent) when it could not be given, so the
+    // caller refunds.
+    private bool ProcessSuccessfulPurchase(Wizard playerWizard, WizClientObjectItem item, uint itemTemplateID) {
         // CLASSIC: a pet keeps the behaviors PetFactory gave it and goes out with them (as .mod additem sends one).
         var isPet = PetFactory.IsPetTemplate(itemTemplateID);
 
@@ -504,15 +530,12 @@ internal class ShopService(SessionActor sessionActor) : MessageService(sessionAc
             Logger.Error("Failed to serialize item {0} for purchase", 
                 Logger.Args(item.m_globalID));
 
-            return;
+            return false;
         }
-        if (isPet) {
-            playerWizard.AddPetToInventory(item);
+        var added = isPet ? playerWizard.AddPetToInventory(item) : playerWizard.AddItemToInventory(item);
+        if (!added) {
+            return false;
         }
-        else {
-            playerWizard.AddItemToInventory(item);
-        }
-        playerWizard.RemoveGold(goldCost);
 
         // Inform the game client that a new item has been added to the player's inventory.
         var addItemMsg = new GAME_5_PROTOCOL.MSG_INVENTORYBEHAVIOR_ADDITEM {
@@ -539,6 +562,8 @@ internal class ShopService(SessionActor sessionActor) : MessageService(sessionAc
         // Inform the game client that the purchase was successful.
         var shopConfirmMsg = new WIZARD_12_PROTOCOL.MSG_SHOPBUYCONFIRM();
         SendToSocket(shopConfirmMsg);
+
+        return true;
     }
 
     private void HandleIllegalPurchaseAttempt(uint itemTemplateID, ulong interactedObjectGID) {

@@ -196,8 +196,10 @@ internal class AuctionHouseService(SessionActor sessionActor) : MessageService(s
                 return;
             }
 
+            // CLASSIC: paid here, checked and spent in one save, before the stock moves or anything is given; two buys
+            // sent together could both pass a check of the live gold and drive it below zero.
             goldCost = entry.m_buyPrice;
-            if (ClassicRuntime.IsActive && wizard.GameStats.m_currentGold < goldCost) {
+            if (!wizard.RemoveGold(goldCost)) {
                 SendBuyFailure();
 
                 return;
@@ -251,7 +253,15 @@ internal class AuctionHouseService(SessionActor sessionActor) : MessageService(s
                 });
 
                 // Add item to inventory after message to prevent crashes.
-                wizard.AddItemToInventory(item);
+                if (!wizard.AddItemToInventory(item)) {
+                    // CLASSIC: paid but not given: the gold goes back. (Restocking is the full-backpack fix's.)
+                    wizard.RefundGold(goldCost);
+                    SendToSocket(new GAME_5_PROTOCOL.MSG_INVENTORYBEHAVIOR_REMOVEITEM { GlobalID = wizard.GameObjectID, ItemID = item.m_globalID });
+                    SendToSocket(new WIZARD_12_PROTOCOL.MSG_UPDATEGOLD { Gold = wizard.GameStats.m_currentGold, MaxGold = wizard.GameStats.m_baseGoldPouch });
+                    SendBuyFailure();
+
+                    return;
+                }
                 SendToSocket(new WIZARD2_53_PROTOCOL.MSG_ITEMACQUISITION {
                     ItemGlobalID = item.m_globalID,
                     ItemTemplateID = (uint) item.m_templateID,
@@ -261,8 +271,7 @@ internal class AuctionHouseService(SessionActor sessionActor) : MessageService(s
             }
         }
 
-        // Update gold balances.
-        wizard.RemoveGold(goldCost);
+        // Update gold balances (already spent above).
         var goldUpdateMsg = new WIZARD_12_PROTOCOL.MSG_UPDATEGOLD {
             Gold = wizard.GameStats.m_currentGold,
             MaxGold = wizard.GameStats.m_baseGoldPouch
@@ -335,6 +344,22 @@ internal class AuctionHouseService(SessionActor sessionActor) : MessageService(s
             gold = bazaar.SellPrice((int) template.m_baseCost, held, ClassicBazaar.KindOf(template) ?? BazaarKind.Gear);
         }
 
+        // CLASSIC: the item leaves the backpack first, and a sale whose removal fails stops here. Another actor (the
+        // bank, a vendor sale) could take the same item between the check above and this point; the Bazaar used to
+        // stock and pay for it anyway. The sold item's document is deleted with it.
+        if (!wizard.DestroyInventoryItem(itemGlobalId)) {
+            Logger.Warning("Bazaar sale of item {0} by {1} refused: it is no longer in the backpack.",
+                Logger.Args(itemGlobalId, wizard.CharId));
+            SendToSocket(new WIZARD_12_PROTOCOL.MSG_AUCTIONRESPONSE {
+                Command = 5,
+                ItemTemplateID = item.m_templateID,
+                Cost = 0,
+                ReturnCode = 0
+            });
+
+            return;
+        }
+
         var auctionRspMsg = new WIZARD_12_PROTOCOL.MSG_AUCTIONRESPONSE {
             Command = 2,
             ItemTemplateID = item.m_templateID,
@@ -370,9 +395,6 @@ internal class AuctionHouseService(SessionActor sessionActor) : MessageService(s
                 AuctionHouseCollection.UpdateAuctionHouseEntry(entry);
             }
         }
-
-        // Remove item from inventory.
-        var removedItemSuccess = wizard.RemoveItemFromInventory(itemGlobalId);
 
         // Inform of update.
         var houseEntryData = WriteAuctionBlob(0, [entry]);

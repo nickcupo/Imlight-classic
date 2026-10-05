@@ -101,9 +101,22 @@ internal class TrainService(SessionActor sessionActor) : MessageService(sessionA
             return;
         }
 
+        // CLASSIC: the points are spent from the saved count first (never below zero; loot on another actor changes it
+        // too) and given back if the spell cannot be learned.
+        if (spellCost > 0 && !WizardData.Collections.WizardCollection.ChangeTrainingPoints(wizard, -spellCost)) {
+            Logger.Error("Wizard {0} attempted to train spell {1} but does not have enough training points.",
+                Logger.Args(wizard.PlayerNameBehavior.GetWizardName(), spellEntry.TemplateID));
+
+            return;
+        }
+
         var spell = SpellFactory.GetSpell((uint) spellEntry.TemplateID);
         var spellLearnedSuccess = wizard.LearnSpell(spell);
         if (!spellLearnedSuccess) {
+            if (spellCost > 0) {
+                WizardData.Collections.WizardCollection.ChangeTrainingPoints(wizard, spellCost);
+            }
+
             Logger.Error("Wizard {0} attempted to train spell {1} but failed to learn it.",
                 Logger.Args(wizard.PlayerNameBehavior.GetWizardName(), spellEntry.TemplateID));
 
@@ -115,8 +128,7 @@ internal class TrainService(SessionActor sessionActor) : MessageService(sessionA
         };
         SendToSocket(addSpellMsg);
 
-        var newTrainingPoints = wizard.MagicSchoolBehavior.TrainingPoints - spellCost;
-        wizard.UpdateTrainingPoints(newTrainingPoints);
+        var newTrainingPoints = wizard.MagicSchoolBehavior.TrainingPoints;
 
         var updateTrainingMsg = new WIZARD_12_PROTOCOL.MSG_UPDATETRAINING() {
             TrainingPoints = newTrainingPoints
