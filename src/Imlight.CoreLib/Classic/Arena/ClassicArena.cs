@@ -87,6 +87,19 @@ public static class ClassicArena {
 
         Logger.Information("Classic arena: guards {0} (Practice) and {1} (Ranked), {2} arenas ({3}).",
             Logger.Args(s_config.PracticeKiosk, s_config.RankedKiosk, s_config.Arenas.Length, s_config.SourceFile));
+
+        // The Arena Ticket vendors' 2009 stock (Diego's Deluxe Raiments, Silverheart's Trophies).
+        foreach (var vendor in s_config.TicketVendors) {
+            Imlight.CoreLib.WizardData.SpiralDB.RegisterNpcInventory(new Imlight.CoreLib.WizardData.Models.World.NPCInventory {
+                TemplateID = vendor.Npc,
+                Inventory = [.. vendor.Items.Select(item => new Imcodec.Types.GID(item.Template))],
+            });
+        }
+
+        if (s_config.TicketVendors.Length > 0) {
+            Logger.Information("Classic arena: {0} Arena Ticket vendors, {1} items.",
+                Logger.Args(s_config.TicketVendors.Length, s_config.TicketVendors.Sum(v => v.Items.Length)));
+        }
         AdminDashboard.AddSection("Arena matches", () => ArenaMatchmaker.Instance?.Snapshot()
             .Select(m => new { m.Id, kind = m.Kind.ToString(), phase = m.Phase, size = $"{m.TeamSize}v{m.TeamSize}", seats = $"{m.Side0} v {m.Side1}" })
             .ToList<object>() ?? []);
@@ -169,6 +182,14 @@ public static class ClassicArena {
     public static bool IsArenaCircle(string? zone, string? tag)
         => Enabled && zone is not null && string.Equals(tag, CircleTag, StringComparison.Ordinal)
            && s_config!.Arenas.Any(a => string.Equals(a.Zone, zone, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>The Arena Ticket vendor whose template is <paramref name="npcTemplate"/>, or null (also when the arena is off).</summary>
+    public static ArenaVendor? TicketVendor(uint npcTemplate)
+        => Enabled ? s_config!.TicketVendors.FirstOrDefault(v => v.Npc == npcTemplate) : null;
+
+    /// <summary>A ticket vendor's item, or null.</summary>
+    public static ArenaVendorItem? TicketItem(uint npcTemplate, uint itemTemplate)
+        => TicketVendor(npcTemplate)?.Items.FirstOrDefault(i => i.Template == itemTemplate);
 
     /// <summary>The guard kind of a template, or null when it is not a guard.</summary>
     public static ArenaKind? KioskKind(uint templateId)

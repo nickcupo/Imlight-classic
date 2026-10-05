@@ -114,6 +114,28 @@ public sealed class ArenaRulesTests {
     }
 
     [Fact]
+    public void TicketVendorsSellThe2009Stock() {
+        var config = Real();
+        var diego = config.TicketVendors.Single(v => v.Npc == 38226);
+        Assert.Equal("WizardShops_00000018", diego.Title);              // "Diego's Deluxe Raiments"
+        Assert.Equal(105, diego.Items.Count(i => i.Rank is null && i.Template is >= 100477 and <= 100582));   // 5 tiers x 7 x 3
+        Assert.Equal("Warlord", diego.Items.Single(i => i.Template == 164174).Rank);   // Magma Colossus
+        var roland = config.TicketVendors.Single(v => v.Npc == 164327);
+        Assert.Equal(10, roland.Items.Length);
+        Assert.Equal("Sergeant", roland.Items.Single(i => i.Template == 164213).Rank);  // Ribbon Stand
+        Assert.All(config.TicketVendors.SelectMany(v => v.Items), i => Assert.Null(i.Price));   // the client shows the template's
+    }
+
+    [Theory]
+    [InlineData(500, 100, 500, null, null)]
+    [InlineData(99, 100, 500, null, "tickets")]
+    [InlineData(1000, 200, 549, "Sergeant", "rank")]
+    [InlineData(1000, 200, 550, "Sergeant", null)]
+    [InlineData(1500, 1500, 950, "Warlord", null)]
+    public void TicketPurchases(int tickets, int price, int rating, string? rank, string? error)
+        => Assert.Equal(error, ArenaRules.TicketPurchaseError(tickets, price, rating, ArenaRules.MinRatingOf(rank, Real().Ranks)));
+
+    [Fact]
     public void OpenCirclesAreNoLongerTheClassicArena() {
         // Owner ruling 2026-10-05: the walk-in circles were the housing dueling sigil; the classic profiles use matches.
         var open = OpenPvpLoader.Load(Path.Combine(ClassicDataFixture.Root, "pvp", "open-pvp-2009.yaml"));

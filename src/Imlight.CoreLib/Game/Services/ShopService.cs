@@ -142,6 +142,14 @@ internal class ShopService(SessionActor sessionActor) : MessageService(sessionAc
             return;
         }
 
+        // CLASSIC: an Arena Ticket vendor (Diego, Roland Silverheart) sells for tickets, some items only from a PvP rank up.
+        if (vendorComponent.SellsForTickets) {
+            BuyWithTickets(playerWizard, item, template, itemTemplateID,
+                (uint) interactedObject.ActiveGameObject.m_templateID.Full);
+
+            return;
+        }
+
         // CLASSIC: a holiday vendor's item sells at its 2009 price (classic-data/holidays). A Crowns-only item, or one the
         // wizard chose to pay for in Crowns (CurrencyType 1), costs the item's Crowns price from the account's balance.
         var holidayPrice = ClassicHolidays.PriceOf(itemTemplateID);
@@ -184,6 +192,48 @@ internal class ShopService(SessionActor sessionActor) : MessageService(sessionAc
             playerWizard.RefundGold(goldCost);
             SendShopDenyMessage();
         }
+    }
+
+    // CLASSIC: a purchase from an Arena Ticket vendor: the 2009 price in tickets (the template's, as the shop window shows),
+    // the item's PvP rank (wiki item pages, 2009: "PvP Rank Sergeant Only"...), tickets taken in one save before the item.
+    private void BuyWithTickets(Wizard wizard, WizClientObjectItem item, WizItemTemplate template, uint itemTemplateID, uint npcTemplate) {
+        var entry = Classic.Arena.ClassicArena.TicketItem(npcTemplate, itemTemplateID);
+        var config = Classic.Arena.ClassicArena.Config;
+        if (entry is null || config is null) {
+            SendShopDenyMessage();
+
+            return;
+        }
+
+        var price = entry.Price ?? template.m_arenaPointCost;
+        var rating = Classic.Arena.ArenaMatchmaker.Instance?.Standing(wizard.CharId).Rating
+                     ?? new ArenaLadderCollection.Raven().Load(wizard.CharId)?.Rating ?? config.StartRating;
+        var why = Imlight.Classic.Pvp.ArenaRules.TicketPurchaseError(wizard.GameStats.m_currentArenaPoints, price, rating,
+            Imlight.Classic.Pvp.ArenaRules.MinRatingOf(entry.Rank, config.Ranks));
+        if (why is not null) {
+            InformGameClient(why == "rank"
+                ? $"You need the PvP rank of {entry.Rank} for that."
+                : $"You need {price} Arena Tickets for that.");
+            SendShopDenyMessage();
+
+            return;
+        }
+
+        wizard.GameStats.m_currentArenaPoints -= price;
+        wizard.GameStats.m_currentPvPCurrency = wizard.GameStats.m_currentArenaPoints;
+        WizardCollection.UpdateCharacterGameStats(wizard);
+        if (!ProcessSuccessfulPurchase(wizard, item, itemTemplateID)) {
+            wizard.GameStats.m_currentArenaPoints += price;
+            wizard.GameStats.m_currentPvPCurrency = wizard.GameStats.m_currentArenaPoints;
+            WizardCollection.UpdateCharacterGameStats(wizard);
+            SendShopDenyMessage();
+
+            return;
+        }
+
+        SendToSocket(Classic.Arena.ArenaMessages.ArenaPoints(wizard.GameStats.m_currentArenaPoints));
+        SendToSocket(Classic.Arena.ArenaMessages.PvpCurrency(wizard.GameStats.m_currentPvPCurrency));
+        Logger.Information("{Wizard} bought {Item} for {Tickets} Arena Tickets.", Logger.Args(wizard.CharId, itemTemplateID, price));
     }
 
     [MessageHandler(typeof(WIZARD_12_PROTOCOL.MSG_SHOPSELLREQUEST))]

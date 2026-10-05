@@ -60,6 +60,15 @@ namespace Imlight.Classic.Pvp;
 /// <summary>An arena a match can go to, and where its duel circle sits (the zone's own PvP sigil spot).</summary>
 public sealed record ArenaZone(string Zone, float X, float Y, float Z, float Yaw);
 
+/// <summary>
+/// An item an Arena Ticket vendor sells: its template, the rank it needs (null: none) and the tickets it costs (null: the
+/// template's own m_arenaPointCost, which the client's shop window shows).
+/// </summary>
+public sealed record ArenaVendorItem(uint Template, string? Rank, int? Price);
+
+/// <summary>An Arena Ticket vendor (Diego the Duelmaster, Roland Silverheart) and the 2009 stock.</summary>
+public sealed record ArenaVendor(uint Npc, string Title, ImmutableArray<ArenaVendorItem> Items);
+
 /// <summary>One rank of the Ranked ladder: its name and the lowest rating that holds it.</summary>
 public sealed record ArenaRank(string Name, int MinRating);
 
@@ -105,6 +114,9 @@ public sealed class ArenaConfig {
 
     /// <summary>Ranked for every account (2009: subscribers, or 80 Crowns a match; this server has no subscriptions).</summary>
     public required bool RankedForAll { get; init; }
+
+    /// <summary>The Arena Ticket vendors and their 2009 stock.</summary>
+    public ImmutableArray<ArenaVendor> TicketVendors { get; init; } = [];
 
     public required string SourceFile { get; init; }
 
@@ -222,6 +234,17 @@ public static class ArenaRules {
         return name;
     }
 
+    /// <summary>The lowest rating that holds <paramref name="rank"/> (null: no rank needed, 0).</summary>
+    public static int MinRatingOf(string? rank, IReadOnlyList<ArenaRank> ranks)
+        => rank is null ? 0 : ranks.FirstOrDefault(r => r.Name == rank)?.MinRating ?? int.MaxValue;
+
+    /// <summary>
+    /// Whether a wizard may buy a ticket item, or why not: "rank" (their rating is below the item's rank) or "tickets"
+    /// (not enough Arena Tickets).
+    /// </summary>
+    public static string? TicketPurchaseError(int tickets, int price, int rating, int minRating)
+        => rating < minRating ? "rank" : tickets < price ? "tickets" : null;
+
     /// <summary>Arena Tickets a match gives: Ranked only, more for a win (youngwizard 2009-08-31: 10 and 3).</summary>
     public static int Tickets(ArenaKind kind, bool won, ArenaConfig config)
         => kind == ArenaKind.Ranked ? (won ? config.TicketsWin : config.TicketsLoss) : 0;
@@ -290,7 +313,7 @@ public static class ArenaLoader {
     private static readonly FrozenSet<string> s_rootKeys = FrozenSet.Create(StringComparer.Ordinal,
         "id", "title", "profiles", "provenance", "license_tag", "notes", "unverified", "hall", "kiosks", "tournaments",
         "arenas", "arena_location", "circle", "confirm_seconds", "arrival_seconds", "return_seconds", "rating", "ranks", "tickets",
-        "ranked_for_all");
+        "ranked_for_all", "ticket_vendors");
     private static readonly Regex s_id = new(@"^arena-[a-z0-9][a-z0-9-]*\z", RegexOptions.CultureInvariant);
 
     /// <summary>Loads the arena file at <paramref name="path"/>.</summary>
@@ -431,6 +454,44 @@ public static class ArenaLoader {
         var loss = Int(tickets, "tickets", "ranked_loss", 0, 10000);
         var forAll = map.Find("ranked_for_all") is { } fa ? d.ReadBool(fa.Value, "ranked_for_all") : true;
 
+        var vendors = ImmutableArray.CreateBuilder<ArenaVendor>();
+        var rankNames = ranks.Select(r => r.Name).ToHashSet(StringComparer.Ordinal);
+        if (map.Find("ticket_vendors") is { } vendorsEntry && d.ReadList(vendorsEntry.Value, "ticket_vendors") is { } vendorList) {
+            for (var i = 0; i < vendorList.Items.Length; i++) {
+                var keyPath = YamlTree.Index("ticket_vendors", i);
+                if (d.ReadMap(vendorList.Items[i], keyPath) is not { } vendor) {
+                    continue;
+                }
+
+                var npc = Int(vendor, keyPath, "npc", 1, int.MaxValue);
+                var title = Str(vendor, keyPath, "title");
+                var items = ImmutableArray.CreateBuilder<ArenaVendorItem>();
+                if (vendor.Find("items") is { } itemsEntry && d.ReadList(itemsEntry.Value, YamlTree.Join(keyPath, "items")) is { } itemList) {
+                    for (var j = 0; j < itemList.Items.Length; j++) {
+                        var itemPath = YamlTree.Index(YamlTree.Join(keyPath, "items"), j);
+                        if (d.ReadMap(itemList.Items[j], itemPath) is not { } item) {
+                            continue;
+                        }
+
+                        var template = Int(item, itemPath, "template", 1, int.MaxValue);
+                        var rank = item.Find("rank") is { } rk ? d.ReadString(rk.Value, YamlTree.Join(itemPath, "rank")) : null;
+                        if (rank is not null && !rankNames.Contains(rank)) {
+                            d.At(item, itemPath, $"rank '{rank}' is not one of the ranks");
+                        }
+
+                        int? price = item.Find("price") is { } pr ? d.ReadInt(pr.Value, YamlTree.Join(itemPath, "price"), 0) : null;
+                        if (template is not null) {
+                            items.Add(new ArenaVendorItem((uint) template.Value, rank, price));
+                        }
+                    }
+                }
+
+                if (npc is not null && title is not null) {
+                    vendors.Add(new ArenaVendor((uint) npc.Value, title, items.ToImmutable()));
+                }
+            }
+        }
+
         if (d.HasErrors) {
             throw d.ToException();
         }
@@ -443,6 +504,7 @@ public static class ArenaLoader {
             CircleRadius = circleRadius!.Value, ConfirmSeconds = confirm!.Value, ArrivalSeconds = arrival!.Value,
             ReturnSeconds = back!.Value, StartRating = start!.Value, KFactor = k!.Value, MinRating = floor!.Value,
             Ranks = ranks.ToImmutable(), TicketsWin = win!.Value, TicketsLoss = loss!.Value, RankedForAll = forAll ?? true,
+            TicketVendors = vendors.ToImmutable(),
             SourceFile = display,
         };
     }

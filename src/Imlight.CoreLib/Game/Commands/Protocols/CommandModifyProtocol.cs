@@ -405,6 +405,26 @@ internal class CommandModifyProtocol : CommandProtocol {
         InformSenderClient($"Added {goldInt} gold.");
     }
 
+    // CLASSIC: Arena Tickets for testing the ticket vendors (QA).
+    [Help("Add Arena Tickets.")]
+    [Command("addtickets")]
+    [AuthRequired(AuthLevel.QualityAssurance)]
+    private void AddTicketsCommand(string tickets) {
+        if (!int.TryParse(tickets, out var count)) {
+            InformSenderClient("Invalid ticket amount.");
+
+            return;
+        }
+
+        var stats = Context.Character.GameStats;
+        stats.m_currentArenaPoints = Math.Max(0, stats.m_currentArenaPoints + count);
+        stats.m_currentPvPCurrency = stats.m_currentArenaPoints;
+        WizardData.Collections.WizardCollection.UpdateCharacterGameStats(Context.Character);
+        Context.SessionActor.Tell(Classic.Arena.ArenaMessages.ArenaPoints(stats.m_currentArenaPoints), null);
+        Context.SessionActor.Tell(Classic.Arena.ArenaMessages.PvpCurrency(stats.m_currentPvPCurrency), null);
+        InformSenderClient($"Arena Tickets: {stats.m_currentArenaPoints}.");
+    }
+
     [Help("Set your maximum health.")]
     [Command("maxhealth")]
     [Alias("maxhp")]
