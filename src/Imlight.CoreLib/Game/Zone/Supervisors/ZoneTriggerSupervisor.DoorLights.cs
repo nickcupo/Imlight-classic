@@ -41,6 +41,9 @@ internal sealed partial class ZoneTriggerSupervisor {
                     _doorReplay.Remove(remove.PlayerActor);
                     Timers.Cancel(("doors", remove.PlayerActor));
                     break;
+                case TriggerObjectPresenceChange presenceChange: // CLASSIC: ResRemoveTriggerObject / ResAddTriggerObject.
+                    ReceiveTriggerObjectPresenceChange(presenceChange);
+                    break;
                 case DoorLightRefresh refresh:
                     foreach (var actor in _doorPlayers.Keys.ToArray()) {
                         if (refresh.Player is not null && actor != refresh.Player) continue;
@@ -90,7 +93,7 @@ internal sealed partial class ZoneTriggerSupervisor {
         return _orderedTriggers.Where(t => t.Trigger?.m_fireEvents?.Any(e => e == boundEvent) == true)
             .Select(t => DoorLightRules.ApplyZonePolicy(new DoorLightRules.Route(
                 (string)t.Trigger.m_results?.m_results?.OfType<ResTeleport>().FirstOrDefault(r => !string.IsNullOrEmpty(r.m_destinationZone))?.m_destinationZone ?? "",
-                _activation.IsArmed(t.Actor, actor), Meets(t.Trigger.m_requirements, t.Trigger.m_triggerName)
+                _activation.IsArmed(t.Actor, Scope(actor)), Meets(t.Trigger.m_requirements, t.Trigger.m_triggerName)
                     && (!_teleportRequirements.TryGetValue(t.Trigger, out var required) || Meets(required, t.Trigger.m_triggerName))), ClassicRuntime.Rules)).ToList();
     }
 

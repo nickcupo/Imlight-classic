@@ -73,6 +73,9 @@ internal sealed class RenderComponent(ZoneEntity entity) : ZoneEntityComponent(e
     private readonly Dictionary<Wizard, IActorRef> _playersWithRequirementsMet = [];
     private readonly Dictionary<IActorRef, Wizard> _playerIgnoreBecauseDynamod = [];
     private readonly HashSet<IActorRef> _collectedHidden = []; // CLASSIC: hidden by HideCollectedForPlayer, not a dynamod.
+    // CLASSIC: the players a zone trigger has taken this object away from (ResRemoveTriggerObject, a disarmed trigger's
+    // object), with their wizards for when it comes back (ZoneTriggerTables).
+    private readonly Dictionary<IActorRef, Wizard> _hiddenByTrigger = [];
     // CLASSIC: the players this object has taken on (OnPlayerJoin, or OnPlayerMove for a player who was already in the
     // zone when the object started; see TakeOnLatePlayer).
     private readonly HashSet<IActorRef> _knownPlayers = [];
@@ -109,6 +112,13 @@ internal sealed class RenderComponent(ZoneEntity entity) : ZoneEntityComponent(e
 
     public override void OnPlayerJoin(CoreObject player, IActorRef suspect, Wizard wizard) {
         _knownPlayers.Add(suspect); // CLASSIC
+        if (TriggerHides(suspect)) { // CLASSIC: gone in this instance (a gate opened before the player came).
+            _hiddenByTrigger[suspect] = wizard;
+            _playersInRange[player] = suspect; // as below, so the distance check takes it on if it comes back
+
+            return;
+        }
+
         // Check to see if dynamods would enable/disable this object.
         // We don't need to check for spawns, only despawns.
         var relevantDynaMods = wizard?.DynamodSet?.Dynamods?
@@ -183,6 +193,7 @@ internal sealed class RenderComponent(ZoneEntity entity) : ZoneEntityComponent(e
     public override void OnPlayerLeave(IActorRef suspect, ulong id) {
         _collectedHidden.Remove(suspect); // CLASSIC
         _knownPlayers.Remove(suspect); // CLASSIC
+        var hiddenByTrigger = _hiddenByTrigger.Remove(suspect); // CLASSIC: then it is not on the player's screen
 
         var wizard = _playersWithRequirementsMet.FirstOrDefault(x => x.Value == suspect).Key;
         if (wizard != null) {
@@ -195,7 +206,7 @@ internal sealed class RenderComponent(ZoneEntity entity) : ZoneEntityComponent(e
             _playersInRange.Remove(player);
         }
 
-        if (_playerIgnoreBecauseDynamod.Remove(suspect)) {
+        if (_playerIgnoreBecauseDynamod.Remove(suspect) || hiddenByTrigger) {
             return;
         }
 
@@ -208,7 +219,7 @@ internal sealed class RenderComponent(ZoneEntity entity) : ZoneEntityComponent(e
         }
 
         // If this player is ignoring the object due to a dynamod, do nothing.
-        if (_playerIgnoreBecauseDynamod.ContainsKey(playerActor)) {
+        if (_playerIgnoreBecauseDynamod.ContainsKey(playerActor) || _hiddenByTrigger.ContainsKey(playerActor)) { // CLASSIC
             return;
         }
 
@@ -292,6 +303,51 @@ internal sealed class RenderComponent(ZoneEntity entity) : ZoneEntityComponent(e
         }
     }
 
+    // CLASSIC: a zone trigger took the object away or brought it back (ZoneTriggerSupervisor.TriggerObjects.cs), for one
+    // player (a public zone) or everyone (an instanced zone).
+    [MessageHandler(typeof(Supervisors.TriggerObjectPresenceUpdate))]
+    public void ReceiveTriggerObjectPresence(Supervisors.TriggerObjectPresenceUpdate update) {
+        if (Entity.Info is null || !string.Equals(Entity.Info.m_zoneTag, update.Tag, System.StringComparison.Ordinal)) {
+            return;
+        }
+
+        var players = update.Player is null ? _knownPlayers.ToList() : _knownPlayers.Contains(update.Player) ? [update.Player] : [];
+        foreach (var player in players) {
+            if (!update.Present) {
+                if (_hiddenByTrigger.ContainsKey(player)) {
+                    continue;
+                }
+
+                var wizard = _playersWithRequirementsMet.FirstOrDefault(x => x.Value == player).Key;
+                if (wizard is not null) {
+                    _playersWithRequirementsMet.Remove(wizard);
+                }
+
+                _hiddenByTrigger[player] = wizard;
+                if (!_playerIgnoreBecauseDynamod.ContainsKey(player)) {
+                    DespawnObjectForPlayer(player);
+                }
+
+                continue;
+            }
+
+            if (!_hiddenByTrigger.Remove(player, out var hiddenWizard)) {
+                continue;
+            }
+
+            if (_playerIgnoreBecauseDynamod.ContainsKey(player) || hiddenWizard is null || !MeetsSpawnRequirements(player, hiddenWizard)) {
+                continue;
+            }
+
+            _playersWithRequirementsMet[hiddenWizard] = player;
+            CreateObjectForPlayer(player);
+        }
+    }
+
+    private bool TriggerHides(IActorRef player)
+        => ClassicQuestEngine.IsActive && Entity.Info?.m_zoneTag is { Length: > 0 } tag
+            && ZoneTriggerTables.Find(Entity.ZoneRef) is { } table && table.Manages(tag) && !table.IsPresent(tag, player);
+
     // CLASSIC: a collection object one player took leaves only that player's view until it respawns for them
     // (InteractQuestSelectComponent). A dynamod that already hides the object keeps it hidden.
     internal void HideCollectedForPlayer(IActorRef player) {
@@ -349,6 +405,13 @@ internal sealed class RenderComponent(ZoneEntity entity) : ZoneEntityComponent(e
     private bool TakeOnLatePlayer(CoreObject playerObj, IActorRef playerActor, Wizard playerWizard) {
         if (!ClassicQuestEngine.IsActive || playerWizard is null || playerActor is null || !_knownPlayers.Add(playerActor)) {
             return false;
+        }
+
+        if (TriggerHides(playerActor)) { // CLASSIC: a zone trigger has taken it away
+            _hiddenByTrigger[playerActor] = playerWizard;
+            DespawnObjectForPlayer(playerActor);
+
+            return true;
         }
 
         if (!MeetsSpawnRequirements(playerActor, playerWizard)) {

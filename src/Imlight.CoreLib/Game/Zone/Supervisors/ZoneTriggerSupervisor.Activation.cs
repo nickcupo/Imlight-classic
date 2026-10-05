@@ -29,10 +29,12 @@
  * 
  * NOTE:
  * The decision itself is Imlight.Classic.Quests.TriggerEventDispatch, where
- * it is tested. Only triggers with a deactivate event are tracked; the rest
- * are always armed, as in stock Imlight. Every posted event carries its
- * player (volumes, trigger results, the tutorial, zone entry), so state is
- * kept per player actor. A trigger whose ZoneTransfer entry carries
+ * it is tested. Triggers with a deactivate event, and triggers that wait for
+ * an activate event (the zone's trigger plan, ZoneTriggerSupervisor.
+ * TriggerObjects.cs), are tracked; the rest are always armed. Every posted
+ * event carries its player (volumes, trigger results, the tutorial, zone
+ * entry); state is kept per zone instance in an instanced zone and per
+ * player actor in a public one. A trigger whose ZoneTransfer entry carries
  * requirements (a classic travel hand decision) fires only for a wizard who
  * meets them, so the event's teleport passes to the next trigger.
  * 
@@ -40,7 +42,7 @@
  * 
  * Created by: Nick with Claude Code (claude-opus-5-5)
  * Version: KALI 1.0
- * Last Updated: 09/27/2026
+ * Last Updated: 10/05/2026
  */
 
 using System.Collections.Generic;
@@ -69,7 +71,8 @@ internal sealed partial class ZoneTriggerSupervisor {
 
         _activation.Track(triggerActor, (string) trigger.m_triggerName,
             trigger.m_activateEvents?.Select(name => (string) name),
-            trigger.m_deactivateEvents?.Select(name => (string) name));
+            trigger.m_deactivateEvents?.Select(name => (string) name),
+            initiallyArmed: InitiallyArmed(trigger)); // CLASSIC: one that waits for its Enable_ event starts disarmed.
     }
 
     private void ReceiveClassicPostEvent(ZONE_102_PROTOCOL.MSG_POSTEVENT message) {
@@ -80,15 +83,20 @@ internal sealed partial class ZoneTriggerSupervisor {
         // decode would read as met for every kill, so it stays quiet.
         var isKill = message.EventName == KilledMonster.EventName;
         using var killed = KilledMonsterScope.Enter(message.KilledTemplateIds);
-        var fires = _activation.Dispatch(_orderedTriggers, entry => entry.Actor, message.EventName, message.PlayerActor,
+        var scope = Scope(message.PlayerActor); // CLASSIC: the instance in a dungeon, the player in a public zone.
+        _table?.MarkSeen(message.EventName, scope);
+        var fires = _activation.Dispatch(_orderedTriggers, entry => entry.Actor, message.EventName, scope,
             listens: entry => entry.Trigger?.m_fireEvents?.Any(x => x == message.EventName) == true
                 && !(isKill && HasUndecodedRequirement(entry.Trigger.m_requirements))
                 && VolumeArrival.Fires(message.ArrivedInside, HasTeleport(entry.Trigger)), // CLASSIC: arrival never teleports.
             meetsRequirements: entry => EvaluateRequirements(entry.Trigger, message)
                 && EvaluateTeleportRequirements(entry.Trigger, message),
             teleportsSomewhere: entry => HasTeleportDestination(entry.Trigger),
-            stateChanged: (name, armed) => Logger.Debug("Zone {Zone} trigger {Trigger} is {State} for {Player} by {Event}.",
-                Logger.Args(Zone.ZonePath, name, armed ? "armed" : "disarmed", message.PlayerActor?.Path.Name, message.EventName)));
+            stateChanged: (actor, name, armed) => {
+                Logger.Debug("Zone {Zone} trigger {Trigger} is {State} for {Player} by {Event}.",
+                    Logger.Args(Zone.ZonePath, name, armed ? "armed" : "disarmed", message.PlayerActor?.Path.Name, message.EventName));
+                OnTriggerStateChanged(actor, armed, scope);
+            });
 
         QueueLegacyDoors(message.PlayerActor);
         ZoneRef.Tell(new ZONE_102_PROTOCOL.MSG_ZONEBROADCAST {
@@ -109,6 +117,10 @@ internal sealed partial class ZoneTriggerSupervisor {
                 SuppressTeleportResults = fire.SuppressTeleport,
                 KilledTemplateIds = message.KilledTemplateIds,
             });
+        }
+
+        if (message.EventName == ZoneTriggerPlans.EnterZoneEvent) { // CLASSIC: a new instance learns the wizard's progress.
+            ReplayProgressEvents(message);
         }
     }
 

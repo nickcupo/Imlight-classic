@@ -173,6 +173,14 @@ internal static class InteractableQuestEvents {
             : [];
 
     /// <summary>
+    /// CLASSIC: every event some object's use can post in the zone (the zone trigger plan's root events).
+    /// </summary>
+    /// <param name="zonePath">The zone.</param>
+    internal static IEnumerable<string> ZoneEventsAnyObjectFiresIn(string zonePath)
+        => s_questEventsByObject.Values.SelectMany(events => events)
+            .Where(questEvent => questEvent.FiresIn(zonePath)).Select(questEvent => questEvent.Name).Distinct();
+
+    /// <summary>
     /// Whether the object fires any quest event a goal can name.
     /// </summary>
     /// <param name="objectTemplate">The object's template.</param>
