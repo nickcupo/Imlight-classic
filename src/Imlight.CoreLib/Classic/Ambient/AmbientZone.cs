@@ -948,14 +948,14 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
         }
     }
 
-    private void JoinWithYes(AmbientWizard wizard, HelpAnswer answer, ulong player) {
+    private void JoinWithYes(AmbientWizard wizard, HelpAnswer answer, ulong player, string line) {
         if (!_duels.TryGetValue(answer.DuelId, out var notice) || notice.FreePlayerSlots <= 0
             || wizard.Activity is AmbientActivity.Fighting or AmbientActivity.Sparring or AmbientActivity.Away) {
             Say(wizard, player, "aw, it's full. good luck!");
             return;
         }
 
-        Say(wizard, player, AmbientChatBrain.HelpAnswered(true, wizard.Turn++, ChatFor(wizard, player)));
+        Say(wizard, player, line);
         AmbientWizards.PermitJoin(wizard.Endpoint, notice.SigilId);
         wizard.DuelSigil = notice.SigilId;
         if (!WalkTo(wizard, notice.Location, AmbientActivity.Helping)) {
@@ -974,20 +974,77 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
             ZoneKey: _zone, Hour: DateTime.Now.Hour, History: _heard,
             Audience: speaker == 0 || _audience.Contains(speaker) ? _audience : [.. _audience, speaker]);
 
+    /// <summary>
+    /// CLASSIC (2026-10-05, owner: "it seems like friendly wizards are answering before i actually hit enter"): a menu
+    /// phrase (MSG_RADIALQUICKCHAT / MSG_DIRECTEDQUICKCHAT) is only acted on after <see cref="MenuSettle"/>, and not at
+    /// all when the same player sends a typed line around it: the live log of 2026-10-05 01:36:42 shows a menu phrase
+    /// arriving with no typed line (the client sends quick chat from its menu and phrase suggestions), and the wizard
+    /// answered in the same millisecond. Every answer now waits for reading, thinking and typing (ChatTiming).
+    /// </summary>
+    private static readonly TimeSpan MenuSettle = ChatTiming.MenuSettle;
+
+    private readonly Dictionary<ulong, DateTime> _lastTyped = [];
+    private DateTime _lastAnswer;                // the zone's latest planned answer: two wizards never answer at once
+    private (ulong Speaker, string Text, DateTime At) _lastMenuLogged;
+
     private void Heard(AmbientWizard wizard, ulong sourceGid, byte[] sourceName, string text, bool whisper, bool menuChat = false) {
         if (!Wizard.TryGetCharacterId(sourceGid, out var speaker) || AmbientWizards.IsAmbientChar(speaker) || !wizard.Present) {
             return;
         }
 
         var now = DateTime.UtcNow;
+        if (menuChat) {
+            if (_lastMenuLogged.Speaker != speaker || _lastMenuLogged.Text != text || now - _lastMenuLogged.At > TimeSpan.FromSeconds(1)) {
+                _lastMenuLogged = (speaker, text, now);
+                Logger.Information("Ambient wizards in {Zone} heard menu chat from {Player}: \"{Text}\" (acted on in {Settle} s unless a typed line follows).",
+                    Logger.Args(_zone, speaker, text, MenuSettle.TotalSeconds));
+            }
+
+            Timers.StartSingleTimer($"menu-{wizard.CharId}-{speaker}-{now.Ticks}",
+                new Later(wizard, w => Settled(w, speaker, text, whisper, menuChat: true, now)), MenuSettle);
+            return;
+        }
+
+        _lastTyped[speaker] = now;
+        if (_lastTyped.Count > 500) {
+            _lastTyped.Clear();
+            _lastTyped[speaker] = now;
+        }
+
+        Settled(wizard, speaker, text, whisper, menuChat: false, now);
+    }
+
+    /// <summary>Runs <paramref name="send"/> after a human answer time, staggered against the zone's other answers.</summary>
+    private void Answer(AmbientWizard wizard, string key, string heard, string reply, Action<AmbientWizard> send) {
+        var now = DateTime.UtcNow;
+        var busy = wizard.Activity is AmbientActivity.Fighting or AmbientActivity.Sparring or AmbientActivity.Helping;
+        var due = ChatTiming.Stagger(now + ChatTiming.Answer(heard, reply, ChatPersona.For(wizard.Identity), busy, _rng), _lastAnswer, _rng);
+        _lastAnswer = due;
+        Timers.StartSingleTimer($"{key}-{wizard.CharId}-{due.Ticks}", new Later(wizard, send), due - now);
+    }
+
+    private void Settled(AmbientWizard wizard, ulong speaker, string text, bool whisper, bool menuChat, DateTime heardAt) {
+        if (!wizard.Present) {
+            return;
+        }
+
+        // A typed line from the same player around the menu phrase wins: the phrase was the client's, not the player's answer.
+        if (menuChat && !ChatTiming.MenuPhraseStands(heardAt, _lastTyped.TryGetValue(speaker, out var typed) ? typed : null)) {
+            return;
+        }
+
+        var now = DateTime.UtcNow;
+        var persona = ChatPersona.For(wizard.Identity);
         var answer = wizard.Offers.Hear(speaker, text, now);
         if (answer.Kind == HelpAnswerKind.Yes) {
-            JoinWithYes(wizard, answer, speaker);
+            var line = AmbientChatBrain.HelpAnswered(true, wizard.Turn++, ChatFor(wizard, speaker));
+            Answer(wizard, "yes", text, line, w => JoinWithYes(w, answer, speaker, line));
             return;
         }
 
         if (answer.Kind == HelpAnswerKind.No) {
-            Say(wizard, speaker, AmbientChatBrain.HelpAnswered(false, wizard.Turn++, ChatFor(wizard, speaker)));
+            var line = AmbientChatBrain.HelpAnswered(false, wizard.Turn++, ChatFor(wizard, speaker));
+            Answer(wizard, "no", text, line, w => Say(w, speaker, line));
             return;
         }
 
@@ -1003,16 +1060,19 @@ internal sealed class AmbientZone : ReceiveActor, IWithTimers {
         }
 
         wizard.Turn++;
-        // A short pause, as a person types.
-        var delay = TimeSpan.FromMilliseconds(1200 + Math.Min(4000, reply.Length * 90));
-        Timers.StartSingleTimer($"reply-{wizard.CharId}-{wizard.Turn}", new Later(wizard, w => {
+        if (!whisper && ChatTiming.Ignores(persona, _rng)) {
+            return; // people miss lines now and then
+        }
+
+        // Noticing and reading the line, a thinking pause and typing at the wizard's own speed: never an instant answer.
+        Answer(wizard, "reply", text, reply, w => {
             if (whisper) {
                 AmbientChat.Whisper(w, speaker, reply);
             }
             else {
                 AmbientChat.Say(w, reply);
             }
-        }), delay);
+        });
         if (wizard.FriendOf(speaker) is not null) {
             Remember(wizard, speaker, helped: false);
         }
