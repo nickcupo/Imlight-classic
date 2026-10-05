@@ -63,6 +63,10 @@ public class Logger {
         ?? "{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [{Level:u3}] {Message:lj}{NewLine}{Exception}";
     private static readonly string s_logLevel = ConfigurationManager.Settings["Logging.LogLevel"].AsString()
         ?? "INFO";
+    private static readonly int s_retainedFiles
+        = int.TryParse(ConfigurationManager.Settings["Logging.RetainedFileCount"].AsString(), out var files) && files > 0 ? files : 31;
+    private static readonly long s_fileSizeLimitMb
+        = long.TryParse(ConfigurationManager.Settings["Logging.FileSizeLimitMB"].AsString(), out var mb) && mb > 0 ? mb : 1024;
     private static readonly string s_seqUrl = ConfigurationManager.Settings["Logging.SeqSinkUrl"].AsString()
         ?? "http://localhost:5341";
 
@@ -74,7 +78,9 @@ public class Logger {
         .Enrich.WithEnvironmentName()
         .Enrich.WithMachineName()
         .WriteTo.Console(outputTemplate: s_logFormat)
-        .WriteTo.File(s_path, rollingInterval: RollingInterval.Day)
+        // CLASSIC: bounded file logs ([Logging] RetainedFileCount, FileSizeLimitMB).
+        .WriteTo.File(s_path, rollingInterval: RollingInterval.Day, retainedFileCountLimit: s_retainedFiles,
+            fileSizeLimitBytes: s_fileSizeLimitMb * 1024L * 1024L, rollOnFileSizeLimit: true)
         .WriteTo.Seq(s_seqUrl)
         .WriteTo.Sink(RecentLogSink.Instance, LogEventLevel.Warning) // CLASSIC: the admin dashboard's recent errors.
         .CreateLogger();
