@@ -34,6 +34,9 @@
  *   1  everything before the bank (implied by a database with no marker)
  *   2  2026-10-04 bank: Wizard.StorageBehavior, SharedBanks/{AccountId},
  *      shared items with owner id 0
+ *   3  2026-10-05 per-owner ignores: Relationship.BlockedBy on BuddyRelationships
+ *      rows (an older build's friend/ignore writes would drop it); old ignored
+ *      rows are migrated at start-up (MigrateIgnoresToPerOwner)
  * Rolling back past a bump needs the pre-deploy backup restored
  * (deploy/linux/deploy-from-mac.sh --rollback --restore-backup).
  * The marker is the same for every rules profile.
@@ -61,7 +64,7 @@ public enum SchemaVerdict {
 public static class PlayerDataSchema {
 
     /// <summary>The version this build writes.</summary>
-    public const int Current = 2;
+    public const int Current = 3;
 
     /// <summary>The marker document's id.</summary>
     public const string DocumentId = "Meta/PlayerDataSchema";

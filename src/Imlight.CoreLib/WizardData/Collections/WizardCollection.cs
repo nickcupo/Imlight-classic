@@ -792,6 +792,7 @@ public static class WizardCollection {
             .Query<Relationship>(collectionName: BuddyRelationshipCollection.CollectionName)
             .Where(x => x.FirstPlayerId == wizard.CharId || x.SecondPlayerId == wizard.CharId)
             .ToList();
+        relationships.ForEach(r => Imlight.CoreLib.Classic.IgnoreRules.MigrateLegacy(r)); // CLASSIC: in memory (schema 3)
         wizard.FriendsBehavior ??= new();
         wizard.FriendsBehavior.Relationships = relationships;
 
