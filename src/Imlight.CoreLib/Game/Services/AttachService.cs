@@ -349,6 +349,12 @@ internal class AttachService(SessionActor sessionActor) : MessageService(session
         };
 
         OnlinePlayerCollection.AddOnlinePlayer(onlinePlayerRef);
+
+        // CLASSIC: this runs on a pool thread; a session that disposed meanwhile already cleared its entries, so take
+        // this late one back off (else the list keeps a dead session until restart).
+        if (SessionActor.IsDisposed) {
+            OnlinePlayerCollection.RemoveSessionByActorPath(onlinePlayerRef.ActorPath);
+        }
     }
 
     private SERVER_100_PROTOCOL.MSG_SERVERINFO GetGameServer() {

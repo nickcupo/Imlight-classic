@@ -503,7 +503,7 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
         }
         if (!_awaitingCombatMoves && !(_ownedMinionEarlyFinishScheduled
             && !caster.IsSummonedMinion && _ownedMinionControl.IsOptedIn(caster.ParticipantObject))) {
-            Logger.Warning("Duel {0} | Slot {1} | Received combat move while not expecting it.",
+            Logger.Debug("Duel {0} | Slot {1} | Received combat move while not expecting it.", // CLASSIC: a late click
                 Logger.Args(Duel.m_duelID.Full, caster.SlotIndex));
 
             return;
@@ -1338,7 +1338,7 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
         }
 
         if (!caster.HasPipsForSpell(spell)) {
-            Logger.Warning("Duel {0} | Slot {1} | Participant does not have enough pips for spell {2}",
+            Logger.Debug("Duel {0} | Slot {1} | Participant does not have enough pips for spell {2}", // CLASSIC: validation working
                 Logger.Args(Duel.m_duelID.Full, caster.SlotIndex, spell.m_templateID));
 
             CombatResolver.AddCombatMove(CombatMoveType.Pass, caster, null, null);

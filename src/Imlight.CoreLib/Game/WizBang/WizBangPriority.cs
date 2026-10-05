@@ -69,13 +69,18 @@ internal class WizBangPriority : RootSingleResourceSingleton<WizBangPriority>, I
         // Convert the WizBangPriorityTemplate, which is a list of string, into a list of our WizBang enum.
         var priorityList = s_wizBangPriority.m_priorityList;
         var wizBangList = new List<WizBangs>(priorityList.Count);
+        var unknown = new List<string>(); // CLASSIC: later wizbangs (PvPLobby, GuildMuseumCurator, ...); one line.
         foreach (var wizBang in priorityList) {
             if (Enum.TryParse(wizBang, out WizBangs wizBangEnum)) {
                 wizBangList.Add(wizBangEnum);
             } else {
-                Logger.Error("Could not parse {0} as {1}", 
-                    Logger.Args(wizBang, nameof(WizBangs)));
+                unknown.Add(wizBang.ToString());
             }
+        }
+
+        if (unknown.Count > 0) {
+            Logger.Debug("WizBang priority list: {0} entries this server has no WizBang for (later content), skipped: {1}",
+                Logger.Args(unknown.Count, string.Join(", ", unknown)));
         }
 
         s_wizBangList = wizBangList;

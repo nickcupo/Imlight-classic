@@ -328,9 +328,20 @@ public static class ClassicStartup {
         Logger.Information("Classic zone census over {Total} client zones: {Open} open, {Closed} closed, {Unmapped} unmapped.",
             Logger.Args(zones.Count, open, closed, unmapped));
         if (unmappedRoots.Count > 0) {
-            Logger.Warning("Classic zones no zone-map prefix covers start with: {Roots}",
-                Logger.Args(string.Join(", ", unmappedRoots)));
+            // CLASSIC: roots known to be later content and closed by being unmapped (PvPRankedMatches) are a census
+            // fact; any other root is news.
+            var news = unmappedRoots.Where(root => !KnownUnmappedRoots.Contains(root)).ToList();
+            if (news.Count > 0) {
+                Logger.Warning("Classic zones no zone-map prefix covers start with: {Roots}",
+                    Logger.Args(string.Join(", ", news)));
+            }
+
+            Logger.Debug("Classic zones unmapped by design: {Roots}",
+                Logger.Args(string.Join(", ", unmappedRoots.Except(news))));
         }
     }
+
+    /// <summary>CLASSIC: client zone roots that are later content, left unmapped (and so closed) on purpose.</summary>
+    private static readonly HashSet<string> KnownUnmappedRoots = new(StringComparer.OrdinalIgnoreCase) { "PvPRankedMatches" };
 
 }

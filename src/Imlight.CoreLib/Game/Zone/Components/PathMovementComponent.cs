@@ -204,7 +204,12 @@ internal sealed class PathMovementComponent(ZoneEntity entity) : ZoneEntityCompo
         // Capture the current position as the start of this movement segment for
         // interpolation before UpdateGameObjectLocation overwrites m_location.
         _lastStartLocation = Entity.ActiveGameObject.m_location;
-        _currentNode = GetNextNode();
+        var nextNode = GetNextNode();
+        if (nextNode is null) {
+            return; // CLASSIC: a path with no nodes; the creature stands.
+        }
+
+        _currentNode = nextNode;
 
         // Determine how long it will take to reach the new node.
         var distanceToNewNode = Vector3.Distance(_lastStartLocation, _currentNode.m_location);
@@ -252,48 +257,56 @@ internal sealed class PathMovementComponent(ZoneEntity entity) : ZoneEntityCompo
     }
 
     private NodeObject GetNextNode() {
-        if (_currentNode is null) {
-            return _approachNode ?? _nodes.First();
+        if (_nodes is null || _nodes.Count == 0) {
+            return null; // CLASSIC: no nodes, nowhere to go.
         }
 
-        // If the path type is chain, we move node1 -> node2 -> node3 -> node2 -> node1.
-        if (_pathType == PathType.PT_CHAIN) {
-            var currentIndex = _nodes.IndexOf(_currentNode);
-            var nextIndex = currentIndex + _currentChainDirection;
+        if (_currentNode is null) {
+            return _approachNode ?? _nodes[0];
+        }
+
+        if (_pathType is not (PathType.PT_CHAIN or PathType.PT_LOOP or PathType.PT_RANDOM)) {
+            throw new NotImplementedException($"Path type {_pathType} is not implemented.");
+        }
+
+        var nextIndex = _pathType == PathType.PT_RANDOM
+            ? new Random().Next(0, _nodes.Count)
+            : NextNodeIndex(_pathType, _nodes.IndexOf(_currentNode), _nodes.Count, ref _currentChainDirection, _pathDirection);
+
+        return _nodes[nextIndex];
+    }
+
+    /// <summary>
+    /// The index of the next node on a chain (node1 -> node2 -> node3 -> node2 -> node1) or a loop (node1 -> node2 ->
+    /// node3 -> node1, reversed when <paramref name="pathDirection"/> is not 0). CLASSIC: always an index of the
+    /// path. A one-node chain stepped to -1 and a creature off its path (the current node is the approach node, index -1)
+    /// could too (ArgumentOutOfRange on MSG_CREATUREMOVEINTERVAL, rig-pg-mb 2026-10-04; the creature froze).
+    /// </summary>
+    internal static int NextNodeIndex(PathType pathType, int currentIndex, int count, ref int chainDirection, int pathDirection) {
+        if (count <= 1) {
+            return 0;
+        }
+
+        if (currentIndex < 0 || currentIndex >= count) {
+            return 0; // Not on the path (the approach node): start at its first node.
+        }
+
+        if (pathType == PathType.PT_CHAIN) {
+            var nextIndex = currentIndex + chainDirection;
 
             // If the next index is out of bounds, then we reverse the direction.
-            if (nextIndex < 0 || nextIndex >= _nodes.Count) {
-                _currentChainDirection = -_currentChainDirection;
-                nextIndex = currentIndex + _currentChainDirection;
+            if (nextIndex < 0 || nextIndex >= count) {
+                chainDirection = -chainDirection;
+                nextIndex = currentIndex + chainDirection;
             }
 
-            return _nodes[nextIndex];
+            return Math.Clamp(nextIndex, 0, count - 1);
         }
 
-        // If the path type is loop, we move node1 -> node2 -> node3 -> node1 or reversed based on _pathDirection.
-        if (_pathType == PathType.PT_LOOP) {
-            var currentIndex = _nodes.IndexOf(_currentNode);
-            var nextIndex = _pathDirection == 0 ? currentIndex + 1 : currentIndex - 1;
+        // Loop: wrap around to the start or end.
+        var next = pathDirection == 0 ? currentIndex + 1 : currentIndex - 1;
 
-            // If the next index is out of bounds, then we loop back to the start or end based on _pathDirection.
-            if (nextIndex >= _nodes.Count) {
-                nextIndex = 0;
-            }
-            else if (nextIndex < 0) {
-                nextIndex = _nodes.Count - 1;
-            }
-
-            return _nodes[nextIndex];
-        }
-
-        // If the path type is random, we move to a random node.
-        if (_pathType == PathType.PT_RANDOM) {
-            var randomIndex = new Random().Next(0, _nodes.Count);
-
-            return _nodes[randomIndex];
-        }
-
-        throw new NotImplementedException($"Path type {_pathType} is not implemented.");
+        return next >= count ? 0 : next < 0 ? count - 1 : next;
     }
 
     private void BroadcastMovement(NodeObject nodeObject) {

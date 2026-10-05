@@ -41,6 +41,7 @@
  */
 
 using System;
+using System.Threading.Tasks;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net.Sockets;
@@ -96,7 +97,10 @@ public sealed partial class SessionActor : ReceiveActor, IDisposable {
     private readonly List<IMessage> _preInitMessages = new();
     private IActorRef _socketListenerRef;
     private IActorRef _socketSenderRef;
-    private bool _isDisposed;
+    private volatile bool _isDisposed;
+
+    /// <summary>CLASSIC: true once Dispose ran; a service that adds this session somewhere checks it afterwards.</summary>
+    internal bool IsDisposed => _isDisposed;
     private long _lastPacketReceivedTicks;
 
     // ctor
@@ -203,33 +207,58 @@ public sealed partial class SessionActor : ReceiveActor, IDisposable {
     }
 
     /// <summary>
-    /// Dispatches a <see cref="IServerMessage"/> to any service that can handle the message. Awaits a response
-    /// with a timeout of 2 seconds.
+    /// Dispatches a <see cref="IServerMessage"/> to any service that can handle the message and waits for the answer.
     /// </summary>
-    /// <param name="msg"></param>
-    /// <typeparam name="T"></typeparam>
-    /// <returns></returns>
+    /// <remarks>
+    /// This blocks the calling service (not this SessionActor) until the answer or the timeout. CLASSIC: new code uses
+    /// <see cref="HandleInternalAskAsync{T}"/> with PipeTo instead. A disposed session's siblings are stopping, so the
+    /// wait there is short: a disposed session's ZoneService used to sit out the full 20 s (live 2026-10-01).
+    /// </remarks>
     public T HandleInternalAsk<T>(IServerMessage msg)
         where T : IServerMessage {
+        var timeout = _isDisposed ? DisposedAskTimeout : InternalAskTimeout;
+        var task = HandleInternalAskAsync<T>(msg, timeout);
+        try {
+            return task.Result;
+        }
+        catch (Exception ex) {
+            Logger.Warning("SessionActor {0} service asked another service with {1}, but got no answer{2}: {3}",
+                Logger.Args(SessionID, msg.GetType().Name, _isDisposed ? " (session disposing)" : "", ex.GetBaseException().Message));
+
+            return default;
+        }
+    }
+
+    /// <summary>CLASSIC: how long an internal Ask waits for a sibling service.</summary>
+    internal static readonly TimeSpan InternalAskTimeout = TimeSpan.FromSeconds(20);
+
+    /// <summary>CLASSIC: how long it waits once the session is disposing.</summary>
+    internal static readonly TimeSpan DisposedAskTimeout = TimeSpan.FromSeconds(2);
+
+    /// <summary>
+    /// CLASSIC: the non-blocking internal Ask. The task completes with the first handling service's answer, or with
+    /// default when no other service handles <paramref name="msg"/>; it faults on timeout. Pipe it to the asking actor
+    /// (<c>PipeTo(Self, ...)</c>) rather than waiting on it.
+    /// </summary>
+    public Task<T> HandleInternalAskAsync<T>(IServerMessage msg, TimeSpan? timeout = null)
+        where T : IServerMessage {
+        // Sender is only meaningful on this actor's own thread; services call this from theirs, where it is NoSender.
+        IActorRef asker = null;
+        try { asker = Sender; } catch (NotSupportedException) { }
+
         if (_dispatchTable.TryGetValue(msg.GetType(), out var handlers)) {
             foreach (var handler in handlers) {
-                if (handler == Sender) {
+                if (handler == asker || handler is IInternalActorRef { IsTerminated: true }) {
                     continue;
                 }
 
-                try {
-                    return handler.Ask<T>(msg, timeout: TimeSpan.FromSeconds(20)).Result;
-                }
-                catch (Exception ex) {
-                    Logger.Error("SessionActor service attempted to ask another service with {0}, but the timeout " +
-                              "was exceeded. {1}", Logger.Args(msg.GetType(), ex.Message));
-                }
+                return handler.Ask<T>(msg, timeout: timeout ?? InternalAskTimeout);
             }
         }
 
         Unhandled(msg);
 
-        return default(T);
+        return Task.FromResult(default(T));
     }
 
     /// <summary>
@@ -297,6 +326,12 @@ public sealed partial class SessionActor : ReceiveActor, IDisposable {
         Logger.Debug("SessionActor {Id} disposing.", Logger.Args(SessionID));
         _isDisposed = true;
 
+        // CLASSIC: the session is gone for everyone at once. Zone triggers stop asking it for its wizard (each Ask
+        // waited 5 s, one after another: 40 s of stalled triggers on live 2026-10-01), and it leaves the online list
+        // (a teleport-to-friend asked a partner disposed seconds earlier, rig-pg-ms 2026-10-04).
+        Classic.PlayerQuery.MarkGone(ActorRef);
+        Imlight.CoreLib.WizardData.Collections.OnlinePlayerCollection.RemoveSessionByActorPath(ActorRef?.Path.ToString());
+
         // Send a message to the server to deallocate this SessionActor.
         var msg = new SERVER_100_PROTOCOL.MSG_DEALLOCATESOCKET() {
             Id = SessionID,
@@ -359,9 +394,17 @@ public sealed partial class SessionActor : ReceiveActor, IDisposable {
     }
 
     protected override void Unhandled(object message) {
-        // Bump this up to warning on release builds.
+        // CLASSIC: a client request no service handles is a silent spinner or hang for the player. Warn once per message
+        // type per process, so one play session lists the real missing handlers; the rest stay at Verbose.
+        if (message is not IServerMessage && Classic.UnhandledMessageLog.FirstTime(message?.GetType())) {
+            Logger.Warning("SessionActor {Id} received unhandled message of type {Type} (first of its type; later ones at Verbose).",
+                Logger.Args(SessionID, message?.GetType().Name));
+
+            return;
+        }
+
         Logger.Verbose("SessionActor {Id} received unhandled message of type {Type}.",
-            Logger.Args(SessionID, message.GetType()));
+            Logger.Args(SessionID, message?.GetType()));
     }
 
     private void ConfigureReceivers() {

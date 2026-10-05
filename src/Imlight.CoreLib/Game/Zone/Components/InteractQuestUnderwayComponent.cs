@@ -230,16 +230,38 @@ internal sealed class InteractQuestUnderwayComponent(ZoneEntity entity)
 
     private void ShowQuestUnderwayDialog(IActorRef playerActor, QuestTemplate quest) {
         var dialogList = quest.m_dialogList as ActorDialogList;
-        var underwayDialogList = dialogList?.m_dialogs.FirstOrDefault(de => de.m_dialogTag == "Underway");
+        var underwayDialogList = UnderwayDialog(dialogList, out var fellBack);
 
         if (underwayDialogList == null) {
-            Logger.Error("Quest {0} has no 'Underway' dialog entry.",
+            Logger.Warning("Quest {0} has no 'Underway' or 'Prep' dialog entry; the NPC says nothing.",
                 Logger.Args(quest.m_questName));
 
             return;
         }
 
+        if (fellBack && Classic.LogOnce.FirstTime("quest-underway-fallback", quest.m_questName?.ToString())) {
+            Logger.Information("Quest {0} has no 'Underway' dialog entry; its 'Prep' (offer) text is shown instead.",
+                Logger.Args(quest.m_questName));
+        }
+
         SendActorDialog(playerActor, underwayDialogList, "QuestInfo");
+    }
+
+    /// <summary>
+    /// CLASSIC: the quest's 'Underway' dialog, else its 'Prep' (offer) dialog, which restates the task. A few quests
+    /// (WC-CLASSIC-SIDE-*, DS-NEC3-C01-002, DS-NEC3-C02-001) have no Underway entry in the client data and no dated
+    /// source gives one, so talking to their NPC mid-quest showed nothing.
+    /// </summary>
+    internal static ActorDialog UnderwayDialog(ActorDialogList dialogList, out bool fellBack) {
+        fellBack = false;
+        var underway = dialogList?.m_dialogs?.FirstOrDefault(de => de.m_dialogTag == "Underway");
+        if (underway is not null) {
+            return underway;
+        }
+
+        fellBack = true;
+
+        return dialogList?.m_dialogs?.FirstOrDefault(de => de.m_dialogTag == "Prep");
     }
 
     private void SendActorDialog(IActorRef playerActor, ActorDialog dialogEntry, string completionType, ulong questId = 0, ulong goalId = 0) {

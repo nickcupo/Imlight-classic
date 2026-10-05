@@ -44,6 +44,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text;
 using Imcodec.Wad;
 using Imlight.Common;
@@ -162,6 +163,7 @@ internal class Locale : RootDirectoryResourceSingleton<Locale>, IMemoryStreamDis
     private static Dictionary<string, string> ProcessLocaleFile(FileEntry record, Memory<byte>? stream) {
         var strings = ReadStrings(stream);
         var data = new Dictionary<string, string>();
+        var duplicates = new List<string>(); // CLASSIC: one summary line per file (KingsIsle's data repeats keys).
 
         for (int i = 1; i < strings.Length; i += 3) {
             if (i + 2 >= strings.Length) {
@@ -180,13 +182,17 @@ internal class Locale : RootDirectoryResourceSingleton<Locale>, IMemoryStreamDis
             }
 
             if (data.ContainsKey(key)) {
-                Logger.Warning("Duplicate key {0} in {1}.",
-                    Logger.Args(key, record.FileName));
+                duplicates.Add(key);
 
                 continue;
             }
 
             data.Add(key, value);
+        }
+
+        if (duplicates.Count > 0) {
+            Logger.Debug("{0}: {1} duplicate key(s), the first of each kept: {2}.",
+                Logger.Args(record.FileName, duplicates.Count, string.Join(", ", duplicates.Take(20))));
         }
 
         return data;

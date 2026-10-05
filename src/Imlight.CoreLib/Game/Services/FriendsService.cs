@@ -600,6 +600,9 @@ internal class FriendsService(SessionActor sessionActor) : MessageService(sessio
                 failure: ex => new GoToPlayerAnswer(targetID, zone, null, ex, instanceOwner));
     }
 
+    /// <summary>CLASSIC: told to a wizard whose teleport-to-friend got no answer from the friend's session.</summary>
+    internal const string FriendNotAvailableMessage = "Your friend is not available.";
+
     /// <summary>CLASSIC: the target's answer to a teleport-to-friend question.</summary>
     internal sealed record GoToPlayerAnswer(ulong TargetId, string Zone, CHARACTER_103_PROTOCOL.MSG_CHARACTER Answer,
                                             Exception Error = null, ulong InstanceOwner = 0);
@@ -607,8 +610,10 @@ internal class FriendsService(SessionActor sessionActor) : MessageService(sessio
     [MessageHandler(typeof(GoToPlayerAnswer))]
     private void ReceiveGoToPlayerAnswer(GoToPlayerAnswer answer) {
         if (answer.Error is not null) {
-            // The blocking version let the timeout escape the handler; log it instead.
-            Logger.Error("Failed to query the target wizard for teleportation: {0}", Logger.Args(answer.Error.Message));
+            // The blocking version let the timeout escape the handler; log it instead. The friend's session is gone or
+            // stuck (rig-pg-ms 2026-10-04: 13 silent timeouts against a partner disposed 6 s earlier): say so.
+            Logger.Warning("Failed to query the target wizard for teleportation: {0}", Logger.Args(answer.Error.Message));
+            InformGameClient(FriendNotAvailableMessage);
 
             return;
         }
@@ -637,7 +642,8 @@ internal class FriendsService(SessionActor sessionActor) : MessageService(sessio
                 refuseWhenFull: inInstance
             );
         } else {
-            Logger.Error("Failed to query the target wizard for teleportation.");
+            Logger.Warning("Failed to query the target wizard for teleportation.");
+            InformGameClient(FriendNotAvailableMessage);
         }
     }
 
