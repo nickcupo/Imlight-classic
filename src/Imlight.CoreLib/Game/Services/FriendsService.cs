@@ -735,7 +735,7 @@ internal class FriendsService(SessionActor sessionActor) : MessageService(sessio
         }
 
         // CLASSIC: the ignore list is capped (every entry is a database row; security audit 2026-10-04).
-        if (!FriendRules.MayIgnoreAnother(wizard.FriendsBehavior.Relationships?.Count(r => r.Blocked) ?? 0)) {
+        if (!FriendRules.MayIgnoreAnother(wizard.FriendsBehavior.GetIgnoredCharacterIds(wizard.CharId).Count)) { // CLASSIC: this wizard's ignores
             InformGameClient($"Your ignore list is full ({FriendRules.MaxIgnored}).");
 
             return;

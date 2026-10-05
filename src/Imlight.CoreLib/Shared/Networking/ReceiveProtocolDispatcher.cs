@@ -78,6 +78,12 @@ public class ReceiveProtocolDispatcher : ReceiveActor {
     protected virtual void OnDispatcherConstructed() { }
 
     /// <summary>
+    /// CLASSIC: a handler threw. Return true when the receiver has dealt with it (logged it and acted); false lets it
+    /// reach the supervisor as before. Runs inside the exception filter, before any finally block.
+    /// </summary>
+    protected virtual bool OnHandlerFault(object message, Exception exception) => false;
+
+    /// <summary>
     /// CLASSIC: a client message that reached a service with no handler for it is warned about once per message type per
     /// process (it is a spinner or a hang for the player); server-internal messages stay with Akka's default. Only a
     /// session's services count: zone entities are also told the zone's broadcasts (combat, aggro, objects) and ignore
@@ -111,6 +117,9 @@ public class ReceiveProtocolDispatcher : ReceiveActor {
         var started = Classic.PerfMonitor.Begin();
         try {
             handler(this, message);
+        }
+        catch (Exception ex) when (OnHandlerFault(message, ex)) {
+            // CLASSIC: handled by the receiver (a session service closes its session; MessageService.OnHandlerFault).
         }
         finally {
             // CLASSIC: a component's own message is named by the component and what it got, not the envelope.

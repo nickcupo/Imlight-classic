@@ -362,6 +362,28 @@ internal abstract class MessageService(SessionActor sessionActor) : ReceiveProto
     protected void InformGameClient(string reason, bool isImportant = false)
         => SessionActor.ActorRef.Tell(Classic.ClassicChat.Notice(reason, isImportant));
 
+    /// <summary>
+    /// CLASSIC (multiplayer audit item D): a handler of this service threw. The session used to stop every service at
+    /// once (Directive.Stop): no OnPreDispose ran, so the wizard was not saved and stayed in its zone as a frozen ghost.
+    /// Now the exception is logged once with its context and the session closes the normal way (SessionActor.Dispose:
+    /// every service's OnPreDispose, which saves the wizard and leaves the zone, then the socket closes). A
+    /// ServiceRetryException still goes to the supervisor, which restarts this service alone.
+    /// </summary>
+    protected override bool OnHandlerFault(object message, Exception exception) {
+        if (exception is ServiceRetryException || SessionActor is null) {
+            return false;
+        }
+
+        SessionFaults.Report(SessionActor, GetType().Name, message, exception);
+
+        // The session's dispose waits for this answer; without it every later service waited out the 2 s timeout.
+        if (message is SERVICE_101_PROTOCOL.MSG_PREDISPOSE) {
+            Sender.Tell(new SERVICE_101_PROTOCOL.MSG_PREDISPOSE());
+        }
+
+        return true;
+    }
+
     protected override void PreRestart(Exception reason, object message) {
         Logger.Error("MessageService {ServiceName} restarting due to {Reason}",
             Logger.Args(GetType().Name, reason.Message));

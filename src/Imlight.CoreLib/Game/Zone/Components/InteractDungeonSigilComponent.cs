@@ -164,13 +164,21 @@ internal sealed partial class InteractDungeonSigilComponent(ZoneEntity entity)
             ticket = _group?.Join(playerCharacter.CharId, now, Classic.Ambient.AmbientWizards.IsAmbient(playerActor));
             if (ticket is null) {
                 if (_group is not null && _group.IsOpen(now)) {
-                    return; // every slot is taken
+                    // Every slot is taken. 2009 had no "sigil full" string for a dungeon sigil (sigil-arena-2009.md),
+                    // so the fifth wizard is silently not counted; a slot frees when a wizard steps off before zero.
+                    return;
                 }
 
                 // CLASSIC: the wizard who starts the countdown goes back to the copy of this dungeon they left "another
                 // way" within the return window (2009: "Leaving any other way gives you 30 minutes to return before it
-                // resets"; Classic.InstanceResets); otherwise the sigil starts a new copy.
+                // resets"; Classic.InstanceResets); otherwise the sigil starts a new copy. A run that already has a
+                // sigil group counting down (another pad, another wizard of that run) is not reused: two groups under one
+                // run id would overwrite each other's step-off tracking (GroupInstances.TrackSigilGroup).
                 var resumed = InstanceResets.ResumableRun(playerCharacter.CharId, sigil.DestinationZone, now);
+                if (resumed != 0 && GroupInstances.HasLiveSigilGroup(resumed, now)) {
+                    resumed = 0;
+                }
+
                 if (resumed != 0) {
                     Logger.Information("Dungeon sigil -> '{0}': {1} returns to sigil run {2}.",
                         Logger.Args(sigil.DestinationZone, playerCharacter.CharId, resumed));
@@ -178,6 +186,7 @@ internal sealed partial class InteractDungeonSigilComponent(ZoneEntity entity)
 
                 _group = new SigilGroup(resumed != 0 ? resumed : GroupInstances.NewRunId(now), now,
                     GroupInstances.SigilCountdownSeconds);
+                GroupInstances.TrackSigilGroup(_group, now); // CLASSIC: a session steps off it by run id (ZoneService)
                 ticket = _group.Join(playerCharacter.CharId, now);
             }
 

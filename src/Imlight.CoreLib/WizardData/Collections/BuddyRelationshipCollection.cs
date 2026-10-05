@@ -54,6 +54,8 @@
 using System.Collections.Generic;
 using System.Linq;
 using Raven.Client.Documents;
+using Imlight.Common;
+using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.WizardData.Databases;
 using Imlight.CoreLib.WizardData.Models.Misc;
 using Imlight.CoreLib.WizardData.Models.Player;
@@ -104,7 +106,9 @@ public static class BuddyRelationshipCollection {
             if (!relationship.Blocked) {
                 existingRelationship.IsBrokenUp = false;
             }
-            existingRelationship.Blocked = relationship.Blocked;
+            // CLASSIC: who ignores whom is changed only through SetIgnore, for its owner alone; a friendship restored
+            // here used to overwrite the row's one Blocked flag, which is both wizards' (multiplayer audit item C).
+            IgnoreRules.MigrateLegacy(existingRelationship);
 
             // Update the metadata so that the entry no longer expires.
             var existingMetadata = session.Advanced.GetMetadataFor(existingRelationship);
@@ -154,13 +158,16 @@ public static class BuddyRelationshipCollection {
             return;
         }   
 
-        // Update the relationship.
-        existingRelationship.Blocked = relationship.Blocked;
+        // Update the relationship. CLASSIC: not who ignores whom (SetIgnore): this copy is one wizard's, loaded at its
+        // login, and would undo an ignore the other wizard made since.
+        IgnoreRules.MigrateLegacy(existingRelationship);
         existingRelationship.IsBrokenUp = relationship.IsBrokenUp;
 
         var metadata = session.Advanced.GetMetadataFor(existingRelationship);
         metadata[Raven.Client.Constants.Documents.Metadata.Collection] = CollectionName;
-        metadata[Raven.Client.Constants.Documents.Metadata.Expires] = KeyExpireTimeInHours;
+        if (!existingRelationship.Blocked) { // CLASSIC: an ignore does not lapse with a removed friendship
+            metadata[Raven.Client.Constants.Documents.Metadata.Expires] = KeyExpireTimeInHours;
+        }
 
         session.SaveChanges();
     }
@@ -206,8 +213,12 @@ public static class BuddyRelationshipCollection {
     public static List<Relationship> GetRelationshipsForPlayer(ulong playerId) {
         using var session = s_store.OpenSession();
 
-        return [.. session.Query<Relationship>(collectionName: CollectionName)
-            .Where(r => r.FirstPlayerId == playerId || r.SecondPlayerId == playerId)];
+        var relationships = session.Query<Relationship>(collectionName: CollectionName)
+            .Where(r => r.FirstPlayerId == playerId || r.SecondPlayerId == playerId)
+            .ToList();
+        relationships.ForEach(r => IgnoreRules.MigrateLegacy(r)); // CLASSIC: in memory only; nothing is saved here
+
+        return relationships;
     }
 
     /// <summary>
@@ -244,12 +255,20 @@ public static class BuddyRelationshipCollection {
     /// <param name="targetId">The character ID of the player who may have been blocked.</param>
     /// <returns>True if the blocker has blocked the target.</returns>
     public static bool HasBlocked(ulong blockerId, ulong targetId) {
+        // CLASSIC: the row is shared and its order is whoever first asked; who ignores is in BlockedBy (IgnoreRules).
+        // Before, this read "first player ignores second", so A ignoring a friend B could silence A to B instead.
         using var session = s_store.OpenSession();
 
-        return session.Query<Relationship>(collectionName: CollectionName)
-            .Any(r => r.FirstPlayerId == blockerId
-                   && r.SecondPlayerId == targetId
-                   && r.Blocked);
+        var rows = session.Query<Relationship>(collectionName: CollectionName)
+            .Where(r => r.Blocked
+                     && ((r.FirstPlayerId == blockerId && r.SecondPlayerId == targetId)
+                      || (r.FirstPlayerId == targetId && r.SecondPlayerId == blockerId)))
+            .ToList();
+        foreach (var row in rows) {
+            IgnoreRules.MigrateLegacy(row); // in memory only
+        }
+
+        return rows.Any(r => IgnoreRules.Ignores(r, blockerId, targetId));
     }
 
     /// <summary>
@@ -267,16 +286,109 @@ public static class BuddyRelationshipCollection {
         var version = System.Threading.Volatile.Read(ref s_blockedVersion);
         using var session = s_store.OpenSession();
 
-        var blockers = session.Query<Relationship>(collectionName: CollectionName)
+        // CLASSIC: the target's ignored rows, either order; the ignoring wizards are those in BlockedBy (IgnoreRules).
+        var rows = session.Query<Relationship>(collectionName: CollectionName)
             .Statistics(out var stats)
-            .Where(r => r.SecondPlayerId == targetId && r.Blocked)
-            .Select(r => r.FirstPlayerId)
-            .ToArray();
+            .Where(r => r.Blocked && (r.FirstPlayerId == targetId || r.SecondPlayerId == targetId))
+            .ToList();
+        foreach (var row in rows) {
+            IgnoreRules.MigrateLegacy(row); // in memory only
+        }
+
+        var blockers = IgnoreRules.WhoIgnore(rows, targetId).ToArray();
         if (!stats.IsStale && System.Threading.Volatile.Read(ref s_blockedVersion) == version) {
             s_blockedBy[targetId] = blockers;
         }
 
         return blockers;
+    }
+
+    /// <summary>
+    /// CLASSIC: records or lifts <paramref name="ownerId"/>'s ignore of <paramref name="targetId"/> on their shared row,
+    /// creating a broken-up row when the two have none (so lifting the ignore makes no friendship). The other wizard's
+    /// own ignore is left as it is. Returns the stored row, or null when an ignore is lifted that has no row.
+    /// </summary>
+    public static Relationship SetIgnore(ulong ownerId, ulong targetId, bool ignore) {
+        InvalidateBlockedCache();
+        try {
+            using var session = s_store.OpenSession();
+
+            var row = session.Query<Relationship>(collectionName: CollectionName)
+                .Customize(x => x.WaitForNonStaleResults())
+                .FirstOrDefault(r => (r.FirstPlayerId == ownerId  && r.SecondPlayerId == targetId)
+                                  || (r.FirstPlayerId == targetId && r.SecondPlayerId == ownerId));
+            if (row is null) {
+                if (!ignore) {
+                    return null;
+                }
+
+                row = new Relationship {
+                    RelationshipId = Shared.Utilities.RandomGen.GenerateGUID(),
+                    FirstPlayerId = ownerId,
+                    SecondPlayerId = targetId,
+                    IsBrokenUp = true, // born broken: lifting the ignore makes no friendship
+                    RelationshipEpochInSeconds = (uint) System.DateTimeOffset.Now.ToUnixTimeSeconds(),
+                };
+                session.Store(row);
+            }
+
+            IgnoreRules.MigrateLegacy(row);
+            IgnoreRules.SetIgnore(row, ownerId, ignore);
+
+            var metadata = session.Advanced.GetMetadataFor(row);
+            metadata[Raven.Client.Constants.Documents.Metadata.Collection] = CollectionName;
+            if (row.Blocked) {
+                metadata.Remove(Raven.Client.Constants.Documents.Metadata.Expires); // an ignore does not lapse
+            }
+
+            session.SaveChanges();
+
+            return row;
+        }
+        finally {
+            InvalidateBlockedCache();
+        }
+    }
+
+    /// <summary>
+    /// CLASSIC (player data schema 3): rewrites every ignored row written before per-owner ignores (Blocked without
+    /// BlockedBy) with their owners (IgnoreRules.MigrateLegacy: a stranger's row is the first player's ignore, an ignored
+    /// friendship row an ignore both ways, since it does not say who ignored). Idempotent; runs at
+    /// every start-up after the schema check. Returns the number of rows changed.
+    /// </summary>
+    public static int MigrateIgnoresToPerOwner() {
+        InvalidateBlockedCache();
+        try {
+            using var session = s_store.OpenSession();
+            session.Advanced.MaxNumberOfRequestsPerSession = int.MaxValue;
+
+            var rows = session.Query<Relationship>(collectionName: CollectionName)
+                .Customize(x => x.WaitForNonStaleResults(System.TimeSpan.FromSeconds(30)))
+                .Where(r => r.Blocked)
+                .ToList();
+            var changed = 0;
+            foreach (var row in rows) {
+                var before = (row.FirstPlayerId, row.SecondPlayerId, row.Blocked);
+                if (IgnoreRules.MigrateLegacy(row)) {
+                    changed++;
+                    Logger.Information("Ignore migration: row {0} ({1}-{2}, blocked {3}) is now ignored by [{4}].",
+                        Logger.Args(row.RelationshipId, before.FirstPlayerId, before.SecondPlayerId, before.Blocked,
+                            string.Join(",", row.BlockedBy)));
+                }
+            }
+
+            if (changed > 0) {
+                session.SaveChanges();
+            }
+
+            Logger.Information("Ignore migration: {0} ignored row(s), {1} rewritten as per-owner ignores.",
+                Logger.Args(rows.Count, changed));
+
+            return changed;
+        }
+        finally {
+            InvalidateBlockedCache();
+        }
     }
 
     // CLASSIC: GetCharactersWhoBlocked answers by target, cleared on every write.

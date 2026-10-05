@@ -223,7 +223,7 @@ public sealed class InstanceResetRuntimeTests : IDisposable {
     private readonly System.Collections.Generic.List<ulong> _runs = [];
 
     private ulong NewRun(DateTime now) {
-        var run = NewRun(now);
+        var run = GroupInstances.NewRunId(now);
         _runs.Add(run);
 
         return run;
@@ -322,6 +322,17 @@ public sealed class InstanceResetRuntimeTests : IDisposable {
 
         GroupInstances.EndRun(run);   // the run's copy expired
         Assert.Equal(0UL, InstanceResets.ResumableRun(A, SunkenOut, now.AddMinutes(5)));
+    }
+
+    [Fact]
+    public void AResumedRunIsNotReusedWhileAnotherSigilGroupOfItCountsDown() {
+        var now = DateTime.UtcNow;
+        var run = NewRun(now);
+        Assert.False(GroupInstances.HasLiveSigilGroup(run, now));
+
+        GroupInstances.TrackSigilGroup(new SigilGroup(run, now, GroupInstances.SigilCountdownSeconds), now);
+        Assert.True(GroupInstances.HasLiveSigilGroup(run, now.AddSeconds(5)));
+        Assert.False(GroupInstances.HasLiveSigilGroup(run, now.AddMinutes(5)));   // past the countdown and its linger
     }
 
     [Fact]

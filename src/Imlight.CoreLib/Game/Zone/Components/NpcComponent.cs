@@ -108,6 +108,14 @@ internal sealed class NpcComponent : ZoneEntityComponent, IComponentFactory, ICl
             return;
         }
 
+        // CLASSIC: the school a dated source shows for this creature at the cutoff, where the mob stats name one
+        // (the tutorial's two Draconians: Storm and Fire in 2008-2009 videos, both Ice in the r806919 templates).
+        if (entity.Template is GameObjectTemplate schoolTemplate
+            && ClassicProgression.MobStats?.SchoolOf(schoolTemplate.m_templateID) is { } classicSchool
+            && Enum.TryParse(classicSchool, out MagicSchool overrideSchool)) {
+            parsedSchool = overrideSchool;
+        }
+
         this.MagicSchool = parsedSchool;
         this.Level = _npcBehaviorTemplate.m_nLevel;
     }

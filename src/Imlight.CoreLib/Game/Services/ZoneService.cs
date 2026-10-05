@@ -84,6 +84,7 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
     private const float SIGIL_COUNTDOWN_SECONDS = 10.0f;
     private const float SIGIL_YAW_ERROR_COMPENSATION = 1.58f; // Gamebryo yaw compensation
     private ZONE_102_PROTOCOL.MSG_STARTSIGILENTRY _activeSigilEntry;
+    private ulong _activeSigilCharId; // CLASSIC: who stood on it, to free the group slot without an Ask (dispose)
 
     private readonly CoreObjectSerializer _effectSerializer = new(
         behaviors: SerializerFlags.None
@@ -97,6 +98,11 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
         => Akka.Actor.Props.Create(() => new ZoneService(parentActor));
 
     protected override void OnPreDispose() {
+        // CLASSIC (multiplayer audit B): a wizard who disconnects or changes zone during a sigil countdown frees its
+        // slot in the group (a zone change also closes this session).
+        ReleaseSigilSlot();
+        _activeSigilEntry = null;
+
         SessionActor.PublishDoorAttach(null);
         var gameObj = GetActiveGameObject();
         if (gameObj is null) {
@@ -179,6 +185,12 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
                 message.SendToClient ? InformGameClient : null));
 
             return;
+        }
+
+        // CLASSIC (multiplayer audit B): any other transfer during a sigil countdown (a teleport to a friend, a door)
+        // steps the wizard off the sigil. The sigil's own transfer clears the entry before it gets here.
+        if (_activeSigilEntry is not null) {
+            CancelSigilCountdown();
         }
 
         // CLASSIC: a door or trigger inside an instance leads to the same instance's zones (Classic.GroupInstances).
@@ -309,6 +321,7 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
         );
 
         _activeSigilEntry = message;
+        _activeSigilCharId = GetActiveWizard()?.CharId ?? 0;
 
         SnapPlayerToSigilFace(message);
 
@@ -343,12 +356,8 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
 
         // If the player walked off the pad during the countdown and the client's walk-off cancel never
         // arrived, drop the transfer instead of yanking them from across the street.
-        var pad = Util.GetVectorFromCompactString(_activeSigilEntry.SigilLoc);
-        var pos = wizard.Location;
-        var dx = pad.X - pos.X;
-        var dy = pad.Y - pos.Y;
-        var dz = pad.Z - pos.Z;
-        if ((dx * dx) + (dy * dy) + (dz * dz) > (_activeSigilEntry.Radius * _activeSigilEntry.Radius)) {
+        // CLASSIC: only the wizards still standing on the pad at zero go (Help_Instances03).
+        if (!IsOnSigilPad(_activeSigilEntry, wizard.Location)) {
             CancelSigilCountdown();
 
             return;
@@ -356,6 +365,7 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
 
         var entry = _activeSigilEntry;
         _activeSigilEntry = null;
+        _activeSigilCharId = 0;
 
         // CLASSIC: a sigil run is a new instance shared by the wizards who used the sigil together.
         var owner = entry.RunId != 0 ? entry.RunId : wizard.CharId;
@@ -383,6 +393,49 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
 
         Logger.Information("Client left the dungeon sigil pad — cancelling countdown.");
         CancelSigilCountdown();
+    }
+
+    // CLASSIC (multiplayer audit B): a wizard who walks off the pad during the countdown steps off the sigil at once,
+    // freeing its slot, even when the client sends no MSG_LEAVESIGILTIMERWAITING. A little slack over the pad radius
+    // keeps a move sent just before the snap onto the face from cancelling it.
+    [MessageHandler(typeof(GAME_5_PROTOCOL.MSG_CLIENTMOVE))]
+    private void ReceiveClientMoveDuringSigil(GAME_5_PROTOCOL.MSG_CLIENTMOVE message) {
+        if (_activeSigilEntry is null) {
+            return;
+        }
+
+        var position = new Imcodec.Math.Vector3(
+            unchecked((short) message.LocationX * 4),
+            unchecked((short) message.LocationY * 4),
+            unchecked((short) message.LocationZ * 4));
+        if (IsOnSigilPad(_activeSigilEntry, position, slack: SigilWalkOffSlack)) {
+            return;
+        }
+
+        Logger.Information("Wizard walked off the dungeon sigil pad — cancelling countdown.");
+        CancelSigilCountdown();
+    }
+
+    /// <summary>CLASSIC: how far past the pad radius a move may be before it counts as walking off.</summary>
+    internal const float SigilWalkOffSlack = 1.15f;
+
+    internal static bool IsOnSigilPad(ZONE_102_PROTOCOL.MSG_STARTSIGILENTRY entry, Imcodec.Math.Vector3 position, float slack = 1f) {
+        var pad = Util.GetVectorFromCompactString(entry.SigilLoc);
+
+        return GroupInstances.IsOnPad(pad.X - position.X, pad.Y - position.Y, pad.Z - position.Z, entry.Radius * slack);
+    }
+
+    /// <summary>CLASSIC: frees this wizard's slot in its sigil group, if it is in one.</summary>
+    private void ReleaseSigilSlot() {
+        var entry = _activeSigilEntry;
+        if (entry is null || entry.RunId == 0) {
+            return;
+        }
+
+        var charId = _activeSigilCharId != 0 ? _activeSigilCharId : GetActiveWizard()?.CharId ?? 0;
+        if (GroupInstances.LeaveSigilRun(entry.RunId, charId)) {
+            Logger.Information("Wizard {0} stepped off sigil run {1}; the slot is free.", Logger.Args(charId, entry.RunId));
+        }
     }
 
 
@@ -1149,8 +1202,10 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
     }
 
     private void CancelSigilCountdown() {
+        ReleaseSigilSlot(); // CLASSIC (multiplayer audit B)
         var entry = _activeSigilEntry;
         _activeSigilEntry = null;
+        _activeSigilCharId = 0;
         Timers.Cancel(SIGIL_ENTER_TIMER_KEY);
 
         if (entry is null) {
