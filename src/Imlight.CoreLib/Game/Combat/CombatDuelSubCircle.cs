@@ -361,6 +361,14 @@ public class CombatDuelSubCircle {
             return true;
         }
 
+        // CLASSIC: a summoned minion's power pips count double for its own school, as a wizard's do. A creature's
+        // stats carry no m_schoolID (JsonIgnore, set only for wizards), so a Life minion's Centaur cost its power
+        // pips one each here while the Myth owner's card window (MinionPipsForOwnerWindow) counted them twice:
+        // the card showed castable and every pick came back "not enough pips" (owner, 2026-10-05 01:52).
+        if (IsSummonedMinion && CombatParticipant is { } participant && (uint) participant.m_primaryMagicSchoolID == magicSchoolID) {
+            return true;
+        }
+
         return (MagicSchool) magicSchoolID switch {
             MagicSchool.Storm   => ParticipantGameStats.m_stormMastery   > 0,
             MagicSchool.Fire    => ParticipantGameStats.m_fireMastery    > 0,
