@@ -29,18 +29,22 @@
  * if (fires && activation.IsArmed(message.PlayerActor)) { ... }
  * 
  * NOTE:
- * A trigger starts armed, as stock Imlight treats every trigger, because the
- * server never posts StartZone, the activate event of most triggers. In
+ * A trigger starts armed unless the zone data says it waits for an event
+ * (ZoneTriggerLiveness decides; the server never posts StartZone, the
+ * activate event of most triggers, so StartZone means armed at start). In
  * Rattlebones' tower (WC_Unicorn_T2), TR_ActivateCombat posts
  * Disable_TR_ActivateCombat and then ActivateFrom_TR_ActivateCombat, one of
  * its own fire events; the disarm is what keeps it from firing again.
+ * The "player" key is the state's scope: the zone supervisor passes one key
+ * for a whole instanced zone (KingsIsle's trigger state lives in the zone
+ * instance) and the player's own key in a public zone, so two players in a
+ * shared street stay apart.
  * 
  * TODO:
- * - Is KingsIsle's trigger state per zone instance rather than per player? Per player keeps two players in a shared zone apart.
  * 
  * Created by: Nick with Claude Code (claude-opus-5-5)
  * Version: KALI 1.0
- * Last Updated: 09/27/2026
+ * Last Updated: 10/05/2026
  */
 
 using System;
@@ -57,27 +61,41 @@ public sealed class TriggerActivation<TPlayer> where TPlayer : class {
 
     private readonly HashSet<string> _activateEvents;
     private readonly HashSet<string> _deactivateEvents;
-    private readonly HashSet<TPlayer> _disarmedFor;
-    private bool _disarmedForNoPlayer;
+    private readonly bool _initiallyArmed; // CLASSIC: a trigger that waits for its activate event starts disarmed.
+    private readonly HashSet<TPlayer> _flippedFor; // the players whose state differs from the initial one
+    private bool _flippedForNoPlayer;
 
     /// <summary>
-    /// Creates the state of one trigger, armed for everyone.
+    /// Creates the state of one trigger, armed (or, with <paramref name="initiallyArmed"/> false, disarmed) for everyone.
     /// </summary>
     /// <param name="activateEvents">The trigger's m_activateEvents.</param>
     /// <param name="deactivateEvents">The trigger's m_deactivateEvents.</param>
     /// <param name="players">Compares player keys; null uses the default comparer.</param>
+    /// <param name="initiallyArmed">False for a trigger that waits for one of its activate events.</param>
     public TriggerActivation(IEnumerable<string?>? activateEvents,
                              IEnumerable<string?>? deactivateEvents,
-                             IEqualityComparer<TPlayer>? players = null) {
+                             IEqualityComparer<TPlayer>? players = null,
+                             bool initiallyArmed = true) {
         _activateEvents = ToSet(activateEvents);
         _deactivateEvents = ToSet(deactivateEvents);
-        _disarmedFor = new HashSet<TPlayer>(players ?? EqualityComparer<TPlayer>.Default);
+        _initiallyArmed = initiallyArmed;
+        _flippedFor = new HashSet<TPlayer>(players ?? EqualityComparer<TPlayer>.Default);
     }
 
     /// <summary>
-    /// True when the trigger has a deactivate event, so its state can ever change.
+    /// True when the trigger has a deactivate event, so it can be disarmed.
     /// </summary>
     public bool CanDisarm => _deactivateEvents.Count > 0;
+
+    /// <summary>
+    /// True when the trigger's state can ever change: it can be disarmed, or it starts disarmed.
+    /// </summary>
+    public bool CanChange => CanDisarm || !_initiallyArmed;
+
+    /// <summary>
+    /// True when the trigger is armed before any event.
+    /// </summary>
+    public bool InitiallyArmed => _initiallyArmed;
 
     /// <summary>
     /// Applies an event posted by <paramref name="player"/>. A deactivate event wins over an activate event
@@ -107,17 +125,18 @@ public sealed class TriggerActivation<TPlayer> where TPlayer : class {
     /// True when the trigger may fire for <paramref name="player"/>.
     /// </summary>
     /// <param name="player">The player; null for an event with no player.</param>
-    /// <returns>True unless a deactivate event from the player is still in force.</returns>
+    /// <returns>The initial state unless an event from the player changed it.</returns>
     public bool IsArmed(TPlayer? player)
-        => player is null ? !_disarmedForNoPlayer : !_disarmedFor.Contains(player);
+        => _initiallyArmed != (player is null ? _flippedForNoPlayer : _flippedFor.Contains(player));
 
     private void SetArmed(TPlayer? player, bool armed) {
+        var flipped = armed != _initiallyArmed;
         if (player is null) {
-            _disarmedForNoPlayer = !armed;
-        } else if (armed) {
-            _disarmedFor.Remove(player);
+            _flippedForNoPlayer = flipped;
+        } else if (flipped) {
+            _flippedFor.Add(player);
         } else {
-            _disarmedFor.Add(player);
+            _flippedFor.Remove(player);
         }
     }
 

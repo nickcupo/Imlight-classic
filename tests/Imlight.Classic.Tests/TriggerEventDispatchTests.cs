@@ -188,7 +188,7 @@ public sealed class TriggerEventDispatchTests {
 
         Assert.False(dispatch.Track(exit, exit.Name, ["StartZone"], []));
         dispatch.Dispatch([exit], entry => entry, "StartZone", new Player("p1"), _ => false, _ => true, _ => false,
-            (name, armed) => reported.Add((name, armed)));
+            (_, name, armed) => reported.Add((name, armed)));
 
         Assert.Empty(reported);
         Assert.True(dispatch.IsArmed(exit, new Player("p1")));

@@ -225,6 +225,12 @@ public sealed class ClassicZoneTypeRegistry : TypeRegistry {
         [ClassicResZoneTimer.TypeHash] = typeof(ClassicResZoneTimer),
         [ClassicResModifyTriggerObject.TypeHash] = typeof(ClassicResModifyTriggerObject),
         [ClassicResWait.TypeHash] = typeof(ClassicResWait),
+        // CLASSIC: trigger objects and trigger states (ClassicTriggerObjectTypes.cs).
+        [Imlight.Classic.Quests.TriggerObjectIds.TriggerObjectInfoHash] = typeof(ClassicTriggerObjectInfo),
+        [ClassicResRemoveTriggerObject.TypeHash] = typeof(ClassicResRemoveTriggerObject),
+        [ClassicResAddTriggerObject.TypeHash] = typeof(ClassicResAddTriggerObject),
+        [ClassicResStateChange.TypeHash] = typeof(ClassicResStateChange),
+        [Imlight.Classic.Quests.TriggerObjectIds.ReqTriggerStateHash] = typeof(ClassicReqTriggerState),
     };
 
     public override void RegisterType(uint hash, Type t)

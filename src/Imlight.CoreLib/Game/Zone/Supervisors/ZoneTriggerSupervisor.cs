@@ -80,6 +80,7 @@ internal sealed partial class ZoneTriggerSupervisor(Core.Zone zone) : ZoneEntity
 
         _orderedTriggers.Clear();
         _activation.Clear(); // CLASSIC
+        PrepareTriggerPlan(message); // CLASSIC: initial trigger states and trigger objects (ZoneTriggerSupervisor.TriggerObjects.cs).
         foreach (var trigger in replacedTriggers) {
             var triggerActor = Context.ActorOf(Props.Create(() => new ZoneTrigger(ZoneRef, Zone, trigger)));
             BeginEntityLoad(triggerActor, trigger?.m_triggerName);

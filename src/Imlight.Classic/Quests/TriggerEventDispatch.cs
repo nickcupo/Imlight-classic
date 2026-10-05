@@ -36,7 +36,7 @@
  *
  * Created by: Nick with Claude Code (claude-opus-5-5)
  * Version: KALI 1.0
- * Last Updated: 09/27/2026
+ * Last Updated: 10/05/2026
  */
 
 using System;
@@ -79,16 +79,18 @@ public sealed class TriggerEventDispatch<TKey, TPlayer> where TKey : notnull whe
         => _activation.Clear();
 
     /// <summary>
-    /// Tracks a trigger's arming when it has a deactivate event; other triggers are always armed.
+    /// Tracks a trigger's arming when it has a deactivate event or starts disarmed; other triggers are always armed.
     /// </summary>
     /// <param name="trigger">The trigger's key.</param>
     /// <param name="name">The trigger's name, for logs.</param>
     /// <param name="activateEvents">The trigger's m_activateEvents.</param>
     /// <param name="deactivateEvents">The trigger's m_deactivateEvents.</param>
+    /// <param name="initiallyArmed">False for a trigger that waits for one of its activate events (ZoneTriggerLiveness).</param>
     /// <returns>True when the trigger is tracked.</returns>
-    public bool Track(TKey trigger, string? name, IEnumerable<string?>? activateEvents, IEnumerable<string?>? deactivateEvents) {
-        var state = new TriggerActivation<TPlayer>(activateEvents, deactivateEvents, _players);
-        if (!state.CanDisarm) {
+    public bool Track(TKey trigger, string? name, IEnumerable<string?>? activateEvents, IEnumerable<string?>? deactivateEvents,
+                      bool initiallyArmed = true) {
+        var state = new TriggerActivation<TPlayer>(activateEvents, deactivateEvents, _players, initiallyArmed);
+        if (!state.CanChange) {
             return false;
         }
 
@@ -121,7 +123,7 @@ public sealed class TriggerEventDispatch<TKey, TPlayer> where TKey : notnull whe
     /// <param name="listens">True when the trigger's m_fireEvents hold the event.</param>
     /// <param name="meetsRequirements">True when the player meets the trigger's requirements.</param>
     /// <param name="teleportsSomewhere">True when the trigger has a teleport with a destination.</param>
-    /// <param name="stateChanged">Told the name and new arming of each trigger the event re-armed or disarmed.</param>
+    /// <param name="stateChanged">Told the key, name and new arming of each trigger the event re-armed or disarmed.</param>
     /// <typeparam name="T">The caller's trigger entry.</typeparam>
     /// <returns>The firing triggers in data order.</returns>
     public List<TriggerFire<T>> Dispatch<T>(IEnumerable<T> orderedTriggers,
@@ -131,12 +133,12 @@ public sealed class TriggerEventDispatch<TKey, TPlayer> where TKey : notnull whe
                                             Func<T, bool> listens,
                                             Func<T, bool> meetsRequirements,
                                             Func<T, bool> teleportsSomewhere,
-                                            Action<string, bool>? stateChanged = null) {
+                                            Action<TKey, string, bool>? stateChanged = null) {
         ArgumentNullException.ThrowIfNull(orderedTriggers);
 
-        foreach (var (name, state) in _activation.Values) {
+        foreach (var (trigger, (name, state)) in _activation) {
             if (state.Observe(eventName, player)) {
-                stateChanged?.Invoke(name, state.IsArmed(player));
+                stateChanged?.Invoke(trigger, name, state.IsArmed(player));
             }
         }
 

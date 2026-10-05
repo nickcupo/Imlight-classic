@@ -50,37 +50,50 @@ internal sealed class ZoneObjectSupervisor(Core.Zone zone) : ZoneEntitySuperviso
         // CLASSIC: by the zone path ("WizardCity/WC_Ravenwood"); ZoneName is the display key ("WizardZone_Ravenwood")
         // once the zone data is in, so Mr. Lincoln stayed in Ravenwood and never reached Golem Court.
         foreach (var objectInfo in zoneData.m_objectList.Concat(ClassicMovedObjects.MovedInto(zone.ZonePath))) {
-            if (!IsObjectEligibleForSpawn(objectInfo, zone.ZonePath)) {
-                continue;
+            SpawnPlacedObject(objectInfo, walkerPaths);
+        }
+
+        // CLASSIC: the trigger objects (m_triggerObjInfo: gates, collision walls, teleporter pads), which only the server
+        // creates; the client never reads triggers.xml. ZoneTriggerPlans leaves out the ones nothing would release.
+        if (ClassicQuestEngine.IsActive) {
+            foreach (var objectInfo in ZoneTriggerPlans.For(zone.ZonePath, message.TriggerData, message.VolumeData, zoneData)
+                         .TriggerObjectsToSpawn()) {
+                SpawnPlacedObject(objectInfo, walkerPaths);
             }
-
-            var template = (GameObjectTemplate) CoreObjectFactory.GetCoreTemplate(objectInfo.m_templateID);
-            if (template is null) {
-                Logger.Warning("Could not create {0} because template ID {1} was not found.",
-                    Logger.Args(objectInfo.m_zoneTag, objectInfo.m_templateID));
-
-                continue;
-            }
-
-            var coreObject = CoreObjectFactory.FinalizeCoreObject(objectInfo, template);
-            if (coreObject is null) {
-                Logger.Warning("Could not finalize CoreObject {0} with template ID {1}.",
-                    Logger.Args(objectInfo.m_zoneTag, objectInfo.m_templateID));
-
-                continue;
-            }
-
-            // Determine if this is a critical object.
-            // If so, register it with the Zone.
-            if (IsCriticalObject(template)) {
-                RegisterCriticalObject(coreObject.m_globalID);
-            }
-
-            var entityActor = CreateEntityActor(coreObject, template, objectInfo);
-            TellPlacedWalkerItsPath(entityActor, template, objectInfo, walkerPaths);
         }
 
         ReportLoadedWhenEntitiesLoad();
+    }
+
+    private void SpawnPlacedObject(CoreObjectInfo objectInfo, PlacedWalkerPaths walkerPaths) {
+        if (!IsObjectEligibleForSpawn(objectInfo, zone.ZonePath)) {
+            return;
+        }
+
+        var template = CoreObjectFactory.GetCoreTemplate(objectInfo.m_templateID) as GameObjectTemplate; // CLASSIC: not a cast that throws
+        if (template is null) {
+            Logger.Warning("Could not create {0} because template ID {1} was not found.",
+                Logger.Args(objectInfo.m_zoneTag, objectInfo.m_templateID));
+
+            return;
+        }
+
+        var coreObject = CoreObjectFactory.FinalizeCoreObject(objectInfo, template);
+        if (coreObject is null) {
+            Logger.Warning("Could not finalize CoreObject {0} with template ID {1}.",
+                Logger.Args(objectInfo.m_zoneTag, objectInfo.m_templateID));
+
+            return;
+        }
+
+        // Determine if this is a critical object.
+        // If so, register it with the Zone.
+        if (IsCriticalObject(template)) {
+            RegisterCriticalObject(coreObject.m_globalID);
+        }
+
+        var entityActor = CreateEntityActor(coreObject, template, objectInfo);
+        TellPlacedWalkerItsPath(entityActor, template, objectInfo, walkerPaths);
     }
 
     // CLASSIC: a walker placed in the zone (the Marleybone cops) names its path in its template's PathBehavior; only
