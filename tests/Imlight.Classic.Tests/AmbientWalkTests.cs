@@ -22,9 +22,9 @@
  * PURPOSE:
  * An ambient wizard's walk as the official client draws it: the client
  * runs a mobile to each MSG_SERVERMOVE at a player's speed (600) and
- * stands it there. One move per straight leg, sent when the wizard gets
- * to the leg's start, keeps it running; the old 69-unit step every
- * 300 ms (230 units a second) left it standing most of the time.
+ * stands it there. A step 100 ms ahead, every 100 ms, keeps it running at
+ * a player's pace; the old 69-unit step every 300 ms (230 units a second)
+ * left it standing most of the time.
  *
  * USAGE EXAMPLE:
  * dotnet test server/tests/Imlight.Classic.Tests --filter AmbientWalkTests
@@ -102,22 +102,30 @@ public sealed class AmbientWalkTests {
     }
 
     [Fact]
-    public void OneMovePerLegKeepsTheClientRunningToTheEnd() {
-        // What AmbientZone sends: each leg's far corner when the wizard starts it, at the client's own run speed.
+    public void StreamedStepsKeepTheClientRunningAtAPlayersPace() {
+        // What AmbientZone sends: every 100 ms the spot 100 ms ahead on the leg (never past its corner); each leg
+        // starts when the wizard gets to its start, at the client's own run speed.
+        const double interval = 0.1;
         var moves = new List<(double, Vector3)>();
-        var at = s_t0;
+        var start = s_t0;
         for (var i = 1; i < s_route.Length; i++) {
-            var leg = WalkLeg.Begin(s_route[i - 1], s_route[i], at, AmbientPace.ClientRunSpeed);
-            moves.Add(((at - s_t0).TotalSeconds, leg.To));
-            at = leg.End;
+            var leg = WalkLeg.Begin(s_route[i - 1], s_route[i], start, AmbientPace.ClientRunSpeed);
+            for (var t = start; t < leg.End; t = t.AddSeconds(interval)) {
+                moves.Add(((t - s_t0).TotalSeconds, leg.At(t.AddSeconds(interval))));
+            }
+
+            start = leg.End;
         }
 
-        moves.Add(((at - s_t0).TotalSeconds, s_route[^1])); // the stop at the end
+        moves.Add(((start - s_t0).TotalSeconds, s_route[^1])); // the stop at the end
         var (standing, stops) = ClientStands(s_route[0], moves, AmbientPace.ClientRunSpeed);
 
         Assert.Equal(0, stops);
-        Assert.InRange(standing, 0, 0.001);
-        Assert.Equal(5, moves.Count); // 4 legs and the stop, not a move every 300 ms
+        Assert.InRange(standing, 0, 0.12); // at most a step's worth at the very end
+        // Each step is a player's: about 60 units in 100 ms (the client plays the run from that pace).
+        var steps = moves.Zip(moves.Skip(1), (a, b) => WalkLeg.GroundDistance(a.Item2, b.Item2)).Where(d => d > 1).ToList();
+        Assert.InRange(steps.Average(), 50, 61);
+        Assert.All(steps, d => Assert.InRange(d, 0, 61));
     }
 
     [Fact]

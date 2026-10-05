@@ -29,9 +29,13 @@
  *   - Before: a step of 230 x 0.3 = 69 units every 300 ms. The client ran
  *     each step in 115 ms and stood for 185 ms: a wizard that looks like
  *     someone tapping the forward key.
- *   - Now: one MSG_SERVERMOVE per straight leg of the route (to its far
- *     corner), the next one when the wizard gets there at 600 units a
- *     second; the client runs the whole leg without a stop.
+ *   - Then (2026-10-04, first try): one MSG_SERVERMOVE per straight leg, to
+ *     its far corner. The client moved the mobile smoothly but without its
+ *     run animation (the owner: "they just glide"): it plays the run from
+ *     moves that come at a player's pace, not from one far target.
+ *   - Now: every 100 ms while it runs, a move one step (60 units) ahead of
+ *     the wizard on its leg, as a player's client streams its own; a timer
+ *     turns each corner when the wizard gets there.
  * A leg is a straight run from one point to the next; the server keeps
  * the wizard's spot along it (for aggro, help offers, late spawns).
  *
