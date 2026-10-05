@@ -122,6 +122,14 @@ internal class MinigameService(SessionActor sessionActor) : MessageService(sessi
 
     [MessageHandler(typeof(GAME_5_PROTOCOL.MSG_MESSAGE_PROCESS))]
     private void ReceiveMessageProcess(GAME_5_PROTOCOL.MSG_MESSAGE_PROCESS message) {
+        // CLASSIC: a process message with no minigame running is dropped; it used to throw and
+        // close the session (security audit 2026-10-04).
+        if (_minigameJob is null) {
+            Logger.Debug("Dropped a process message for job {0} with no matching minigame.", Logger.Args(message.JobID));
+
+            return;
+        }
+
         // The raw message is just like any other message sent by the client.
         // However, it does not include the magic header or body.
         // It immediately begins with the DML header, detailing the service ID, message ID, length, and finally the payload.
@@ -174,7 +182,7 @@ internal class MinigameService(SessionActor sessionActor) : MessageService(sessi
     [MessageHandler(typeof(GAME_5_PROTOCOL.MSG_CLIENT_PROCESS_TERMINATED))]
     private void ReceiveClientKilledProcess(GAME_5_PROTOCOL.MSG_CLIENT_PROCESS_TERMINATED message) {
         // The client has terminated the minigame process.
-        if (message.JobID == _minigameProcessId) {
+        if (_minigameJob is not null && message.JobID == _minigameProcessId) { // CLASSIC: none running
             _minigameJob.Tell(message, SessionActor.ActorRef);
         }
     }
@@ -183,6 +191,7 @@ internal class MinigameService(SessionActor sessionActor) : MessageService(sessi
     private void ReceiveProcessKilled(PROCESS_107_PROTOCOL.MSG_PROCESS_KILLED message) {
         if (message.ProcessId == _minigameProcessId) {
             // Our minigame job has been killed.
+            _minigameJob = null; // CLASSIC: later process messages are dropped
             // Inform the client the process has been terminated.
             var terminateMsg = new GAME_5_PROTOCOL.MSG_KILL_CLIENT_PROCESS { JobID = _minigameProcessId };
             SendToSocket(terminateMsg);

@@ -576,7 +576,11 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
     [MessageHandler(typeof(DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_COMBATMOVE))]
     private void ReceiveCombatMove(DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_COMBATMOVE message) {
         if (_currentDuelActor == null) {
-            throw new Exception("Combat move received without a duel actor.");
+            // CLASSIC: a stray move (a late packet after the duel, or a forged one) is dropped; throwing closed the
+            // session (security audit 2026-10-04).
+            Logger.Debug("Combat move received without a duel actor; dropped.");
+
+            return;
         }
 
         _currentDuelActor.Tell(TranslateCombatMove(message, SessionActor.ActorRef));

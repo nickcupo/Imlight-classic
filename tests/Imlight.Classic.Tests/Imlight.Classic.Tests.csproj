@@ -80,6 +80,14 @@
     <Message Importance="high" Text="Server integration tests enabled: $(W101CServerIntegrationTests). Pure rules tests always run." />
   </Target>
 
+  <!-- security-world -->
+  <ItemGroup>
+    <ServerIntegrationTest Include="SecurityWorldServerTests.cs" />
+    <ServerIntegrationTest Include="PlayerOptionIndexTests.cs" />
+    <!-- Listed after the shared Compile Remove above, so removed here for public CI too. -->
+    <Compile Remove="SecurityWorldServerTests.cs;PlayerOptionIndexTests.cs" Condition="'$(W101CServerIntegrationTests)' != 'true'" />
+  </ItemGroup>
+
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.10.1" />
     <PackageReference Include="xunit.v3.mtp-off" Version="4.0.1" />
