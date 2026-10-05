@@ -87,6 +87,13 @@ public class Wizard {
     public string PreviousZone { get; set; }
 
     public ulong InteriorStowedMountId { get; set; }
+
+    /// <summary>
+    /// CLASSIC: the mount the server took off for a duel (<see cref="StowMountForDuel"/>), saved, so a session that
+    /// ends mid-fight (logout, a dropped client, a server restart) gets it back at the next attach
+    /// (<see cref="RestoreDuelStowedMount"/>) instead of finding it in the backpack.
+    /// </summary>
+    public ulong CombatStowedMountId { get; set; }
     public string MarkedZone { get; set; }
     public string MarkedZoneDisplayName { get; set; }
     public uint LastLoginTime { get; set; }
@@ -677,6 +684,62 @@ public class Wizard {
         unequipEffects = CharacterEffectHelper.RemoveEffectsFromWizard(this, template);
 
         return true;
+    }
+
+    /// <summary>
+    /// CLASSIC: takes the equipped mount off for a duel and saves which one it was. Returns its id, or, when no mount
+    /// is equipped, the one a session that dropped mid-fight already stowed (a rejoin); 0 when there is none.
+    /// <paramref name="removedEffects"/> is set only when a mount was taken off here.
+    /// </summary>
+    internal ulong StowMountForDuel(out byte slot, out List<GameEffectBase> removedEffects) {
+        slot = 255;
+        removedEffects = null;
+
+        var mount = EquipmentBehavior.GetItemInSlot(EquipmentSlotType.Mount);
+        if (mount is null) {
+            return CombatStowedMountId;
+        }
+
+        var mountId = mount.m_globalID;
+        slot = EquipmentBehavior.GetSlotOfItem(mountId);
+        if (!EquipmentToInventoryTransfer(mountId, out removedEffects)) {
+            return 0;
+        }
+
+        CombatStowedMountId = mountId;
+        WizardCollection.UpdateCharacterCombatStowedMount(this);
+
+        return mountId;
+    }
+
+    /// <summary>
+    /// CLASSIC: the duel is over (or the wizard attached with a mount still stowed from one): puts the stowed mount
+    /// back on and forgets it. In a zone without mounts it becomes the interior stow, worn again outdoors. Returns
+    /// true when the mount was equipped here (<paramref name="equipEffects"/> then holds its effects).
+    /// </summary>
+    internal bool RestoreDuelStowedMount(bool zoneDisallowsMounts, out List<GameEffectBase> equipEffects) {
+        equipEffects = null;
+        var mountId = CombatStowedMountId;
+        if (mountId == 0) {
+            return false;
+        }
+
+        CombatStowedMountId = 0;
+        WizardCollection.UpdateCharacterCombatStowedMount(this);
+
+        // Sold, traded or worn again since: nothing to restore.
+        if (InventoryBehavior.GetItem(mountId) is null || EquipmentBehavior.GetItemInSlot(EquipmentSlotType.Mount) is not null) {
+            return false;
+        }
+
+        if (zoneDisallowsMounts) {
+            InteriorStowedMountId = mountId;
+            WizardCollection.UpdateCharacterInteriorStowedMount(this);
+
+            return false;
+        }
+
+        return InventoryToEquipmentTransfer(mountId, out equipEffects, out _);
     }
 
     public bool AddSnack(ulong snackTemplateId, out ClientPetSnackItem snackObj) {

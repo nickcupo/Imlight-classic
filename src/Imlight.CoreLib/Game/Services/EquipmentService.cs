@@ -332,6 +332,23 @@ internal class EquipmentService(SessionActor sessionActor) : MessageService(sess
             var wizard = GetActiveWizard();
             var equip = wizard.EquipmentBehavior;
 
+            // CLASSIC: a mount the server took off for a duel that this wizard's last session never finished (a
+            // logout, a dropped client or a restart mid-fight) goes back on at attach; a rejoined duel keeps it stowed.
+            if (!message.Force && wizard.CombatStowedMountId != 0 && !wizard.IsInDuel) {
+                var stowedId = wizard.CombatStowedMountId;
+                if (wizard.RestoreDuelStowedMount(ZoneDisallowsMounts(), out var restoredEffects)) {
+                    var restored = equip.GetItemInSlot(EquipmentSlotType.Mount);
+                    if (restored is not null) {
+                        SendEquipItem(restored, "Mount");
+                    }
+                    SendAddEffects(restoredEffects);
+                    Logger.Information("{0}: the mount {1} stowed for an unfinished duel is worn again.",
+                        Logger.Args(wizard.CharId, stowedId));
+
+                    return;
+                }
+            }
+
             if (message.Force || ZoneDisallowsMounts()) {
                 var mount = equip.GetItemInSlot(EquipmentSlotType.Mount);
                 if (mount is null) {
