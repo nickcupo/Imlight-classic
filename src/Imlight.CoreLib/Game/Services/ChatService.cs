@@ -93,6 +93,10 @@ internal class ChatService(SessionActor sessionActor) : MessageService(sessionAc
     protected static Props Props(SessionActor parentActor)
         => Akka.Actor.Props.Create(() => new ChatService(parentActor));
 
+    // CLASSIC: see the QA hook in ReceiveRequestRadialChat.
+    internal const string QaFaultPhrase = "qa-fault-session";
+    private static readonly bool s_qaFaultHook = ConfigurationManager.Settings["Classic.QaFaultHook"].AsBool();
+
     [MessageHandler(typeof(GAME_5_PROTOCOL.MSG_REQUESTRADIALCHAT))]
     private void ReceiveRequestRadialChat(GAME_5_PROTOCOL.MSG_REQUESTRADIALCHAT message) {
         var charObj = GetActiveGameObject();
@@ -120,6 +124,13 @@ internal class ChatService(SessionActor sessionActor) : MessageService(sessionAc
         var cleanedMessage = CleanMessageTrash(rawMessage);
         if (string.IsNullOrEmpty(cleanedMessage)) {
             return;
+        }
+
+        // CLASSIC: a QA hook for rigs only ([Classic] QaFaultHook, off unless a rig's ini sets it; never in the shipped
+        // ini): this Say makes the handler throw, to check that a failing service saves the wizard, takes it out of
+        // its zone and closes the session (multiplayer audit item D, SessionFaults).
+        if (cleanedMessage.Trim() == QaFaultPhrase && s_qaFaultHook) {
+            throw new InvalidOperationException("QA fault hook ([Classic] QaFaultHook): injected session service failure");
         }
 
         // Parse in-game chat commands. Do not broadcast it to the zone.
