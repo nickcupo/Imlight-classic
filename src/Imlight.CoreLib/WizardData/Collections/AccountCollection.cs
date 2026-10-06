@@ -32,6 +32,8 @@ public static class AccountCollection {
     // CLASSIC: lazy, as WizardCollection's, so the Crowns transactions can be tested with a session double.
     private static readonly Lazy<IDocumentStore> s_storeSource = new(() => PlayerDatabase.Instance.Store);
     private static IDocumentStore s_store => s_storeSource.Value;
+    // CLASSIC: uniqueness spans account IDs/write lanes. Registration always takes this gate before its account lane.
+    private static readonly object s_registrationGate = new();
 
     private const int WriteLaneCount = 1 << 6; // 64 lanes
     private const ulong WriteLaneMask = WriteLaneCount - 1;
@@ -147,29 +149,42 @@ public static class AccountCollection {
     /// </summary>
     /// <param name="account">The account to be created.</param>
     /// <returns>True if the account is successfully created, false if the account already exists.</returns>
-    public static bool CreateAccount(Account account) {
-        return WithWriteLane(account.AccountId, () => {
-            using var session = s_store.OpenSession();
+    public static bool CreateAccount(Account account)
+        => CreateAccount(account, () => s_store.OpenSession(), (session, username) =>
+            // CLASSIC: a previous registration must be visible before the next uniqueness check. Raven's default
+            // string equality is case-insensitive, so an existing case variant is reserved as well.
+            session.Query<Account>(collectionName: CollectionName)
+                .Customize(query => query.WaitForNonStaleResults(TimeSpan.FromSeconds(15)))
+                .Any(existing => existing.Username == username));
 
-            // Return false if the account already exists.
-            if (session.Query<Account>(collectionName: CollectionName)
-                       .Any(c => c.Username == account.Username)) {
-                return false;
-            }
+    internal static bool CreateAccount(Account account, Func<IDocumentSession> openSession,
+        Func<IDocumentSession, string, bool> usernameExists) {
+        ArgumentNullException.ThrowIfNull(account);
+        if (s_heldWriteLane is not null || WizardCollection.HoldsWriteLane)
+            throw new InvalidOperationException("Account registration must start outside account and wizard write lanes.");
+        lock (s_registrationGate) {
+            return WithWriteLane(account.AccountId, () => {
+                using var session = openSession();
 
-            // Foreach character in the account, add it to the database.
-            foreach (var character in account.Characters) {
-                WizardCollection.AddCharacter(character);
-            }
+                // Return false if the account already exists.
+                if (usernameExists(session, account.Username)) {
+                    return false;
+                }
 
-            session.Store(account);
-            var metadata = session.Advanced.GetMetadataFor(account);
-            metadata[Raven.Client.Constants.Documents.Metadata.Collection] = CollectionName;
+                // Foreach character in the account, add it to the database.
+                foreach (var character in account.Characters) {
+                    WizardCollection.AddCharacter(character);
+                }
 
-            session.SaveChanges();
+                session.Store(account);
+                var metadata = session.Advanced.GetMetadataFor(account);
+                metadata[Raven.Client.Constants.Documents.Metadata.Collection] = CollectionName;
 
-            return true;
-        });
+                session.SaveChanges();
+
+                return true;
+            });
+        }
     }
 
     /// <summary>

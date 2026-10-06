@@ -87,6 +87,15 @@ public sealed class LauncherServicesTests : IDisposable {
     [Fact]
     public void NoFolderServesNothing() => Assert.Null(ClientPatchFiles.Resolve(null, "/classic/manifest.json"));
 
+    [Theory]
+    [InlineData("/classic/installers/Wizard101-Classic.dmg")]
+    [InlineData("/classic/%69nstallers%2FWizard101-Classic.dmg")]
+    public void LegacyInstallerCopiesCannotBypassTheFriendPassword(string url) {
+        Directory.CreateDirectory(Path.Combine(_root, "installers"));
+        File.WriteAllText(Path.Combine(_root, "installers", "Wizard101-Classic.dmg"), "retained old installer");
+        Assert.Null(ClientPatchFiles.Resolve(_root, url));
+    }
+
     [Fact]
     public void RangesForResumedDownloads() {
         Assert.Null(ClientPatchFiles.ParseRange(null, 100));

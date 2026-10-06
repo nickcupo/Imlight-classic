@@ -76,6 +76,9 @@ button.danger { background:var(--bad); }
 #msg { position:fixed; right:16px; bottom:16px; background:var(--ink); color:var(--bg); padding:8px 12px; border-radius:8px; display:none; max-width:80vw; }
 .setting { display:grid; grid-template-columns:1fr 120px auto; gap:8px; align-items:center; padding:5px 0; border-bottom:1px solid var(--line); }
 .setting p { margin:2px 0 0; color:var(--muted); font-size:12px; }
+.friend-fields { display:grid; gap:10px; }
+.friend-fields label { display:block; margin-bottom:4px; }
+#friendAccountStatus { overflow-wrap:anywhere; }
 @media (max-width:520px) { .setting { grid-template-columns:1fr; } main { padding:10px; } }
 </style>
 </head>
@@ -111,6 +114,21 @@ button.danger { background:var(--bad); }
     <h2>Broadcast</h2>
     <div class="row"><textarea id="bText" rows="2" maxlength="500" placeholder="Message to every wizard"></textarea></div>
     <div class="row"><button id="bBtn">Send</button></div>
+  </section>
+  <section aria-labelledby="friendsTitle">
+    <h2 id="friendsTitle">Friends</h2>
+    <p class="muted">Create a regular player account for a friend.</p>
+    <form id="friendAccountForm">
+      <div class="friend-fields">
+        <div><label for="friendUsername">Username</label><input id="friendUsername" name="username" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" minlength="3" maxlength="24" pattern="[a-z0-9_\-]{3,24}" aria-describedby="friendUsernameHint" required><span id="friendUsernameHint" class="muted">3–24 lowercase letters, numbers, underscores or hyphens.</span></div>
+        <div><label for="friendPassword">Game password</label><input id="friendPassword" name="password" type="password" autocomplete="new-password" minlength="12" maxlength="128" aria-describedby="friendPasswordHint" required></div>
+        <div><label for="friendPasswordConfirm">Confirm game password</label><input id="friendPasswordConfirm" name="passwordConfirm" type="password" autocomplete="new-password" minlength="12" maxlength="128" required></div>
+      </div>
+      <p id="friendPasswordHint" class="muted">12–128 characters. Use a separate password from shared site access.</p>
+      <div class="row"><button id="friendCreateBtn" type="submit">Create account</button><a href="/friends/" target="_blank" rel="noopener">Open friend page</a></div>
+    </form>
+    <p id="friendAccountStatus" class="muted" role="status" aria-live="polite"></p>
+    <p id="friendPortalState" class="muted" role="status" aria-live="polite"></p>
   </section>
   <section class="wide">
     <h2>Online</h2>
@@ -149,7 +167,8 @@ async function api(path, body) {
   if (!r.ok) throw new Error(data.error || ('HTTP ' + r.status));
   return data;
 }
-function showLogin() { $('app').hidden = true; $('login').hidden = false; }
+function clearFriendPasswords() { $('friendPassword').value = ''; $('friendPasswordConfirm').value = ''; $('friendPasswordConfirm').setCustomValidity(''); }
+function showLogin() { $('app').hidden = true; $('login').hidden = false; clearFriendPasswords(); }
 function fmtUptime(s) { const d = Math.floor(s/86400), h = Math.floor(s%86400/3600), m = Math.floor(s%3600/60); return (d ? d+'d ' : '') + h + 'h ' + m + 'm'; }
 function fmtTime(t) { try { return new Date(t).toLocaleString(); } catch (e) { return t; } }
 function fmtBytes(b) { return b > 1048576 ? (b/1048576).toFixed(1)+' MB' : (b/1024).toFixed(0)+' KB'; }
@@ -159,6 +178,38 @@ function rows(tbody, items, cells, empty) {
   for (const it of items) { const tr = el('tr'); for (const c of cells(it)) tr.append(el('td', c)); tb.append(tr); }
 }
 let editing = null;
+let friendStateLoaded = false;
+async function refreshFriendState() {
+  try {
+    const state = await api('/api/friends/state');
+    $('friendPortalState').textContent = state.enabled
+      ? 'Friend page enabled. Downloads: Mac ' + (state.downloads && state.downloads.mac ? 'ready' : 'unavailable') + ', Windows ' + (state.downloads && state.downloads.windows ? 'ready' : 'unavailable') + '.'
+      : 'Friend page is not enabled.';
+  } catch (error) { $('friendPortalState').textContent = 'Friend page status is unavailable.'; }
+}
+function checkFriendConfirmation() {
+  $('friendPasswordConfirm').setCustomValidity($('friendPasswordConfirm').value && $('friendPasswordConfirm').value !== $('friendPassword').value
+    ? 'The game passwords must match.' : '');
+}
+$('friendPassword').addEventListener('input', checkFriendConfirmation);
+$('friendPasswordConfirm').addEventListener('input', checkFriendConfirmation);
+$('friendAccountForm').addEventListener('submit', async event => {
+  event.preventDefault();
+  checkFriendConfirmation();
+  if (!$('friendAccountForm').reportValidity()) return;
+  const body = { username:$('friendUsername').value, password:$('friendPassword').value, passwordConfirm:$('friendPasswordConfirm').value };
+  const button = $('friendCreateBtn');
+  button.disabled = true; button.textContent = 'Creating…';
+  for (const input of $('friendAccountForm').querySelectorAll('input')) input.disabled = true;
+  $('friendAccountForm').setAttribute('aria-busy', 'true');
+  $('friendAccountStatus').textContent = '';
+  try {
+    const result = await api('/api/friends/account', body);
+    clearFriendPasswords();
+    $('friendAccountStatus').textContent = 'Created player account ' + result.username + '.';
+  } catch (error) { $('friendAccountStatus').textContent = error.message; }
+  finally { button.disabled = false; button.textContent = 'Create account'; for (const input of $('friendAccountForm').querySelectorAll('input')) input.disabled = false; $('friendAccountForm').setAttribute('aria-busy', 'false'); }
+});
 function renderSettings(list) {
   if (editing) return;
   const box = $('settings'); box.replaceChildren();
@@ -214,6 +265,7 @@ async function refresh() {
   for (const e of s.recentLog) { const d = el('div', null, e.level); d.append(el('span', fmtTime(e.time) + ' ', 'muted')); d.append(document.createTextNode(e.message)); log.append(d); }
   renderSettings(s.settings);
   renderExtras(s.sections);
+  if (!friendStateLoaded) { friendStateLoaded = true; refreshFriendState(); }
 }
 $('loginBtn').onclick = async () => { try { await api('/api/login', { username:$('u').value, password:$('p').value }); $('p').value = ''; $('loginErr').textContent = ''; refresh(); } catch (e) { $('loginErr').textContent = e.message; } };
 $('p').addEventListener('keydown', e => { if (e.key === 'Enter') $('loginBtn').click(); });

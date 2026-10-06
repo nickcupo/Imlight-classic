@@ -139,6 +139,8 @@ public static class AdminDashboard {
                 "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; frame-ancestors 'none'";
 
             var path = request.Url?.AbsolutePath ?? "/";
+            // CLASSIC: the friend page has its own scoped site sessions, before the Administrator API gate.
+            if (Friends.FriendPortal.TryHandle(context)) return;
             if (request.HttpMethod == "GET" && path == "/") {
                 Write(response, 200, "text/html; charset=utf-8", AdminDashboardPage.Html);
 
@@ -171,6 +173,10 @@ public static class AdminDashboard {
             }
 
             switch (path, request.HttpMethod) {
+                case ("/api/friends/state", "GET"):
+                case ("/api/friends/account", "POST"):
+                    Friends.FriendPortal.HandleAdmin(context, path);
+                    break;
                 case ("/api/state", "GET"):
                     Json(response, 200, State(user));
                     break;

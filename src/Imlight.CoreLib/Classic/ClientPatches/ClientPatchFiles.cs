@@ -62,6 +62,8 @@ internal static class ClientPatchFiles {
         if (root is null || !urlPath.StartsWith(Prefix, StringComparison.Ordinal)) return null;
         var relative = Uri.UnescapeDataString(urlPath[Prefix.Length..]);
         if (relative.Length == 0 || relative.Length > 200 || relative.Contains('\\') || relative.Contains('\0')) return null;
+        // CLASSIC: installers now require a friend-site session. Retained legacy copies must not bypass that gate.
+        if (relative.StartsWith("installers/", StringComparison.OrdinalIgnoreCase)) return null;
         foreach (var part in relative.Split('/')) {
             if (part.Length == 0 || part.StartsWith('.')) return null;   // "", ".", "..", hidden and partial files
         }
