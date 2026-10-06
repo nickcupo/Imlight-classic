@@ -25,7 +25,7 @@
  *
  * USAGE EXAMPLE:
  * var catalog = CrownShopCatalogLoader.Load(path);
- * var offered = catalog.Offered(rules.IsFeatureEnabled);
+ * var offered = catalog.Offered(rules.IsFeatureEnabled, rules.Profile.Id);
  *
  * Created by: Nick with Claude Code (claude-opus-5-5)
  * Version: KALI 1.0
@@ -76,7 +76,13 @@ public sealed record CrownShopEntry(
     int? RentalDays,
     int MinLevel,
     bool CombatOnly,
-    string? Feature);
+    string? Feature) {
+
+    // CLASSIC: absent membership preserves legacy offers; explicit membership is exact,
+    // rather than inherited from a newer profile that extends an older one.
+    public ImmutableArray<string> Profiles { get; init; } = [];
+
+}
 
 /// <summary>
 /// The Crown Shop at the cutoff.
@@ -89,10 +95,12 @@ public sealed class CrownShopCatalog {
     public required string SourceFile { get; init; }
 
     /// <summary>
-    /// The items whose feature switch is on, by template.
+    /// The items whose feature switch and optional exact profile membership allow them, by template.
+    /// An omitted profile never authorizes an item with an explicit profile list.
     /// </summary>
-    public FrozenDictionary<ulong, CrownShopEntry> Offered(Func<string, bool> featureEnabled)
-        => Items.Where(item => item.Feature is null || featureEnabled(item.Feature))
+    public FrozenDictionary<ulong, CrownShopEntry> Offered(Func<string, bool> featureEnabled, string? profileId = null)
+        => Items.Where(item => (item.Feature is null || featureEnabled(item.Feature))
+                && (item.Profiles.IsDefaultOrEmpty || profileId is not null && item.Profiles.Contains(profileId, StringComparer.Ordinal)))
             .ToFrozenDictionary(item => item.Template);
 
 }
@@ -106,7 +114,7 @@ public static class CrownShopCatalogLoader {
         "id", "title", "profiles", "provenance", "license_tag", "notes", "items");
     internal static readonly FrozenSet<string> s_itemKeys = FrozenSet.Create(StringComparer.Ordinal,
         "name", "template", "category", "crowns", "gold", "rental_days", "min_level", "combat_only", "feature", "source",
-        "confidence", "notes");
+        "confidence", "notes", "profiles");
     private static readonly Regex s_id = new(@"^crown-shop-[a-z0-9][a-z0-9-]*\z", RegexOptions.CultureInvariant);
 
     /// <exception cref="ClassicDataException">The file is missing or invalid; every error is reported.</exception>
@@ -157,6 +165,7 @@ public static class CrownShopCatalogLoader {
                 var level = item.Find("min_level") is { } l ? diagnostics.ReadInt(l.Value, At("min_level"), 1, 50) : null;
                 var combat = item.Find("combat_only") is { } co ? diagnostics.ReadBool(co.Value, At("combat_only")) : null;
                 var feature = item.Find("feature") is { } f ? diagnostics.ReadString(f.Value, At("feature")) : null;
+                var itemProfiles = ReadItemProfiles(item, At("profiles"), profiles, diagnostics);
                 if (feature is not null && !ClassicFeatures.IsKnown(feature)) {
                     diagnostics.At(item.Find("feature")!.Value, At("feature"), $"unknown feature '{feature}'");
                 }
@@ -174,7 +183,7 @@ public static class CrownShopCatalogLoader {
                 }
 
                 items.Add(new CrownShopEntry(name, (ulong) template.Value, category, crowns ?? 0, gold ?? 0, days, level ?? 1,
-                    combat ?? false, feature));
+                    combat ?? false, feature) { Profiles = itemProfiles });
             }
         }
 
@@ -188,6 +197,39 @@ public static class CrownShopCatalogLoader {
             Items = items.ToImmutable(),
             SourceFile = display,
         };
+    }
+
+    private static ImmutableArray<string> ReadItemProfiles(YMap item, string keyPath,
+        ImmutableArray<string> catalogProfiles, YamlDiagnostics diagnostics) {
+        if (item.Find("profiles") is not { } entry || diagnostics.ReadList(entry.Value, keyPath) is not { } list) {
+            return [];
+        }
+
+        if (list.Items.IsEmpty) {
+            diagnostics.At(list, keyPath, "needs at least one profile when item profiles are specified");
+        }
+
+        var profiles = ImmutableArray.CreateBuilder<string>();
+        for (var i = 0; i < list.Items.Length; i++) {
+            var path = YamlTree.Index(keyPath, i);
+            if (diagnostics.ReadString(list.Items[i], path) is not { } profile) {
+                continue;
+            }
+
+            if (!ClassicSchema.IsValidId(profile) || profiles.Contains(profile)) {
+                diagnostics.At(list.Items[i], path, $"'{profile}' is not a valid, unrepeated profile id");
+                continue;
+            }
+
+            if (!catalogProfiles.Contains(profile)) {
+                diagnostics.At(list.Items[i], path, $"item profile '{profile}' is not listed in the catalog profiles");
+                continue;
+            }
+
+            profiles.Add(profile);
+        }
+
+        return profiles.ToImmutable();
     }
 
 }

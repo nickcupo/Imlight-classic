@@ -55,8 +55,10 @@ internal static class ElixirRuntime {
             var approved = definition.Effects[i];
             if (template.m_equipEffects[i] is not StatisticEffectInfo info || info.m_effectName != approved.Name
                 || info.m_lookupIndex != approved.LookupIndex || !float.IsFinite(approved.Value)
-                || approved.Value <= 0 || Math.Abs(CanonicalStatEffects.GetCanonicalStatValue(info) - approved.Value) > 0.000001f)
+                || approved.Value <= 0)
                 return false;
+            var actual = CanonicalStatEffects.GetCanonicalStatValue(info);
+            if (!float.IsFinite(actual) || Math.Abs(actual - approved.Value) > .000001f) return false;
         }
         return true;
     }

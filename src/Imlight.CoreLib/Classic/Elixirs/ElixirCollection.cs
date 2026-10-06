@@ -1,6 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using Imcodec.CoreObject;
+using Imcodec.IO;
+using Imcodec.ObjectProperty;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
 using Imlight.CoreLib.Shared.Resources;
@@ -18,9 +21,86 @@ internal readonly record struct ElixirResult(string Error, ElixirLedger Ledger =
     internal bool NoWork => Error is null && Ledger is null;
 }
 
+internal sealed record ElixirPurchaseResult(string Error, ElixirResult Activation = default, ByteString ItemData = default) {
+    internal bool Saved => Error is null && Activation.Saved;
+}
+
 // CLASSIC: original item, inventory/equipment membership and remaining seconds commit together
 // under the existing character lane. Network/stat publication occurs only after SaveChanges.
 internal static class ElixirCollection {
+    // CLASSIC: the October 2009 shop activated a purchased boost immediately. The current
+    // native SaveForLater flag is rejected, never interpreted as permission to replace one.
+    // Account -> character lanes, debit, original item, equipment and ledger share one save.
+    internal static ElixirPurchaseResult Purchase(Wizard live, WizClientObjectItem freshItem,
+        WizItemTemplate template, bool equipNow, Func<uint, ElixirDefinition> definitions = null,
+        Func<IDocumentSession, ulong, Account> loadAccount = null,
+        Func<WizClientObjectItem, ByteString> serialize = null) {
+        if (!equipNow || live is null || live.Account is null || freshItem is null || freshItem.m_globalID == 0
+            || freshItem.m_templateID.Full >= (1UL << 28) || !ElixirRules.IsElixir(freshItem, template)
+            || freshItem.m_characterId != 0 && freshItem.m_characterId != live.CharId)
+            return new("That elixir cannot be purchased now.");
+        var definition = (definitions ?? ElixirRules.Approved)((uint)freshItem.m_templateID.Full);
+        if (definition?.Valid != true || definition.Crowns <= 0 || !ElixirRules.CanActivate(live, definition)
+            || !ElixirRules.MatchesNative(definition, template)) return new("That elixir cannot be activated now.");
+        var result = new ElixirPurchaseResult("Your elixir could not be saved.");
+        var savedBalance = 0;
+        try {
+            var saved = AccountCollection.WithAccountWriteLane(live.Account.AccountId,
+                () => WizardCollection.CommitCharacterMutation(live.CharId, (session, wizard) => {
+                    if (!ElixirRules.CanActivate(live, definition) || wizard.AccountId != live.Account.AccountId
+                        || wizard.InventoryBehavior?.InventoryItemIds is null
+                        || wizard.EquipmentBehavior?.EquippedItemIds is null || wizard.EquipmentBehavior.SlotList is null
+                        || wizard.InventoryBehavior.InventoryItemIds.Contains(freshItem.m_globalID)
+                        || wizard.EquipmentBehavior.EquippedItemIds.Contains(freshItem.m_globalID)
+                        || wizard.StorageBehavior?.BankItemIds?.Contains(freshItem.m_globalID) == true) return false;
+                    var ledger = session.Load<ElixirLedger>(ElixirLedger.DocumentId(live.CharId))
+                        ?? new ElixirLedger { OwnerId = live.CharId };
+                    if (ledger.OwnerId != live.CharId || !EquipmentMatches(wizard, ledger) || !EquipmentMatches(live, ledger)
+                        || ledger.Active.Any(e => !ApprovedEntry(e, definitions))) return false;
+                    var originals = ledger.Active.Select(e => session.Load<WizClientObjectItem>(e.ItemDocumentId)).ToArray();
+                    if (ledger.Active.Any(e => !OwnedEntry(originals.SingleOrDefault(i => i?.m_globalID == e.ItemId), e, live.CharId))) return false;
+                    var documentId = $"ClassicElixirItems/{live.CharId}/{freshItem.m_globalID.Full}";
+                    if (session.Load<WizClientObjectItem>(documentId) is not null) return false;
+                    var timed = freshItem.m_inactiveBehaviors?.OfType<ClientElixirBehavior>().SingleOrDefault();
+                    if (timed is null) return false;
+                    var entry = new ElixirEntry {
+                        ItemId = freshItem.m_globalID, ItemDocumentId = documentId, TemplateId = definition.TemplateId,
+                        RemainingSeconds = definition.DurationSeconds, Families = [.. definition.Families],
+                    };
+                    if (!ledger.TryActivate(entry)) return false;
+                    var account = loadAccount is null ? session.Query<Account>(collectionName: AccountCollection.CollectionName)
+                        .FirstOrDefault(a => a.AccountId == wizard.AccountId) : loadAccount(session, wizard.AccountId);
+                    if (account?.AccountId != wizard.AccountId || account.CharacterIds?.Contains(live.CharId) != true
+                        || account.Crowns < definition.Crowns) return false;
+                    freshItem.m_characterId = live.CharId;
+                    timed.m_expireTime = entry.RemainingSeconds;
+                    timed.m_statsApplied = false;
+                    ByteString data;
+                    if (serialize is not null) data = serialize(freshItem);
+                    else if (!new CoreObjectSerializer(behaviors: SerializerFlags.None).Serialize(freshItem, 24, out data)) return false;
+                    if (data.Length == 0) return false;
+                    account.Crowns -= definition.Crowns;
+                    savedBalance = account.Crowns;
+                    session.Store(freshItem, documentId);
+                    session.Advanced.GetMetadataFor(freshItem)[Raven.Client.Constants.Documents.Metadata.Collection] = WizardItemCollection.CollectionName;
+                    session.Store(ledger, ElixirLedger.DocumentId(live.CharId));
+                    wizard.EquipmentBehavior.EquippedItemIds = [.. wizard.EquipmentBehavior.EquippedItemIds, freshItem.m_globalID];
+                    wizard.EquipmentBehavior.SlotList = [.. wizard.EquipmentBehavior.SlotList, new EquipmentSlot {
+                        SlotType = EquipmentSlotType.Elixir, ItemId = freshItem.m_globalID,
+                        ItemName = freshItem.m_debugName, EquippedSince = DateTime.UtcNow,
+                    }];
+                    result = new(null, new ElixirResult(null, ledger.Copy(), freshItem, [], [.. originals, freshItem]), data);
+                    return true;
+                }, _ => {
+                    live.Account.Crowns = savedBalance;
+                    live.EquipmentBehavior.PublishElixirItems(result.Activation.ActiveItems);
+                    ElixirRuntime.PublishValidated(live, result.Activation.Ledger);
+                }));
+            return saved ? result : new("That elixir cannot be activated: check your balance and active boosts.");
+        }
+        catch (Exception ex) { Failed(live, ex); return new("Your elixir could not be saved. Please try again."); }
+    }
+
     // CLASSIC: trusted attach validates original stored ownership and both equipment views before
     // any timer/effect can run. Orphan force-equipped objects are never approval evidence.
     internal static bool LoadValidated(Wizard live, Func<uint, ElixirDefinition> definitions = null) {
@@ -52,11 +132,14 @@ internal static class ElixirCollection {
         if (live is null || item is null || item.m_characterId != live.CharId
             || item.m_templateID.Full >= (1UL << 28) || !ElixirRules.IsElixir(item)) return Refused();
         var definition = (definitions ?? ElixirRules.Approved)((uint)item.m_templateID.Full);
-        if (definition?.Valid != true || definition.TemplateId != item.m_templateID.Full) return Refused();
+        if (definition?.Valid != true || definition.TemplateId != item.m_templateID.Full
+            || !ElixirRules.CanActivate(live, definition)) return Refused();
         ElixirResult result = Refused();
         try {
             var saved = WizardCollection.CommitCharacterMutation(live.CharId, (session, wizard) => {
-                if (!InBackpack(wizard, itemId)) return false;
+                if (!ElixirRules.CanActivate(live, definition) || !InBackpack(wizard, itemId)) return false;
+                if (definitions is null && !ElixirRules.MatchesNative(definition,
+                    CoreObjectFactory.GetCoreTemplate((uint)item.m_templateID.Full) as WizItemTemplate)) return false;
                 var stored = Find(session, live.CharId, itemId, findItem);
                 if (stored is null || stored.m_characterId != live.CharId || stored.m_globalID != itemId
                     || stored.m_templateID != item.m_templateID || !ElixirRules.IsElixir(stored)) return false;

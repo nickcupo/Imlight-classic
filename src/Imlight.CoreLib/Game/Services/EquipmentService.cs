@@ -81,6 +81,18 @@ internal partial class EquipmentService(SessionActor sessionActor) : MessageServ
     protected static Props Props(SessionActor parentActor)
         => Akka.Actor.Props.Create(() => new EquipmentService(parentActor));
 
+    // CLASSIC: owned-item activation uses the same trusted duel context as purchases.
+    [MessageHandler(typeof(COMBAT_106_PROTOCOL.MSG_ACTORADDEDTODUEL))]
+    private void ElixirDuelEntered(COMBAT_106_PROTOCOL.MSG_ACTORADDEDTODUEL message)
+        => ElixirRules.SetCombatContext(GetActiveWizard(), true, message.Duel?.Duel?.m_bPVP ?? true);
+    [MessageHandler(typeof(COMBAT_106_PROTOCOL.MSG_COMBATWIN))]
+    private void ElixirWon(COMBAT_106_PROTOCOL.MSG_COMBATWIN message) => ElixirDuelLeft();
+    [MessageHandler(typeof(COMBAT_106_PROTOCOL.MSG_COMBATDEFEAT))]
+    private void ElixirLost(COMBAT_106_PROTOCOL.MSG_COMBATDEFEAT message) => ElixirDuelLeft();
+    [MessageHandler(typeof(CLASSIC_FEATURES_PROTOCOL.MSG_PVPRELEASE))]
+    private void ElixirReleased(CLASSIC_FEATURES_PROTOCOL.MSG_PVPRELEASE message) => ElixirDuelLeft();
+    private void ElixirDuelLeft() => ElixirRules.SetCombatContext(GetActiveWizard(), false, false);
+
     [MessageHandler(typeof(GAME_5_PROTOCOL.MSG_EQUIPITEM))]
     private void ReceiveEquipItem(GAME_5_PROTOCOL.MSG_EQUIPITEM message) {
         try {

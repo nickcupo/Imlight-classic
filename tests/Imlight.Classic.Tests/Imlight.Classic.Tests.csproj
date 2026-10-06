@@ -80,6 +80,7 @@
     <ServerIntegrationTest Include="HousingAtticTests.cs" />
     <ServerIntegrationTest Include="ElixirTests.cs" />
     <ServerIntegrationTest Include="ElixirServiceTests.cs" />
+    <ServerIntegrationTest Include="OctoberShopRuntimeTests.cs" />
     <ServerIntegrationTest Include="HouseTests.cs" />
     <ServerIntegrationTest Include="HouseTransportTests.cs" />
   </ItemGroup>

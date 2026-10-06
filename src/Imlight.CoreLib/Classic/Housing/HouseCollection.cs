@@ -55,7 +55,7 @@ internal sealed record HouseEquipResult(string Error, WizClientObjectItem Item =
 }
 
 // CLASSIC: deed identity is the original owned item, not its template (two identical houses
-// are independent). Purchases, selection and furnished sales each use a single Raven save.
+// are independent). Purchases, selection and approved empty-house sales each use a single Raven save.
 internal static class HouseCollection {
     internal static bool MayEnter(ulong character, ulong owner, ulong deed, string zone)
         => character != 0 && TryGetOwned(owner, deed, out var house) && HouseCatalog.TryRoom(house.TemplateId, zone, out _);
@@ -219,22 +219,16 @@ internal static class HouseCollection {
                 var rooms = new[] { record.ExteriorZone, record.InteriorZone }
                     .Select(zone => session.Load<HousingLedger>(HousingLedger.DocumentId(new HousingRoomIdentity(live.CharId, deedId, zone)))).Where(r => r is not null).ToArray();
                 if (rooms.Any(r => r.OwnerId != live.CharId || r.DeedId != deedId)) return false;
-                var entries = rooms.SelectMany(r => r.Entries.Where(e => !e.Removed)).ToArray();
-                if (entries.Select(e => e.ItemId).Distinct().Count() != entries.Length) return false;
-                var attic = session.Load<AtticLedger>(AtticLedger.DocumentId(live.CharId));
-                if (entries.Length > 0 && (atticCapacity <= 0 || attic?.OwnerId != live.CharId || !attic.Valid()
-                    || attic.Count + entries.Length > atticCapacity)) { result = new("Your attic cannot hold all this house's furniture."); return false; }
-                var originals = session.Load<WizClientObjectItem>(entries.Select(e => e.ItemDocumentId).Distinct().ToArray());
-                foreach (var entry in entries) {
-                    originals.TryGetValue(entry.ItemDocumentId, out var original);
-                    if (original is null || original.m_characterId != live.CharId || original.m_globalID != entry.ItemId
-                        || original.m_templateID != entry.TemplateId || !HousingCollection.Ordinary(original)
-                        || wizard.InventoryBehavior.InventoryItemIds.Contains(entry.ItemId) || HousingCollection.OutsideBackpack(wizard, entry.ItemId)) return false;
-                }
-                var added = new List<AtticPatch>();
-                foreach (var room in rooms) for (var slot = 0; slot < room.Entries.Count; slot++) if (room.Active(slot)) {
-                    if (!attic.TryAdd(room.Entries[slot], atticCapacity, out var patch) || !room.TryPickup(slot)) return false;
-                    added.Add(patch);
+                // CLASSIC: May 2010 live notes require an empty house before sale; Pick Up All is separate for
+                // inside/outside. https://web.archive.org/web/20140122055808/https://www.wizard101.com/game/community/updatenotes/may2010
+                // Period corroboration: Gamma's 2010-04-29 Housing Updates post (thread17854), and the 2010-08-22
+                // Pick Up All question/reply in https://www.wizard101.com/forum/ravenwood-commons/housing-updates-17854
+                // (dated search-index evidence, no live-host fetch). The older furnished-sale-to-attic rule is not October's.
+                // Check both saved rooms under the character write lane before changing any document or balance.
+                // The retained atticCapacity argument does not permit sale to bypass this rule.
+                if (rooms.Any(r => r.Count > 0)) {
+                    result = new("Please empty both the inside and outside of your house before selling it.");
+                    return false;
                 }
                 var portfolio = session.Load<HousePortfolio>(HousePortfolio.DocumentId(live.CharId));
                 portfolio.DeedIds = portfolio.DeedIds.Where(id => id != deedId).ToList();
@@ -243,7 +237,7 @@ internal static class HouseCollection {
                 var balance = Math.Min((long)wizard.GameStats.m_baseGoldPouch, (long)wizard.GameStats.m_currentGold + serverCalculatedGold);
                 if (balance < 0 || balance > int.MaxValue) return false;
                 wizard.GameStats.m_currentGold = (int)balance;
-                result = new(null, record.Copy(), attic?.Copy(), added, serverCalculatedGold);
+                result = new(null, record.Copy(), null, [], serverCalculatedGold);
                 return true;
             }, wizard => {
                 live.GameStats.m_currentGold = wizard.GameStats.m_currentGold;
