@@ -67,6 +67,8 @@
     <ServerIntegrationTest Include="PostCombatEffectsTests.cs" />
     <ServerIntegrationTest Include="ArenaMatchmakerTests.cs" />
     <ServerIntegrationTest Include="ArenaInventoryReloadTests.cs" />
+    <ServerIntegrationTest Include="FriendPortalTests.cs" />
+    <ServerIntegrationTest Include="AccountRegistrationRaceTests.cs" />
   </ItemGroup>
   <!-- security-auth -->
   <ItemGroup>
