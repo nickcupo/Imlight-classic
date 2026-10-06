@@ -73,6 +73,9 @@ internal static class CharacterHelper {
             if (template is null) {
                 continue;
             }
+            // CLASSIC: selecting a deed chooses a home; it never adds an appearance or gear effect.
+            if (Imlight.Classic.ClassicRuntime.IsActive
+                && template.m_behaviors?.Any(b => b is DeedBehaviorTemplate) == true) continue;
 
             // CLASSIC: a timed item is not ordinary gear. Native template values alone never
             // authorize an elixir's historical effects or bypass its validated active ledger.
