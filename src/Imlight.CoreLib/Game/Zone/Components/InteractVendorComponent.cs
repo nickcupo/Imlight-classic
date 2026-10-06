@@ -40,6 +40,10 @@ using System.Collections.Generic;
 using System.Linq;
 using Akka.Actor;
 using Imcodec.Cryptography;
+using Imcodec.CoreObject;
+using Imlight.CoreLib.Shared.Resources;
+using Imlight.Classic;
+using Imlight.CoreLib.Classic.Housing;
 using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty;
 using Imcodec.ObjectProperty.TypeCache;
@@ -121,13 +125,18 @@ internal sealed class InteractVendorComponent(ZoneEntity entity) : ZoneEntityCom
     }
 
     public bool HasItem(GID itemGID)
-        => _inventory.Any(x => x.MParts.TemplateId == itemGID.MParts.TemplateId);
+        => OfferedInventory().Any(x => x.MParts.TemplateId == itemGID.MParts.TemplateId);
+
+    // CLASSIC: unverified deeds remain closed in the visible stock and purchase validation.
+    private List<GID> OfferedInventory() => !ClassicRuntime.IsActive ? _inventory : _inventory.Where(id =>
+        CoreObjectFactory.GetCoreTemplate(id) is not WizItemTemplate t || !HouseCatalog.IsDeed(t)
+        || HouseCatalog.TryGet(id.MParts.TemplateId, out _)).ToList();
 
     private void SendShopOfferings(IActorRef playerActor) {
         var shopOffering = new WizShopOffering() {
             m_sellModifier = 0.05f,
             m_shopTitle = TicketVendor?.Title ?? "KrocNPC_00000013", // CLASSIC: a ticket vendor's own shop title
-            m_shopList = _inventory,
+            m_shopList = OfferedInventory(),
 
             // Changes the type of currency that is used
             // 0 - Gold

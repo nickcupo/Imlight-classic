@@ -44,6 +44,8 @@ using System.Text.RegularExpressions;
 using Imcodec.Cryptography;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
+using Imlight.Classic;
+using Imlight.CoreLib.Classic.Elixirs;
 using Imlight.CoreLib.Game.Spells;
 using Imlight.CoreLib.Shared.Behaviors;
 using Imlight.CoreLib.Shared.Items;
@@ -79,7 +81,9 @@ internal static class CharacterEffectHelper {
                 continue;
             }
 
-            gameEffect.m_internalID = wizard.GameEffects.Count;
+            // CLASSIC: removing one effect must not let a later item reuse a still-live id.
+            gameEffect.m_internalID = ClassicRuntime.IsActive
+                ? ElixirRuntime.NextEffectId(wizard) : wizard.GameEffects.Count;
             var effect = AddGameEffectToStats(wizard.GameStats, effectInfo);
 
             if (gameEffect is ProvideSpellEffect provideSpellEffect) {

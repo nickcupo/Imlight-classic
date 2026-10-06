@@ -1,5 +1,7 @@
 using System;
 using System.IO;
+using System.Collections.Generic;
+using System.Linq;
 using System.Text;
 using Imcodec.IO;
 using Imcodec.ObjectProperty;
@@ -19,17 +21,20 @@ internal static class HousingCodec {
 
     internal static BlobRequest Manifest(HousingLedger ledger, ulong zoneId) => new() {
         m_type = HousingRules.BlobType, m_associatedGID = zoneId,
-        m_blobRequestObjectList = [new BlobRequestObject {
-            m_subType = HousingRules.SubType, m_versionNumber = ledger.Version,
-            m_packageNumber = ledger.PackageNumber, m_userData = 0, m_objectCount = (uint)ledger.Entries.Count,
-        }],
+        m_blobRequestObjectList = Enumerable.Range(0, ledger.PackageCount).Select(index => new BlobRequestObject {
+            m_subType = HousingRules.SubType, m_versionNumber = index == 0 ? ledger.Version : ledger.SecondVersion,
+            m_packageNumber = index == 0 ? ledger.PackageNumber : ledger.SecondPackageNumber,
+            m_userData = index == 0 ? 0 : HousingRules.SecondRoomUserData,
+            m_objectCount = (uint)ledger.PackageEntries(index).Count(),
+        }).ToList(),
     };
 
-    internal static Blob Blob(HousingLedger ledger, ulong zoneId) => new() {
+    internal static Blob Blob(HousingLedger ledger, ulong zoneId, int packageIndex = 0) => new() {
         m_type = HousingRules.BlobType, m_subType = HousingRules.SubType,
-        m_versionNumber = ledger.Version, m_packageNumber = ledger.PackageNumber,
+        m_versionNumber = packageIndex == 0 ? ledger.Version : ledger.SecondVersion,
+        m_packageNumber = packageIndex == 0 ? ledger.PackageNumber : ledger.SecondPackageNumber,
         m_associatedGID = zoneId, m_epochDays = 0,
-        m_data = new HousingBlob { m_housingBlobObjectList = ledger.Entries.ConvertAll(Pack) },
+        m_data = new HousingBlob { m_housingBlobObjectList = ledger.PackageEntries(packageIndex).Select(Pack).ToList() },
     };
 
     internal static HousingBlobObject Pack(HousingEntry entry) {
@@ -67,17 +72,31 @@ internal static class HousingCodec {
     // before allocation. The generic PropertyClass decoder accepts arbitrary class hashes and
     // unbounded vector counts, so it must not receive an untrusted network blob.
     internal static bool AcceptRequest(ByteString data, ulong zoneId, int package) {
+        var ledger = new HousingLedger { PackageNumber = package };
+        return TryRequests(data, zoneId, ledger, out var packages) && packages.Count == 1 && packages[0] == 0;
+    }
+
+    internal static bool TryRequests(ByteString data, ulong zoneId, HousingLedger ledger, out List<int> packages) {
+        packages = [];
         byte[] bytes = data;
-        if (bytes is null || bytes.Length > 128) return false;
+        if (bytes is null || bytes.Length > 256) return false;
         try {
             using var stream = new MemoryStream(bytes, writable: false);
             using var reader = new BinaryReader(stream, Encoding.UTF8);
             if (reader.ReadUInt32() != new BlobRequest().GetHash() || ReadName(reader) != HousingRules.BlobType
-                || reader.ReadUInt64() != zoneId || reader.ReadUInt32() != 1
-                || reader.ReadUInt32() != new BlobRequestObject().GetHash() || ReadName(reader) != HousingRules.SubType) return false;
-            reader.ReadUInt32(); // client's cached version; server returns the current committed version
-            return reader.ReadInt32() == package && reader.ReadUInt32() == 0
-                && reader.ReadUInt32() <= HousingRules.PackageSlots && stream.Position == stream.Length;
+                || reader.ReadUInt64() != zoneId) return false;
+            var count = reader.ReadUInt32();
+            if (count == 0 || count > ledger.PackageCount) return false;
+            for (var i = 0; i < count; i++) {
+                if (reader.ReadUInt32() != new BlobRequestObject().GetHash() || ReadName(reader) != HousingRules.SubType) return false;
+                reader.ReadUInt32(); // cached version is not authority
+                var package = reader.ReadInt32(); var userData = reader.ReadUInt32();
+                var index = package == ledger.PackageNumber && userData == 0 ? 0
+                    : ledger.PackageCount == 2 && package == ledger.SecondPackageNumber && userData == HousingRules.SecondRoomUserData ? 1 : -1;
+                if (index < 0 || packages.Contains(index) || reader.ReadUInt32() > HousingRules.PackageSlots) return false;
+                packages.Add(index);
+            }
+            return stream.Position == stream.Length;
         }
         catch (EndOfStreamException) { return false; }
     }

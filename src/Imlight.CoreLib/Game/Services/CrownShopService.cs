@@ -49,6 +49,7 @@ using Imlight.Common;
 using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;
+using Imlight.CoreLib.Shared.Resources;
 using Imlight.CoreLib.WizardData.Collections;
 using Imlight.CoreLib.WizardData.Models.Player;
 using System;
@@ -60,8 +61,10 @@ namespace Imlight.CoreLib.Game.Services;
 
 internal class CrownShopService(SessionActor sessionActor) : MessageService(sessionActor) {
 
-    // The client's own tab and category ids (GUI/CrownShop); the names are its locale keys.
+    // The existing tab/category layout and client's locale keys. Housing's new ids below
+    // are unique server-provided layout references, not a claim about historic retail ids.
     private const int FeaturedTab = 37, MountsTab = 39, GameplayTab = 45;
+    private const int HousingTab = 46, HousesCategory = 20;
     private const int FeaturedCategory = 0, PermanentMountsCategory = 2, RentalMountsCategory = 3, HenchmenCategory = 18,
         EverythingCategory = 19;
     private const int WishlistMaxSize = 30, WishlistExpansionSize = 10;
@@ -169,6 +172,21 @@ internal class CrownShopService(SessionActor sessionActor) : MessageService(sess
         if (item.Category == CrownShopCategories.Henchmen && _pendingHire is not null) {
             Fail(message, "a henchman is already being hired");
 
+            return;
+        }
+
+        // CLASSIC: approved houses atomically save the account/gold debit, original deed
+        // and portfolio. No ordinary payment or inventory give may run a second time.
+        if (ClassicRuntime.IsActive && CoreObjectFactory.GetCoreTemplate((uint)item.Template) is WizItemTemplate deedTemplate
+            && Classic.Housing.HouseCatalog.IsDeed(deedTemplate)) {
+            var deed = CoreObjectFactory.FinalizeCoreObject((uint)item.Template) as WizClientObjectItem;
+            var purchased = Classic.Housing.HouseCollection.Purchase(wizard, deed,
+                payWithGold ? Classic.Housing.HouseCurrency.Gold : Classic.Housing.HouseCurrency.Crowns);
+            if (!purchased.Saved) { Fail(message, purchased.Error); return; }
+            SendToSocket(new GAME_5_PROTOCOL.MSG_INVENTORYBEHAVIOR_ADDITEM {
+                GlobalID = wizard.GameObjectID, SerializedItem = purchased.ItemData,
+            });
+            Complete(wizard, message, item, payWithGold);
             return;
         }
 
@@ -295,7 +313,12 @@ internal class CrownShopService(SessionActor sessionActor) : MessageService(sess
     private static (FrozenDictionary<ulong, CrownShopEntry>, ByteString) BuildCatalog() {
         var offered = ClassicProgression.CrownShop?.Offered(ClassicRuntime.Rules.IsFeatureEnabled)
             ?? FrozenDictionary<ulong, CrownShopEntry>.Empty;
-        var shown = ForClient(offered.Values).ToFrozenDictionary(item => item.Template);
+        // Only a dated/owner-approved definition with an actual Crowns price is projected;
+        // gold-only world vendor houses do not acquire a fabricated Crowns price.
+        var houses = ClassicRuntime.IsActive ? Classic.Housing.HouseCatalog.Approved.Where(h => h.Crowns > 0)
+            .Select(h => new CrownShopEntry(h.Name, h.TemplateId, CrownShopCategories.Houses, h.Crowns,
+                h.Gold, null, h.MinimumLevel, false, null)) : [];
+        var shown = ForClient(offered.Values.Concat(houses)).ToFrozenDictionary(item => item.Template);
 
         return (shown, SerializeCatalog(shown.Values));
     }
@@ -323,6 +346,7 @@ internal class CrownShopService(SessionActor sessionActor) : MessageService(sess
             CrownShopCategories.PermanentMounts => PermanentMountsCategory,
             CrownShopCategories.RentalMounts => RentalMountsCategory,
             CrownShopCategories.Henchmen => HenchmenCategory,
+            CrownShopCategories.Houses => HousesCategory,
             _ => EverythingCategory,
         };
 
@@ -379,6 +403,18 @@ internal class CrownShopService(SessionActor sessionActor) : MessageService(sess
                 Category(EverythingCategory, GameplayTab, "CrownShopSWF_CategoryEverything", icons + "Everything.dds", everything: true),
             ],
         };
+        if (items.Any(item => item.m_displayPriority.StartsWith($"{HousesCategory}:"))) {
+            // CLASSIC: category/menu ids arrive in CrownShopLayout. Native names/icon and
+            // m_isHousesCategory select its existing house UI; no program patch is needed.
+            layout.m_tabs.Add(new CrownShopCategoryMenu {
+                m_ID = HousingTab, m_name = "CrownShopSWF_MenuHousing", m_iconResource = icons + "Housing.dds",
+                m_categoryIDs = [HousesCategory], m_tags = "", m_description = "CrownShopSWF_MenuHousing_Desc",
+            });
+            var housesCategory = Category(HousesCategory, HousingTab, "CrownShopSWF_CategoryHouses", icons + "Housing.dds", single: true);
+            housesCategory.m_isHousesCategory = true;
+            housesCategory.m_description = "CrownShopSWF_CategoryHouses_Desc";
+            layout.m_categories.Add(housesCategory);
+        }
 
         var data = new CrownShopData {
             m_items = items,

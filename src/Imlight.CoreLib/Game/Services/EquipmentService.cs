@@ -44,6 +44,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using Akka.Actor;
 using Imcodec.CoreObject;
 using Imcodec.IO;
@@ -52,6 +53,7 @@ using Imcodec.ObjectProperty;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
 using Imlight.CoreLib.Classic;
+using Imlight.CoreLib.Classic.Elixirs;
 using Imlight.CoreLib.Shared.Items;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Resources;
@@ -60,10 +62,11 @@ using Imlight.CoreLib.WizardData.Collections;
 using Imlight.CoreLib.WizardData.Models.Misc;
 using Imlight.CoreLib.Game.Pet;
 using Imlight.CoreLib.WizardData.Models.Player;
+using Imlight.Classic;
 
 namespace Imlight.CoreLib.Game.Services;
 
-internal class EquipmentService(SessionActor sessionActor) : MessageService(sessionActor) {
+internal partial class EquipmentService(SessionActor sessionActor) : MessageService(sessionActor) {
 
     private readonly CoreObjectSerializer _itemSerializer = new(
         versionable: false,
@@ -76,7 +79,7 @@ internal class EquipmentService(SessionActor sessionActor) : MessageService(sess
     private ulong _summonedPetId;
 
     protected static Props Props(SessionActor parentActor)
-        => Akka.Actor.Props.Create(() => new InventoryService(parentActor));
+        => Akka.Actor.Props.Create(() => new EquipmentService(parentActor));
 
     [MessageHandler(typeof(GAME_5_PROTOCOL.MSG_EQUIPITEM))]
     private void ReceiveEquipItem(GAME_5_PROTOCOL.MSG_EQUIPITEM message) {
@@ -128,6 +131,23 @@ internal class EquipmentService(SessionActor sessionActor) : MessageService(sess
                         + " This has been logged as suspicious behavior.",
                 Logger.Args(itemId));
 
+            return;
+        }
+
+        // CLASSIC: native backpack activation uses the explicit Elixir slot, ownership is checked above.
+        // A slot string cannot turn an ordinary item into a potion, or bypass the historical allowlist.
+        var itemTemplate = ItemHelper.GetItemTemplate(item);
+        if (ClassicRuntime.IsInitialized && ClassicRuntime.IsActive && (Classic.Housing.HouseCatalog.IsDeed(itemTemplate) || message.SlotName == "Islands")) {
+            if (!Classic.Housing.HouseCatalog.IsDeed(itemTemplate) || message.SlotName != "Islands") return;
+            SelectHouse(wizard, itemId, true);
+            return;
+        }
+        if (ElixirRules.IsElixir(item, itemTemplate) || message.SlotName == ElixirRules.SlotName) {
+            if (message.SlotName != ElixirRules.SlotName || !ElixirRules.IsElixir(item, itemTemplate)) return;
+            var activated = ElixirCollection.Activate(wizard, itemId);
+            if (!activated.Saved) return;
+            SendEquipItem(activated.Item, ElixirRules.SlotName);
+            TellOtherServices(new CLASSIC_FEATURES_PROTOCOL.MSG_ELIXIRCHANGED { CharacterId = wizard.CharId });
             return;
         }
 
@@ -196,6 +216,14 @@ internal class EquipmentService(SessionActor sessionActor) : MessageService(sess
                         + " This has been logged as a suspicious behavior infraction.",
                 Logger.Args(itemId));
 
+            return;
+        }
+
+        // CLASSIC: active elixirs are consumed/timed items, never ordinary gear returned to the
+        // backpack by an unverified unequip request. No native cancellation flow is enabled yet.
+        if (wizEquipmentBehavior.SlotList.Any(s => s.SlotType == EquipmentSlotType.Elixir && s.ItemId == itemId)) return;
+        if (ClassicRuntime.IsInitialized && ClassicRuntime.IsActive && wizEquipmentBehavior.SlotList.Any(s => s.SlotType == EquipmentSlotType.Islands && s.ItemId == itemId)) {
+            SelectHouse(wizard, itemId, false);
             return;
         }
 
@@ -493,4 +521,3 @@ internal class EquipmentService(SessionActor sessionActor) : MessageService(sess
         }
     }
 }
-

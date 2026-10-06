@@ -49,6 +49,7 @@ using Imlight.Classic;
 using Imlight.Classic.Quests;
 using Imlight.Common;
 using Imlight.CoreLib.Classic;
+using Imlight.CoreLib.Classic.Housing;
 using Imlight.CoreLib.Game.Sigils;
 using Imlight.CoreLib.Game.WizBang;
 using Imlight.CoreLib.Game.World;
@@ -61,7 +62,7 @@ using Imlight.CoreLib.WizardData.Models.Player;
 
 namespace Imlight.CoreLib.Game.Services;
 
-internal class ZoneService(SessionActor sessionActor) : MessageService(sessionActor) {
+internal partial class ZoneService(SessionActor sessionActor) : MessageService(sessionActor) {
 
     private const int ZONE_REMOVAL_WAIT_TIME_IN_SECONDS = 8;
     private const int ZONE_TRANSFER_CLEANUP_WAIT_TIME_IN_SECONDS = 1;
@@ -79,6 +80,7 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
     private bool _removedForTransfer; // CLASSIC: DoZoneTransfer removed the player from ZoneActor
     private uint _currentDynamicZoneId;
     private ulong _currentInstanceOwner; // CLASSIC: the instance (owner or sigil run) this session's zone belongs to
+    private ulong _currentHousingDeedId; // CLASSIC: separate lots can share an owner and zone template.
 
     private const string SIGIL_ENTER_TIMER_KEY = "sigilenter";
     private const float SIGIL_COUNTDOWN_SECONDS = 10.0f;
@@ -195,6 +197,28 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
 
         // CLASSIC: a door or trigger inside an instance leads to the same instance's zones (Classic.GroupInstances).
         if (ClassicRuntime.IsActive) {
+            // CLASSIC: interior doors preserve a validated lot, while public exits drop its identity.
+            if (message.HousingDeedId == 0 && message.KeepInstance && _currentHousingDeedId != 0
+                    && HouseCollection.TryGetOwned(_currentInstanceOwner, _currentHousingDeedId, out var currentHouse)
+                    && HouseCatalog.TryRoom(currentHouse.TemplateId, message.DestinationZone, out _)) {
+                message.HousingDeedId = _currentHousingDeedId;
+                message.OwnerCharId = _currentInstanceOwner;
+            }
+            if (message.HousingDeedId != 0) {
+                if (!HouseTransferEntries.MayEnter(GetActiveWizard().CharId, message.OwnerCharId,
+                        message.HousingDeedId, message.DestinationZone)) {
+                    Sender.Tell(new ZONE_102_PROTOCOL.MSG_ZONETRANSFERRSP { ErrorCode = 1 });
+                    InformGameClient("That house is not available.");
+                    return;
+                }
+                message.KeepInstance = false;
+                message.IsPrivate = true;
+            } else if (HouseCatalog.IsApprovedRoom(message.DestinationZone)) {
+                Sender.Tell(new ZONE_102_PROTOCOL.MSG_ZONETRANSFERRSP { ErrorCode = 1 });
+                return;
+            } else if (_currentHousingDeedId != 0) {
+                message.KeepInstance = false;
+            }
             message.OwnerCharId = GroupInstances.OwnerForTransfer(message.OwnerCharId, message.KeepInstance,
                 _currentInstanceOwner);
 
@@ -236,6 +260,14 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
             // CLASSIC: the attach after the client's zone change joins the instance that answered (a sigil group's
             // run, a friend's dungeon), not the wizard's own.
             if (ClassicRuntime.IsActive && GetActiveWizard() is { } traveller) {
+                // CLASSIC: the next SessionActor consumes this exact private identity after normal attach validation.
+                if (zoneDetails.HousingDeedId != 0 && !HouseTransferEntries.Queue(traveller.CharId,
+                        zoneDetails.InstanceOwnerId, zoneDetails.HousingDeedId, message.DestinationZone, DateTime.UtcNow)) {
+                    Sender.Tell(new ZONE_102_PROTOCOL.MSG_ZONETRANSFERRSP { ErrorCode = 1 });
+                    InformGameClient("That house is not available.");
+                    return;
+                }
+                if (zoneDetails.HousingDeedId == 0) HouseTransferEntries.Cancel(traveller.CharId);
                 GroupInstances.QueueEntry(traveller.CharId, message.DestinationZone, zoneDetails.InstanceOwnerId,
                     DateTime.UtcNow);
 
@@ -261,6 +293,7 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
             SessionActor.PublishDoorAttach(null);
             _currentDynamicZoneId = zoneDetails.DynamicZoneId;
             _currentInstanceOwner = zoneDetails.InstanceOwnerId; // CLASSIC
+            _currentHousingDeedId = zoneDetails.HousingDeedId; // CLASSIC
         }
 
         Sender.Tell(zoneDetails);
@@ -295,6 +328,7 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
 
     [MessageHandler(typeof(GAME_5_PROTOCOL.MSG_ZONETRANSFERNACK))]
     private void ReceiveZoneTransferNack(GAME_5_PROTOCOL.MSG_ZONETRANSFERNACK message) {
+        HouseTransferEntries.Cancel(GetActiveWizard()?.CharId ?? 0); // CLASSIC: a refused transfer is not an attach proof.
         // The client has denied the zone transfer.
         Logger.Debug("Client was not OK with zone transfer!");
         _isTransferQueued = false;
@@ -442,6 +476,7 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
     [MessageHandler(typeof(WIZARD_12_PROTOCOL.MSG_PATCHINGBLOCKED))]
     private void ReceivePatchingBlocked(WIZARD_12_PROTOCOL.MSG_PATCHINGBLOCKED message) {
         _isTransferQueued = false;
+        HouseTransferEntries.Cancel(GetActiveWizard()?.CharId ?? 0); // CLASSIC
     }
 
     [MessageHandler(typeof(GAME_5_PROTOCOL.MSG_RETRYTELEPORT))]
@@ -461,6 +496,14 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
         }
 
         var character = GetActiveWizard();
+
+        // CLASSIC: zone reload uses the same trusted lot; it does not infer a deed from the native attach packet.
+        if (_currentHousingDeedId != 0) {
+            if (!HouseTransferEntries.MayEnter(character.CharId, _currentInstanceOwner, _currentHousingDeedId, character.Zone)
+                    || !HouseTransferEntries.Queue(character.CharId, _currentInstanceOwner, _currentHousingDeedId,
+                        character.Zone, DateTime.UtcNow)) return;
+            GroupInstances.QueueEntry(character.CharId, character.Zone, _currentInstanceOwner, DateTime.UtcNow);
+        }
 
         _isTransferQueued = true;
         var zoneTransferRequestMessage = new GAME_5_PROTOCOL.MSG_ZONETRANSFERREQUEST {
@@ -526,6 +569,7 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
             }
 
             var owner = GetActiveWizard();
+            if (TryGoToHouse(owner)) return; // CLASSIC: an equipped, durable deed chooses the owned home.
             if (!ClassicGate.AllowsZone(DormZone, owner.CharId, InformGameClient)) {
                 return;
             }

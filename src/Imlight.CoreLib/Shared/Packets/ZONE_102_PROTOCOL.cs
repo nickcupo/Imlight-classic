@@ -603,6 +603,7 @@ public class ZONE_102_PROTOCOL : IServerProtocol {
         public bool SendToClient = true;
         public bool IsPrivate = false;
         public ulong OwnerCharId;
+        public ulong HousingDeedId; // CLASSIC: trusted house identity; never serialized to the client.
 
         /// <summary>
         /// A fresh dungeon-sigil entry starts a NEW run: GameWorld drops the owner's stale copy of the
@@ -645,6 +646,7 @@ public class ZONE_102_PROTOCOL : IServerProtocol {
 
         /// <summary>CLASSIC: the instance (owner or sigil run) of the zone that answered; 0 for a public zone.</summary>
         public ulong InstanceOwnerId;
+        public ulong HousingDeedId; // CLASSIC: the deed of this physical instance; 0 for dorms/dungeons/public zones.
 
         /// <summary>CLASSIC: the answering zone's hard player limit (m_nHardLimit).</summary>
         public int ZoneHardLimit;
@@ -745,6 +747,8 @@ public class ZONE_102_PROTOCOL : IServerProtocol {
         public byte ServiceID { get; } = 102;
 
         public string ZoneName;
+        public ulong OwnerCharId; // CLASSIC: query the exact physical house, not just its zone template.
+        public ulong HousingDeedId;
 
     }
 
@@ -754,6 +758,8 @@ public class ZONE_102_PROTOCOL : IServerProtocol {
         public byte ServiceID { get; } = 102;
 
         public bool HasZone;
+        public ulong OwnerCharId; // CLASSIC
+        public ulong HousingDeedId;
 
     }
 
@@ -954,6 +960,8 @@ public class ZONE_102_PROTOCOL : IServerProtocol {
         public byte ServiceID { get; } = 102;
 
         public WizZoneData ZoneData;
+        public ulong InstanceOwnerId; // CLASSIC: trusted identity of the answering zone.
+        public ulong HousingDeedId;
 
     }
 

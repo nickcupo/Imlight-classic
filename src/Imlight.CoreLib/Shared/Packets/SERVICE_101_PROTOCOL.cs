@@ -125,6 +125,7 @@ internal sealed class SERVICE_101_PROTOCOL : IServerProtocol {
         public bool MakePrivate;
         public ulong OwnerCharId;
         public bool RefuseWhenFull; // CLASSIC: joining a friend's instance (Classic.GroupInstances)
+        public ulong HousingDeedId; // CLASSIC: server-only lot identity, absent from native packets.
 
     }
 

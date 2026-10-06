@@ -390,9 +390,11 @@ internal class ChatService(SessionActor sessionActor) : MessageService(sessionAc
     private void SendFilteredZoneMessage(IMessage msg, ulong senderCharId, string zoneName) {
         var blockedBy = BuddyRelationshipCollection.GetCharactersWhoBlocked(senderCharId);
         var playersInZone = OnlinePlayerCollection.GetPlayersInZone(zoneName);
-        var senderInstance = OnlinePlayerCollection.GetOnlinePlayer(senderCharId)?.InstanceOwnerId ?? 0; // CLASSIC
+        var senderOnline = OnlinePlayerCollection.GetOnlinePlayer(senderCharId); // CLASSIC
+        var senderInstance = senderOnline?.InstanceOwnerId ?? 0;
 
-        foreach (var player in ChatAudience(playersInZone, senderCharId, senderInstance, blockedBy)) {
+        foreach (var player in ChatAudience(playersInZone, senderCharId, senderInstance, blockedBy,
+                     senderOnline?.HousingDeedId ?? 0)) {
             Context.ActorSelection(player.ActorPath).Tell(msg);
         }
     }
@@ -404,9 +406,11 @@ internal class ChatService(SessionActor sessionActor) : MessageService(sessionAc
     /// a Say in one dungeon run used to reach the wizards in every other run of it.
     /// </summary>
     internal static IEnumerable<OnlinePlayer> ChatAudience(IEnumerable<OnlinePlayer> playersInZone, ulong senderCharId,
-                                                          ulong senderInstance, ICollection<ulong> blockedBy)
+                                                          ulong senderInstance, ICollection<ulong> blockedBy,
+                                                          ulong senderHousingDeedId = 0)
         => playersInZone.Where(player => player.CharacterId != senderCharId
                                          && player.InstanceOwnerId == senderInstance
+                                         && player.HousingDeedId == senderHousingDeedId // CLASSIC: Say stays inside one lot.
                                          && !blockedBy.Contains(player.CharacterId));
 
     private void SendChatCommand(string input, CoreObject charObj, Wizard character) {

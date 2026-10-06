@@ -35,7 +35,9 @@ public enum EquipmentSlotType {
     Ring,
     Pet,
     Mount,
-    Deck
+    Deck,
+    Elixir, // CLASSIC: append only; preserve all persisted gear-slot values.
+    Islands // CLASSIC: the native selected deed is nonvisual and adds no gear stats.
 
 }
 

@@ -56,4 +56,24 @@ public sealed class CrownShopCatalogTests {
     public void TheCanonicalProfileNamesTheCrownShop()
         => Assert.Equal("rules/crown-shop-2009.yaml", ClassicDataFixture.LoadProfile("late-2009").Rules.CrownShop);
 
+    [Fact]
+    public void HouseOffersUseTheNativeHouseUiAndAConnectedLayoutWhileEmptyHouseCatalogHasNoTab() {
+        var house = new CrownShopEntry("Test house", 160431, CrownShopCategories.Houses, 10000, 100000, null, 2, false, null);
+        var serializer = new Imcodec.ObjectProperty.ObjectSerializer(Versionable: false,
+            Behaviors: Imcodec.ObjectProperty.SerializerFlags.SerializeFlags | Imcodec.ObjectProperty.SerializerFlags.Compress);
+        Assert.True(serializer.Deserialize<Imcodec.ObjectProperty.TypeCache.CrownShopData>(
+            Imlight.CoreLib.Game.Services.CrownShopService.SerializeCatalog([house]),
+            Imcodec.ObjectProperty.PropertyFlags.Prop_Save | Imcodec.ObjectProperty.PropertyFlags.Prop_Public, out var data));
+        var category = Assert.Single(data.m_crownShopLayout.m_categories.Where(c => c.m_isHousesCategory));
+        Assert.Equal("CrownShopSWF_CategoryHouses", category.m_name);
+        var tab = Assert.Single(data.m_crownShopLayout.m_tabs.Where(t => t.m_ID == category.m_parentTabID));
+        Assert.Equal("CrownShopSWF_MenuHousing", tab.m_name);
+        Assert.Contains(category.m_ID, tab.m_categoryIDs);
+        Assert.Contains($"{category.m_ID}:", Assert.Single(data.m_items).m_displayPriority);
+        Assert.True(serializer.Deserialize<Imcodec.ObjectProperty.TypeCache.CrownShopData>(
+            Imlight.CoreLib.Game.Services.CrownShopService.SerializeCatalog([]),
+            Imcodec.ObjectProperty.PropertyFlags.Prop_Save | Imcodec.ObjectProperty.PropertyFlags.Prop_Public, out var empty));
+        Assert.DoesNotContain(empty.m_crownShopLayout.m_categories, c => c.m_isHousesCategory);
+    }
+
 }

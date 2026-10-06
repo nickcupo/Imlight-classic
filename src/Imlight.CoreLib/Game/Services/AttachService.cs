@@ -40,6 +40,8 @@
  */
 
 using System;
+using Imlight.Classic;
+using System.Linq;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using Akka.Actor;
@@ -50,6 +52,7 @@ using Imcodec.ObjectProperty;
 using Imcodec.ObjectProperty.TypeCache;
 using Imcodec.Types;
 using Imlight.Common;
+using Imlight.CoreLib.Classic.Housing;
 using Imlight.CoreLib.Shared.Character;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;
@@ -70,6 +73,7 @@ internal class AttachService(SessionActor sessionActor) : MessageService(session
     private bool _attachReceived;
     private bool _loginCompleteSent; // CLASSIC
     private ulong _instanceOwnerId; // CLASSIC: the instance the attach joined (Classic.GroupInstances)
+    private ulong _housingDeedId; // CLASSIC: ephemeral, validated lot identity.
     private int _zoneHardLimit; // CLASSIC
 
     protected static Props Props(SessionActor parentActor)
@@ -97,12 +101,27 @@ internal class AttachService(SessionActor sessionActor) : MessageService(session
             return;
         }
 
+        // CLASSIC: persist only an already authorized identity. A save failure cannot silently lose the lot on relog.
+        if (ClassicRuntime.IsActive && HouseCatalog.Approved.Any()
+                && !HouseCollection.RecordLocation(_wizard.CharId, zoneDetails.InstanceOwnerId,
+                    zoneDetails.HousingDeedId, message.ZoneName)) {
+            if (zoneDetails.HousingDeedId != 0) {
+                HouseTransferEntries.Queue(_wizard.CharId, zoneDetails.InstanceOwnerId, zoneDetails.HousingDeedId,
+                    message.ZoneName, DateTime.UtcNow);
+                Classic.GroupInstances.QueueEntry(_wizard.CharId, message.ZoneName, zoneDetails.InstanceOwnerId, DateTime.UtcNow);
+            }
+            Auth.SecuritySettings.GameKeys.Value.Arm(_account.AccountId);
+            SendToSocket(new GAME_5_PROTOCOL.MSG_ATTACHFAILED { Error = 1 });
+            return;
+        }
+
         _instanceOwnerId = zoneDetails.InstanceOwnerId; // CLASSIC
+        _housingDeedId = zoneDetails.HousingDeedId; // CLASSIC
         _zoneHardLimit = zoneDetails.ZoneHardLimit; // CLASSIC
         // CLASSIC: housing services consume only this validated, in-process ownership context.
         // Login/attach packet bytes remain unchanged (the native blob cache uses the existing ZoneID).
         SessionActor.PublishHousingAttach(new HousingAttachContext(_wizard.CharId, zoneDetails.InstanceOwnerId,
-            message.ZoneName, zoneDetails.DynamicZoneId, message.ZoneID));
+            message.ZoneName, zoneDetails.DynamicZoneId, message.ZoneID, zoneDetails.HousingDeedId));
 
         // CLASSIC: logging back in to an arena whose match is over (or a copy of one nobody fights in): back to the arena
         // hall once the attach is done.
@@ -363,6 +382,32 @@ internal class AttachService(SessionActor sessionActor) : MessageService(session
             OwnerCharId = Classic.GroupInstances.OwnerForAttach(_wizard.CharId, zoneName, DateTime.UtcNow),
         };
 
+        // CLASSIC: the native attach has no trusted deed field. Only a completed internal transfer, or the
+        // owner's durable saved lot on relog, can select a house. Visitors still require its owner present.
+        if (ClassicRuntime.IsActive) {
+            var now = DateTime.UtcNow;
+            if (HouseTransferEntries.TryConsume(_wizard.CharId, zoneMsg.OwnerCharId, zoneName, now, out var deed)) {
+                if (!HouseTransferEntries.MayEnter(_wizard.CharId, zoneMsg.OwnerCharId, deed, zoneName))
+                    return new ZONE_102_PROTOCOL.MSG_ZONETRANSFERRSP { ErrorCode = 1 };
+                zoneMsg.HousingDeedId = deed;
+                zoneMsg.IsPrivate = true;
+            } else if (HouseCatalog.IsApprovedRoom(zoneName)) {
+                if (zoneMsg.OwnerCharId != _wizard.CharId)
+                    return new ZONE_102_PROTOCOL.MSG_ZONETRANSFERRSP { ErrorCode = 1 };
+                if (HouseCollection.HasSavedLocation(_wizard.CharId, _wizard.CharId, zoneName)) {
+                    if (!HouseCollection.TryGetSavedLocation(_wizard.CharId, _wizard.CharId, zoneName, out var savedDeed))
+                        return new ZONE_102_PROTOCOL.MSG_ZONETRANSFERRSP { ErrorCode = 1 };
+                    zoneMsg.HousingDeedId = savedDeed;
+                } else {
+                    if (!HouseCollection.TryGetEquipped(_wizard, out var home)
+                            || !HouseCatalog.TryRoom(home.TemplateId, zoneName, out _))
+                        return new ZONE_102_PROTOCOL.MSG_ZONETRANSFERRSP { ErrorCode = 1 };
+                    zoneMsg.HousingDeedId = home.DeedId;
+                }
+                zoneMsg.IsPrivate = true;
+            }
+        }
+
         // CLASSIC: logging out resets the dungeon the wizard was in (2009 rule, Classic.InstanceResets), unless a fight
         // there holds the wizard's seat or someone else is inside. The attach that ends a zone transfer is not a login.
         if (Classic.InstanceResets.IsActive && Classic.InstanceResets.ResetOnLogin(_wizard.CharId, zoneName, zoneMsg.OwnerCharId,
@@ -370,7 +415,13 @@ internal class AttachService(SessionActor sessionActor) : MessageService(session
             zoneMsg.ResetInstance = true;
         }
 
-        return AskOtherService<ZONE_102_PROTOCOL.MSG_ZONETRANSFERRSP>(zoneMsg);
+        var reply = AskOtherService<ZONE_102_PROTOCOL.MSG_ZONETRANSFERRSP>(zoneMsg);
+        // CLASSIC: native retry after a failed allocation retains the same proof, without changing key validation.
+        if (reply?.ErrorCode != 0 && zoneMsg.HousingDeedId != 0) {
+            HouseTransferEntries.Queue(_wizard.CharId, zoneMsg.OwnerCharId, zoneMsg.HousingDeedId, zoneName, DateTime.UtcNow);
+            Classic.GroupInstances.QueueEntry(_wizard.CharId, zoneName, zoneMsg.OwnerCharId, DateTime.UtcNow);
+        }
+        return reply;
     }
 
     private ZONE_102_PROTOCOL.MSG_ADDPLAYERRSP AddPlayerToZone(WizClientObject charObj, Wizard wizard) {
@@ -399,6 +450,7 @@ internal class AttachService(SessionActor sessionActor) : MessageService(session
             CurrentRealm = realmName,
             ActorPath = playerActor.Path.ToString(),
             InstanceOwnerId = _instanceOwnerId, // CLASSIC
+            HousingDeedId = _housingDeedId, // CLASSIC
             ZoneHardLimit = _zoneHardLimit, // CLASSIC
         };
 

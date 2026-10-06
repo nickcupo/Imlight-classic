@@ -3,7 +3,8 @@ using System.Threading;
 namespace Imlight.CoreLib.Shared.Networking;
 
 // CLASSIC: trusted in-process attach state; never a generated/on-wire login or attach field.
-internal sealed record HousingAttachContext(ulong CharacterId, ulong OwnerId, string Zone, uint DynamicServerProcId, ulong ZoneId);
+internal sealed record HousingAttachContext(ulong CharacterId, ulong OwnerId, string Zone, uint DynamicServerProcId, ulong ZoneId,
+    ulong HousingDeedId = 0);
 
 public sealed partial class SessionActor {
     private HousingAttachContext _housingAttach;

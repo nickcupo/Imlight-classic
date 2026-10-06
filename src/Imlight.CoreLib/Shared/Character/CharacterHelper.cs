@@ -45,6 +45,7 @@ using Imcodec.ObjectProperty.TypeCache;
 using Imcodec.Types;
 using Imlight.Common;
 using Imlight.CoreLib.Game.Effects;
+using Imlight.CoreLib.Classic.Elixirs;
 using Imlight.CoreLib.Shared.Behaviors;
 using Imlight.CoreLib.Shared.Items;
 using Imlight.CoreLib.WizardData.Models.Player;
@@ -72,8 +73,16 @@ internal static class CharacterHelper {
             if (template is null) {
                 continue;
             }
+            // CLASSIC: selecting a deed chooses a home; it never adds an appearance or gear effect.
+            if (Imlight.Classic.ClassicRuntime.IsActive
+                && template.m_behaviors?.Any(b => b is DeedBehaviorTemplate) == true) continue;
 
-            var activatedEffects = CharacterEffectHelper.AddEffectsToWizard(wizard, template);
+            // CLASSIC: a timed item is not ordinary gear. Native template values alone never
+            // authorize an elixir's historical effects or bypass its validated active ledger.
+            var activatedEffects = Imlight.Classic.ClassicRuntime.IsActive && ElixirRuntime.IsElixir(template)
+                ? ElixirRuntime.AddApprovedEffects(wizard, item, template,
+                    pvp: wizard.IsInDuel && Imlight.CoreLib.Classic.Arena.ClassicArena.IsArenaZone(wizard.Zone))
+                : CharacterEffectHelper.AddEffectsToWizard(wizard, template);
 
             Logger.Debug("{0} Applied {1} effects for item {2}.",
                 Logger.Args(wizard.PlayerNameBehavior.GetWizardName(), activatedEffects.Count, template.m_objectName));

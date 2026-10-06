@@ -247,4 +247,10 @@ internal sealed class CLASSIC_FEATURES_PROTOCOL : IServerProtocol {
 
     }
 
+    /// <summary>CLASSIC: a committed activation requests a timer/effect refresh; never on the wire.</summary>
+    public sealed class MSG_ELIXIRCHANGED : IServerMessage {
+        public byte MessageOrder { get; } = 17;
+        public byte ServiceID { get; } = 110;
+        public ulong CharacterId;
+    }
 }

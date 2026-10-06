@@ -71,6 +71,11 @@ public static class AccountCollection {
         }
     }
 
+    // CLASSIC: housing purchases commit the account, wizard and original deed together.
+    // Reuse the existing account-before-character lock order; never a debit/refund split.
+    internal static T WithAccountWriteLane<T>(ulong accountId, Func<T> write)
+        => WithWriteLane(accountId, write);
+
     private static bool UpdateAccount(ulong accountId, Action<Account> update) {
         return WithWriteLane(accountId, () => {
             using var session = s_store.OpenSession();

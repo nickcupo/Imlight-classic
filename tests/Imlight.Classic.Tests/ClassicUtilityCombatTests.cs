@@ -312,6 +312,45 @@ public sealed class ClassicUtilityCombatTests : IDisposable {
         Assert.Empty(target._hangingEffects);
     }
 
+    [Theory]
+    [InlineData(50)]
+    [InlineData(100)]
+    public void ALethalTickVoidsTheQueuedSpellWithoutConsumingStunOrBeguile(int health) {
+        var caster = Circle();
+        caster.ParticipantGameStats.m_currentHitpoints = health;
+        caster._hangingEffects.Add(Dot(100, 1));
+        caster.CombatParticipant.m_stunned = 1;
+        caster.BeguiledActions = 1;
+        var target = Circle();
+        var actions = Resolve(caster, new QueuedCombatAction {
+            SpellCaster = caster, SelectedTarget = target,
+            Spell = new Spell { m_templateID = uint.MaxValue - 102 },
+            SpellTemplate = new SpellTemplate { m_effects = [new SpellEffect {
+                m_effectType = kSpellEffects.kDamage, m_effectParam = 100, m_effectTarget = kEffectTarget.kEnemySingle,
+            }] },
+        });
+
+        Assert.False(caster.IsAlive);
+        Assert.Empty(caster._hangingEffects);
+        Assert.Empty(actions.m_actionList);
+        Assert.Equal(1000, target.ParticipantGameStats.m_currentHitpoints);
+        Assert.Equal(1, caster.CombatParticipant.m_stunned);
+        Assert.Equal(1, caster.BeguiledActions);
+    }
+
+    [Fact]
+    public void ASurvivedTickStillResolvesTheQueuedAction() {
+        var caster = Circle();
+        caster.ParticipantGameStats.m_currentHitpoints = 150;
+        caster._hangingEffects.Add(Dot(100, 1));
+        caster.CombatParticipant.m_stunned = 1;
+        var actions = Resolve(caster, new QueuedCombatAction { SpellCaster = caster });
+
+        Assert.Equal(50, caster.ParticipantGameStats.m_currentHitpoints);
+        Assert.Single(actions.m_actionList);
+        Assert.Equal(0, caster.CombatParticipant.m_stunned);
+    }
+
     [Fact]
     public void DrainAndHotCannotOverflowHealthAddition() {
         var caster = Circle(); var victim = Circle();
@@ -342,14 +381,16 @@ public sealed class ClassicUtilityCombatTests : IDisposable {
         typeof(CombatResolver).GetMethod("InvokeOverTimeEffects", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(resolver, [target]);
     }
 
-    private static void Resolve(CombatDuelSubCircle caster, QueuedCombatAction action) {
+    private static CombatActionListObj Resolve(CombatDuelSubCircle caster, QueuedCombatAction action) {
         var resolver = new CombatResolver(caster._duelActor.Duel, [caster]);
         resolver.Reset();
         var queue = (List<QueuedCombatAction>) typeof(CombatResolver)
             .GetField("_queuedCombatActions", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(resolver)!;
         queue.Add(action);
+        var actions = new CombatActionListObj { m_actionList = [] };
         typeof(CombatResolver).GetMethod("ProcessQueuedActions", BindingFlags.Instance | BindingFlags.NonPublic)!
-            .Invoke(resolver, [new CombatActionListObj { m_actionList = [] }]);
+            .Invoke(resolver, [actions]);
+        return actions;
     }
 
     private static SpellEffect Block() => new() {

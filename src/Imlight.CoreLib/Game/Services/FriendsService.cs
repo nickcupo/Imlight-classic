@@ -230,7 +230,10 @@ internal class FriendsService(SessionActor sessionActor) : MessageService(sessio
         }
 
         self.FriendsBehavior.TryGetRelationship(buddyCharID, out var statsRelationship);
-        var sameZone = TryGetOnlinePlayer(buddyCharID, out var statsTarget) && statsTarget.CurrentZone == self.Zone;
+        var selfOnline = OnlinePlayerCollection.GetOnlinePlayer(self.CharId); // CLASSIC: proximity belongs to one lot.
+        var sameZone = TryGetOnlinePlayer(buddyCharID, out var statsTarget) && statsTarget.CurrentZone == self.Zone
+            && selfOnline is not null && HouseTransferEntries.SameInstance(selfOnline.InstanceOwnerId,
+                selfOnline.HousingDeedId, statsTarget.InstanceOwnerId, statsTarget.HousingDeedId);
         if (!FriendRules.MayViewStats(self.CharId, buddyCharID, statsRelationship, sameZone)) {
             Logger.Debug("{0} asked for the stats of character {1}, who is neither a friend nor nearby.",
                 Logger.Args(self.CharId, buddyCharID));
@@ -661,6 +664,12 @@ internal class FriendsService(SessionActor sessionActor) : MessageService(sessio
         // CLASSIC: a friend in a dungeon is reached in their instance (a sigil group's run or the dungeon's owner), and
         // not when it already holds four wizards (2009: "Your friend is in a full instance"; Classic.GroupInstances).
         var instanceOwner = ClassicRuntime.IsActive ? onlinePlayer.InstanceOwnerId : 0;
+        var housingDeed = ClassicRuntime.IsActive ? onlinePlayer.HousingDeedId : 0; // CLASSIC
+
+        if (housingDeed != 0 && !HouseTransferEntries.MayEnter(me.CharId, instanceOwner, housingDeed, zone)) {
+            InformGameClient(FriendNotAvailableMessage);
+            return;
+        }
 
         // CLASSIC: a friend fighting an arena match is busy (the arena instance is the match's own).
         if (Classic.Arena.ArenaMatchmaker.Instance?.IsRun(instanceOwner) == true) {
@@ -669,7 +678,8 @@ internal class FriendsService(SessionActor sessionActor) : MessageService(sessio
             return;
         }
 
-        if (instanceOwner != 0 && GroupInstances.IsFull(GroupInstances.CountIn(OnlinePlayerCollection.GetOnlinePlayers(),
+        if (instanceOwner != 0 && GroupInstances.IsFull(GroupInstances.CountIn(OnlinePlayerCollection.GetOnlinePlayers()
+                    .Where(p => p.HousingDeedId == housingDeed),
                 p => p.CurrentZone, p => p.InstanceOwnerId, zone, instanceOwner), onlinePlayer.ZoneHardLimit)) {
             InformGameClient(GroupInstances.FullInstanceMessage, true);
 
@@ -681,8 +691,9 @@ internal class FriendsService(SessionActor sessionActor) : MessageService(sessio
                 message: new CHARACTER_103_PROTOCOL.MSG_QUERYACTIVEWIZARD(),
                 timeout: TimeSpan.FromSeconds(QUERY_TELEPORT_WIZARD_TIMEOUT_IN_SECONDS)
             )
-            .PipeTo(Self, success: rsp => new GoToPlayerAnswer(targetID, zone, rsp, InstanceOwner: instanceOwner),
-                failure: ex => new GoToPlayerAnswer(targetID, zone, null, ex, instanceOwner));
+            .PipeTo(Self, success: rsp => new GoToPlayerAnswer(targetID, zone, rsp, InstanceOwner: instanceOwner,
+                    HousingDeedId: housingDeed),
+                failure: ex => new GoToPlayerAnswer(targetID, zone, null, ex, instanceOwner, housingDeed));
     }
 
     /// <summary>CLASSIC: told to a wizard whose teleport-to-friend got no answer from the friend's session.</summary>
@@ -690,7 +701,7 @@ internal class FriendsService(SessionActor sessionActor) : MessageService(sessio
 
     /// <summary>CLASSIC: the target's answer to a teleport-to-friend question.</summary>
     internal sealed record GoToPlayerAnswer(ulong TargetId, string Zone, CHARACTER_103_PROTOCOL.MSG_CHARACTER Answer,
-                                            Exception Error = null, ulong InstanceOwner = 0);
+                                            Exception Error = null, ulong InstanceOwner = 0, ulong HousingDeedId = 0);
 
     [MessageHandler(typeof(GoToPlayerAnswer))]
     private void ReceiveGoToPlayerAnswer(GoToPlayerAnswer answer) {
@@ -705,6 +716,16 @@ internal class FriendsService(SessionActor sessionActor) : MessageService(sessio
 
         var queryResult = answer.Answer;
         if (queryResult is not null) {
+            // CLASSIC: a delayed friend answer cannot select a different lot or admit visitors after its owner left.
+            if (answer.HousingDeedId != 0 && (!TryGetOnlinePlayer(answer.TargetId, out var currentTarget)
+                    || !string.Equals(currentTarget.CurrentZone, answer.Zone, StringComparison.OrdinalIgnoreCase)
+                    || !HouseTransferEntries.SameInstance(answer.InstanceOwner, answer.HousingDeedId,
+                        currentTarget.InstanceOwnerId, currentTarget.HousingDeedId)
+                    || !HouseTransferEntries.MayEnter(GetActiveWizard().CharId, answer.InstanceOwner,
+                        answer.HousingDeedId, answer.Zone))) {
+                InformGameClient(FriendNotAvailableMessage);
+                return;
+            }
             // CLASSIC: [Classic] TeleportToFriendAnywhere (owner ruling 2026-10-01, on): unlocked worlds only decide the
             // world list. Off, a friend in a world this wizard has not unlocked cannot be reached.
             if (ClassicRuntime.IsActive && !Classic.ClassicSettings.TeleportToFriendAnywhere
@@ -724,7 +745,8 @@ internal class FriendsService(SessionActor sessionActor) : MessageService(sessio
                 doTeleportEffects: true,
                 makePrivate: inInstance,
                 ownerCharId: inInstance ? answer.InstanceOwner : answer.TargetId,
-                refuseWhenFull: inInstance
+                refuseWhenFull: inInstance,
+                housingDeedId: answer.HousingDeedId
             );
         } else {
             Logger.Warning("Failed to query the target wizard for teleportation.");

@@ -63,7 +63,8 @@ using Imlight.CoreLib.WizardData.Models.Player;
 namespace Imlight.CoreLib.Game.Trading;
 
 /// <summary>Where a player is, as the trade rules see it.</summary>
-internal sealed record TradeParty(ulong CharId, Wizard Wizard, string Zone, ulong Instance, Vector3? Location);
+internal sealed record TradeParty(ulong CharId, Wizard Wizard, string Zone, ulong Instance, Vector3? Location,
+    ulong HousingDeedId = 0); // CLASSIC: two identical lots owned by one wizard are separate trade locations.
 
 /// <summary>What the trade manager needs from the server (fakes in tests).</summary>
 internal interface ITradeWorld {
@@ -417,7 +418,8 @@ internal sealed class TreasureTradeManager {
             return TradeStatus.CannotTrade;
         }
 
-        if (!string.Equals(a.Zone, b.Zone, StringComparison.OrdinalIgnoreCase) || a.Instance != b.Instance) {
+        if (!string.Equals(a.Zone, b.Zone, StringComparison.OrdinalIgnoreCase) || a.Instance != b.Instance
+                || a.HousingDeedId != b.HousingDeedId) { // CLASSIC
             return TradeStatus.NotInZone;
         }
 

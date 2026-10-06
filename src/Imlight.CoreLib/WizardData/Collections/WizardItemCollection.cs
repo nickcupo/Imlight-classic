@@ -27,17 +27,15 @@ using Imlight.CoreLib.Shared.Resources;
 using Imlight.CoreLib.WizardData.Databases;
 using Imlight.CoreLib.WizardData.Models.Player;
 using Imcodec.ObjectProperty.TypeCache;
+using Imlight.CoreLib.Classic.Elixirs;
 
 namespace Imlight.CoreLib.WizardData.Collections;
 
 public static class WizardItemCollection {
 
     public const string CollectionName = "WizardItems";
-    private static readonly IDocumentStore s_store;
-
-    static WizardItemCollection() {
-        s_store = PlayerDatabase.Instance.Store;
-    }
+    private static readonly Lazy<IDocumentStore> s_storeSource = new(() => PlayerDatabase.Instance.Store);
+    private static IDocumentStore s_store => s_storeSource.Value;
 
     /// <summary>
     /// Adds an item to the WorldItem collection for a specific player.
@@ -276,10 +274,18 @@ public static class WizardItemCollection {
         return true;
     }
 
-    // CLASSIC: true when a rental item's time has run out.
+    // CLASSIC: only Calendar timers use Unix seconds. Game elixirs persist remaining online
+    // seconds (native 0x14177f620); treating 1800 as a timestamp destroyed them on next login.
     public static bool IsExpired(WizClientObjectItem item, DateTimeOffset now)
-        => CoreObjectFactory.FindBehaviorInstance<ClientTimedItemBehavior>(item, out var timed)
-            && timed.m_expireTime != 0 && timed.m_expireTime <= now.ToUnixTimeSeconds();
+        => IsExpired(item, now, CoreObjectFactory.GetCoreTemplate);
+
+    internal static bool IsExpired(WizClientObjectItem item, DateTimeOffset now, Func<ulong, CoreTemplate> templates) {
+        if (item?.m_inactiveBehaviors?.OfType<ClientTimedItemBehavior>().FirstOrDefault() is not { } timed) return false;
+        if (templates(item.m_templateID) is not WizItemTemplate template) return false;
+        var timer = template.m_behaviors?.OfType<TimedItemBehaviorTemplate>().SingleOrDefault();
+        // An unknown timer mode is not interpreted as a Calendar expiry.
+        return timer is not null && ElixirRuntime.CalendarExpired(timed.m_expireTime, timer.m_timerType, now);
+    }
 
     /// <summary>
     /// CLASSIC: saves a pet item's growth (its ClientPetItemBehavior: level, experience, stats, talents) onto the stored copy.

@@ -135,6 +135,26 @@ internal class ShopService(SessionActor sessionActor) : MessageService(sessionAc
         // otherwise, or out of range, the template's own.
         ApplyBuyDyes(item, template, message.texture, message.decal);
 
+        // CLASSIC: a house's price, original deed, gold/account balance and portfolio save
+        // together. Never route a deed through the ordinary charge-then-give path.
+        if (ClassicRuntime.IsActive && Classic.Housing.HouseCatalog.IsDeed(template)) {
+            var purchased = Classic.Housing.HouseCollection.Purchase(playerWizard, item,
+                message.CurrencyType == 1 ? Classic.Housing.HouseCurrency.Crowns : Classic.Housing.HouseCurrency.Gold);
+            if (!purchased.Saved) { InformGameClient(purchased.Error); SendShopDenyMessage(); return; }
+            SendToSocket(new GAME_5_PROTOCOL.MSG_INVENTORYBEHAVIOR_ADDITEM {
+                GlobalID = playerWizard.GameObjectID, SerializedItem = purchased.ItemData,
+            });
+            SendToSocket(new WIZARD2_53_PROTOCOL.MSG_ITEMACQUISITION {
+                ItemGlobalID = purchased.Item.m_globalID, ItemTemplateID = itemTemplateID, ItemLocation = 1,
+            });
+            SendToSocket(new WIZARD_12_PROTOCOL.MSG_UPDATEGOLD {
+                Gold = playerWizard.GameStats.m_currentGold, MaxGold = playerWizard.GameStats.m_baseGoldPouch,
+            });
+            SendToSocket(ClassicCrowns.BalanceMessage(playerWizard.Account, playerWizard.CharId));
+            SendToSocket(new WIZARD_12_PROTOCOL.MSG_SHOPBUYCONFIRM());
+            return;
+        }
+
         // CLASSIC: never charge for an item the backpack cannot take.
         if (playerWizard.InventoryBehavior.IsFull) {
             SendShopDenyMessage();
@@ -257,6 +277,22 @@ internal class ShopService(SessionActor sessionActor) : MessageService(sessionAc
             && (item is null || CoreObjectFactory.GetCoreTemplate(item.m_templateID) is not WizItemTemplate sellTemplate
                 || !Imlight.Classic.Inventory.BackpackQuickSell.IsSellable(sellTemplate.m_adjectiveList))) {
             ProcessFailedSale();
+            return;
+        }
+
+        if (ClassicRuntime.IsActive && Classic.Housing.HouseCollection.IsDeed(item)) {
+            if (!Classic.Housing.HouseCatalog.TryGet((uint)item.m_templateID.Full, out var house) || !house.ResaleAllowed) { ProcessFailedSale(); return; }
+            // The ordinary vendor's resale percentage is an explicit, separately gated
+            // historical ruling; calculate from the approved gold price, never a request.
+            var sold = Classic.Housing.HouseCollection.Sell(wizard, message.GlobalID, (int)Math.Ceiling(house.Gold * SELL_MODIFIER));
+            if (!sold.Saved) { InformGameClient(sold.Error); ProcessFailedSale(); return; }
+            SendToSocket(new WIZARD_12_PROTOCOL.MSG_UPDATEGOLD { Gold = wizard.GameStats.m_currentGold, MaxGold = wizard.GameStats.m_baseGoldPouch });
+            SendToSocket(new GAME_5_PROTOCOL.MSG_INVENTORYBEHAVIOR_REMOVEITEM { GlobalID = wizard.GameObjectID, ItemID = message.GlobalID });
+            foreach (var patch in sold.Added) SendToSocket(new WIZARDHOUSING_50_PROTOCOL.MSG_PATCHADDATTIC {
+                BlobGID = sold.Attic.ContainerId, ObjectID = patch.Entry.TemplateId, SubType = Classic.Housing.HousingRules.AtticSubType,
+                PackageNumber = (uint)patch.PackageNumber, VersionNumber = patch.Version, GIDID = patch.CacheIndex, Data = "", PrimaryColorIndex = 0,
+            });
+            if (sold.Attic is { } attic) SendToSocket(new WIZARDHOUSING_50_PROTOCOL.MSG_UPDATEATTICCOUNT { GlobalID = wizard.GameObjectID, ItemCount = attic.Count });
             return;
         }
 

@@ -49,19 +49,24 @@ namespace Imlight.CoreLib.Game.World;
 /// <summary>
 /// Manages zone instances for a specific player using Akka.NET actor system.
 /// </summary>
-internal sealed class InstanceContainer(ulong instanceOwnerId) : ReceiveProtocolDispatcher, IWithTimers {
+internal sealed class InstanceContainer(ulong instanceOwnerId, ulong housingDeedId = 0) : ReceiveProtocolDispatcher, IWithTimers {
 
     public ITimerScheduler Timers { get; set; }
 
     private readonly ulong _instanceOwnerId = instanceOwnerId;
+    private readonly ulong _housingDeedId = housingDeedId; // CLASSIC: distinct lots may share every zone template.
     private readonly List<uint> _dynamicZoneIds = [];
     private readonly Dictionary<string, IActorRef> _zones = [];
 
-    public static Props Props(ulong instanceOwnerId) 
-        => Akka.Actor.Props.Create(() => new InstanceContainer(instanceOwnerId));
+    public static Props Props(ulong instanceOwnerId, ulong housingDeedId = 0)
+        => Akka.Actor.Props.Create(() => new InstanceContainer(instanceOwnerId, housingDeedId));
 
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_ZONETRANSFER))]
     public void ReceiveZoneTransfer(ZONE_102_PROTOCOL.MSG_ZONETRANSFER message) {
+        if (message.OwnerCharId != _instanceOwnerId || message.HousingDeedId != _housingDeedId) { // CLASSIC
+            Sender.Tell(new ZONE_102_PROTOCOL.MSG_ZONETRANSFERRSP { ErrorCode = 1 });
+            return;
+        }
         Logger.Debug("Container (owned by: {0}) received zone transfer request for zone: {1}",
             Logger.Args(_instanceOwnerId, message.DestinationZone));
 
@@ -86,7 +91,10 @@ internal sealed class InstanceContainer(ulong instanceOwnerId) : ReceiveProtocol
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_INSTANCECONTAINERHASZONE))]
     public void ReceiveInstanceContainerHasZone(ZONE_102_PROTOCOL.MSG_INSTANCECONTAINERHASZONE message) 
         => Sender.Tell(new ZONE_102_PROTOCOL.MSG_INSTANCECONTAINERHASZONERSP {
-            HasZone = _zones.ContainsKey(message.ZoneName)
+            HasZone = (message.OwnerCharId == 0 || message.OwnerCharId == _instanceOwnerId)
+                && message.HousingDeedId == _housingDeedId && _zones.ContainsKey(message.ZoneName), // CLASSIC
+            OwnerCharId = _instanceOwnerId,
+            HousingDeedId = _housingDeedId,
         });
 
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_DROPINSTANCEZONE))]
@@ -207,7 +215,7 @@ internal sealed class InstanceContainer(ulong instanceOwnerId) : ReceiveProtocol
         var zoneActorName = SanitizeZoneName(zoneName);
         var zoneId = GetNextDynamicZoneId();
         // CLASSIC: the zone knows it is an instance, so a party loss can reset it (Zone.MSG_INSTANCEPARTYLOST).
-        var zone = Context.ActorOf(Zone.Core.Zone.Props(zoneName, zoneId, _instanceOwnerId),
+        var zone = Context.ActorOf(Zone.Core.Zone.Props(zoneName, zoneId, _instanceOwnerId, _housingDeedId),
             $"{zoneActorName}_{zoneId}");
 
         // Log the new zone creation.

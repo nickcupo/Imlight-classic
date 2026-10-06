@@ -104,6 +104,45 @@ public class ServerWizEquipmentBehavior : IClientBehaviorProvider<ClientWizEquip
 
     public bool HasItemEquipped(ulong itemId) => EquippedItems.Any(item => item.m_globalID == itemId);
 
+    // CLASSIC: Elixir is a multi-item native slot; ordinary gear's replace/clear-by-type rules do not apply.
+    internal bool AppendElixirItem(WizClientObjectItem item) {
+        using var writeScope = s_writeLock.EnterScope();
+        if (item is null || HasItemEquipped(item.m_globalID)
+            || SlotList.Count(s => s.SlotType == EquipmentSlotType.Elixir) >= Classic.Elixirs.ElixirRules.MaximumActive) return false;
+        EquippedItemIds = [.. EquippedItemIds, (ulong)item.m_globalID];
+        EquippedItems.Add(item);
+        SlotList = [.. SlotList, new EquipmentSlot {
+            SlotType = EquipmentSlotType.Elixir, ItemId = item.m_globalID,
+            ItemName = item.m_debugName, EquippedSince = DateTime.UtcNow,
+        }];
+        return true;
+    }
+
+    internal bool RemoveElixirItem(ulong itemId) {
+        using var writeScope = s_writeLock.EnterScope();
+        if (!SlotList.Any(s => s.SlotType == EquipmentSlotType.Elixir && s.ItemId == itemId)) return false;
+        var item = EquippedItems.FirstOrDefault(i => i.m_globalID == itemId);
+        SlotList = SlotList.Where(s => !(s.SlotType == EquipmentSlotType.Elixir && s.ItemId == itemId)).ToList();
+        EquippedItemIds = EquippedItemIds.Where(id => id != itemId).ToList();
+        if (item is not null) EquippedItems.Remove(item);
+        return true;
+    }
+
+    // CLASSIC: publish the committed multi-slot state without replacing concurrently read gear lists.
+    internal void PublishElixirItems(IReadOnlyList<WizClientObjectItem> items) {
+        using var writeScope = s_writeLock.EnterScope();
+        var previous = SlotList.Where(s => s.SlotType == EquipmentSlotType.Elixir).ToDictionary(s => (ulong)s.ItemId);
+        var oldIds = previous.Keys.ToHashSet();
+        foreach (var item in EquippedItems.Where(i => oldIds.Contains(i.m_globalID)).ToArray()) EquippedItems.Remove(item);
+        EquippedItemIds = [.. EquippedItemIds.Where(id => !oldIds.Contains(id)), .. items.Select(i => (ulong)i.m_globalID)];
+        SlotList = [.. SlotList.Where(s => s.SlotType != EquipmentSlotType.Elixir), .. items.Select(item =>
+            previous.TryGetValue(item.m_globalID, out var old) ? old : new EquipmentSlot {
+                SlotType = EquipmentSlotType.Elixir, ItemId = item.m_globalID,
+                ItemName = item.m_debugName, EquippedSince = DateTime.UtcNow,
+            })];
+        foreach (var item in items) EquippedItems.Add(item);
+    }
+
     public bool SlotInUse(string slotName, out byte index) {
         index = 255;
 
