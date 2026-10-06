@@ -266,6 +266,12 @@ public class CombatResolver(Duel duel, CombatDuelSubCircle[] actorSubCircles) {
             // This is because the overtime effects can kill a participant, and we want to see the animation.
             cinematicTime += InvokeOverTimeEffects(action.SpellCaster);
 
+            // CLASSIC: a lethal tick voids the pending action just as an earlier opponent's hit does.
+            // Keep the tick/death animation above, but do not cast or consume stun/Beguile afterward.
+            if (ClassicRuntime.IsActive && !action.SpellCaster.IsAlive) {
+                continue;
+            }
+
             // Beguile: a combatant beguiled before this action takes it for the other side (like a stun, it applies
             // at the next action, this round's if the combatant has not acted yet), and the action uses it up.
             var beguiled = action.SpellCaster.BeguiledActions > 0;
