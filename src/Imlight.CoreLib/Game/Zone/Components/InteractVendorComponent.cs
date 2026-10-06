@@ -128,7 +128,7 @@ internal sealed class InteractVendorComponent(ZoneEntity entity) : ZoneEntityCom
         => OfferedInventory().Any(x => x.MParts.TemplateId == itemGID.MParts.TemplateId);
 
     // CLASSIC: unverified deeds remain closed in the visible stock and purchase validation.
-    private List<GID> OfferedInventory() => !ClassicRuntime.IsActive ? _inventory : _inventory.Where(id =>
+    private List<GID> OfferedInventory() => !ClassicRuntime.IsInitialized || !ClassicRuntime.IsActive ? _inventory : _inventory.Where(id =>
         CoreObjectFactory.GetCoreTemplate(id) is not WizItemTemplate t || !HouseCatalog.IsDeed(t)
         || HouseCatalog.TryGet(id.MParts.TemplateId, out _)).ToList();
 
