@@ -299,7 +299,7 @@ public class CombatResolver(Duel duel, CombatDuelSubCircle[] actorSubCircles) {
                 }
 
                 // If our target is gone, pass the turn.
-                if (!action.SelectedTarget.IsAlive || !action.SelectedTarget.AddedToDuel) {
+                if (!CanResolveTarget(action)) {
                     cinematicTime += HandlePassAction(action, combatActionList);
 
                     Logger.Debug("Duel {0} | Slot {1} | Spell cannot occur because target is dead.",
@@ -342,6 +342,32 @@ public class CombatResolver(Duel duel, CombatDuelSubCircle[] actorSubCircles) {
         }
 
         return instantCinematics ? 0 : cinematicTime;
+    }
+
+    // CLASSIC: a direct friendly heal revives a defeated wizard still in the duel. HoTs do not.
+    // Firsthand dated evidence: MMORPG.com, "PvP Overview", Matt Plourde, 2009-03-09.
+    // https://www.mmorpg.com/wizard101/system-focus/pvp-overview-2000116592
+    internal static bool CanResolveTarget(QueuedCombatAction action) {
+        var target = action?.SelectedTarget;
+        if (target is null || !target.AddedToDuel || !target.Occupied) return false;
+        if (target.IsAlive) return true;
+        return ClassicRuntime.IsActive && target.IsWizard && action.SpellCaster is { } caster
+            && target.OccupiedTeam == caster.ActingTeam
+            && HasDirectFriendlyHeal(action.SpellTemplate?.m_effects);
+    }
+
+    private static bool HasDirectFriendlyHeal(IEnumerable<SpellEffect> effects) {
+        if (effects is null) return false;
+        return effects.Any(effect => effect is not null &&
+            (effect.m_effectType == kSpellEffects.kHeal && effect.m_effectParam > 0
+                && effect.m_effectTarget is kEffectTarget.kFriendlySingle or kEffectTarget.kFriendlyTeam
+                    or kEffectTarget.kFriendlyTeamAllAtOnce
+             || effect switch {
+                 RandomSpellEffect random => HasDirectFriendlyHeal(random.m_effectList),
+                 VariableSpellEffect variable => HasDirectFriendlyHeal(variable.m_effectList),
+                 EffectListSpellEffect list => HasDirectFriendlyHeal(list.m_effectList),
+                 _ => false,
+             }));
     }
 
     // A beguiled caster's single target: a random living combatant on the side it now acts against (its own

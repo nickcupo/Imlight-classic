@@ -65,6 +65,8 @@ internal static class AmbientCombat {
     /// <summary>The move for <paramref name="me"/>, as an MSG_ACTORCOMBATMOVE the duel queues as usual.</summary>
     internal static COMBAT_106_PROTOCOL.MSG_ACTORCOMBATMOVE Choose(CombatDuelComponent duel, CombatDuelSubCircle me,
                                                                     out AllyMove move) {
+        // CLASSIC: arena opponents use visible wards, school-specific pip costs and team tactics; PvE keeps its ally rules.
+        if (duel.IsArenaPvp) return Pvp.ArenaPvpCombat.Choose(duel, me, out move);
         var view = ViewFor(duel, me);
         move = AllyBrain.Choose(view);
 

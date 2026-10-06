@@ -137,7 +137,8 @@ internal sealed class ArenaService(SessionActor sessionActor) : MessageService(s
                 arena.Leave(_charId);
                 break;
             case 5:
-                InformGameClient("Watching arena matches is not open on this server yet.");
+                // CLASSIC: the existing Watch intent takes an onlooker to the match without assigning a combat seat.
+                arena.Watch(_charId, message.MatchID);
                 break;
             default:
                 Logger.Information("Arena: intent {0} is not a 2009 action; ignored.", Logger.Args(message.Command));
@@ -197,7 +198,7 @@ internal sealed class ArenaService(SessionActor sessionActor) : MessageService(s
             DestinationZone = message.Zone,
             DestinationLocation = message.Location,
             SendToClient = true,
-            IsPrivate = true,
+            IsPrivate = message.RunId != 0,
             OwnerCharId = message.RunId,
             ResetInstance = false,
         });
@@ -224,7 +225,7 @@ internal sealed class ArenaService(SessionActor sessionActor) : MessageService(s
         SendToSocket(ArenaMessages.ArenaPoints(wizard.GameStats.m_currentArenaPoints));
         SendToSocket(ArenaMessages.PvpCurrency(wizard.GameStats.m_currentPvPCurrency));
         SendToSocket(outcome.Result);
-        var verdict = outcome.Won ? "You won the match!" : outcome.Fled ? "You fled the match, so it counts as a loss." : "You lost the match.";
+        var verdict = outcome.NoContest ? "The match ended without a contest." : outcome.Won ? "You won the match!" : outcome.Fled ? "You fled the match, so it counts as a loss." : "You lost the match.";
         InformGameClient(outcome.Kind == ArenaKind.Ranked
             ? $"{verdict} Rating {outcome.RatingAfter} ({outcome.RatingAfter - outcome.RatingBefore:+#;-#;0}), rank {outcome.Rank}. "
               + $"+{outcome.Tickets} Arena Tickets."

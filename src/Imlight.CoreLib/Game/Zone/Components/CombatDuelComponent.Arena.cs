@@ -40,10 +40,13 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using Akka.Actor;
+using Imcodec.MessageLayer;
+using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
 using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.Classic.Arena;
+using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Game.Combat;
 using Imlight.CoreLib.WizardData.Models.Player;
 
@@ -55,12 +58,21 @@ internal sealed partial class CombatDuelComponent {
     private const double ARENA_SEAT_DELAY_SECONDS = 2;
 
     private bool _arena;
+    internal bool IsArenaPvp => _arena && _pvp; // CLASSIC: the separate arena AI never changes PvE helper decisions.
     private ArenaRun _arenaRun;
     private bool _arenaReported;
     private readonly HashSet<ulong> _arenaFled = [];
+    private readonly Dictionary<IActorRef, ulong> _arenaOnlookers = [];
     private readonly Dictionary<ulong, (IActorRef Actor, CoreObject Object, DateTime ArrivedUtc)> _arenaWaiting = [];
 
     private ArenaRun ArenaRunHere => _arenaRun ??= ArenaMatchmaker.Instance?.Run(Entity.Zone?.InstanceOwnerId ?? 0);
+
+    [MessageHandler(typeof(ArenaAmbientFailed))]
+    private void ReceiveArenaAmbientFailed(ArenaAmbientFailed failure) {
+        if (!_arena || _arenaReported || ArenaRunHere?.RunId != failure.RunId) return;
+        ArenaReport(-1);
+        if (_isActive) PvpClose("the arena match could not continue");
+    }
 
     /// <summary>A wizard of this arena's match arrived (or moved): seat them on their team's side.</summary>
     private void ArenaOnPlayer(CoreObject playerObj, IActorRef playerActor, Wizard playerWizard) {
@@ -74,6 +86,17 @@ internal sealed partial class CombatDuelComponent {
 
         var charId = playerWizard.CharId;
         if (!run.Side0.Contains(charId) && !run.Side1.Contains(charId)) {
+            // CLASSIC: onlookers arriving after the opening broadcast need the current public duel snapshot.
+            if (_isActive && ArenaMatchmaker.Instance?.IsSpectator(charId, run.MatchId) == true
+                && _arenaOnlookers.TryAdd(playerActor, charId)) {
+                if (_serializer.Serialize(GetClientBehaviorInstance(), _combatParticipantFlags, out var snapshot))
+                    playerActor.Tell(new DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_DUEL { Data = snapshot });
+                foreach (var seated in SubCircles.Where(c => c is { Occupied: true, AddedToDuel: true })) {
+                    if (_serializer.Serialize(seated.CombatParticipant, _combatParticipantFlags, out var participantData))
+                        playerActor.Tell(new DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_COMBATADD { DuelID = SigilId, ParticipantData = participantData });
+                }
+                SendCombatPhase((byte) Duel.m_duelPhase, playerActor);
+            }
             return; // not one of this match's wizards
         }
 
@@ -95,11 +118,20 @@ internal sealed partial class CombatDuelComponent {
         if (ArenaRunHere is not { } run || _arenaReported) {
             return;
         }
+        if (ArenaMatchmaker.Instance?.Run(run.RunId) is null) {
+            _arenaReported = true;
+            if (_isActive) PvpClose("the arena match ended without a contest");
+            return;
+        }
 
         var now = DateTime.UtcNow;
         foreach (var (charId, waiting) in _arenaWaiting.Where(w => (now - w.Value.ArrivedUtc).TotalSeconds >= ARENA_SEAT_DELAY_SECONDS).ToList()) {
             _arenaWaiting.Remove(charId);
             var side = run.Side0.Contains(charId) ? 0 : 1;
+            if (Classic.Ambient.AmbientWizards.IsAmbient(waiting.Actor)) {
+                Classic.Ambient.AmbientWizards.PermitJoin(waiting.Actor, SigilId);
+                Classic.Ambient.AmbientWizards.MarkSparring(waiting.Actor, SigilId);
+            }
             if (!PvpSeat(waiting.Actor, waiting.Object, side)) {
                 Logger.Warning("Duel {0} | arena: no seat for {1} on side {2}.", Logger.Args(Duel.m_duelID.Full, charId, side + 1));
             }
@@ -142,6 +174,15 @@ internal sealed partial class CombatDuelComponent {
     private void ArenaBegin(ArenaRun run) {
         ArenaMatchmaker.Instance?.Started(run.RunId);
         PvpBegin();
+    }
+
+    // CLASSIC: only the existing public phase/stats broadcasts reach onlookers; combat hands remain participant-local.
+    private void ArenaOnlookerBroadcast(IMessage message) {
+        if (!_arena || ArenaRunHere is not { } run) return;
+        foreach (var (actor, charId) in _arenaOnlookers.ToList()) {
+            if (ArenaMatchmaker.Instance?.IsSpectator(charId, run.MatchId) == true) actor.Tell(message);
+            else _arenaOnlookers.Remove(actor);
+        }
     }
 
     private HashSet<ulong> SeatedCharIds()

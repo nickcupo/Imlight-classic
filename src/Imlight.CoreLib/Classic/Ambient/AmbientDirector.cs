@@ -66,6 +66,8 @@ internal sealed class AmbientDirector : ReceiveActor {
 
             Logger.Information("Ambient wizards: {Count} in {Zones} zones.",
                 Logger.Args(ready.Zones.Sum(z => z.Wizards.Count), ready.Zones.Count(z => z.Wizards.Count > 0)));
+            // CLASSIC: the bounded Practice/Ranked population starts without requiring a human to open the guard.
+            Arena.ArenaAmbientParticipants.Configure(Context.System, _server);
         });
         Receive<Status.Failure>(failure => Logger.Error("Ambient wizards did not start: {Error}",
             Logger.Args(failure.Cause?.GetBaseException().ToString())));
