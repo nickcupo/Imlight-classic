@@ -156,13 +156,14 @@ public class GameServer : Server {
     private void ReceiveValidateSessionKey(SERVER_100_PROTOCOL.MSG_VALIDATESESSIONKEY message) {
         // CLASSIC: the key the client sent must be the one issued to the account it names, armed, inside its window and
         // (by default) from the address that selected the character. It is consumed; transfers re-arm it.
-        var result = Keys.TryConsume(message.Key.ToString(), message.UserID, message.SessionActor?.RemoteIp);
+        var result = Keys.TryConsume(message.Key.ToString(), message.UserID, message.SessionActor?.RemoteIp, message.SessionID);
         if (result != GameKeyResult.Accepted) {
             // CLASSIC: the shape of the key (never the key): a 44-character select key or a decimal transfer key.
             var given = message.Key.ToString() ?? "";
             var shape = given.Length > 0 && given.Length <= 11 && given.All(char.IsAsciiDigit) ? "decimal" : $"{given.Length} chars";
-            Logger.Warning("Attach refused for account {Account} from {Ip}: {Result} (key {Shape})",
-                Logger.Args(message.UserID, message.SessionActor?.RemoteIp, result, shape));
+            Logger.Warning("Attach refused for account {Account} from {Ip}: {Result} (key {Shape}, session id {Sid})",
+                Logger.Args(message.UserID, message.SessionActor?.RemoteIp, result, shape,
+                    message.SessionID == 0 ? "not sent" : "sent"));
             Sender.Tell(new SERVER_100_PROTOCOL.MSG_VALIDATESESSIONKEYRSP() { ErrorCode = 1 });
 
             return;

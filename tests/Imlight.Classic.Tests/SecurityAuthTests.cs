@@ -56,71 +56,111 @@ public class SecurityAuthTests {
         Assert.False(keys.Arm(8));
     }
 
-    // Live 2026-10-05: walking into WizardCity/WC_Duel_Arena (any zone change) disconnected the r806919 client with
-    // "failed to validate their login key" (UnknownKey). The client turns MSG_SERVERTRANSFER into a new
-    // MSG_CHARACTERSELECTED and sends the transfer's INT Key as LoginKey ("%d"); the server sent Key = 0 and re-armed
-    // the select key, so the client attached with "0".
+    // Live 2026-10-05/06: walking into WizardCity/WC_Duel_Arena (any zone change) disconnected the r806919 client with
+    // "failed to validate their login key" (UnknownKey). The client copies the MSG_SERVERTRANSFER over its stored
+    // MSG_CHARACTERSELECTED record and builds MSG_ATTACH field by field from it: LoginKey (STR) from the transfer's Key
+    // (INT) comes out EMPTY, while GID fields such as SessionID are echoed. This is that attach.
+    private static (string LoginKey, ulong SessionId) RealClientAttachAfter(GameSessionKeys.TransferKey transfer)
+        => ("", transfer.SessionId);
+
     [Fact]
-    public void A_server_transfer_issues_a_fresh_single_use_key_the_client_sends_as_decimal_text() {
+    public void After_a_transfer_the_real_client_attaches_with_an_empty_key_and_the_echoed_session_id() {
         var keys = new GameSessionKeys(TimeSpan.FromMinutes(5));
         var select = keys.Issue(7, "10.0.0.2");
         Assert.Equal(GameKeyResult.Accepted, keys.TryConsume(select, 7, "10.0.0.2"));
 
         var transfer = keys.IssueTransfer(7, "10.0.0.2");
-        Assert.InRange(transfer, 1, int.MaxValue);
-        var text = GameSessionKeys.TransferKeyText(transfer);
-        Assert.Equal(transfer.ToString(System.Globalization.CultureInfo.InvariantCulture), text);
+        Assert.NotEqual(0UL, transfer.SessionId);
+        var (loginKey, sessionId) = RealClientAttachAfter(transfer);
 
-        // The old bug: Key = 0 in the transfer. And the select key is not re-armed or reusable.
-        Assert.Equal(GameKeyResult.UnknownKey, keys.TryConsume("0", 7, "10.0.0.2"));
-        Assert.Equal(GameKeyResult.UnknownKey, keys.TryConsume(select, 7, "10.0.0.2"));
-        // Bound to the address and the account.
-        Assert.Equal(GameKeyResult.WrongAddress, keys.TryConsume(text, 7, "10.0.0.9"));
-        Assert.Equal(GameKeyResult.WrongAccount, keys.TryConsume(text, 8, "10.0.0.2"));
+        // Without the echoed SessionID an empty key proves nothing (the live failure), nor does a guessed one.
+        Assert.Equal(GameKeyResult.UnknownKey, keys.TryConsume(loginKey, 7, "10.0.0.2"));
+        Assert.Equal(GameKeyResult.UnknownKey, keys.TryConsume(loginKey, 7, "10.0.0.2", transfer.SessionId ^ 2));
+        // Bound to the account and the address.
+        Assert.Equal(GameKeyResult.WrongAccount, keys.TryConsume(loginKey, 8, "10.0.0.2", sessionId));
+        Assert.Equal(GameKeyResult.WrongAddress, keys.TryConsume(loginKey, 7, "10.0.0.9", sessionId));
 
-        Assert.Equal(GameKeyResult.Accepted, keys.TryConsume(text, 7, "::ffff:10.0.0.2"));
-        Assert.Equal(GameKeyResult.NotArmed, keys.TryConsume(text, 7, "10.0.0.2"));
-
-        // The next zone change gets a new key; the used one is gone.
-        var next = keys.IssueTransfer(7, "10.0.0.2");
-        Assert.NotEqual(transfer, next);
-        Assert.Equal(GameKeyResult.UnknownKey, keys.TryConsume(text, 7, "10.0.0.2"));
-        Assert.Equal(GameKeyResult.Accepted, keys.TryConsume(GameSessionKeys.TransferKeyText(next), 7, "10.0.0.2"));
+        Assert.Equal(GameKeyResult.Accepted, keys.TryConsume(loginKey, 7, "::ffff:10.0.0.2", sessionId));
+        // Single use: a second attach of the same transfer (the client's parallel or retried attach) is refused, and
+        // so is the Key of that transfer (both proofs are one entry).
+        Assert.Equal(GameKeyResult.NotArmed, keys.TryConsume(loginKey, 7, "10.0.0.2", sessionId));
+        Assert.Equal(GameKeyResult.NotArmed, keys.TryConsume(GameSessionKeys.TransferKeyText(transfer.Key), 7, "10.0.0.2"));
         Assert.Equal(1, keys.Count);
 
-        // A failed attach after the key check re-arms the transfer key for the client's fallback attach.
+        // A failed attach after the key check re-arms it for the client's fallback attach (same record, same SessionID).
         Assert.True(keys.Arm(7));
-        Assert.Equal(GameKeyResult.Accepted, keys.TryConsume(GameSessionKeys.TransferKeyText(next), 7, "10.0.0.2"));
+        Assert.Equal(GameKeyResult.Accepted, keys.TryConsume("", 7, "10.0.0.2", sessionId));
 
-        // A new character select replaces a transfer key.
-        var again = keys.IssueTransfer(7, "10.0.0.2");
-        var reselect = keys.Issue(7, "10.0.0.2");
-        Assert.Equal(GameKeyResult.UnknownKey, keys.TryConsume(GameSessionKeys.TransferKeyText(again), 7, "10.0.0.2"));
-        Assert.Equal(GameKeyResult.Accepted, keys.TryConsume(reselect, 7, "10.0.0.2"));
+        // The next zone change has new proofs; the old SessionID no longer works.
+        var next = keys.IssueTransfer(7, "10.0.0.2");
+        Assert.NotEqual(transfer.SessionId, next.SessionId);
+        Assert.Equal(GameKeyResult.UnknownKey, keys.TryConsume("", 7, "10.0.0.2", sessionId));
+        Assert.Equal(GameKeyResult.Accepted, keys.TryConsume("", 7, "10.0.0.2", next.SessionId));
+        // The select key never comes back.
+        Assert.Equal(GameKeyResult.UnknownKey, keys.TryConsume(select, 7, "10.0.0.2"));
+        Assert.Equal(1, keys.Count);
     }
 
     [Fact]
-    public void A_transfer_key_expires_and_a_few_wrong_guesses_disarm_it() {
+    public void Exactly_one_of_two_parallel_attaches_of_a_transfer_wins() {
+        var keys = new GameSessionKeys(TimeSpan.FromMinutes(5));
+        keys.Issue(7, "10.0.0.2");
+        var transfer = keys.IssueTransfer(7, "10.0.0.2");
+        var results = new GameKeyResult[2];
+        System.Threading.Tasks.Parallel.For(0, 2, i => results[i] = keys.TryConsume("", 7, "10.0.0.2", transfer.SessionId));
+        Assert.Equal(1, results.Count(r => r == GameKeyResult.Accepted));
+        Assert.Equal(1, results.Count(r => r == GameKeyResult.NotArmed));
+    }
+
+    [Fact]
+    public void A_client_that_sends_the_transfer_key_as_decimal_text_also_attaches() {
+        var keys = new GameSessionKeys(TimeSpan.FromMinutes(5));
+        var transfer = keys.IssueTransfer(7, "10.0.0.2");
+        Assert.InRange(transfer.Key, 1, int.MaxValue);
+        var text = GameSessionKeys.TransferKeyText(transfer.Key);
+        Assert.Equal(GameKeyResult.UnknownKey, keys.TryConsume("0", 7, "10.0.0.2"));
+        Assert.Equal(GameKeyResult.WrongAddress, keys.TryConsume(text, 7, "10.0.0.9"));
+        Assert.Equal(GameKeyResult.Accepted, keys.TryConsume(text, 7, "10.0.0.2"));
+        Assert.Equal(GameKeyResult.NotArmed, keys.TryConsume("", 7, "10.0.0.2", transfer.SessionId));
+
+        // A stale key text with the right SessionID (the playbot resends its select key) still proves the transfer.
+        var select = keys.Issue(7, "10.0.0.2");
+        Assert.Equal(GameKeyResult.Accepted, keys.TryConsume(select, 7, "10.0.0.2"));
+        var next = keys.IssueTransfer(7, "10.0.0.2");
+        Assert.Equal(GameKeyResult.Accepted, keys.TryConsume(select, 7, "10.0.0.2", next.SessionId));
+
+        // A new character select replaces a transfer.
+        var again = keys.IssueTransfer(7, "10.0.0.2");
+        var reselect = keys.Issue(7, "10.0.0.2");
+        Assert.Equal(GameKeyResult.UnknownKey, keys.TryConsume("", 7, "10.0.0.2", again.SessionId));
+        Assert.Equal(GameKeyResult.Accepted, keys.TryConsume(reselect, 7, "10.0.0.2"));
+        keys.Revoke(7);
+        Assert.Equal(0, keys.Count);
+        Assert.Equal(GameKeyResult.UnknownKey, keys.TryConsume("", 7, "10.0.0.2", again.SessionId));
+    }
+
+    [Fact]
+    public void A_transfer_expires_and_a_few_wrong_guesses_disarm_it() {
         var clock = new ManualClock();
         var keys = new GameSessionKeys(TimeSpan.FromMinutes(5), time: clock);
-        var key = GameSessionKeys.TransferKeyText(keys.IssueTransfer(7, "10.0.0.2"));
+        var transfer = keys.IssueTransfer(7, "10.0.0.2");
         clock.Now += TimeSpan.FromMinutes(6);
-        Assert.Equal(GameKeyResult.Expired, keys.TryConsume(key, 7, "10.0.0.2"));
+        Assert.Equal(GameKeyResult.Expired, keys.TryConsume("", 7, "10.0.0.2", transfer.SessionId));
 
-        key = GameSessionKeys.TransferKeyText(keys.IssueTransfer(7, "10.0.0.2"));
+        transfer = keys.IssueTransfer(7, "10.0.0.2");
         for (var i = 0; i < GameSessionKeys.MaxTransferFailures; i++) {
-            Assert.Equal(GameKeyResult.UnknownKey, keys.TryConsume((1000 + i).ToString(), 7, "10.0.0.2"));
+            Assert.Equal(GameKeyResult.UnknownKey, keys.TryConsume("", 7, "10.0.0.2", 1000UL + (ulong) i));
         }
 
-        Assert.Equal(GameKeyResult.NotArmed, keys.TryConsume(key, 7, "10.0.0.2"));
+        Assert.Equal(GameKeyResult.NotArmed, keys.TryConsume("", 7, "10.0.0.2", transfer.SessionId));
 
-        // Wrong guesses naming another account do not touch this one's key.
-        key = GameSessionKeys.TransferKeyText(keys.IssueTransfer(7, "10.0.0.2"));
+        // Wrong guesses naming another account do not touch this one's transfer.
+        transfer = keys.IssueTransfer(7, "10.0.0.2");
         for (var i = 0; i < GameSessionKeys.MaxTransferFailures; i++) {
-            keys.TryConsume("12345", 9, "10.0.0.2");
+            keys.TryConsume("12345", 9, "10.0.0.2", 99);
         }
 
-        Assert.Equal(GameKeyResult.Accepted, keys.TryConsume(key, 7, "10.0.0.2"));
+        Assert.Equal(GameKeyResult.Accepted, keys.TryConsume("", 7, "10.0.0.2", transfer.SessionId));
     }
 
     [Fact]
@@ -136,19 +176,20 @@ public class SecurityAuthTests {
 
     /// <summary>
     /// Every MSG_SERVERTRANSFER the server builds (zone change, realm transfer, attach fallback: every door, sigil,
-    /// arena match, Go Home, teleport to a friend) must carry a key from IssueTransfer, never Key = 0 or a re-armed key.
+    /// arena match, Go Home, teleport to a friend) must carry fresh proofs from IssueTransfer (SessionID, Key and
+    /// FallbackKey), and the attach must hand its SessionID to the key check.
     /// </summary>
     [Fact]
-    public void Every_server_transfer_carries_a_fresh_transfer_key() {
+    public void Every_server_transfer_carries_fresh_proofs_and_the_attach_checks_its_session_id() {
         var dir = new System.IO.DirectoryInfo(AppContext.BaseDirectory);
         while (dir is not null && !System.IO.Directory.Exists(System.IO.Path.Combine(dir.FullName, "src", "Imlight.CoreLib"))) {
             dir = dir.Parent;
         }
 
         Assert.NotNull(dir);
+        var src = System.IO.Path.Combine(dir!.FullName, "src");
         var builds = 0;
-        foreach (var file in System.IO.Directory.EnumerateFiles(System.IO.Path.Combine(dir!.FullName, "src"), "*.cs",
-                     System.IO.SearchOption.AllDirectories)) {
+        foreach (var file in System.IO.Directory.EnumerateFiles(src, "*.cs", System.IO.SearchOption.AllDirectories)) {
             if (file.Contains($"{System.IO.Path.DirectorySeparatorChar}obj{System.IO.Path.DirectorySeparatorChar}")) {
                 continue;
             }
@@ -161,14 +202,21 @@ public class SecurityAuthTests {
                 var body = text[at..end];
                 var before = text[Math.Max(0, at - 1200)..at];
                 var name = System.IO.Path.GetFileName(file);
-                Assert.True(body.Contains("Key = transferKey,") && body.Contains("FallbackKey = transferKey,"),
-                    $"{name}: a MSG_SERVERTRANSFER without the transfer key");
+                Assert.True(body.Contains("Key = transferKey.Key,") && body.Contains("FallbackKey = transferKey.Key,")
+                            && body.Contains("SessionID = transferKey.SessionId,"),
+                    $"{name}: a MSG_SERVERTRANSFER without the transfer proofs");
                 Assert.True(before.Contains("IssueTransfer("), $"{name}: transferKey does not come from IssueTransfer");
                 at = end;
             }
         }
 
         Assert.Equal(3, builds); // ZoneService (zone change, realm transfer), AttachService (attach-timeout fallback)
+
+        var attach = System.IO.File.ReadAllText(System.IO.Path.Combine(src, "Imlight.CoreLib", "Game", "Services", "AttachService.cs"));
+        Assert.Contains("ValidateLoginKey(message.LoginKey, message.UserID, message.SessionID, out var account)", attach);
+        Assert.Contains("SessionID = sessionId,", attach);
+        var server = System.IO.File.ReadAllText(System.IO.Path.Combine(src, "Imlight.CoreLib", "Game", "GameServer.cs"));
+        Assert.Contains("Keys.TryConsume(message.Key.ToString(), message.UserID, message.SessionActor?.RemoteIp, message.SessionID)", server);
     }
 
     [Fact]

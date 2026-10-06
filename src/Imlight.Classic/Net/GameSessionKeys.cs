@@ -35,21 +35,26 @@
  * key can also be bound to the address that selected the character.
  *
  * Transfers (MSG_SERVERTRANSFER: zone change, realm transfer, attach
- * fallback): the r806919 client handles the transfer as a new
- * MSG_CHARACTERSELECTED and fills MSG_ATTACH.LoginKey from the transfer's INT
- * Key field, formatted "%d" (GameClient::AppSessionEstablished,
- * DMLField::ToStr). It does not resend the character-select key. So every
- * transfer issues a fresh random positive 31-bit key for the account
- * (IssueTransfer), sent as Key and FallbackKey, replacing the previous key.
- * It is single-use, armed for the validity window, bound to the address and
- * the account like the select key, and a few wrong guesses naming the
- * account disarm it (MaxTransferFailures). Re-arming the old key for a
- * transfer (the 2026-10-05 scheme) made the client attach with "0" and every
- * zone change disconnect.
+ * fallback): the r806919 client copies the whole transfer message over its
+ * stored MSG_CHARACTERSELECTED record and builds MSG_ATTACH from it
+ * (GameClient::AppSessionEstablished): each attach field is assigned from the
+ * record field of the same name. It never resends the character-select key.
+ * LoginKey (STR) assigned from the transfer's Key (INT) comes out EMPTY on
+ * the live client (2026-10-06), while GID fields copy fine (UserID, CharID,
+ * TargetPlayerID, ZoneID, SessionID). So every transfer issues a fresh proof
+ * (IssueTransfer): a random non-zero 64-bit SessionID the client echoes in
+ * MSG_ATTACH.SessionID, plus a random 31-bit Key/FallbackKey for clients that
+ * do send it as LoginKey ("%d"). Either one consumes the same single-use
+ * entry: armed for the validity window, bound to the account and the
+ * address, replacing the previous key; a few wrong keys naming the account
+ * disarm it (MaxTransferFailures).
+ *
+ * History: 2026-10-05 re-armed the select key (the client attached with
+ * "0"); the first fix relied on Key alone (the client attached with "").
  *
  * Created by: Nick with Claude Code (claude-opus-5-5)
  * Version: KALI 1.0
- * Last Updated: 10/05/2026
+ * Last Updated: 10/06/2026
  */
 
 using System;
@@ -87,7 +92,12 @@ public sealed class GameSessionKeys {
         public DateTimeOffset LastActivity;
         public bool IsTransfer;
         public int Failures;
+        public string? AltHash; // a transfer's SessionID proof; the same entry as its Key
+        public byte[]? AltKey;
     }
+
+    /// <summary>A transfer's proofs: MSG_SERVERTRANSFER.SessionID (echoed in MSG_ATTACH.SessionID) and Key/FallbackKey.</summary>
+    public readonly record struct TransferKey(int Key, ulong SessionId);
 
     /// <summary>Wrong keys naming an account that disarm its armed transfer key (it has only 31 random bits).</summary>
     public const int MaxTransferFailures = 3;
@@ -123,9 +133,22 @@ public sealed class GameSessionKeys {
     public int Count {
         get {
             lock (_lock) {
-                return _byKeyHash.Count;
+                return _byAccount.Count;
             }
         }
+    }
+
+    /// <summary>Forgets the account's entry under every hash it is filed under.</summary>
+    private Entry? RemoveAccountEntry(ulong accountId) {
+        if (!_byAccount.Remove(accountId, out var hash) || !_byKeyHash.Remove(hash, out var entry)) {
+            return null;
+        }
+
+        if (entry.AltHash is { } alt) {
+            _byKeyHash.Remove(alt);
+        }
+
+        return entry;
     }
 
     /// <summary>
@@ -141,9 +164,7 @@ public sealed class GameSessionKeys {
 
         lock (_lock) {
             Prune();
-            if (_byAccount.TryGetValue(accountId, out var old)) {
-                _byKeyHash.Remove(old);
-            }
+            RemoveAccountEntry(accountId);
 
             _byKeyHash[hash] = new Entry {
                 Key = Encoding.UTF8.GetBytes(text),
@@ -159,42 +180,49 @@ public sealed class GameSessionKeys {
     }
 
     /// <summary>
-    /// A fresh key for a MSG_SERVERTRANSFER (its INT Key and FallbackKey), armed for one attach; the account's previous
-    /// key (from character select or an earlier transfer) stops working. The client attaches with it as decimal text.
+    /// Fresh proofs for a MSG_SERVERTRANSFER, armed for one attach; the account's previous key (from character select
+    /// or an earlier transfer) stops working. Send <see cref="TransferKey.SessionId"/> as the transfer's SessionID and
+    /// <see cref="TransferKey.Key"/> as its Key and FallbackKey.
     /// </summary>
     /// <param name="accountId">The account.</param>
     /// <param name="address">The client's address (no port); the previous key's address when null.</param>
-    /// <returns>A random key in 1..int.MaxValue (the same text signed or unsigned).</returns>
-    public int IssueTransfer(ulong accountId, string? address) {
+    public TransferKey IssueTransfer(ulong accountId, string? address) {
         lock (_lock) {
             Prune();
-            string? previousAddress = null;
-            if (_byAccount.TryGetValue(accountId, out var old)) {
-                if (_byKeyHash.Remove(old, out var previous)) {
-                    previousAddress = previous.Address;
-                }
-            }
+            var previousAddress = RemoveAccountEntry(accountId)?.Address;
 
             int value;
-            string text, hash;
+            ulong session;
+            string text, hash, proof, proofHash;
             do {
                 value = RandomNumberGenerator.GetInt32(1, int.MaxValue);
+                session = BitConverter.ToUInt64(RandomNumberGenerator.GetBytes(8)) | 1UL; // never 0 (0 = not sent)
                 text = TransferKeyText(value);
                 hash = HashOf(text);
-            } while (_byKeyHash.ContainsKey(hash));
+                proof = SessionProofText(session);
+                proofHash = HashOf(proof);
+            } while (_byKeyHash.ContainsKey(hash) || _byKeyHash.ContainsKey(proofHash));
 
-            _byKeyHash[hash] = new Entry {
+            var entry = new Entry {
                 Key = Encoding.UTF8.GetBytes(text),
                 AccountId = accountId,
                 Address = NormalizeAddress(address) ?? previousAddress,
                 ArmedUntil = _time.GetUtcNow() + Validity,
                 LastActivity = _time.GetUtcNow(),
                 IsTransfer = true,
+                AltHash = proofHash,
+                AltKey = Encoding.UTF8.GetBytes(proof),
             };
+            _byKeyHash[hash] = entry;
+            _byKeyHash[proofHash] = entry;
             _byAccount[accountId] = hash;
-            return value;
+            return new TransferKey(value, session);
         }
     }
+
+    /// <summary>The lookup text of a transfer's SessionID proof (never a LoginKey the client sends).</summary>
+    private static string SessionProofText(ulong sessionId)
+        => "sid:" + sessionId.ToString(System.Globalization.CultureInfo.InvariantCulture);
 
     /// <summary>The LoginKey text the r806919 client sends for a transfer key: DMLField::ToStr of an INT ("%d").</summary>
     public static string TransferKeyText(int key) => key.ToString(System.Globalization.CultureInfo.InvariantCulture);
@@ -231,25 +259,27 @@ public sealed class GameSessionKeys {
     /// <summary>Forgets the account's key.</summary>
     public void Revoke(ulong accountId) {
         lock (_lock) {
-            if (_byAccount.Remove(accountId, out var hash)) {
-                _byKeyHash.Remove(hash);
-            }
+            RemoveAccountEntry(accountId);
         }
     }
 
     /// <summary>
     /// Checks an attach: the key must exist, belong to <paramref name="accountId"/>, be armed and inside its window,
-    /// and (when bound) come from the address it was issued to. An accepted key is consumed until re-armed.
+    /// and (when bound) come from the address it was issued to. An accepted key is consumed until re-armed. After a
+    /// transfer the r806919 client sends an empty LoginKey and proves the transfer with the SessionID it echoes.
     /// </summary>
-    public GameKeyResult TryConsume(string? key, ulong accountId, string? address) {
-        if (string.IsNullOrEmpty(key) || key.Length > 256) {
-            return GameKeyResult.UnknownKey;
-        }
-
-        var hash = HashOf(key);
-        var given = Encoding.UTF8.GetBytes(key);
+    /// <param name="key">MSG_ATTACH.LoginKey.</param>
+    /// <param name="accountId">MSG_ATTACH.UserID.</param>
+    /// <param name="address">The connection's address.</param>
+    /// <param name="sessionId">MSG_ATTACH.SessionID (0 when not sent).</param>
+    public GameKeyResult TryConsume(string? key, ulong accountId, string? address, ulong sessionId = 0) {
         lock (_lock) {
-            if (!_byKeyHash.TryGetValue(hash, out var entry) || !CryptographicOperations.FixedTimeEquals(entry.Key, given)) {
+            var entry = Find(key);
+            if (entry is null && sessionId != 0) {
+                entry = Find(SessionProofText(sessionId));
+            }
+
+            if (entry is null) {
                 CountTransferFailure(accountId);
                 return GameKeyResult.UnknownKey;
             }
@@ -276,6 +306,22 @@ public sealed class GameSessionKeys {
             entry.LastActivity = _time.GetUtcNow();
             return GameKeyResult.Accepted;
         }
+    }
+
+    /// <summary>The entry filed under <paramref name="key"/> (its Key or its SessionID proof), compared in constant time.</summary>
+    private Entry? Find(string? key) {
+        if (string.IsNullOrEmpty(key) || key.Length > 256) {
+            return null;
+        }
+
+        var given = Encoding.UTF8.GetBytes(key);
+        var hash = HashOf(key);
+        if (!_byKeyHash.TryGetValue(hash, out var entry)) {
+            return null;
+        }
+
+        var stored = hash == entry.AltHash ? entry.AltKey! : entry.Key;
+        return CryptographicOperations.FixedTimeEquals(stored, given) ? entry : null;
     }
 
     /// <summary>A wrong key naming an account with an armed transfer key; enough of them disarm it.</summary>
@@ -315,16 +361,15 @@ public sealed class GameSessionKeys {
         }
 
         var cutoff = _time.GetUtcNow() - IdleLifetime;
-        var stale = new List<(string Hash, ulong Account)>();
-        foreach (var (hash, entry) in _byKeyHash) {
+        var stale = new HashSet<ulong>();
+        foreach (var entry in _byKeyHash.Values) {
             if (entry.LastActivity < cutoff && (entry.ArmedUntil is not { } until || until < cutoff)) {
-                stale.Add((hash, entry.AccountId));
+                stale.Add(entry.AccountId);
             }
         }
 
-        foreach (var (hash, account) in stale) {
-            _byKeyHash.Remove(hash);
-            _byAccount.Remove(account);
+        foreach (var account in stale) {
+            RemoveAccountEntry(account);
         }
     }
 }

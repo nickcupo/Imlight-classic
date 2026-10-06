@@ -885,14 +885,14 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
         }
 
         // Send MSG_SERVERTRANSFER to redirect the client to the new game server.
-        // CLASSIC: the client attaches with the transfer's Key as its LoginKey; a fresh single-use key per transfer.
+        // CLASSIC: a fresh single-use proof per transfer (SessionID, Key/FallbackKey; Imlight.Classic.Net.GameSessionKeys).
         var transferKey = Auth.SecuritySettings.GameKeys.Value.IssueTransfer(account.AccountId, SessionActor.RemoteIp);
         var serverTransfer = new GAME_5_PROTOCOL.MSG_SERVERTRANSFER {
             IP = keyRsp.IP,
             TCPPort = keyRsp.Port,
             UDPPort = keyRsp.Port,
-            Key = transferKey,
-            FallbackKey = transferKey,
+            Key = transferKey.Key,
+            FallbackKey = transferKey.Key,
             UserID = account.AccountId,
             CharID = wizard.CharId,
             ZoneName = wizard.Zone,
@@ -900,7 +900,7 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
             Location = Util.GetCompactStringFromVector(wizard.Location, wizard.Orientation),
             Slot = 0,
             SessionSlot = 0,
-            SessionID = 0,
+            SessionID = transferKey.SessionId, // CLASSIC: the client echoes it in MSG_ATTACH (the proof)
             TargetPlayerID = wizard.CharId,
             TransitionID = 1,
             FallbackIP = keyRsp.IP,
@@ -910,6 +910,7 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
             FallbackZoneID = new Imcodec.Types.GID((ulong) keyRsp.Port)
         };
         SessionActor.MarkTransferringOut(); // CLASSIC: Game/AccountSessions.cs
+        LogTransfer(serverTransfer); // CLASSIC
         SendToSocket(serverTransfer);
     }
 
@@ -931,6 +932,17 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
             CurrentZone = currentZone
         };
         SendToSocket(rsp);
+    }
+
+    /// <summary>CLASSIC: what a MSG_SERVERTRANSFER carries (Debug), without its proofs.</summary>
+    internal static void LogTransfer(GAME_5_PROTOCOL.MSG_SERVERTRANSFER t) {
+        Logger.Debug("MSG_SERVERTRANSFER to {Ip}:{Tcp}/{Udp} user {User} char {Char} zone {Zone} ({ZoneId}) at {Location}; " +
+                     "slot {Slot} session slot {SessionSlot} target {Target} transition {Transition}; fallback {FallbackIp}:" +
+                     "{FallbackTcp} {FallbackZone} ({FallbackZoneId}); key {Key}, fallback key {FallbackKey}, session id {Sid}",
+            Logger.Args(t.IP, t.TCPPort, t.UDPPort, (ulong) t.UserID, (ulong) t.CharID, t.ZoneName, (ulong) t.ZoneID, t.Location,
+                t.Slot, t.SessionSlot, (ulong) t.TargetPlayerID, t.TransitionID, t.FallbackIP, t.FallbackTCPPort, t.FallbackZone,
+                (ulong) t.FallbackZoneID, t.Key == 0 ? "0" : "set", t.FallbackKey == 0 ? "0" : "set",
+                (ulong) t.SessionID == 0 ? "0" : "set"));
     }
 
     private void SetZone(IActorRef actorRef) {
@@ -1009,22 +1021,22 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
         WizardCollection.UpdateCharacterZone(character, character.Zone, character.ZoneDisplayName);
         WizardCollection.UpdateCharacterLocation(character, character.Location, character.Orientation.Z);
 
-        // CLASSIC: the client attaches with the transfer's Key as its LoginKey ("%d"), not the key from character select:
-        // a fresh single-use key per transfer (Imlight.Classic.Net.GameSessionKeys).
+        // CLASSIC: a fresh single-use proof per transfer: the client echoes SessionID in its MSG_ATTACH (its LoginKey
+        // comes out empty), and Key/FallbackKey serve a client that sends it (Imlight.Classic.Net.GameSessionKeys).
         var transferKey = Auth.SecuritySettings.GameKeys.Value.IssueTransfer(account.AccountId, SessionActor.RemoteIp);
         var serverTransfer = new GAME_5_PROTOCOL.MSG_SERVERTRANSFER() {
             IP = character.GameServerIp,
             TCPPort = character.GameServerPort,
             UDPPort = character.GameServerPort,
-            Key = transferKey,
-            FallbackKey = transferKey,
+            Key = transferKey.Key,
+            FallbackKey = transferKey.Key,
             UserID = account.AccountId,
             CharID = character.CharId,
             ZoneName = character.QueuedZoneName,
             Location = character.QueuedZoneLocation,
             Slot = 0,
             SessionSlot = 0,
-            SessionID = 0,
+            SessionID = transferKey.SessionId, // CLASSIC: the client echoes it in MSG_ATTACH (the proof)
             TargetPlayerID = character.CharId,
             TransitionID = 1,
             FallbackIP = character.GameServerIp,
@@ -1034,6 +1046,7 @@ internal class ZoneService(SessionActor sessionActor) : MessageService(sessionAc
             FallbackZoneID = _currentDynamicZoneId
         };
         SessionActor.MarkTransferringOut(); // CLASSIC: Game/AccountSessions.cs
+        LogTransfer(serverTransfer); // CLASSIC
         SendToSocket(serverTransfer);
 
         // Register fallback data on the GameServer so the new session can
