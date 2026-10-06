@@ -268,7 +268,7 @@ public class CombatResolver(Duel duel, CombatDuelSubCircle[] actorSubCircles) {
 
             // CLASSIC: a lethal tick voids the pending action just as an earlier opponent's hit does.
             // Keep the tick/death animation above, but do not cast or consume stun/Beguile afterward.
-            if (ClassicRuntime.IsActive && !action.SpellCaster.IsAlive) {
+            if (ClassicRuntime.IsInitialized && ClassicRuntime.IsActive && !action.SpellCaster.IsAlive) {
                 continue;
             }
 
