@@ -47,6 +47,7 @@ using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Classic;
 using Imlight.Common;
 using Imlight.CoreLib.Classic;
+using Imlight.CoreLib.Classic.Elixirs;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Resources;
 using Imlight.CoreLib.Shared.Utilities;
@@ -64,6 +65,19 @@ internal class InventoryService(SessionActor sessionActor) : MessageService(sess
     private void ReceiveTrashInventoryItem(GAME_5_PROTOCOL.MSG_TRASHINVENTORYITEM message) {
         var wizard = GetActiveWizard();
         if (wizard is null) {
+            return;
+        }
+
+        // CLASSIC: the native confirmed active-elixir dismissal reuses this message, but
+        // has no backpack item. Only an exact approved active original may take this path;
+        // ordinary equipped gear and forged TemplateID values remain undiscardable here.
+        if (wizard.EquipmentBehavior?.GetItem(message.GlobalID)?.m_inactiveBehaviors?
+            .Any(behavior => behavior is ClientElixirBehavior) == true) {
+            var result = ElixirCollection.Cancel(wizard, message.GlobalID, message.TemplateID);
+            if (result.Saved) {
+                foreach (var cleanup in ElixirService.ExpireCommitted(wizard, result, true)) SendToSocket(cleanup);
+            }
+            else Logger.Information("Active elixir dismissal of item {0} by {1} refused.", Logger.Args(message.GlobalID, wizard.CharId));
             return;
         }
 

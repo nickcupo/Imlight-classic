@@ -133,6 +133,20 @@ public class ServerWizEquipmentBehavior : IClientBehaviorProvider<ClientWizEquip
         using var writeScope = s_writeLock.EnterScope();
         var previous = SlotList.Where(s => s.SlotType == EquipmentSlotType.Elixir).ToDictionary(s => (ulong)s.ItemId);
         var oldIds = previous.Keys.ToHashSet();
+        // CLASSIC: Raven's original holds durable remaining seconds, not this attached
+        // session's effect-publication state. Preserve that transient flag only for the
+        // same owned original/template while its validated timer counts down. Otherwise
+        // every one-second checkpoint replaces true with persisted false and re-enables
+        // the native elixir over and over despite the existing effects already being live.
+        foreach (var item in items) {
+            var old = EquippedItems.FirstOrDefault(i => i.m_globalID == item.m_globalID
+                && i.m_characterId == item.m_characterId && i.m_templateID == item.m_templateID);
+            var oldTimer = old?.m_inactiveBehaviors?.OfType<ClientElixirBehavior>().SingleOrDefault();
+            var newTimer = item.m_inactiveBehaviors?.OfType<ClientElixirBehavior>().SingleOrDefault();
+            if (oldIds.Contains(item.m_globalID) && oldTimer is { m_expireTime: > 0 }
+                && newTimer is { m_expireTime: > 0 } && newTimer.m_expireTime <= oldTimer.m_expireTime)
+                newTimer.m_statsApplied = oldTimer.m_statsApplied;
+        }
         foreach (var item in EquippedItems.Where(i => oldIds.Contains(i.m_globalID)).ToArray()) EquippedItems.Remove(item);
         EquippedItemIds = [.. EquippedItemIds.Where(id => !oldIds.Contains(id)), .. items.Select(i => (ulong)i.m_globalID)];
         SlotList = [.. SlotList.Where(s => s.SlotType != EquipmentSlotType.Elixir), .. items.Select(item =>
