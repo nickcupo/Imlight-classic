@@ -69,9 +69,10 @@ public class Logger {
         = long.TryParse(ConfigurationManager.Settings["Logging.FileSizeLimitMB"].AsString(), out var mb) && mb > 0 ? mb : 1024;
     private static readonly string s_seqUrl = ConfigurationManager.Settings["Logging.SeqSinkUrl"].AsString()
         ?? "http://localhost:5341";
+    private static readonly LoggingLevelSwitch s_levelSwitch = new() { MinimumLevel = GetLogLevel(s_logLevel) };
 
     public static ILogger Log { get; } = new LoggerConfiguration()
-        .MinimumLevel.ControlledBy(new LoggingLevelSwitch { MinimumLevel = GetLogLevel(s_logLevel) })
+        .MinimumLevel.ControlledBy(s_levelSwitch)
         .Enrich.FromLogContext()
         .Enrich.WithThreadId()
         .Enrich.WithThreadName()
@@ -84,6 +85,9 @@ public class Logger {
         .WriteTo.Seq(s_seqUrl)
         .WriteTo.Sink(RecentLogSink.Instance, LogEventLevel.Warning) // CLASSIC: the admin dashboard's recent errors.
         .CreateLogger();
+
+    /// <summary>CLASSIC: routes Akka and other global Serilog users through the server's existing sinks.</summary>
+    public static void ConfigureGlobal() => Serilog.Log.Logger = Log;
 
     /// <summary>
     /// Returns an array of objects that can be used to format a log message.

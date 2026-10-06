@@ -110,6 +110,8 @@ internal static class Program {
         ConfigurationManager.Initialize(
             Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Config/Imlight.ini")
         );
+        // CLASSIC: bind Akka.Logger.Serilog to the existing sinks before any actors start.
+        Logger.ConfigureGlobal();
         Logger.Information("Imlight configuration loaded.");
 
         // CLASSIC: thread pool headroom for handlers that still block (see ClassicStartup.ConfigureThreadPool).
