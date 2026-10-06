@@ -55,6 +55,13 @@ public sealed class ClassicDormCapacityTests : IDisposable {
         Assert.Equal(HousingRules.OctoberDormCapacity, Convert.ToInt32(document["dorm_furniture_capacity"]));
     }
 
+    [Fact]
+    public void UninitializedRuntimeKeepsTheExistingNativeAllowance() {
+        ClassicRuntime.ResetForTests();
+        var store = new Store(); using var scope = store.Scope();
+        Assert.Equal(200, HousingCollection.Load(Owner, create: true)!.Capacity);
+    }
+
     [Theory]
     [InlineData("october-2010-arc1", 50)]
     [InlineData("late-2009", 200)]
