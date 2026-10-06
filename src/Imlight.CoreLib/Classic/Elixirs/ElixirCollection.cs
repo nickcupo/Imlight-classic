@@ -183,6 +183,52 @@ internal static class ElixirCollection {
         Func<uint, ElixirDefinition> definitions = null)
         => Advance(live, wholeSeconds, null, definitions);
 
+    // CLASSIC: r806919's confirmed Elixir removal sends service 5 MSG_TRASHINVENTORYITEM
+    // for the selected active original with TemplateID left zero (0x1408656c0 -> 0x1408657ff).
+    // It is separate from backpack trash: ledger, original timer and the exact Elixir slot
+    // commit once under the character lane before effects or client cleanup are published.
+    internal static ElixirResult Cancel(Wizard live, ulong itemId, ulong requestTemplateId = 0,
+        Func<uint, ElixirDefinition> definitions = null) {
+        if (live?.Account is null || live.Account.AccountId != live.AccountId || itemId == 0
+            || requestTemplateId != 0) return Refused();
+        ElixirResult result = Refused();
+        try {
+            var saved = WizardCollection.CommitCharacterMutation(live.CharId, (session, wizard) => {
+                var ledger = session.Load<ElixirLedger>(ElixirLedger.DocumentId(live.CharId));
+                var selected = ledger?.Active.SingleOrDefault(e => e.ItemId == itemId);
+                var liveItem = live.EquipmentBehavior?.GetItem(itemId);
+                if (wizard.AccountId != live.AccountId || ledger?.OwnerId != live.CharId || selected is null
+                    || ledger.Version == uint.MaxValue || !EquipmentMatches(wizard, ledger) || !EquipmentMatches(live, ledger)
+                    || wizard.InventoryBehavior?.InventoryItemIds?.Contains(itemId) != false
+                    || live.InventoryBehavior?.InventoryItemIds?.Contains(itemId) != false
+                    || wizard.StorageBehavior?.BankItemIds?.Contains(itemId) != false
+                    || live.StorageBehavior?.BankItemIds?.Contains(itemId) != false
+                    || !OwnedEntry(liveItem, selected, live.CharId)
+                    || !ElixirRuntime.HasValidatedEntry(live, liveItem)
+                    || ledger.Active.Any(e => !ApprovedEntry(e, definitions))) return false;
+                var originals = ledger.Active.Select(e => session.Load<WizClientObjectItem>(e.ItemDocumentId)).ToArray();
+                if (ledger.Active.Any(e => !OwnedEntry(originals.SingleOrDefault(i => i?.m_globalID == e.ItemId), e, live.CharId))) return false;
+                var original = originals.Single(i => i.m_globalID == itemId);
+                var timed = original.m_inactiveBehaviors.OfType<ClientElixirBehavior>().Single();
+                var removed = ledger.Cancel(itemId);
+                if (removed is null) return false;
+                timed.m_expireTime = 0;
+                timed.m_statsApplied = false;
+                wizard.EquipmentBehavior.EquippedItemIds = wizard.EquipmentBehavior.EquippedItemIds.Where(id => id != itemId).ToList();
+                wizard.EquipmentBehavior.SlotList = wizard.EquipmentBehavior.SlotList
+                    .Where(s => !(s.SlotType == EquipmentSlotType.Elixir && s.ItemId == itemId)).ToList();
+                session.Store(ledger, ElixirLedger.DocumentId(live.CharId));
+                result = new(null, ledger.Copy(), original, [removed], originals.Where(i => i.m_globalID != itemId).ToArray());
+                return true;
+            }, _ => {
+                live.EquipmentBehavior.PublishElixirItems(result.ActiveItems);
+                ElixirRuntime.PublishValidated(live, result.Ledger);
+            });
+            return saved ? result : Refused();
+        }
+        catch (Exception ex) { return Failed(live, ex); }
+    }
+
     internal static ElixirResult AdvanceOnline(Wizard live, IReadOnlyDictionary<ulong, uint> elapsedByItem,
         Func<uint, ElixirDefinition> definitions = null)
         => Advance(live, null, elapsedByItem, definitions);

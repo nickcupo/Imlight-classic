@@ -43,6 +43,19 @@ internal sealed class ElixirLedger {
         return AdvanceOnline(Active.ToDictionary(e => e.ItemId, _ => seconds));
     }
 
+    // CLASSIC: the native active-elixir confirmation consumes only the selected original,
+    // using the same zero-second cleanup state as natural expiry; it never refunds a boost.
+    internal ElixirEntry Cancel(ulong itemId) {
+        if (itemId == 0 || Version == uint.MaxValue) return null;
+        var selected = Active.SingleOrDefault(e => e.ItemId == itemId);
+        if (selected is null || selected.RemainingSeconds == 0) return null;
+        var removed = selected.Copy();
+        removed.RemainingSeconds = 0;
+        Active = Active.Where(e => e.ItemId != itemId).ToList();
+        Version++;
+        return removed;
+    }
+
     internal ElixirEntry[] AdvanceOnline(IReadOnlyDictionary<ulong, uint> elapsedByItem) {
         if (elapsedByItem is null || !elapsedByItem.Values.Any(s => s > 0) || Active.Count == 0
             || Version == uint.MaxValue || elapsedByItem.Keys.Any(id => !Active.Any(e => e.ItemId == id))) return [];

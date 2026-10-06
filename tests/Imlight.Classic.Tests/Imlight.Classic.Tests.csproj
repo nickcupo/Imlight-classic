@@ -74,12 +74,16 @@
     <ServerIntegrationTest Include="ArenaAmbientMatchmakerTests.cs" />
     <ServerIntegrationTest Include="ClassicRevivalTests.cs" />
     <ServerIntegrationTest Include="HousingTests.cs" />
+    <ServerIntegrationTest Include="ClassicDormCapacityTests.cs" />
     <ServerIntegrationTest Include="HousingInventoryConcurrencyTests.cs" />
     <ServerIntegrationTest Include="ArenaAmbientActorTransportTests.cs" />
     <ServerIntegrationTest Include="ActorLoggingTests.cs" />
     <ServerIntegrationTest Include="HousingAtticTests.cs" />
     <ServerIntegrationTest Include="ElixirTests.cs" />
     <ServerIntegrationTest Include="ElixirServiceTests.cs" />
+    <ServerIntegrationTest Include="ElixirCancellationTests.cs" />
+    <ServerIntegrationTest Include="ElixirCancellationTests.Native.cs" />
+    <ServerIntegrationTest Include="ArenaPvpMinionTests.cs" />
     <ServerIntegrationTest Include="OctoberShopRuntimeTests.cs" />
     <ServerIntegrationTest Include="HouseTests.cs" />
     <ServerIntegrationTest Include="HouseTransportTests.cs" />

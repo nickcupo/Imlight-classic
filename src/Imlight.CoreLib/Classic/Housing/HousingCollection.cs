@@ -34,7 +34,8 @@ internal static class HousingCollection {
         if (owner == 0) return null;
         lock (PackageLock) {
             using var session = Open();
-            var capacity = HousingRules.PackageSlots;
+            session.Advanced.OptimisticConcurrencyMode = OptimisticConcurrencyMode.Writes;
+            var capacity = HousingRules.DormCapacity;
             if (room.DeedId != 0) {
                 var wizard = HouseCollection.LoadWizard(session, owner);
                 var house = HouseCollection.Owned(session, wizard, owner, room.DeedId);
@@ -42,8 +43,20 @@ internal static class HousingCollection {
             }
             else if (!HousingRules.IsDorm(room.Zone)) return null;
             var ledger = session.Load<HousingLedger>(HousingLedger.DocumentId(room));
-            if (ledger is not null || !create) return ledger;
-            session.Advanced.OptimisticConcurrencyMode = OptimisticConcurrencyMode.Writes;
+            if (ledger is not null) {
+                // CLASSIC: reconcile the allowance without touching entries, floats, cache slots or
+                // versions. An overfull legacy dorm remains editable/pickable; only new placement stops.
+                if (room.DeedId == 0 && ledger.OwnerId == owner && ledger.DeedId == 0
+                    && ledger.SecondPackageNumber == 0 && ledger.Capacity != capacity) {
+                    var previous = ledger.Capacity;
+                    ledger.Capacity = capacity;
+                    session.SaveChanges();
+                    Logger.Information("Classic dorm {0} allowance reconciled {1}->{2}; retained {3} furniture entries.",
+                        Logger.Args(owner, previous, capacity, ledger.Entries.Count));
+                }
+                return ledger;
+            }
+            if (!create) return null;
             var allocator = session.Load<HousingPackageAllocator>(HousingPackageAllocator.DocumentId);
             var freshAllocator = allocator is null;
             allocator ??= new HousingPackageAllocator();
@@ -161,7 +174,13 @@ internal static class HousingCollection {
 
     internal static bool ValidRoom(IDocumentSession session, Wizard wizard, HousingRoomIdentity room, HousingLedger ledger) {
         if (ledger?.OwnerId != room.OwnerId || ledger.DeedId != room.DeedId) return false;
-        if (room.DeedId == 0) return HousingRules.IsDorm(room.Zone) && ledger.SecondPackageNumber == 0;
+        if (room.DeedId == 0) {
+            if (!HousingRules.IsDorm(room.Zone) || ledger.SecondPackageNumber != 0) return false;
+            // Direct commands must honor the current allowance even if no room load has reconciled it.
+            // The character transaction saves this value only together with a successful mutation.
+            ledger.Capacity = HousingRules.DormCapacity;
+            return true;
+        }
         var house = HouseCollection.Owned(session, wizard, room.OwnerId, room.DeedId);
         return house is not null && HouseCatalog.Same(ledger.Zone, room.Zone)
             && HouseCatalog.TryRoom(house.TemplateId, room.Zone, out var capacity) && ledger.Capacity == capacity

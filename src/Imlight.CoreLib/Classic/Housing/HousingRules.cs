@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using Imlight.CoreLib.Classic;
 
 namespace Imlight.CoreLib.Classic.Housing;
 
@@ -13,6 +14,10 @@ internal static class HousingRules {
     // r806919 ClientHousingBlobStrategy's lookup range is [UserData, UserData + 200).
     // This is a native package bound, not a claim about the historical room's furniture allowance.
     internal const int PackageSlots = 200;
+    // CLASSIC: Dorm Decorating 101, published and last updated June24,2010, specifies50
+    // furniture items. Keep the older profiles unchanged and preserve the200-slot native cache.
+    internal const int OctoberDormCapacity = 50;
+    internal static int DormCapacity => ClassicOctoberRules.Active ? OctoberDormCapacity : PackageSlots;
     // UserData200/400 belong to the owner's attic. A second room package occupies600..799.
     internal const uint SecondRoomUserData = 600;
     internal const string AtticSubType = "Attic";

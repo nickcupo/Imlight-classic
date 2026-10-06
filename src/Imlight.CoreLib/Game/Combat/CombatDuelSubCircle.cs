@@ -98,6 +98,38 @@ public class CombatDuelSubCircle {
     internal bool IsSummonedMinion { get; private set; }
     private CoreObject _minionOwnerObject;
     private CombatTeam _minionTeam = CombatTeam.Player;
+    // CLASSIC: local queued-action identity survives an authenticated hold/rejoin, but never a replacement occupant.
+    private object _deferredActionIdentity = new();
+    private CoreObject _continuedActionObject;
+    private IActorRef _continuedActionActor;
+    private ulong _continuedActionGlobalId, _continuedActionCharacterId;
+    private bool _continuedActionRejoined;
+    internal object DeferredActionIdentity => _deferredActionIdentity;
+
+    private void ResetDeferredActionIdentity() {
+        _deferredActionIdentity = new object();
+        _continuedActionObject = null;
+        _continuedActionActor = null;
+        _continuedActionGlobalId = _continuedActionCharacterId = 0;
+        _continuedActionRejoined = false;
+    }
+
+    private void ContinueDeferredActions(bool rejoined) {
+        _continuedActionObject = ParticipantObject;
+        _continuedActionActor = ParticipantActor;
+        _continuedActionGlobalId = ParticipantObject?.m_globalID.Full ?? 0;
+        _continuedActionCharacterId = _wizard?.CharId ?? 0;
+        _continuedActionRejoined |= rejoined;
+    }
+
+    internal bool IsDeferredActionContinuation(object identity, ulong characterId, bool requireRejoin)
+        => ReferenceEquals(identity, _deferredActionIdentity) && characterId != 0
+            && (!requireRejoin || _continuedActionRejoined)
+            && characterId == _continuedActionCharacterId && characterId == _wizard?.CharId
+            && ReferenceEquals(ParticipantObject, _continuedActionObject)
+            && ParticipantObject?.m_globalID.Full == _continuedActionGlobalId
+            && Equals(ParticipantActor, _continuedActionActor)
+            && (!Disconnected || (HeldCharacterId == characterId && Equals(ParticipantActor, ActorRefs.Nobody)));
 
     // Capture identity as well as slot: a replacement occupant must not inherit somebody else's minion.
     internal void CaptureMinionOwner(int ownerSlot) {
@@ -198,6 +230,7 @@ public class CombatDuelSubCircle {
 
     internal CombatParticipant AssignParticipant(IActorRef actor, CoreObject participantObject, bool isSummonedMinion = false,
                                                  int minionOwnerSubCircle = 0) {
+        ResetDeferredActionIdentity();
         ParticipantActor = actor;
         ParticipantObject = participantObject;
         IsSummonedMinion = isSummonedMinion;
@@ -244,6 +277,7 @@ public class CombatDuelSubCircle {
         Disconnected = true;
         DisconnectedAtUtc = nowUtc;
         ParticipantActor = ActorRefs.Nobody;
+        ContinueDeferredActions(rejoined: false);
     }
 
     internal void RejoinSeat(IActorRef actor, CoreObject participantObject, Wizard wizard) {
@@ -258,6 +292,7 @@ public class CombatDuelSubCircle {
 
         Disconnected = false;
         HeldCharacterId = 0;
+        ContinueDeferredActions(rejoined: true);
 
         // Minions summoned by this wizard name the old object as their owner.
         foreach (var circle in _duelActor.SubCircles.Where(circle => circle is not null && circle != this)) {
@@ -268,6 +303,7 @@ public class CombatDuelSubCircle {
     }
 
     internal void RemoveParticipant() {
+        ResetDeferredActionIdentity();
         Disconnected = false;
         HeldCharacterId = 0;
         ParticipantActor = null;

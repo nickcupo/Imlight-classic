@@ -102,6 +102,10 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
     private const string PREPLANNING_TIME_KEY = "PrePlanningPhase";
     private const string RESOUTION_TIME_KEY = "ResolutionPhase";
     private const double MINION_SUMMON_ANIMATION_DELAY = 5.5;
+    // CLASSIC: a deferred summon belongs to the occupant that cast it, not a future occupant of the same seat.
+    private sealed record DeferredMinionOwner(CoreObject Identity, ulong GlobalId, IActorRef Actor,
+        object OccupantIdentity, ulong CharacterId);
+    private readonly Dictionary<ZONE_102_PROTOCOL.MSG_DEFERREDMINIONSUMMON, DeferredMinionOwner> _deferredMinionOwners = [];
 
     public bool NoTransfer { get; set; } = false;
     public ITimerScheduler Timers { get; set; }
@@ -118,7 +122,9 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
         => (byte) SubCircles.Count(x => x.Occupied && x.OccupiedTeam == CombatTeam.Player && x.IsAlive
                                         && !x.IsSummonedMinion);
     public byte AliveCreatureCount
-        => (byte) SubCircles.Count(x => x.Occupied && x.OccupiedTeam == CombatTeam.Monster && x.IsAlive);
+        // CLASSIC: both PvP sides lose when their last wizard falls, even with a living summoned minion.
+        => (byte) SubCircles.Count(x => x.Occupied && x.OccupiedTeam == CombatTeam.Monster && x.IsAlive
+                                        && (!_pvp || !x.IsSummonedMinion));
     public byte PlayersInDuel
         => (byte) SubCircles.Count(x => x.Occupied && x.OccupiedTeam == CombatTeam.Player && x.AddedToDuel);
     public byte CreaturesInDuel
@@ -127,7 +133,8 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
         => (byte) SubCircles.Count(x => x.Occupied && x.OccupiedTeam == CombatTeam.Player && x.IsAlive && x.AddedToDuel
                                         && !x.IsSummonedMinion);
     public byte AliveAndInDuelCreatureCount
-        => (byte) SubCircles.Count(x => x.Occupied && x.OccupiedTeam == CombatTeam.Monster && x.IsAlive && x.AddedToDuel);
+        => (byte) SubCircles.Count(x => x.Occupied && x.OccupiedTeam == CombatTeam.Monster && x.IsAlive && x.AddedToDuel
+                                        && (!_pvp || !x.IsSummonedMinion));
     public ulong SigilId => Entity.ActiveGameObject.m_globalID;
 
     // CLASSIC: keyed by the object instance. CoreObject is a record whose hash follows its location, so the default
@@ -693,6 +700,7 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
         _ownedControllableSummons.Clear();
         _minionHandStages.Clear();
         _summonOrder.Clear();
+        _deferredMinionOwners.Clear();
 
         // Minions are children of this sigil entity, which persists between fights; MSG_COMBATDEATH
         // deletes them outright.
@@ -738,15 +746,28 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
 
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_DEFERREDMINIONSUMMON))]
     private void ReceiveDeferredMinionSummon(ZONE_102_PROTOCOL.MSG_DEFERREDMINIONSUMMON message) {
-        // Drop if the duel ended or restarted during the summon animation.
-        if (!_isActive || message.Caster is null || Array.IndexOf(SubCircles, message.Caster) < 0) {
-            Logger.Information("Duel {0} | deferred minion summon (tid {1}) dropped, duel no longer active.",
+        // CLASSIC: also drop a summon if its caster fled or this seat changed occupants during the animation.
+        // Health is deliberately not checked: an already cast summon keeps its existing resolution timing.
+        if (!_deferredMinionOwners.Remove(message, out var owner) || !_isActive || message.Caster is null
+            || Array.IndexOf(SubCircles, message.Caster) < 0 || !message.Caster.Occupied
+            || !DeferredMinionOwnerMatches(message.Caster, owner)) {
+            Logger.Information("Duel {0} | deferred minion summon (tid {1}) dropped, duel or caster seat changed.",
                 Logger.Args(Duel.m_duelID.Full, message.CreatureTid));
 
             return;
         }
 
         SpawnAndAssignMinion(message.CreatureTid, message.Caster, controllableSummon: true);
+    }
+
+    private static bool DeferredMinionOwnerMatches(CombatDuelSubCircle caster, DeferredMinionOwner owner) {
+        if (!ReferenceEquals(caster.DeferredActionIdentity, owner.OccupantIdentity)) return false;
+        var originalObject = ReferenceEquals(caster.ParticipantObject, owner.Identity)
+            && caster.ParticipantObject.m_globalID.Full == owner.GlobalId;
+        return (originalObject && (Equals(caster.ParticipantActor, owner.Actor)
+                || (caster.Disconnected && caster.IsDeferredActionContinuation(owner.OccupantIdentity, owner.CharacterId,
+                    requireRejoin: false))))
+            || caster.IsDeferredActionContinuation(owner.OccupantIdentity, owner.CharacterId, requireRejoin: true);
     }
 
     private void InitializeDuel(Dictionary<IActorRef, CoreObject> startingParticipants) {
@@ -911,6 +932,11 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
     }
 
     internal void SummonMinion(uint creatureTid, CombatDuelSubCircle caster) {
+        if (caster is null || !caster.Occupied || caster.ParticipantActor is null
+            || Array.IndexOf(SubCircles, caster) < 0) {
+            return;
+        }
+
         if (CoreObjectFactory.GetCoreTemplate(creatureTid) is null) {
             Logger.Warning("Duel {0} | minion summon: no template for creature tid {1}.",
                 Logger.Args(Duel.m_duelID.Full, creatureTid));
@@ -921,9 +947,13 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
         // Cinematics before this cast plus the summon animation: the minion appears mid-cast.
         var castOffset = CurrentActionCinematicOffsetSeconds;
         var spawnDelay = castOffset + MINION_SUMMON_ANIMATION_DELAY;
+        var message = new ZONE_102_PROTOCOL.MSG_DEFERREDMINIONSUMMON { CreatureTid = creatureTid, Caster = caster };
+        _deferredMinionOwners.Add(message, new DeferredMinionOwner(caster.ParticipantObject,
+            caster.ParticipantObject.m_globalID.Full, caster.ParticipantActor, caster.DeferredActionIdentity,
+            caster._wizard?.CharId ?? 0));
         Timers.StartSingleTimer(
             $"minionSummon_{Guid.NewGuid():N}",
-            new ZONE_102_PROTOCOL.MSG_DEFERREDMINIONSUMMON { CreatureTid = creatureTid, Caster = caster },
+            message,
             TimeSpan.FromSeconds(spawnDelay));
     }
 
@@ -934,9 +964,13 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
     }
 
     private void SpawnAndAssignMinion(uint creatureTid, CombatDuelSubCircle caster, bool controllableSummon = false) {
-        var slot = GetAvailableSubCircleTeamPlayer();
+        // CLASSIC: PvP minions occupy their caster's physical half, which the creature AI uses for enemy targets.
+        // PvE summons retain the existing player-half selection.
+        var slot = _pvp && caster.SlotIndex < 4
+            ? GetAvailableSubCircleTeamCreature()
+            : GetAvailableSubCircleTeamPlayer();
         if (slot is null) {
-            Logger.Information("Duel {0} | minion summon (tid {1}) skipped, no free player-team slot.",
+            Logger.Information("Duel {0} | minion summon (tid {1}) skipped, no free summon-team slot.",
                 Logger.Args(Duel.m_duelID.Full, creatureTid));
 
             return;
@@ -978,7 +1012,7 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
             return;
         }
 
-        Logger.Information("Duel {0} | summoned minion tid {1} into player-team slot {2} (caught up next round).",
+        Logger.Information("Duel {0} | summoned minion tid {1} into summon-team slot {2} (caught up next round).",
             Logger.Args(Duel.m_duelID.Full, creatureTid, slot.SlotIndex));
     }
 
