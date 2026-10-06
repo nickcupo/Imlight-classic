@@ -60,7 +60,10 @@ public static class ClassicSpellSchema {
     /// </summary>
     public const string CanonicalProfileId = "late-2009";
 
-    public static ImmutableArray<string> Schools { get; } = ["fire", "ice", "storm", "myth", "life", "death", "balance"];
+    public static ImmutableArray<string> PlayerSchools { get; } = ["fire", "ice", "storm", "myth", "life", "death", "balance"];
+
+    // CLASSIC: October 2010 secondary-school records do not add base player accuracy tables.
+    public static ImmutableArray<string> Schools { get; } = [.. PlayerSchools, "sun", "star"];
 
     /// <summary>
     /// The schools an effect may name: every school, and <c>all</c>.
@@ -75,7 +78,7 @@ public static class ClassicSpellSchema {
     public static ImmutableArray<string> EffectTypes { get; } = [
         "damage", "dot", "heal", "hot", "steal", "pip", "minion", "beguile", "stun", "threat",
         "blade", "charm", "enchant", "trap", "shield", "ward", "prism", "global", "mutate",
-        "dispel", "remove_charm", "remove_ward", "reshuffle"
+        "dispel", "remove_charm", "remove_ward", "reshuffle", "cloak", "stun_resist", "critical_block"
     ];
 
     /// <summary>
@@ -106,7 +109,7 @@ public static class ClassicSpellLoader {
     internal static readonly FrozenSet<string> s_valuesKeys = FrozenSet.Create(StringComparer.Ordinal,
         "pips", "accuracy", "level_learned", "training_points", "trainer", "effects");
     internal static readonly FrozenSet<string> s_effectKeys = FrozenSet.Create(StringComparer.Ordinal,
-        "type", "school", "min", "max", "percent", "rounds", "targets", "notes");
+        "type", "school", "min", "max", "outcomes", "percent", "rounds", "targets", "notes");
     private static readonly string[] s_effectRequired = ["type", "school"];
     internal static readonly FrozenSet<string> s_modernValuesKeys = FrozenSet.Create(StringComparer.Ordinal,
         "pips", "accuracy", "effects_summary");
@@ -117,9 +120,11 @@ public static class ClassicSpellLoader {
 
     private const int MaxPips = 14;
     private static readonly SpellEffectKind[] s_needsAmount = [SpellEffectKind.Damage, SpellEffectKind.Heal, SpellEffectKind.Dot, SpellEffectKind.Hot];
-    private static readonly SpellEffectKind[] s_needsRounds = [SpellEffectKind.Dot, SpellEffectKind.Hot, SpellEffectKind.Stun, SpellEffectKind.Beguile];
+    private static readonly SpellEffectKind[] s_needsRounds = [SpellEffectKind.Dot, SpellEffectKind.Hot, SpellEffectKind.Stun, SpellEffectKind.Beguile,
+        SpellEffectKind.StunResist, SpellEffectKind.CriticalBlock];
     private static readonly SpellEffectKind[] s_needsPercent = [
-        SpellEffectKind.Blade, SpellEffectKind.Charm, SpellEffectKind.Trap, SpellEffectKind.Shield, SpellEffectKind.Global
+        SpellEffectKind.Blade, SpellEffectKind.Charm, SpellEffectKind.Trap, SpellEffectKind.Shield, SpellEffectKind.Global,
+        SpellEffectKind.StunResist, SpellEffectKind.CriticalBlock
     ];
 
     private static readonly Regex s_slug = new(@"^[a-z0-9]+(-[a-z0-9]+)*\z", RegexOptions.CultureInvariant);
@@ -469,6 +474,32 @@ public static class ClassicSpellLoader {
         }
 
         var kind = (SpellEffectKind) ClassicSpellSchema.EffectTypes.IndexOf(typeName);
+        // CLASSIC: a discrete roll must never be interpreted as every integer between min and max.
+        var outcomes = ImmutableArray<int>.Empty;
+        if (map.Find("outcomes") is { } outcomesEntry) {
+            var outcomesPath = YamlTree.Join(keyPath, "outcomes");
+            if (diagnostics.ReadList(outcomesEntry.Value, outcomesPath) is { } list) {
+                var parsed = ImmutableArray.CreateBuilder<int>();
+                for (var i = 0; i < list.Items.Length; i++) {
+                    if (diagnostics.ReadInt(list.Items[i], YamlTree.Index(outcomesPath, i), 0) is { } value) {
+                        parsed.Add(value);
+                    }
+                }
+
+                outcomes = parsed.ToImmutable();
+                if (list.Items.Length is < 2 or > 15 || outcomes.Distinct().Count() != outcomes.Length) {
+                    diagnostics.At(list, outcomesPath, "needs 2 to 15 distinct outcomes (four-bit index 15 is the no-choice sentinel)");
+                }
+                if (!outcomes.IsEmpty && (min != outcomes.Min() || max != outcomes.Max())) {
+                    diagnostics.At(list, outcomesPath, "min and max must bound the explicit outcomes exactly");
+                }
+            }
+
+            if (kind != SpellEffectKind.Damage) {
+                diagnostics.At(outcomesEntry.Value, outcomesPath, "explicit outcomes currently require a damage effect");
+            }
+        }
+
         var missing = new List<string>();
         if (s_needsAmount.Contains(kind)) {
             missing.AddRange(new[] { "min", "max", "targets" }.Where(key => map.Find(key) is null));
@@ -490,7 +521,8 @@ public static class ClassicSpellLoader {
 
         SpellTargets? target = targetName is null ? null : (SpellTargets) ClassicSpellSchema.Targets.IndexOf(targetName);
 
-        return new SpellEffectValues(kind, school, min, max, percent, rounds, target, notes);
+        return diagnostics.Errors.Count > errorsBefore ? null
+            : new SpellEffectValues(kind, school, min, max, percent, rounds, target, notes) { Outcomes = outcomes };
     }
 
     private static void CheckIntroduced(YMap map, YamlDiagnostics diagnostics) {

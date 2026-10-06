@@ -188,6 +188,11 @@ public sealed record SpellOverridePlan {
     public ImmutableArray<EffectAddress>? Structure { get; init; }
 
     /// <summary>
+    /// CLASSIC: each random wrapper's new child list, copied from these original child indices. The wrapper stays one effect.
+    /// </summary>
+    public ImmutableDictionary<int, ImmutableArray<int>> RandomChildren { get; init; } = ImmutableDictionary<int, ImmutableArray<int>>.Empty;
+
+    /// <summary>
     /// What still differs from the record once the plan is applied (<see cref="SpellMechanicsAudit"/>).
     /// </summary>
     public ImmutableArray<MechanicsIssue> RemainingIssues { get; init; } = [];
@@ -195,7 +200,8 @@ public sealed record SpellOverridePlan {
     /// <summary>
     /// True when applying the plan changes anything.
     /// </summary>
-    public bool ChangesTemplate => Rank is not null || ClearSchoolPips || Accuracy is not null || !EffectChanges.IsEmpty || Structure is not null;
+    public bool ChangesTemplate => Rank is not null || ClearSchoolPips || Accuracy is not null || !EffectChanges.IsEmpty || Structure is not null
+        || !RandomChildren.IsEmpty;
 
 }
 
@@ -240,6 +246,8 @@ public static class SpellOverridePlanner {
             [SpellEffectKind.Charm] = [TemplateEffectKind.ModifyOutgoingDamage, TemplateEffectKind.ModifyAccuracy, TemplateEffectKind.ModifyOutgoingHeal],
             [SpellEffectKind.Trap] = [TemplateEffectKind.ModifyIncomingDamage],
             [SpellEffectKind.Shield] = [TemplateEffectKind.ModifyIncomingDamage],
+            [SpellEffectKind.StunResist] = [TemplateEffectKind.StunResist],
+            [SpellEffectKind.CriticalBlock] = [TemplateEffectKind.CriticalBlock],
             [SpellEffectKind.Global] = [
                 TemplateEffectKind.ModifyOutgoingDamage, TemplateEffectKind.ModifyOutgoingHeal, TemplateEffectKind.ModifyAccuracy,
                 TemplateEffectKind.ModifyIncomingDamage, TemplateEffectKind.ModifyIncomingHeal
@@ -266,9 +274,23 @@ public static class SpellOverridePlanner {
     /// <returns>The plan; empty changes when the template already carries the classic numbers.</returns>
     public static SpellOverridePlan Plan(ClassicSpellRecord record, SpellMatch match, SpellValues values, SpellTemplateShape shape,
                                          int? inheritedFixedPips = null) {
-        var plan = PlanValues(record, match, values, shape, inheritedFixedPips);
+        // CLASSIC: dated trained outcomes do not establish a TC/item variant's amounts or branch weighting.
+        // Keep the previous canonical overrides for that indirect match until it has its own dated record.
+        if (match != SpellMatch.ClientTemplate && values.Effects.Any(effect => !effect.Outcomes.IsEmpty)) {
+            values = record.Values;
+        }
+
+        var (prepared, randomChildren) = PrepareDiscreteOutcomes(values, shape);
+        var plan = PlanValues(record, match, values, prepared, inheritedFixedPips) with { RandomChildren = randomChildren };
         var issues = SpellMechanicsAudit.Compare(values, SpellPlanSimulator.Apply(shape, plan), record.School);
         plan = plan with { RemainingIssues = issues };
+        if (values.Effects.Any(effect => !effect.Outcomes.IsEmpty)) {
+            // A generic structural rebuild would flatten a roll into multiple hits. Refuse unsupported topology.
+            if (!issues.IsEmpty) {
+                throw new InvalidOperationException($"{record.Id}: explicit outcome plan does not match its record: {string.Join("; ", issues.Select(issue => issue.Detail))}");
+            }
+            return plan;
+        }
         // An X card's amounts are per pip and a fixed card's are whole, so neither is rebuilt across the other.
         if (!issues.Any(IsStructural) || (plan.PipsSkip != PipsSkip.None && values.Effects.Any(effect => effect.HasAmount))) {
             return plan;
@@ -287,6 +309,55 @@ public static class SpellOverridePlanner {
 
     private static bool IsStructural(MechanicsIssue issue)
         => issue.Kind is not (MechanicsIssueKind.Pips or MechanicsIssueKind.SchoolPips or MechanicsIssueKind.Accuracy);
+
+    private static (SpellTemplateShape Shape, ImmutableDictionary<int, ImmutableArray<int>> Children) PrepareDiscreteOutcomes(
+        SpellValues values, SpellTemplateShape shape) {
+        var selections = ImmutableDictionary.CreateBuilder<int, ImmutableArray<int>>();
+        if (!values.Effects.Any(effect => !effect.Outcomes.IsEmpty)) {
+            return (shape, selections.ToImmutable());
+        }
+
+        var slots = BuildSlots(shape.Effects);
+        var pairs = Pair(values.Effects, slots, amountsFit: true, out _);
+        var nodes = shape.Effects.ToBuilder();
+        for (var i = 0; i < values.Effects.Length; i++) {
+            var effect = values.Effects[i];
+            if (effect.Outcomes.IsEmpty) {
+                continue;
+            }
+
+            var candidates = pairs.Where(pair => pair.Effect == i).ToArray();
+            if (effect.Kind != SpellEffectKind.Damage || effect.Outcomes.Length is < 2 or > 15
+                || effect.Outcomes.Distinct().Count() != effect.Outcomes.Length
+                || effect.Min != effect.Outcomes.Min() || effect.Max != effect.Outcomes.Max()
+                || candidates.Length != 1 || slots[candidates[0].Slot].Shape != SlotShape.Range) {
+                throw new InvalidOperationException($"{shape.Path}: explicit damage outcomes require one uniform native random effect");
+            }
+
+            var slot = slots[candidates[0].Slot];
+            if (slot.Kind != TemplateEffectKind.Damage || !SchoolFits(effect, slot) || CategoryOf(effect) != CategoryOf(slot.Target)) {
+                throw new InvalidOperationException($"{shape.Path}: explicit outcomes must preserve the native damage school and target");
+            }
+            var top = slot.Addresses[0].Index;
+            var selected = ImmutableArray.CreateBuilder<int>();
+            foreach (var outcome in effect.Outcomes) {
+                var source = Enumerable.Range(0, slot.Effects.Length).FirstOrDefault(
+                    child => slot.Effects[child].Param == outcome && !selected.Contains(child), -1);
+                if (source < 0) {
+                    throw new InvalidOperationException($"{shape.Path}: native random effect has no damage outcome {outcome}");
+                }
+                selected.Add(source);
+            }
+
+            var indices = selected.ToImmutable();
+            nodes[top] = nodes[top] with { Children = [.. indices.Select(child => nodes[top].Children[child])] };
+            if (!indices.SequenceEqual(Enumerable.Range(0, slot.Effects.Length))) {
+                selections.Add(top, indices);
+            }
+        }
+
+        return (shape with { Effects = nodes.ToImmutable() }, selections.ToImmutable());
+    }
 
     private static SpellOverridePlan PlanValues(ClassicSpellRecord record, SpellMatch match, SpellValues values, SpellTemplateShape shape,
                                                 int? inheritedFixedPips) {
@@ -556,7 +627,8 @@ public static class SpellOverridePlanner {
         for (var i = 0; i < slot.Effects.Length; i++) {
             var node = slot.Effects[i];
             int? param = values[i] == node.Param ? null : values[i];
-            int? rounds = effect.Kind is SpellEffectKind.Dot or SpellEffectKind.Hot && effect.Rounds is { } r && r != node.Rounds ? r : null;
+            int? rounds = effect.Kind is SpellEffectKind.Dot or SpellEffectKind.Hot or SpellEffectKind.StunResist or SpellEffectKind.CriticalBlock
+                && effect.Rounds is { } r && r != node.Rounds ? r : null;
             float? heal = effect.Kind == SpellEffectKind.Steal && effect.Percent is { } p && Math.Abs(p / 100f - node.HealModifier) > 0.0001f
                 ? p / 100f
                 : null;
@@ -568,6 +640,10 @@ public static class SpellOverridePlanner {
     }
 
     private static int[] NewParams(SpellEffectValues effect, Slot slot) {
+        if (!effect.Outcomes.IsEmpty) {
+            // CLASSIC: one entry per native random choice, never a linearly interpolated range.
+            return effect.Outcomes.ToArray();
+        }
         var nodes = slot.Effects;
         var values = new int[nodes.Length];
         if (!s_amountKinds.Contains(effect.Kind)) {
@@ -773,7 +849,8 @@ public static class SpellOverridePlanner {
                 param = percent;
             }
 
-            int? rounds = effect.Kind is SpellEffectKind.Dot or SpellEffectKind.Hot && effect.Rounds is { } r && r != current.Rounds ? r : null;
+            int? rounds = effect.Kind is SpellEffectKind.Dot or SpellEffectKind.Hot or SpellEffectKind.StunResist or SpellEffectKind.CriticalBlock
+                && effect.Rounds is { } r && r != current.Rounds ? r : null;
             float? heal = effect.Kind == SpellEffectKind.Steal && effect.Percent is { } p && Math.Abs(p / 100f - current.HealModifier) > 0.0001f
                 ? p / 100f
                 : null;

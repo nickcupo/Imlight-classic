@@ -453,7 +453,7 @@ public sealed class SpellOverridePlannerTests {
         Assert.Equal(new[] {
             SpellEffectKind.Damage, SpellEffectKind.Dot, SpellEffectKind.Heal, SpellEffectKind.Hot, SpellEffectKind.Steal,
             SpellEffectKind.Pip, SpellEffectKind.Blade, SpellEffectKind.Charm, SpellEffectKind.Trap, SpellEffectKind.Shield,
-            SpellEffectKind.Ward, SpellEffectKind.Global,
+            SpellEffectKind.Ward, SpellEffectKind.Global, SpellEffectKind.StunResist, SpellEffectKind.CriticalBlock,
         }, SpellOverridePlanner.AppliedKinds.ToArray());
     }
 

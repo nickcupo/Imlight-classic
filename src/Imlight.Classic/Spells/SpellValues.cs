@@ -71,6 +71,9 @@ public enum SpellEffectKind {
     RemoveCharm,
     RemoveWard,
     Reshuffle,
+    Cloak,
+    StunResist,
+    CriticalBlock,
 }
 
 /// <summary>
@@ -123,6 +126,11 @@ public readonly record struct SpellPips {
 /// <param name="Notes">What the fields cannot say.</param>
 public sealed record SpellEffectValues(SpellEffectKind Kind, string School, int? Min, int? Max, int? Percent, int? Rounds,
                                        SpellTargets? Targets, string? Notes) {
+
+    /// <summary>
+    /// CLASSIC: explicit equally selectable damage outcomes, in client replay order. Empty means the ordinary min/max range.
+    /// </summary>
+    public ImmutableArray<int> Outcomes { get; init; } = [];
 
     /// <summary>
     /// True when the effect carries an amount.

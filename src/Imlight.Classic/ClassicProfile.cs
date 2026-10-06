@@ -245,6 +245,12 @@ public sealed class ClassicProfile {
     public DateOnly? Cutoff { get; init; }
 
     /// <summary>
+    /// CLASSIC: an independent zone-content boundary for a bounded rules update.
+    /// Null uses <see cref="Cutoff"/>; inherited independently of the rules date.
+    /// </summary>
+    public DateOnly? ZoneContentCutoff { get; init; }
+
+    /// <summary>
     /// The highest level a wizard may reach; null means no cap.
     /// </summary>
     public int? LevelCap { get; init; }
@@ -285,7 +291,7 @@ public sealed class ClassicProfile {
     /// <summary>
     /// True when the profile restricts nothing, so it must behave exactly like stock Imlight.
     /// </summary>
-    public bool IsUnrestricted => Cutoff is null && LevelCap is null && Worlds is null && Features.AllEnabled;
+    public bool IsUnrestricted => Cutoff is null && ZoneContentCutoff is null && LevelCap is null && Worlds is null && Features.AllEnabled;
 
     /// <summary>
     /// True when <paramref name="worldId"/> is allowed by the world list.
@@ -301,13 +307,16 @@ public sealed class ClassicProfile {
     /// <returns>The id, status, cutoff, cap, worlds and the features that are off.</returns>
     public string Describe() {
         var cutoff = Cutoff?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) ?? "none";
+        var zoneCutoff = ZoneContentCutoff is { } boundary
+            ? $", zone content cutoff {boundary.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)}"
+            : "";
         var cap = LevelCap?.ToString(CultureInfo.InvariantCulture) ?? "none";
         var worlds = Worlds is null ? "all" : string.Join(", ", Worlds.Value);
         var disabled = Features.Disabled;
         var off = disabled.IsEmpty ? "none" : string.Join(", ", disabled);
         var status = Status.ToString().ToLowerInvariant();
 
-        return $"{Id} ({status}): cutoff {cutoff}, level cap {cap}, worlds {worlds}; features off: {off}";
+        return $"{Id} ({status}): cutoff {cutoff}{zoneCutoff}, level cap {cap}, worlds {worlds}; features off: {off}";
     }
 
 }

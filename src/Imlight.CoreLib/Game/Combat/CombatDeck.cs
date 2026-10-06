@@ -77,12 +77,12 @@ internal class CombatDeck {
         => _enchantedCastTemplates.TryGetValue(spell, out var enchanted) ? enchanted : original;
 
     // Returns a consumed vault ID for the owning duel to persist, only after successful validation.
-    internal bool TryEnchant(int sourceIndex, uint targetIndex, out uint consumedTreasureId) {
+    internal bool TryEnchant(int sourceIndex, uint targetIndex, out uint consumedTreasureId, bool pvp = false) {
         consumedTreasureId = 0;
         if (sourceIndex < 0 || sourceIndex >= LastGivenHand.Count || targetIndex >= LastGivenHand.Count) return false;
         var source = LastGivenHand[sourceIndex];
         var target = LastGivenHand[(int) targetIndex];
-        if (!ClassicHandEnchantment.TryPrepare(source, target, out var enchanted, out var template)) return false;
+        if (!ClassicHandEnchantment.TryPrepare(source, target, out var enchanted, out var template, pvp)) return false;
         LastGivenHand[(int) targetIndex] = enchanted;
         _enchantedCastTemplates.Add(enchanted, template);
         if (source.m_treasureCard) consumedTreasureId = ConsumeFromVault(source);
@@ -409,4 +409,3 @@ internal class CombatDeck {
     }
 
 }
-

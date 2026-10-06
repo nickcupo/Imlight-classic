@@ -90,6 +90,56 @@ public sealed class ProfileLoaderTests : IDisposable {
     }
 
     [Fact]
+    public void ZoneContentCutoffIsInheritedIndependentlyOfTheRulesDate() {
+        _data.WriteProfile("base", BaseProfile + "\nzone_content_cutoff: 2010-05-25\n");
+        _data.WriteProfile("child", """
+            id: child
+            title: Child
+            status: optional
+            extends: base
+            cutoff: 2010-10-31
+            """);
+
+        var profile = ClassicProfileLoader.Load(_data.ProfilesPath, "child");
+
+        Assert.Equal(new DateOnly(2010, 10, 31), profile.Cutoff);
+        Assert.Equal(new DateOnly(2010, 5, 25), profile.ZoneContentCutoff);
+    }
+
+    [Fact]
+    public void ChildNullZoneContentCutoffRemovesTheIndependentParentBoundary() {
+        _data.WriteProfile("base", BaseProfile + "\nzone_content_cutoff: 2010-05-25\n");
+        _data.WriteProfile("child", """
+            id: child
+            title: Child
+            status: optional
+            extends: base
+            cutoff: 2010-10-31
+            zone_content_cutoff: null
+            """);
+
+        var profile = ClassicProfileLoader.Load(_data.ProfilesPath, "child");
+
+        Assert.Null(profile.ZoneContentCutoff);
+        Assert.Equal(new DateOnly(2010, 10, 31), profile.Cutoff);
+    }
+
+    [Fact]
+    public void ZoneContentCutoffRejectsInvalidDates() {
+        _data.WriteProfile("child", """
+            id: child
+            title: Child
+            status: optional
+            cutoff: 2010-10-31
+            zone_content_cutoff: 2010-13-01
+            """);
+
+        var error = ZoneFixture.SingleError(() => ClassicProfileLoader.Load(_data.ProfilesPath, "child"), "zone_content_cutoff");
+
+        Assert.Equal(5, error.Line);
+    }
+
+    [Fact]
     public void NestedFeatureMapsMerge() {
         _data.WriteProfile("child", """
             id: child

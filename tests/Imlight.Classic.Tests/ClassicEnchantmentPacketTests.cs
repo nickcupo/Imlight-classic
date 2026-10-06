@@ -142,6 +142,62 @@ public sealed class ClassicEnchantmentPacketTests : IDisposable {
         Assert.Equal(75, TargetTemplate.m_accuracy);
     }
 
+    [Theory]
+    [InlineData(0)]
+    [InlineData(4)]
+    public async Task OctoberCloakWorksOnEitherPvpSideAndKeepsTheSharedWardUnchanged(int slot) {
+        ClassicRuntime.ResetForTests();
+        ClassicRuntime.Initialize(ClassicDataFixture.RealRules("october-2010-arc1"));
+        _duel.Duel.m_bPVP = true;
+        SourceTemplate.m_effects[0].m_effectType = kSpellEffects.kModifyCardCloak;
+        SourceTemplate.m_effects[0].m_effectParam = 0;
+        TargetTemplate.m_sTypeName = "Ward";
+        TargetTemplate.m_effects = [new SpellEffect {
+            m_effectType = kSpellEffects.kModifyIncomingDamage, m_effectParam = -50,
+            m_effectTarget = kEffectTarget.kFriendlySingle, m_sDamageType = "Fire",
+        }];
+        TargetTemplate.m_noPvEEnchant = true; // PvP must consult the PvP restriction instead.
+        if (slot != 4) {
+            CombatRegressionTests.SetProperty(_caster, "ParticipantActor", ActorRefs.Nobody);
+            var otherSide = Occupy(slot, true);
+            otherSide._combatDeck = _deck;
+            CombatRegressionTests.SetProperty(otherSide, "ParticipantActor", _player);
+        }
+
+        Send();
+        var card = Assert.Single((await ReadHand()).m_spellList);
+        Assert.True(card.m_cloaked);
+        Assert.Equal(Source, card.m_enchantment);
+        var cast = _deck.CastTemplateFor(Assert.Single(_deck.LastGivenHand), TargetTemplate);
+        var effect = Assert.Single(cast.m_effects);
+        Assert.True(effect.m_cloaked);
+        Assert.Equal(Source, effect.m_enchantmentSpellTemplateID);
+        Assert.Equal(-50, effect.m_effectParam);
+        Assert.False(TargetTemplate.m_cloaked);
+        Assert.False(Assert.Single(TargetTemplate.m_effects).m_cloaked);
+        _deck.Discard(Assert.Single(_deck.LastGivenHand));
+        _deck.Reshuffle();
+        Assert.All(_deck.GetHand().m_spellList, spell => Assert.False(spell.m_cloaked));
+    }
+
+    [Theory]
+    [InlineData("late-2009", "Ward", false)]
+    [InlineData("october-2010-arc1", "Attack", false)]
+    [InlineData("october-2010-arc1", "Ward", true)]
+    public async Task CloakRefusesAnOlderEraNonWardOrPvpForbiddenTarget(string profile, string type, bool forbidden) {
+        ClassicRuntime.ResetForTests();
+        ClassicRuntime.Initialize(ClassicDataFixture.RealRules(profile));
+        _duel.Duel.m_bPVP = true;
+        SourceTemplate.m_effects[0].m_effectType = kSpellEffects.kModifyCardCloak;
+        SourceTemplate.m_effects[0].m_effectParam = 0;
+        TargetTemplate.m_sTypeName = type;
+        TargetTemplate.m_noPvPEnchant = forbidden;
+        Send();
+        var hand = await ReadHand();
+        Assert.Equal(2, hand.m_spellList.Count);
+        Assert.All(hand.m_spellList, spell => Assert.False(spell.m_cloaked));
+    }
+
     [Fact]
     public async Task MutationUsesRecordedOutputAndRestoresOriginalCardOnReshuffle() {
         SourceTemplate.m_effects[0].m_effectType = kSpellEffects.kModifyCardMutation;

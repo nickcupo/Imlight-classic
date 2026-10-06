@@ -57,7 +57,8 @@ public sealed class RealSpellsTests {
         var files = Directory.GetFiles(SpellsPath, "*.yaml", SearchOption.AllDirectories);
 
         Assert.Equal(files.Length, book.Records.Length);
-        Assert.Equal(ClassicSpellSchema.Schools.Order(), book.Records.Select(record => record.School).Distinct().Order());
+        Assert.All(book.Records, record => Assert.Contains(record.School, ClassicSpellSchema.Schools));
+        Assert.All(ClassicSpellSchema.PlayerSchools, school => Assert.Contains(book.Records, record => record.School == school));
     }
 
     [Fact]
@@ -122,8 +123,91 @@ public sealed class RealSpellsTests {
         Assert.Equal(ClassicSpellSchema.CanonicalProfileId, Assert.Single(profiles, profile => profile.Status == ProfileStatus.Canonical).Id);
         foreach (var record in LoadBook().Records) {
             Assert.All(record.Profiles, id => Assert.Contains(id, ids));
-            Assert.Contains(ClassicSpellSchema.CanonicalProfileId, record.Profiles);
         }
+    }
+
+    [Fact]
+    public void VerifiedOctoberUtilitySpellIsAvailableOnlyInTheNewProfile() {
+        var book = LoadBook();
+        var october = new ClassicSpellOverrides(book, ClassicDataFixture.LoadProfile("october-2010-arc1"));
+        var late = new ClassicSpellOverrides(book, ClassicDataFixture.LoadProfile("late-2009"));
+        var early = new ClassicSpellOverrides(book, ClassicDataFixture.LoadProfile("arc1-2009h1"));
+        var spell = book.FindByName("Strangle")!;
+        Assert.Equal("Mildred Farseer", spell.Values.Trainer);
+        Assert.Equal(SpellPips.Of(2), spell.Values.Pips);
+        Assert.Equal(22, spell.Values.LevelLearned);
+        Assert.True(october.IsTrainable(spell.ClientTemplate));
+        Assert.False(late.IsTrainable(spell.ClientTemplate));
+        Assert.False(early.IsTrainable(spell.ClientTemplate));
+        Assert.True(october.IsTrainable("Spells/Tiered Spells/Fire Cat.xml"));
+        Assert.False(october.IsTrainable("Spells/Entangle.xml"));
+        Assert.False(october.IsTrainable("Spells/Vaporize.xml"));
+        Assert.False(october.IsTrainable("Spells/Unbalance.xml"));
+    }
+
+    [Theory]
+    [InlineData("Cloak", "sun", "Spells/Cloak.xml", 0)]
+    public void ApprovedDiegoCardsAreOctoberOnly(string name, string school, string template, int level) {
+        var book = LoadBook();
+        var spell = book.FindByTemplate(template)!;
+        Assert.Equal(name, spell.Name);
+        Assert.Equal(school, spell.School);
+        Assert.Equal("Diego the Duelmaster", spell.Values.Trainer);
+        Assert.Equal(SpellPips.Of(0), spell.Values.Pips);
+        Assert.Equal(level, spell.Values.LevelLearned);
+        Assert.Equal(1, spell.Values.TrainingPoints);
+        Assert.True(new ClassicSpellOverrides(book, ClassicDataFixture.LoadProfile("october-2010-arc1")).IsTrainable(template));
+        Assert.False(new ClassicSpellOverrides(book, ClassicDataFixture.LoadProfile("late-2009")).IsTrainable(template));
+        Assert.False(new ClassicSpellOverrides(book, ClassicDataFixture.LoadProfile("arc1-2009h1")).IsTrainable(template));
+    }
+
+    [Fact]
+    public void CloakPlanPreservesTheClientCardTargetAndEffect() {
+        var overrides = new ClassicSpellOverrides(LoadBook(), ClassicDataFixture.LoadProfile("october-2010-arc1"));
+        var shape = new SpellTemplateShape {
+            Path = "Spells/Cloak.xml", Name = "Cloak", Rank = 0, Accuracy = 100,
+            Effects = [new TemplateEffectNode {
+                EffectType = "kModifyCardCloak", TargetName = "kSpell", DamageType = "All", Param = 0,
+            }],
+        };
+
+        var plan = overrides.PlanFor(shape)!;
+        var result = SpellPlanSimulator.Apply(shape, plan);
+
+        Assert.Empty(plan.RemainingIssues);
+        Assert.False(plan.ChangesTemplate);
+        Assert.Equal("kModifyCardCloak", Assert.Single(result.Effects).EffectTypeName);
+        Assert.Equal("kSpell", Assert.Single(result.Effects).TargetMemberName);
+    }
+
+    [Fact]
+    public void ConvictionIsWithheldWithTheCriticalSystem() {
+        var book = LoadBook();
+        var overrides = new ClassicSpellOverrides(book, ClassicDataFixture.LoadProfile("october-2010-arc1"));
+
+        Assert.Null(book.FindByTemplate("Spells/Conviction.xml"));
+        Assert.False(overrides.IsTrainable("Spells/Conviction.xml"));
+        Assert.False(ClassicDataFixture.LoadProfile("october-2010-arc1").Features.IsEnabled(ClassicFeatures.CriticalAndBlock));
+    }
+
+    [Theory]
+    [InlineData("late-2009")]
+    [InlineData("october-2010-arc1")]
+    public void UnresolvedOctoberNumericChangesDoNotBorrowTheLaterClientValues(string profileId) {
+        var book = LoadBook();
+        var profile = ClassicDataFixture.LoadProfile(profileId);
+        var poison = book.FindByName("Poison")!.ValuesFor(profile.Lineage);
+        var hound = book.FindByName("Heck Hound")!.ValuesFor(profile.Lineage);
+
+        Assert.Equal(SpellPips.Of(4), poison.Pips);
+        Assert.Equal(0.85, poison.Accuracy);
+        Assert.Equal(35, poison.Effects[0].Min);
+        Assert.Equal(390, poison.Effects[1].Min);
+        Assert.Equal(3, poison.Effects[1].Rounds);
+        Assert.Equal(SpellPips.X, hound.Pips);
+        Assert.Equal(0.75, hound.Accuracy);
+        Assert.Equal(120, Assert.Single(hound.Effects).Min);
+        Assert.Equal(3, Assert.Single(hound.Effects).Rounds);
     }
 
     [Fact]
@@ -135,7 +219,7 @@ public sealed class RealSpellsTests {
         Assert.Contains("late-2009", table.Profiles);
         Assert.Equal(0.75, table.BaseAccuracy("fire", profile.Lineage));
         Assert.Equal(0.9, table.BaseAccuracy("life", profile.Lineage));
-        Assert.All(ClassicSpellSchema.Schools, school => Assert.NotNull(table.BaseAccuracy(school, profile.Lineage)));
+        Assert.All(ClassicSpellSchema.PlayerSchools, school => Assert.NotNull(table.BaseAccuracy(school, profile.Lineage)));
     }
 
     [Fact]

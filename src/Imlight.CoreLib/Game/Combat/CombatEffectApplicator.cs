@@ -566,13 +566,14 @@ internal static class CombatEffectApplicator {
 
             // CLASSIC: before the July 2009 update a stun left no stun block.
             if (target.TryStun() && ClassicRuntime.Rules.StunGivesStunBlock) {
-                // Creature was stunned. Add a stun block hanging effect.
-                var stunBlockEffect = new SpellEffect {
-                    m_effectType = kSpellEffects.kStunBlock,
-                    m_spellTemplateID = effect.m_spellTemplateID,
-                };
-
-                target._hangingEffects.Add(stunBlockEffect);
+                // CLASSIC: July 2010 gives four shields in PvP; the 2009 profiles and PvE still give one.
+                var blocks = Imlight.CoreLib.Classic.ClassicOctoberRules.AutomaticStunBlocks(target._duelActor?.Duel?.m_bPVP == true);
+                for (var block = 0; block < blocks; block++) {
+                    target._hangingEffects.Add(new SpellEffect {
+                        m_effectType = kSpellEffects.kStunBlock,
+                        m_spellTemplateID = effect.m_spellTemplateID,
+                    });
+                }
             }
         }
 

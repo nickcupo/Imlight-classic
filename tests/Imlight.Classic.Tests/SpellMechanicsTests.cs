@@ -278,6 +278,53 @@ public sealed class SpellMechanicsTests {
         Assert.Equal(80, roll.m_effectList[0].m_effectParam);
     }
 
+    [Theory]
+    [InlineData(0, 10)]
+    [InlineData(1, 100)]
+    [InlineData(2, 1000)]
+    public void OctoberWildBoltServerAndSimulatorKeepOneRollWithReplayedNativeChoices(int choice, int damage) {
+        var original = new[] { 10, 100, 100, 1000 }.Select(value => new SpellEffect {
+            m_effectType = kSpellEffects.kDamage, m_effectParam = value, m_sDamageType = "Storm",
+            m_effectTarget = kEffectTarget.kEnemySingle,
+        }).ToList();
+        var template = new SpellTemplate {
+            m_accuracy = 70, m_spellRank = new SpellRank { m_spellRank = 2 },
+            m_effects = [new RandomSpellEffect {
+                m_effectType = kSpellEffects.kInvalidSpellEffect, m_effectParam = -1, m_pipNum = 1,
+                m_effectTarget = kEffectTarget.kEnemySingle, m_effectList = original,
+            }],
+        };
+        var effect = Effect(SpellEffectKind.Damage, "storm", 10, 1000) with { Outcomes = [10, 100, 1000] };
+        var record = RecordOf("storm", SpellPips.Of(2), 0.7, effect);
+        var before = SpellTemplateEditor.ShapeOf(template, "Spells/Wild Bolt.xml");
+        var plan = PlanFor(record, before);
+        SpellTemplateEditor.ApplyPlan(template, plan);
+
+        var roll = Assert.IsType<RandomSpellEffect>(Assert.Single(template.m_effects));
+        Assert.Equal(new[] { 10, 100, 1000 }, roll.m_effectList.Select(child => child.m_effectParam).ToArray());
+        Assert.Equal(-1, roll.m_effectParam);
+        Assert.Equal(1, roll.m_pipNum);
+        Assert.NotSame(original[3], roll.m_effectList[2]);
+        Assert.Equal(SpellPlanSimulator.Apply(before, plan).Effects[0].Children.Select(child => child.Param),
+            SpellTemplateEditor.ShapeOf(template, "Spells/Wild Bolt.xml").Effects[0].Children.Select(child => child.Param));
+
+        // The existing resolver chooses and applies one child, and sends that same four-bit index to the client.
+        var stack = new Imlight.CoreLib.Game.Combat.CombatEffectStack();
+        var method = typeof(Imlight.CoreLib.Game.Combat.CombatActionResolver).GetMethod("ChooseRandomEffect",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
+        var selected = Assert.IsType<SpellEffect>(method.Invoke(null, [roll, stack, new SelectedOutcomeRandom(choice)]));
+        Assert.Equal(damage, selected.m_effectParam);
+        Assert.Equal((uint) choice, stack.GetStackAsUint() & 15);
+    }
+
+    private sealed class SelectedOutcomeRandom(int choice) : System.Random {
+        public override int Next(int minValue, int maxValue) {
+            Assert.Equal(0, minValue);
+            Assert.Equal(3, maxValue);
+            return choice;
+        }
+    }
+
     // ---- the target combat uses ----
 
     [Fact]

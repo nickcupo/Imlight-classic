@@ -166,12 +166,14 @@ internal static class ZoneFixture {
     public static ClassicProfile Profile(DateOnly? cutoff = null,
                                          string[]? worlds = null,
                                          Dictionary<string, bool>? features = null,
-                                         int? levelCap = null)
+                                         int? levelCap = null,
+                                         DateOnly? zoneContentCutoff = null)
         => new() {
             Id = "test",
             Title = "Test",
             Status = ProfileStatus.Debug,
             Cutoff = cutoff,
+            ZoneContentCutoff = zoneContentCutoff,
             LevelCap = levelCap,
             Worlds = worlds?.ToImmutableArray(),
             Features = new FeatureSwitches(features ?? new Dictionary<string, bool>()),

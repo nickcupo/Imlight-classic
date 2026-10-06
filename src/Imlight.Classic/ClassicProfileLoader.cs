@@ -28,7 +28,7 @@
  * var profile = ClassicProfileLoader.Load("/opt/w101c/classic-data/profiles", "late-2009");
  * 
  * NOTE:
- * Only cutoff, level_cap, worlds, features, rules, world_unlocks and
+ * Only cutoff, zone_content_cutoff, level_cap, worlds, features, rules, world_unlocks and
  * disabled_quests are inherited. Maps
  * merge recursively; scalars, lists and explicit nulls replace. Metadata
  * (id, title, description, status, notes, extends) is never inherited.
@@ -57,10 +57,10 @@ namespace Imlight.Classic;
 public static class ClassicProfileLoader {
 
     internal static readonly FrozenSet<string> s_rootKeys = FrozenSet.Create(StringComparer.Ordinal,
-        "id", "title", "description", "status", "extends", "cutoff", "level_cap", "worlds", "features", "rules", "notes",
+        "id", "title", "description", "status", "extends", "cutoff", "zone_content_cutoff", "level_cap", "worlds", "features", "rules", "notes",
         "world_unlocks", "disabled_quests");
     private static readonly string[] s_requiredKeys = ["id", "title", "cutoff", "status"];
-    private static readonly string[] s_inheritedKeys = ["cutoff", "level_cap", "worlds", "features", "rules", "world_unlocks", "disabled_quests"];
+    private static readonly string[] s_inheritedKeys = ["cutoff", "zone_content_cutoff", "level_cap", "worlds", "features", "rules", "world_unlocks", "disabled_quests"];
     internal static readonly FrozenSet<string> s_worldUnlockKeys = FrozenSet.Create(StringComparer.Ordinal, "any_of", "source", "notes");
     private static readonly FrozenSet<string> s_ruleKeys = FrozenSet.Create(StringComparer.Ordinal,
         "accuracy_table", "xp_table", "player_health", "mob_rewards", "badges", "quest_cards", "treasure_prices", "mob_stats", "crown_shop", "later_objects", "creature_decks", "power_pips_from_rank", "dragonspyre_difficulty", "tutorial",
@@ -191,8 +191,8 @@ public static class ClassicProfileLoader {
                         diagnostics.At(value, "extends", $"'{parent}' is not a valid profile id (expected {ClassicSchema.IdPattern})");
                     }
                     break;
-                case "cutoff":
-                    _ = diagnostics.ReadDate(value, "cutoff", allowNull: true);
+                case "cutoff" or "zone_content_cutoff":
+                    _ = diagnostics.ReadDate(value, entry.Key, allowNull: true);
                     break;
                 case "level_cap":
                     _ = diagnostics.ReadPositiveInt(value, "level_cap", allowNull: true);
@@ -451,6 +451,8 @@ public static class ClassicProfileLoader {
             Status = Enum.Parse<ProfileStatus>(ScalarOf(child, "status")!, ignoreCase: true),
             Extends = ScalarOf(child, "extends"),
             Cutoff = merged.Find("cutoff")?.Value is { } cutoff ? diagnostics.ReadDate(cutoff, "cutoff", allowNull: true) : null,
+            ZoneContentCutoff = merged.Find("zone_content_cutoff")?.Value is { } zoneCutoff
+                ? diagnostics.ReadDate(zoneCutoff, "zone_content_cutoff", allowNull: true) : null,
             LevelCap = merged.Find("level_cap")?.Value is { } cap ? diagnostics.ReadPositiveInt(cap, "level_cap", allowNull: true) : null,
             Worlds = merged.Find("worlds")?.Value is YSeq worlds
                 ? worlds.Items.Cast<YScalar>().Select(world => world.Value).ToImmutableArray()

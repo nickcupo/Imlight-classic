@@ -213,7 +213,8 @@ public sealed class ClassicRules {
             }
         }
 
-        if (Profile.Cutoff is { } cutoff) {
+        // CLASSIC: a later rules snapshot may retain its independently verified zone boundary.
+        if ((Profile.ZoneContentCutoff ?? Profile.Cutoff) is { } cutoff) {
             if (area is not null && DateRuleCloses(area.Introduced, area.IntroducedAfter, cutoff) is { } areaWhy) {
                 return Deny(classification, $"{areaWhy} ({Describe(home, area)})",
                     area.Message ?? ClassicMessages.AreaClosed, home.RuleSource, area.Confidence);

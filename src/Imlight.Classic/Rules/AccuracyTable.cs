@@ -207,11 +207,11 @@ public static class AccuracyTableLoader {
             return schools.ToImmutable();
         }
 
-        diagnostics.CheckKeys(schoolMap, "schools", ClassicSpellSchema.Schools.ToFrozenSet(StringComparer.Ordinal),
-            ClassicSpellSchema.Schools);
+        diagnostics.CheckKeys(schoolMap, "schools", ClassicSpellSchema.PlayerSchools.ToFrozenSet(StringComparer.Ordinal),
+            ClassicSpellSchema.PlayerSchools);
         foreach (var schoolEntry in schoolMap.Entries) {
             var keyPath = YamlTree.Join("schools", schoolEntry.Key);
-            if (!ClassicSpellSchema.Schools.Contains(schoolEntry.Key, StringComparer.Ordinal)
+            if (!ClassicSpellSchema.PlayerSchools.Contains(schoolEntry.Key, StringComparer.Ordinal)
                 || diagnostics.ReadMap(schoolEntry.Value, keyPath) is not { } school) {
                 continue;
             }

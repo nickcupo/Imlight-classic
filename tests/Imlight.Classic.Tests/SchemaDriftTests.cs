@@ -266,7 +266,7 @@ public sealed class SchemaDriftTests {
 
         Assert.Equal(PropertyNames(schema), Sorted(AccuracyTableLoader.s_rootKeys));
         Assert.Equal(PropertyNames(schema.GetProperty("$defs").GetProperty("school")), Sorted(AccuracyTableLoader.s_schoolKeys));
-        Assert.Equal(PropertyNames(schema.GetProperty("properties").GetProperty("schools")), Sorted(ClassicSpellSchema.Schools));
+        Assert.Equal(PropertyNames(schema.GetProperty("properties").GetProperty("schools")), Sorted(ClassicSpellSchema.PlayerSchools));
     }
 
 
