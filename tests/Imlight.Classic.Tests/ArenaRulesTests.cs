@@ -137,6 +137,39 @@ public sealed class ArenaRulesTests {
     }
 
     [Fact]
+    public void OctoberTicketStockKeepsTheVerifiedPetRanksAndIsSeparateFrom2009() {
+        // CLASSIC: Diego 120465 (2010-10-31), pet revisions 114260/118681/113782/113783.
+        var october = ArenaLoader.Load(Path.Combine(ClassicDataFixture.Root, "pvp", "arena-october-2010.yaml"));
+        Assert.Equal(new[] { "october-2010-arc1" }, october.Profiles);
+        var old = Real();
+        Assert.DoesNotContain("october-2010-arc1", old.Profiles);
+        Assert.Contains("late-2009", old.Profiles);
+        Assert.Contains("arc1-2009h1", old.Profiles);
+        var diego = october.TicketVendors.Single(v => v.Npc == 38226);
+        var oldDiego = old.TicketVendors.Single(v => v.Npc == 38226);
+        Assert.Equal(116, diego.Items.Length);
+        Assert.Equal(113, oldDiego.Items.Length);
+        Assert.Equal(126, october.TicketVendors.Sum(v => v.Items.Length));
+        Assert.Equal(oldDiego.Items.OrderBy(i => i.Template),
+            diego.Items.Where(i => i.Template is not (225449 or 225401 or 225424)).OrderBy(i => i.Template));
+        Assert.Equal(old.TicketVendors.Single(v => v.Npc == 164327).Items.ToArray(),
+            october.TicketVendors.Single(v => v.Npc == 164327).Items.ToArray());
+        Assert.Equal("Warlord", diego.Items.Single(i => i.Template == 164174).Rank);
+        foreach (var (template, rank, price) in new[] {
+            (225449u, "Knight", 25), (225401u, "Commander", 250), (225424u, "Captain", 750),
+        }) {
+            var pet = diego.Items.Single(i => i.Template == template);
+            Assert.Equal(rank, pet.Rank);
+            Assert.Equal(price, pet.Price);
+            Assert.DoesNotContain(oldDiego.Items, i => i.Template == template);
+            var minimum = ArenaRules.MinRatingOf(rank, october.Ranks);
+            Assert.Equal("rank", ArenaRules.TicketPurchaseError(price, price, minimum - 1, minimum));
+            Assert.Null(ArenaRules.TicketPurchaseError(price, price, minimum, minimum));
+            Assert.Equal("tickets", ArenaRules.TicketPurchaseError(price - 1, price, minimum, minimum));
+        }
+    }
+
+    [Fact]
     public void AnExplicitPriceWinsOverThe2009Price() {
         var dir = Directory.CreateDirectory(Path.Combine(Path.GetTempPath(), $"arena-price-{Guid.NewGuid():N}")).FullName;
         var path = Path.Combine(dir, "arena-2009.yaml");   // the loader wants the id to match the file name

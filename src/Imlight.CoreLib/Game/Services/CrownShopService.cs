@@ -47,6 +47,7 @@ using Imlight.Classic;
 using Imlight.Classic.Rules;
 using Imlight.Common;
 using Imlight.CoreLib.Classic;
+using Imlight.CoreLib.Classic.Elixirs;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;
 using Imlight.CoreLib.Shared.Resources;
@@ -64,7 +65,7 @@ internal class CrownShopService(SessionActor sessionActor) : MessageService(sess
     // The existing tab/category layout and client's locale keys. Housing's new ids below
     // are unique server-provided layout references, not a claim about historic retail ids.
     private const int FeaturedTab = 37, MountsTab = 39, GameplayTab = 45;
-    private const int HousingTab = 46, HousesCategory = 20;
+    private const int HousingTab = 46, HousesCategory = 20, ElixirsTab = 47, ElixirsCategory = 21;
     private const int FeaturedCategory = 0, PermanentMountsCategory = 2, RentalMountsCategory = 3, HenchmenCategory = 18,
         EverythingCategory = 19;
     private const int WishlistMaxSize = 30, WishlistExpansionSize = 10;
@@ -75,6 +76,17 @@ internal class CrownShopService(SessionActor sessionActor) : MessageService(sess
     private PendingHire _pendingHire;
 
     private sealed record PendingHire(WIZARD_12_PROTOCOL.MSG_PCS_PURCHASE_REQUEST Request, CrownShopEntry Item, bool PayWithGold);
+
+    [MessageHandler(typeof(COMBAT_106_PROTOCOL.MSG_ACTORADDEDTODUEL))]
+    private void ElixirDuelEntered(COMBAT_106_PROTOCOL.MSG_ACTORADDEDTODUEL message)
+        => ElixirRules.SetCombatContext(GetActiveWizard(), true, message.Duel?.Duel?.m_bPVP ?? true);
+    [MessageHandler(typeof(COMBAT_106_PROTOCOL.MSG_COMBATWIN))]
+    private void ElixirWon(COMBAT_106_PROTOCOL.MSG_COMBATWIN message) => ElixirDuelLeft();
+    [MessageHandler(typeof(COMBAT_106_PROTOCOL.MSG_COMBATDEFEAT))]
+    private void ElixirLost(COMBAT_106_PROTOCOL.MSG_COMBATDEFEAT message) => ElixirDuelLeft();
+    [MessageHandler(typeof(CLASSIC_FEATURES_PROTOCOL.MSG_PVPRELEASE))]
+    private void ElixirReleased(CLASSIC_FEATURES_PROTOCOL.MSG_PVPRELEASE message) => ElixirDuelLeft();
+    private void ElixirDuelLeft() => ElixirRules.SetCombatContext(GetActiveWizard(), false, false);
 
     protected static Props Props(SessionActor parentActor)
         => Akka.Actor.Props.Create(() => new CrownShopService(parentActor));
@@ -172,6 +184,32 @@ internal class CrownShopService(SessionActor sessionActor) : MessageService(sess
         if (item.Category == CrownShopCategories.Henchmen && _pendingHire is not null) {
             Fail(message, "a henchman is already being hired");
 
+            return;
+        }
+
+        // CLASSIC: native Use Now maps to PurchaseElixirEquipNow=1 (r806919
+        // 0x140a61bb0 -> same +0x52c choice -> 0x140a5f08f -> 0x14217e450).
+        // Save Later is 0 and is outside the dated immediately-active purchase policy.
+        var purchaseTemplate = CoreObjectFactory.GetCoreTemplate((uint)item.Template) as WizItemTemplate;
+        if (item.Category == CrownShopCategories.Elixirs || ElixirRuntime.IsElixir(purchaseTemplate)) {
+            var definition = ElixirRules.Approved((uint)item.Template);
+            if (item.Category != CrownShopCategories.Elixirs || definition is null || payWithGold
+                || item.Gold != 0 || item.Crowns != definition.Crowns || !ElixirUseNow(message)
+                || !ElixirRules.CanActivate(wizard, definition)) {
+                Fail(message, "that elixir must be used now outside PvP");
+                return;
+            }
+            var fresh = CoreObjectFactory.FinalizeCoreObject((uint)item.Template) as WizClientObjectItem;
+            var purchased = ElixirCollection.Purchase(wizard, fresh, purchaseTemplate, true);
+            if (!purchased.Saved) { Fail(message, purchased.Error); return; }
+            SendToSocket(new GAME_5_PROTOCOL.MSG_INVENTORYBEHAVIOR_ADDITEM {
+                GlobalID = wizard.GameObjectID, SerializedItem = purchased.ItemData,
+            });
+            SendToSocket(new GAME_5_PROTOCOL.MSG_EQUIPITEM {
+                ItemID = fresh.m_globalID, SlotName = ElixirRules.SlotName, IsEquip = 1,
+            });
+            TellOtherServices(new CLASSIC_FEATURES_PROTOCOL.MSG_ELIXIRCHANGED { CharacterId = wizard.CharId });
+            Complete(wizard, message, item, false);
             return;
         }
 
@@ -311,14 +349,14 @@ internal class CrownShopService(SessionActor sessionActor) : MessageService(sess
 
     // The catalog the profile allows, in the client's tabs.
     private static (FrozenDictionary<ulong, CrownShopEntry>, ByteString) BuildCatalog() {
-        var offered = ClassicProgression.CrownShop?.Offered(ClassicRuntime.Rules.IsFeatureEnabled)
+        var offered = ClassicProgression.CrownShop?.Offered(ClassicRuntime.Rules.IsFeatureEnabled, ClassicRuntime.Rules.Profile.Id)
             ?? FrozenDictionary<ulong, CrownShopEntry>.Empty;
         // Only a dated/owner-approved definition with an actual Crowns price is projected;
         // gold-only world vendor houses do not acquire a fabricated Crowns price.
         var houses = ClassicRuntime.IsActive ? Classic.Housing.HouseCatalog.Approved.Where(h => h.Crowns > 0)
             .Select(h => new CrownShopEntry(h.Name, h.TemplateId, CrownShopCategories.Houses, h.Crowns,
                 h.Gold, null, h.MinimumLevel, false, null)) : [];
-        var shown = ForClient(offered.Values.Concat(houses)).ToFrozenDictionary(item => item.Template);
+        var shown = ForClient(ForProfile(offered.Values.Concat(houses), ClassicRuntime.Rules)).ToFrozenDictionary(item => item.Template);
 
         return (shown, SerializeCatalog(shown.Values));
     }
@@ -339,6 +377,15 @@ internal class CrownShopService(SessionActor sessionActor) : MessageService(sess
             .Where(item => item.Category != CrownShopCategories.Henchmen)
             .Select(item => item.Crowns <= 0 && item.Gold > 0 ? item with { Crowns = (item.Gold + 9) / 10 } : item);
 
+    // Catalog feature flags alone never authorize an unverified elixir or its price.
+    internal static IEnumerable<CrownShopEntry> ForProfile(IEnumerable<CrownShopEntry> offered, ClassicRules rules)
+        => offered.Where(item => item.Category != CrownShopCategories.Elixirs
+            || item.Template < (1UL << 28) && ElixirRules.Approved(rules, (uint)item.Template) is { } definition
+                && item.Gold == 0 && item.Crowns == definition.Crowns);
+
+    internal static bool ElixirUseNow(WIZARD_12_PROTOCOL.MSG_PCS_PURCHASE_REQUEST request)
+        => request.PurchaseElixirEquipNow == 1;
+
     // The client's CrownShopData for these items.
     internal static ByteString SerializeCatalog(IEnumerable<CrownShopEntry> offered) {
 
@@ -347,6 +394,7 @@ internal class CrownShopService(SessionActor sessionActor) : MessageService(sess
             CrownShopCategories.RentalMounts => RentalMountsCategory,
             CrownShopCategories.Henchmen => HenchmenCategory,
             CrownShopCategories.Houses => HousesCategory,
+            CrownShopCategories.Elixirs => ElixirsCategory,
             _ => EverythingCategory,
         };
 
@@ -414,6 +462,16 @@ internal class CrownShopService(SessionActor sessionActor) : MessageService(sess
             housesCategory.m_isHousesCategory = true;
             housesCategory.m_description = "CrownShopSWF_CategoryHouses_Desc";
             layout.m_categories.Add(housesCategory);
+        }
+        if (items.Any(item => item.m_displayPriority.StartsWith($"{ElixirsCategory}:"))) {
+            // Native locale keys select this menu. The dedicated icon path is unproved;
+            // retain the existing Everything icon rather than invent a resource name.
+            layout.m_tabs.Add(new CrownShopCategoryMenu {
+                m_ID = ElixirsTab, m_name = "CrownShopSWF_MenuElixirs", m_iconResource = icons + "Everything.dds",
+                m_categoryIDs = [ElixirsCategory], m_tags = "", m_description = "CrownShopSWF_MenuElixirs_Desc",
+            });
+            layout.m_categories.Add(Category(ElixirsCategory, ElixirsTab, "CrownShopSWF_CategoryElixirs",
+                icons + "Everything.dds", single: true));
         }
 
         var data = new CrownShopData {

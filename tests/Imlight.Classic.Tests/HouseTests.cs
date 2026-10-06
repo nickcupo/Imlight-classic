@@ -24,11 +24,19 @@ public sealed class HouseTests : IDisposable {
     private readonly IDictionary<ulong, CoreTemplate> _cache;
     private readonly Dictionary<ulong, CoreTemplate?> _previous = new();
     private readonly IReadOnlyDictionary<uint, HouseDefinition>? _previousDefinitions;
+    private readonly FieldInfo _inventoryLimit = typeof(ServerWizInventoryBehavior)
+        .GetField("s_iniMaxItemsAllowed", BindingFlags.Static | BindingFlags.NonPublic)!;
+    private readonly int _previousInventoryLimit;
     private static HouseDefinition Definition => new(Template, Template - 2, "Fixture house", Exterior, Interior,
         Exterior + "_Preview", 250, 250, 8000, 10000, 2, true, true); // explicit fixture allowances, not a historical ruling
 
     public HouseTests() {
         EquipmentAttachConcurrencyTests.Configure();
+        // CLASSIC: the resource-free configuration has no Character.MaxInventoryItems. Set and restore an
+        // explicit positive fixture limit so initial purchases do not depend on another test's AddItem fallback.
+        _previousInventoryLimit = (int)_inventoryLimit.GetValue(null)!;
+        _inventoryLimit.SetValue(null, Imlight.Classic.Inventory.Banking.ClassicBackpackSize);
+        Assert.True(ServerWizInventoryBehavior.MaxItemsAllowed > 0, "House fixture needs a positive backpack limit.");
         _cache = (IDictionary<ulong, CoreTemplate>)typeof(CoreObjectFactory)
             .GetField("s_templateCache", BindingFlags.Static | BindingFlags.NonPublic)!.GetValue(null)!;
         foreach (var id in new[] { Template, Furniture }) { _cache.TryGetValue(id, out var old); _previous[id] = old; }
@@ -42,6 +50,7 @@ public sealed class HouseTests : IDisposable {
     public void Dispose() {
         HouseCatalog.TestDefinitions.Value = _previousDefinitions;
         foreach (var pair in _previous) { if (pair.Value is null) _cache.Remove(pair.Key); else _cache[pair.Key] = pair.Value; }
+        _inventoryLimit.SetValue(null, _previousInventoryLimit);
     }
 
     [Fact]
@@ -151,32 +160,97 @@ public sealed class HouseTests : IDisposable {
     }
 
     [Fact]
-    public void FurnishedSaleMovesBothRoomsToSharedAtticAndArchivesOriginalDeedAtomically() {
+    public void ExplicitPickupThenEmptySalePreservesFurnitureAndArchivesOriginalDeedAtomically() {
         var store = new Store(); using var scope = store.Scope(); var live = store.Login(); Assert.True(Buy(live, 9101).Saved);
-        var outside = HousingCollection.Load(new HousingRoomIdentity(Owner, 9101, Exterior), true);
-        var inside = HousingCollection.Load(new HousingRoomIdentity(Owner, 9101, Interior), true);
+        var outsideIdentity = new HousingRoomIdentity(Owner, 9101, Exterior);
+        var insideIdentity = new HousingRoomIdentity(Owner, 9101, Interior);
+        var outside = HousingCollection.Load(outsideIdentity, true);
+        var inside = HousingCollection.Load(insideIdentity, true);
         store.Place(outside, 9301); store.Place(inside, 9302); var exact = inside.Entries[0].Copy();
-        var sold = HouseCollection.Sell(live, 9101, 400, 100);
-        Assert.True(sold.Saved); Assert.Equal(2, sold.Added.Count); Assert.Equal(2, store.Attic.Count);
+        // CLASSIC: empty the two areas explicitly; sale itself cannot move furniture to the attic.
+        var noExceptions = HousingCodec.Encode(new HousingItemList { m_housingItemGIDList = [] });
+        store.Wizard.Zone = Exterior; live.Zone = Exterior;
+        Assert.True(HousingAtticCollection.PickUpAll(live, Owner, Dynamic, 100, noExceptions, outsideIdentity).Saved);
+        store.Wizard.Zone = Interior; live.Zone = Interior;
+        Assert.True(HousingAtticCollection.PickUpAll(live, Owner, Dynamic, 100, noExceptions, insideIdentity).Saved);
+        Assert.Equal(2, store.Attic.Count);
+        var outsideVersion = store.Room(9101, Exterior).Version;
+        var insideVersion = store.Room(9101, Interior).Version;
+        var atticVersions = store.Attic.Packages.Select(p => p.Version).ToArray();
+        var sold = HouseCollection.Sell(live, 9101, 400, 0); // empty sale does not require attic space
+        Assert.True(sold.Saved, sold.Error); Assert.Empty(sold.Added); Assert.Null(sold.Attic); Assert.Equal(2, store.Attic.Count);
         Assert.Equal(92400, store.Wizard.GameStats.m_currentGold); Assert.Empty(store.Wizard.InventoryBehavior.InventoryItemIds);
+        Assert.Equal(92400, live.GameStats.m_currentGold); Assert.Empty(live.InventoryBehavior.Items);
         Assert.Empty(store.Portfolio.DeedIds); Assert.True(store.House(9101).Sold);
         Assert.True(store.Room(9101, Exterior).Entries[0].Removed); Assert.True(store.Room(9101, Interior).Entries[0].Removed);
+        Assert.Equal(outsideVersion, store.Room(9101, Exterior).Version);
+        Assert.Equal(insideVersion, store.Room(9101, Interior).Version);
+        Assert.Equal(atticVersions, store.Attic.Packages.Select(p => p.Version).ToArray());
         var returned = store.Attic.Packages.SelectMany(p => p.Entries).Single(e => e.ItemId == 9302);
         Exact(exact, returned); Assert.Contains(sold.Record.ItemDocumentId, store.Documents.Keys);
         Assert.False(HouseCollection.TryGetOwned(Owner, 9101, out _)); Assert.False(HouseCollection.Sell(live, 9101, 400, 100).Saved);
+        Assert.Equal(92400, store.Wizard.GameStats.m_currentGold);
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void SaleCapacityOrSaveFailureCannotPartiallyMoveFurnitureOrPay(bool failSave) {
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(true, false, true)]
+    public void SaleRefusesFurnitureInEitherAreaWithoutChangingAnySavedOrLiveState(bool furnishedOutside, bool furnishedInside, bool missingFurnitureOriginal) {
         var store = new Store(); using var scope = store.Scope(); var live = store.Login(); Assert.True(Buy(live, 9101).Saved);
-        var outside = HousingCollection.Load(new HousingRoomIdentity(Owner, 9101, Exterior), true); var inside = HousingCollection.Load(new HousingRoomIdentity(Owner, 9101, Interior), true);
-        store.Place(outside, 9301); store.Place(inside, 9302); store.FailSave = failSave;
-        Assert.False(HouseCollection.Sell(live, 9101, 400, failSave ? 100 : 1).Saved);
+        var outside = HousingCollection.Load(new HousingRoomIdentity(Owner, 9101, Exterior), true);
+        var inside = HousingCollection.Load(new HousingRoomIdentity(Owner, 9101, Interior), true);
+        if (furnishedOutside) store.Place(outside, 9301);
+        if (furnishedInside) store.Place(inside, 9302);
+        if (missingFurnitureOriginal) store.Documents.Remove("item/9301");
+        var beforeOutside = store.Room(9101, Exterior).Copy();
+        var beforeInside = store.Room(9101, Interior).Copy();
+        var atticVersions = store.Attic.Packages.Select(p => p.Version).ToArray();
+        var documents = store.Documents.Keys.OrderBy(k => k).ToArray();
+        var sale = HouseCollection.Sell(live, 9101, 400, 1000); // even a large attic never permits a furnished sale
+        Assert.False(sale.Saved); Assert.Contains("empty", sale.Error, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(0, store.Attic.Count); Assert.False(store.House(9101).Sold);
-        Assert.False(store.Room(9101, Exterior).Entries[0].Removed); Assert.False(store.Room(9101, Interior).Entries[0].Removed);
-        Assert.Equal(92000, store.Wizard.GameStats.m_currentGold); Assert.Single(live.InventoryBehavior.Items);
+        Assert.Null(store.House(9101).SoldAt);
+        Assert.Equal(beforeOutside.Version, store.Room(9101, Exterior).Version);
+        Assert.Equal(beforeInside.Version, store.Room(9101, Interior).Version);
+        Assert.Equal(atticVersions, store.Attic.Packages.Select(p => p.Version).ToArray());
+        foreach (var (before, after) in new[] { (beforeOutside, store.Room(9101, Exterior)), (beforeInside, store.Room(9101, Interior)) }) {
+            Assert.Equal(before.Count, after.Count);
+            for (var i = 0; i < before.Entries.Count; i++) {
+                Assert.False(after.Entries[i].Removed);
+                Assert.Equal(before.Entries[i].ItemId, after.Entries[i].ItemId);
+                Exact(before.Entries[i], after.Entries[i]);
+            }
+        }
+        Assert.Equal(documents, store.Documents.Keys.OrderBy(k => k).ToArray());
+        Assert.Equal(92000, store.Wizard.GameStats.m_currentGold); Assert.Equal(92000, live.GameStats.m_currentGold);
+        Assert.Equal(9101ul, Assert.Single(store.Wizard.InventoryBehavior.InventoryItemIds));
+        Assert.Equal(9101ul, Assert.Single(store.Portfolio.DeedIds));
+        Assert.Equal(9101ul, Assert.Single(live.InventoryBehavior.Items).m_globalID.Full);
+        Assert.Equal(30000, store.Account.Crowns);
+    }
+
+    [Fact]
+    public void EmptySaleSaveFailureCannotPayOrArchiveTheOriginalDeed() {
+        var store = new Store(); using var scope = store.Scope(); var live = store.Login(); Assert.True(Buy(live, 9101).Saved);
+        store.FailSave = true;
+        Assert.False(HouseCollection.Sell(live, 9101, 400, 0).Saved);
+        Assert.Equal(0, store.Attic.Count); Assert.False(store.House(9101).Sold); Assert.Null(store.House(9101).SoldAt);
+        Assert.Equal(92000, store.Wizard.GameStats.m_currentGold); Assert.Equal(92000, live.GameStats.m_currentGold);
+        Assert.Equal(9101ul, Assert.Single(store.Wizard.InventoryBehavior.InventoryItemIds));
+        Assert.Equal(9101ul, Assert.Single(store.Portfolio.DeedIds)); Assert.Single(live.InventoryBehavior.Items);
+        Assert.True(HouseCollection.TryGetOwned(Owner, 9101, out _));
+    }
+
+    [Fact]
+    public void MissingOriginalDeedCannotBeSoldEvenWhenBothRoomsAreEmpty() {
+        var store = new Store(); using var scope = store.Scope(); var live = store.Login(); var bought = Buy(live, 9101); Assert.True(bought.Saved);
+        store.Documents.Remove(bought.Record.ItemDocumentId);
+        Assert.False(HouseCollection.Sell(live, 9101, 400, 0).Saved);
+        Assert.False(store.House(9101).Sold); Assert.Equal(9101ul, Assert.Single(store.Portfolio.DeedIds));
+        Assert.Equal(92000, store.Wizard.GameStats.m_currentGold); Assert.Equal(92000, live.GameStats.m_currentGold);
+        Assert.Single(live.InventoryBehavior.Items); Assert.Equal(0, store.Attic.Count);
     }
 
     [Fact]

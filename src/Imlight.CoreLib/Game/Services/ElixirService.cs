@@ -43,7 +43,8 @@ internal class ElixirService : MessageService {
         if (wizard is null || !ElixirCollection.LoadValidated(wizard)) return;
         _wizard = wizard;
         _combat = wizard.IsInDuel;
-        _pvp = _combat && Classic.Arena.ClassicArena.IsArenaZone(wizard.Zone);
+        _pvp = _combat; // attach alone does not prove which kind of duel is active.
+        if (!_combat) ElixirRules.SetCombatContext(wizard, false, false);
         _clock.Begin(ElixirRuntime.RemainingTimers(wizard).Select(t => t.ItemId), Stopwatch.GetTimestamp());
         Refresh(sendTimers: true);
     }
@@ -57,6 +58,7 @@ internal class ElixirService : MessageService {
     private void DuelEntered(COMBAT_106_PROTOCOL.MSG_ACTORADDEDTODUEL message) {
         _combat = true;
         _pvp = message.Duel?.Duel?.m_bPVP ?? true; // unknown duel contexts suppress benefits.
+        ElixirRules.SetCombatContext(_wizard ?? GetActiveWizard(), true, _pvp);
         Refresh();
     }
 
@@ -66,7 +68,11 @@ internal class ElixirService : MessageService {
     private void Lost(COMBAT_106_PROTOCOL.MSG_COMBATDEFEAT message) => DuelLeft();
     [MessageHandler(typeof(CLASSIC_FEATURES_PROTOCOL.MSG_PVPRELEASE))]
     private void Released(CLASSIC_FEATURES_PROTOCOL.MSG_PVPRELEASE message) => DuelLeft();
-    private void DuelLeft() { _combat = _pvp = false; Refresh(); }
+    private void DuelLeft() {
+        _combat = _pvp = false;
+        ElixirRules.SetCombatContext(_wizard ?? GetActiveWizard(), false, false);
+        Refresh();
+    }
 
     private void Refresh(bool sendTimers = false) {
         if (_wizard is null || !Enabled() || SessionActor.TransferringOut) return;
