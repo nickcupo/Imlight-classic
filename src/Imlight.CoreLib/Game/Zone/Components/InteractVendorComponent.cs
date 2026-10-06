@@ -65,7 +65,7 @@ internal sealed class InteractVendorComponent(ZoneEntity entity) : ZoneEntityCom
     public string InteractWizBang => "Registrar";
     public string DisplayKey      => "GUI_ShopOptionEquipment";
 
-    private List<GID> _inventory;
+    private List<GID> _inventory = []; // CLASSIC: missing stock is an empty shop, including purchase validation.
 
     public static bool ShouldAttachToEntity(CoreTemplate template)
         // Attach if the template is an NPC and has an inventory in Dragon database,
@@ -76,6 +76,13 @@ internal sealed class InteractVendorComponent(ZoneEntity entity) : ZoneEntityCom
         || WorldVendorLocations.IsVendor(goTemplate.m_templateID));
 
     public override void OnStart() {
+        // CLASSIC: ticket shops use the same dated configuration that registers their SpiralDB inventories.
+        // An intervening resource reload must not leave a newly spawned Roland with an empty shop.
+        if (Classic.Arena.ClassicArena.TicketInventory((uint) Entity.ActiveGameObject.m_templateID.Full) is { } ticketInventory) {
+            _inventory = ticketInventory.Inventory;
+            return;
+        }
+
         if (!NpcInventoryCollection.TryGetNpcInventory(Entity.ActiveGameObject.m_templateID, out var inventory)) {
             // CLASSIC: a warning with the template id (the GID printed as its type name); a vendor the client lists
             // without an inventory in the data sells nothing.
@@ -87,7 +94,7 @@ internal sealed class InteractVendorComponent(ZoneEntity entity) : ZoneEntityCom
             return;
         }
 
-        _inventory = inventory.Inventory;
+        _inventory = inventory.Inventory ?? []; // CLASSIC
     }
 
     // CLASSIC: an Arena Ticket vendor (Diego, Roland Silverheart; classic-data/pvp/arena-*.yaml).
