@@ -200,6 +200,20 @@ public sealed class ZoneWorldMapTests : IDisposable {
     }
 
     [Fact]
+    public void IndependentZoneContentCutoffKeepsExactLaterZonesClosedUnderOctoberRules() {
+        var october = new DateOnly(2010, 10, 31);
+        var rules = new ClassicRules(ZoneFixture.Profile(cutoff: october, worlds: s_worlds, zoneContentCutoff: s_cutoff), _map);
+
+        Assert.True(Rules(cutoff: october).IsZoneAllowed("Later/X").Allowed);
+        var decision = rules.IsZoneAllowed("Later/X");
+        Assert.False(decision.Allowed);
+        Assert.StartsWith("introduced 2010-10-27, after the cutoff 2010-05-25", decision.Reason);
+        Assert.True(rules.IsZoneAllowed("OnDay/X").Allowed);
+        Assert.Equal(october, rules.Profile.Cutoff);
+        Assert.False(ZoneFixture.Profile(zoneContentCutoff: s_cutoff).IsUnrestricted);
+    }
+
+    [Fact]
     public void IntroducedAfterDeniesWheneverThereIsACutoff() {
         Assert.False(Rules().IsZoneAllowed("Someday/X").Allowed);
         Assert.False(Rules(cutoff: new DateOnly(2030, 1, 1)).IsZoneAllowed("Someday/X").Allowed);

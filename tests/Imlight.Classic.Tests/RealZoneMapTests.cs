@@ -112,6 +112,26 @@ public sealed class RealZoneMapTests {
         Assert.NotEmpty(decision.PlayerMessage);
     }
 
+    [Theory]
+    [InlineData("Housing_Modern/Anything")]
+    [InlineData("MonthlyEvents/Anything")]
+    [InlineData("MooShu/MS_Catmandu")]
+    [InlineData("WizardCity/Tutorial_Fusion_Arena_1")]
+    [InlineData("WizardCity/Interiors/WC_CastleTours")]
+    [InlineData("WizardCity/Interiors/WC_Krampus_Test")]
+    [InlineData("Krokotopia/Interiors/KT_SkeletonKeyWood01")]
+    public void OctoberRulesDoNotOpenZonesWhoseLaterIntroductionDateIsUnclassified(string zone) {
+        var rules = ClassicDataFixture.RealRules("october-2010-arc1");
+        var decision = rules.IsZoneAllowed(zone);
+
+        Assert.False(decision.Allowed, decision.Reason);
+        Assert.Contains("2010-05-25", decision.Reason);
+        Assert.True(rules.UntargetedAreaSpells);
+        Assert.True(rules.StunGivesStunBlock);
+        Assert.True(rules.IsZoneAllowed("Grizzleheim/GH_MainHub").Allowed);
+        Assert.True(rules.IsZoneAllowed("Housing/WizardCity/WC_Tier1_Interior_Preview").Allowed);
+    }
+
     [Fact]
     public void HatcheryIsClosedByThePetsHatchingSwitch() {
         var decision = ClassicDataFixture.RealRules("late-2009").IsZoneAllowed("WizardCity/Interiors/WC_Hatchery");

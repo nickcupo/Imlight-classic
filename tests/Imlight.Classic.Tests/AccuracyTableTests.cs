@@ -53,7 +53,7 @@ public sealed class AccuracyTableTests : IDisposable {
     private static string TableYaml(string fire = "accuracy: 0.75", string extraSchool = "") {
         var text = new StringBuilder();
         text.Append("id: accuracy-test\ntitle: Test\nprofiles: [late-2009, arc1-2009h1]\nschools:\n");
-        foreach (var school in ClassicSpellSchema.Schools) {
+        foreach (var school in ClassicSpellSchema.PlayerSchools) {
             text.Append("  ").Append(school).Append(":\n");
             text.Append("    ").Append(school == "fire" ? fire.Replace("\n", "\n    ") : "accuracy: 0.8").Append('\n');
             text.Append("    provenance:\n    - {source: https://example.invalid, source_date: '2010-01-01', retrieved: '2026-09-27', covers: [accuracy], confidence: verified}\n");

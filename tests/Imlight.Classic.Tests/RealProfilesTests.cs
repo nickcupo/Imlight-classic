@@ -93,6 +93,24 @@ public sealed class RealProfilesTests {
     }
 
     [Fact]
+    public void OctoberArcOneKeepsItsBoundariesAndAddsVerifiedAreaTargeting() {
+        var profile = ClassicDataFixture.LoadProfile("october-2010-arc1");
+        Assert.Equal(ProfileStatus.Optional, profile.Status);
+        Assert.Equal("late-2009", profile.Extends);
+        Assert.Equal(new DateOnly(2010, 10, 31), profile.Cutoff);
+        Assert.Equal(new DateOnly(2010, 5, 25), profile.ZoneContentCutoff);
+        Assert.Equal(50, profile.LevelCap);
+        Assert.Equal(new[] { "wizard_city", "krokotopia", "marleybone", "mooshu", "dragonspyre", "grizzleheim" }, profile.Worlds!.Value);
+        Assert.True(profile.Features.IsEnabled(ClassicFeatures.UntargetedAreaSpells));
+        Assert.False(profile.Features.IsEnabled(ClassicFeatures.CriticalAndBlock));
+        Assert.False(profile.Features.IsEnabled(ClassicFeatures.PetsLeveling));
+        Assert.Contains(profile.Notes, note => note.Contains("bounded release", StringComparison.Ordinal));
+        Assert.Equal(new[] { "october-2010-arc1", "late-2009" }, profile.Lineage);
+        Assert.Equal("progression/xp-2009.yaml", profile.Rules.XpTable);
+        Assert.Contains("zone content cutoff 2010-05-25", profile.Describe());
+    }
+
+    [Fact]
     public void DevUnrestrictedRestrictsNothing() {
         var profile = ClassicDataFixture.LoadProfile("dev-unrestricted");
 

@@ -125,6 +125,14 @@ public static class SpellTemplateEditor {
                 .Select(effect => Copy(effect!))];
         }
 
+        // CLASSIC: retain the native random wrapper and copy only the dated choices, in client replay order.
+        foreach (var (index, children) in plan.RandomChildren) {
+            if (template.m_effects?[index] is not RandomSpellEffect random || random.m_effectList is not { } original) {
+                throw new InvalidOperationException($"{plan.Record.Id}: no native random effect at {index}");
+            }
+            random.m_effectList = [.. children.Select(child => Copy(original[child]))];
+        }
+
         foreach (var change in plan.EffectChanges) {
             if (SpellTemplateMapping.EffectAt(template.m_effects, change.Address, ChildrenOf) is not { } effect) {
                 continue;

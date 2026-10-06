@@ -1283,7 +1283,7 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
         var bit = raw > 0 && (raw & (raw - 1)) == 0 ? (int) Math.Log2(raw) : -1;
         foreach (var candidate in new[] { (int) Math.Min(raw, int.MaxValue), (int) Math.Min(message.SpellTarget, int.MaxValue), bit }) {
             if (candidate < 0 || candidate >= hand.Count || candidate == message.SpellSelection) continue;
-            if (ClassicHandEnchantment.TryPrepare(source, hand[candidate], out _, out _)) return candidate;
+            if (ClassicHandEnchantment.TryPrepare(source, hand[candidate], out _, out _, caster._duelActor.Duel.m_bPVP)) return candidate;
         }
 
         return -1;
@@ -1292,9 +1292,12 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
     private void HandleEnchantMove(CombatDuelSubCircle caster, int sourceIndex, uint targetIndex) {
         RunMonstrologyEnchantment(caster, sourceIndex, targetIndex, () => {
             // A queued cast owns its selected card until ChangeMind. Do not invalidate its references.
-            if (!Duel.m_bPVP && caster.AddedToDuel && caster.IsAlive && !caster.IsSummonedMinion && caster.OccupiedTeam == CombatTeam.Player
+            // CLASSIC: October Cloak uses the same validated hand transaction on either player's PvP side.
+            var pvpCloak = Duel.m_bPVP && ClassicHandEnchantment.AllowsPvpEnchantment(caster.GetSpellFromLastHand((byte) sourceIndex));
+            if ((!Duel.m_bPVP || pvpCloak) && caster.AddedToDuel && caster.IsAlive && !caster.IsSummonedMinion
+                && (caster.OccupiedTeam == CombatTeam.Player || pvpCloak)
                 && CombatResolver.GetQueuedAction(caster) is null
-                && caster._combatDeck.TryEnchant(sourceIndex, targetIndex, out var consumedId)
+                && caster._combatDeck.TryEnchant(sourceIndex, targetIndex, out var consumedId, Duel.m_bPVP)
                 && consumedId != 0 && caster._wizard is { } wizard) {
                 // CLASSIC: only the deck's copy (it left the book when it went into the deck); see DoSpellCastConsequences.
                 var deckSlot = wizard.EquipmentBehavior.SlotList.FirstOrDefault(s => s.SlotType == EquipmentSlotType.Deck);

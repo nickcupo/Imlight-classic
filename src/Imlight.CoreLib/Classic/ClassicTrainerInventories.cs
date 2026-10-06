@@ -5,6 +5,7 @@
 #nullable enable
 
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using Imlight.Classic;
 using Imlight.Classic.Spells;
@@ -19,9 +20,31 @@ internal static class ClassicTrainerInventories {
 
     private const ulong Sabrina = 38210, Diego = 38226;
 
-    internal static void Refresh()
-        => Refresh(ClassicSpellTemplates.Records.SingleOrDefault(spell => spell.Id == "spell.ice.stun_block"),
+    internal static void Refresh() {
+        Refresh(ClassicSpellTemplates.Records.SingleOrDefault(spell => spell.Id == "spell.ice.stun_block"),
             CoreObjectFactory.TryGetTemplateIdByPath);
+        RefreshOctoberTraining(ClassicSpellTemplates.Records, CoreObjectFactory.TryGetTemplateIdByPath);
+    }
+
+    // CLASSIC: restore the approved October trainer additions after every resource reload, with no duplicate stock.
+    internal static void RefreshOctoberTraining(IEnumerable<ClassicSpellRecord> records, Func<string, ulong?> resolveTemplate) {
+        if (!ClassicOctoberRules.Active) return;
+        SpiralDB.TryGetNpcSpellInventory(Diego, out var inventory);
+        var stock = inventory?.Spells.ToList() ?? [];
+        foreach (var record in records.Where(spell => spell.Id == "spell.sun.cloak")) {
+            if (!record.IsInProfile(ClassicRuntime.Rules.Profile.Id) || record.ClientTemplate is not { } path
+                || resolveTemplate(path) is not { } templateId || templateId != ClassicOctoberTraining.Cloak) continue;
+            var values = record.ValuesFor(ClassicRuntime.Rules.Profile.Lineage);
+            if (values.Trainer != "Diego the Duelmaster" || (values.LevelLearned ?? 0) != ClassicOctoberTraining.RequiredLevel(templateId)) {
+                Logger.Warning("Classic October trainer: invalid trainer or approved temporary level for {0}; entry omitted.", Logger.Args(record.Name));
+                continue;
+            }
+            stock.RemoveAll(spell => spell.TemplateID == templateId);
+            stock.Add(new NPCSpellEntry { TemplateID = templateId, RequiredSpellID = 0, Level = values.LevelLearned ?? 0 });
+        }
+        SpiralDB.RegisterNpcSpellInventory(new NPCSpellInventory { TemplateID = Diego, Spells = stock });
+        Logger.Information("Classic October trainer: restored Cloak stock; temporary Private requirement, exact October eligibility unverified.");
+    }
 
     internal static void Refresh(ClassicSpellRecord? record, Func<string, ulong?> resolveTemplate) {
         if (!ClassicRuntime.IsActive || record?.ClientTemplate is not { } path

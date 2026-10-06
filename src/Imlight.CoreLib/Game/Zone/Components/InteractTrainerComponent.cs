@@ -64,6 +64,8 @@ internal sealed class InteractTrainerComponent(ZoneEntity entity) : ZoneEntityCo
     public string DisplayKey      => "GUI_ShopOptionEquipment";
 
     public List<NPCSpellEntry> SpellInventory { get; private set; } = [];
+    // CLASSIC: training guards identify the trainer from its authoritative template, not client input.
+    internal ulong TrainerTemplateId => Entity.Template is GameObjectTemplate template ? template.m_templateID : 0;
     private List<ServiceOptionBase> _serviceOptionBases = [];
 
     public static bool ShouldAttachToEntity(CoreTemplate template) 
@@ -194,6 +196,15 @@ internal sealed class InteractTrainerComponent(ZoneEntity entity) : ZoneEntityCo
                 newBase.m_bCanTrain = false;
                 newBase.m_failedRequirement = null;
 
+                newServiceOptions.Add(newBase);
+                continue;
+            }
+
+            // CLASSIC: the owner's temporary October Private-rank requirement applies only to Diego's Cloak.
+            if (ClassicOctoberTraining.Applies(TrainerTemplateId, SpellInventory[i].TemplateID)
+                && !ClassicOctoberTraining.CanTrain(wizard, TrainerTemplateId, SpellInventory[i].TemplateID)) {
+                newBase.m_bCanTrain = false;
+                newBase.m_failedRequirement = ClassicOctoberTraining.RankRequirement(SpellInventory[i].TemplateID);
                 newServiceOptions.Add(newBase);
                 continue;
             }

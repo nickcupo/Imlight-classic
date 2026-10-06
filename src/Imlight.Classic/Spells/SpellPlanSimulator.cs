@@ -64,6 +64,12 @@ public static class SpellPlanSimulator {
             ? [.. structure.Select(address => NodeAt(shape.Effects, address) ?? new TemplateEffectNode { Composition = TemplateComposition.Other })]
             : shape.Effects;
         var nodes = effects.ToBuilder();
+        // CLASSIC: prune a native random wrapper's choices without turning them into independent hits.
+        foreach (var (index, children) in plan.RandomChildren) {
+            var original = nodes[index];
+            nodes[index] = original with { Children = [.. children.Select(child => original.Children[child])] };
+        }
+
         foreach (var change in plan.EffectChanges) {
             if (change.Address.Index < 0 || change.Address.Index >= nodes.Count) {
                 continue;

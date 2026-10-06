@@ -80,6 +80,9 @@ public static class SpellEffectMeaning {
         [SpellEffectKind.RemoveCharm] = ["kRemoveCharm"],
         [SpellEffectKind.RemoveWard] = ["kRemoveWard"],
         [SpellEffectKind.Reshuffle] = ["kReshuffle"],
+        [SpellEffectKind.Cloak] = ["kModifyCardCloak"],
+        [SpellEffectKind.StunResist] = ["kStunResist"],
+        [SpellEffectKind.CriticalBlock] = ["kCritBlock"],
     }.ToFrozenDictionary();
 
     /// <summary>
@@ -88,7 +91,7 @@ public static class SpellEffectMeaning {
     public static FrozenSet<SpellEffectKind> ValueKinds { get; } = FrozenSet.Create(
         SpellEffectKind.Damage, SpellEffectKind.Dot, SpellEffectKind.Heal, SpellEffectKind.Hot, SpellEffectKind.Steal,
         SpellEffectKind.Pip, SpellEffectKind.Ward, SpellEffectKind.Blade, SpellEffectKind.Charm, SpellEffectKind.Trap,
-        SpellEffectKind.Shield, SpellEffectKind.Global, SpellEffectKind.Enchant);
+        SpellEffectKind.Shield, SpellEffectKind.Global, SpellEffectKind.Enchant, SpellEffectKind.StunResist, SpellEffectKind.CriticalBlock);
 
     /// <summary>
     /// The kSpellEffects members that can carry <paramref name="effect"/>, the one a rebuilt effect gets first.

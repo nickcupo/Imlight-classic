@@ -96,6 +96,8 @@ public static class SpellMechanicsAudit {
     private sealed record Unit(int Index, TemplateEffectNode Node, TemplateComposition Composition, string EffectType, string DamageType,
                                TemplateTarget Target, int Min, int Max, int Rounds, float HealModifier, bool Outcome = false) {
 
+        public ImmutableArray<int> Outcomes { get; init; } = [];
+
         public bool IsZero => Composition != TemplateComposition.Other && Min == 0 && Max == 0
             && EffectType is "kDamage" or "kHeal" or "kDamageOverTime" or "kHealOverTime" or "kStealHealth" or "kModifyOutgoingDamage"
                 or "kModifyIncomingDamage" or "kModifyAccuracy" or "kModifyOutgoingHeal" or "kModifyIncomingHeal" or "kAbsorbDamage"
@@ -207,14 +209,23 @@ public static class SpellMechanicsAudit {
                 $"{name} targets {Category(effect)} in 2009, {Category(unit.Target)} ({unit.Node.TargetMemberName}) on the template");
         }
 
-        if (effect.HasAmount && effect.Min != effect.Max && unit.Composition is TemplateComposition.Plain) {
+        if (!effect.Outcomes.IsEmpty) {
+            if (unit.Composition != TemplateComposition.Random) {
+                yield return new(MechanicsIssueKind.Composition, $"{name} needs one random effect with explicit outcomes");
+            }
+            else if (!effect.Outcomes.SequenceEqual(unit.Outcomes)) {
+                yield return new(MechanicsIssueKind.Amount, $"{name}: expected outcomes [{string.Join(", ", effect.Outcomes)}], template has [{string.Join(", ", unit.Outcomes)}]");
+            }
+        }
+        else if (effect.HasAmount && effect.Min != effect.Max && unit.Composition is TemplateComposition.Plain) {
             yield return new(MechanicsIssueKind.Composition, $"{name} is a rolled range in 2009, a fixed {unit.Min} on the template");
         }
         else if (AmountDiffers(effect, unit)) {
             yield return new(MechanicsIssueKind.Amount, $"{name}: template has {DescribeAmount(unit)}");
         }
 
-        if (effect.Kind is SpellEffectKind.Dot or SpellEffectKind.Hot && effect.Rounds is { } rounds && rounds != unit.Rounds) {
+        if (effect.Kind is SpellEffectKind.Dot or SpellEffectKind.Hot or SpellEffectKind.StunResist or SpellEffectKind.CriticalBlock
+            && effect.Rounds is { } rounds && rounds != unit.Rounds) {
             yield return new(MechanicsIssueKind.Rounds, $"{name}: {rounds} rounds in 2009, {unit.Rounds} on the template");
         }
 
@@ -225,6 +236,10 @@ public static class SpellMechanicsAudit {
     }
 
     private static bool AmountDiffers(SpellEffectValues effect, Unit unit) {
+        if (!effect.Outcomes.IsEmpty) {
+            return unit.Composition != TemplateComposition.Random || !effect.Outcomes.SequenceEqual(unit.Outcomes);
+        }
+
         if (!SpellEffectMeaning.ValueKinds.Contains(effect.Kind) || unit.Composition == TemplateComposition.Other) {
             return false;
         }
@@ -252,7 +267,8 @@ public static class SpellMechanicsAudit {
         }
 
         // An enchantment or mutation is cast on a card in hand.
-        if (effect.Kind is SpellEffectKind.Enchant or SpellEffectKind.Mutate && unit.Node.TargetMemberName is "kSpell" or "kSpecificSpells") {
+        if (effect.Kind is SpellEffectKind.Enchant or SpellEffectKind.Mutate or SpellEffectKind.Cloak
+            && unit.Node.TargetMemberName is "kSpell" or "kSpecificSpells") {
             return effect.Targets is null or SpellTargets.Single;
         }
 
@@ -309,7 +325,9 @@ public static class SpellMechanicsAudit {
                 case TemplateComposition.Random when uniform: {
                     var first = children[0];
                     units.Add(new Unit(i * 1000, first, TemplateComposition.Random, first.EffectTypeName, first.DamageType, first.Target,
-                        children.Min(child => child.Param), children.Max(child => child.Param), first.Rounds, first.HealModifier));
+                        children.Min(child => child.Param), children.Max(child => child.Param), first.Rounds, first.HealModifier) {
+                        Outcomes = [.. children.Select(child => child.Param)],
+                    });
                     break;
                 }
                 case TemplateComposition.PerPip when uniform: {

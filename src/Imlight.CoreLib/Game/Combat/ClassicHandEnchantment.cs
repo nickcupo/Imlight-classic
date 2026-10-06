@@ -16,7 +16,7 @@ namespace Imlight.CoreLib.Game.Combat;
 internal static class ClassicHandEnchantment {
     internal const byte MoveType = 5;
 
-    internal static bool TryPrepare(Spell source, Spell target, out Spell enchanted, out SpellTemplate castTemplate) {
+    internal static bool TryPrepare(Spell source, Spell target, out Spell enchanted, out SpellTemplate castTemplate, bool pvp = false) {
         enchanted = null;
         castTemplate = null;
         if (!ClassicRuntime.IsActive || source is null || target is null || ReferenceEquals(source, target)
@@ -25,8 +25,8 @@ internal static class ClassicHandEnchantment {
             || CoreObjectFactory.GetCoreTemplate(source.m_templateID) is not SpellTemplate enchantment
             || CoreObjectFactory.GetCoreTemplate(target.m_templateID) is not SpellTemplate original
             || enchantment.m_spellRank?.m_spellRank != 0 || enchantment.m_effects is not { Count: > 0 }
-            // The owning duel accepts this transaction only for PvE.
-            || original.m_noPvEEnchant) {
+            || (pvp ? original.m_noPvPEnchant : original.m_noPvEEnchant)
+            || (pvp && !AllowsPvpEnchantment(source))) { // CLASSIC: only dated October Cloak is enabled in PvP.
             return false;
         }
         var collection = enchantment.m_effects.Where(e => e?.m_effectType == kSpellEffects.kCollectEssence).ToArray();
@@ -50,6 +50,24 @@ internal static class ClassicHandEnchantment {
         enchanted = target with { };
         castTemplate = original;
         switch (effect.m_effectType) {
+            case kSpellEffects.kModifyCardCloak when ClassicOctoberRules.Active:
+                // CLASSIC: Cloak disguises a charm or ward. Keep the spell's effect and numbers intact, and use
+                // the real client's cloak flags on the hand card and its cast effects; never change the shared template.
+                if (!string.Equals(original.m_sTypeName, "Charm", StringComparison.OrdinalIgnoreCase)
+                    && !string.Equals(original.m_sTypeName, "Ward", StringComparison.OrdinalIgnoreCase)) {
+                    return false;
+                }
+                enchanted.m_cloaked = true;
+                castTemplate = original with {
+                    m_cloaked = true,
+                    m_effects = original.m_effects.Select(originalEffect => {
+                        var cloaked = SpellTemplateEditor.Copy(originalEffect);
+                        cloaked.m_cloaked = true;
+                        cloaked.m_enchantmentSpellTemplateID = source.m_templateID;
+                        return cloaked;
+                    }).ToList(),
+                };
+                break;
             case kSpellEffects.kCollectEssence when collection.Length == 1:
                 break; // Collection stays identified by the authoritative enchantment template; never a client award.
             case kSpellEffects.kModifyCardAccuracy when effect.m_effectParam > 0:
@@ -94,6 +112,12 @@ internal static class ClassicHandEnchantment {
         enchanted.m_enchantedThisCombat = true;
         return true;
     }
+
+    // CLASSIC: do not open the existing PvE enchantment extensions or Monstrology to PvP.
+    internal static bool AllowsPvpEnchantment(Spell source)
+        => ClassicOctoberRules.Active && source is not null
+            && CoreObjectFactory.GetCoreTemplate(source.m_templateID) is SpellTemplate { m_effects.Count: 1 } template
+            && template.m_effects[0]?.m_effectType == kSpellEffects.kModifyCardCloak;
 
     private static readonly kSpellEffects[] s_damageKinds = [kSpellEffects.kDamage, kSpellEffects.kDamageOverTime, kSpellEffects.kStealHealth];
 

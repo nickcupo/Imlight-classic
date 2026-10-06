@@ -111,6 +111,25 @@ public sealed class ClassicUtilityCombatTests : IDisposable {
         Assert.Empty(target._hangingEffects);
     }
 
+    [Theory]
+    [InlineData("late-2009", true, 1)]
+    [InlineData("october-2010-arc1", true, 4)]
+    [InlineData("october-2010-arc1", false, 1)]
+    public void AutomaticStunShieldsRespectTheEraAndPvpMode(string profile, bool pvp, int shields) {
+        ClassicRuntime.ResetForTests();
+        ClassicRuntime.Initialize(ClassicDataFixture.RealRules(profile));
+        var target = Circle();
+        target._duelActor.Duel.m_bPVP = pvp;
+        Apply(Stun(), target);
+        Assert.Equal(1, target.CombatParticipant.m_stunned);
+        Assert.Equal(shields, target._hangingEffects.Count);
+        Assert.All(target._hangingEffects, shield => Assert.Equal(kSpellEffects.kStunBlock, shield.m_effectType));
+        target.CombatParticipant.m_stunned = 0;
+        Apply(Stun(), target);
+        Assert.Equal(0, target.CombatParticipant.m_stunned);
+        Assert.Equal(shields - 1, target._hangingEffects.Count);
+    }
+
     [Fact]
     public void TwoCastStunBlocksAreConsumedOneAtATimeAndDoNotAbsorbDamage() {
         var target = Circle();

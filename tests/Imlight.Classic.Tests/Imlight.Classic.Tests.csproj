@@ -44,6 +44,7 @@
     <ServerIntegrationTest Include="ClassicMinionAITargetTests.cs" />
     <ServerIntegrationTest Include="CraftingProtocolEvidenceTests.cs" />
     <ServerIntegrationTest Include="ClassicUtilityCombatTests.cs" />
+    <ServerIntegrationTest Include="OctoberPvpSpellTests.cs" />
     <ServerIntegrationTest Include="CombatRegressionTests.cs" />
     <ServerIntegrationTest Include="EquipmentAttachConcurrencyTests.cs" />
     <ServerIntegrationTest Include="PowerPipRulesTests.cs" />

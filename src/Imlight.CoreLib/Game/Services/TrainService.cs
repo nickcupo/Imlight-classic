@@ -104,6 +104,13 @@ internal class TrainService(SessionActor sessionActor) : MessageService(sessionA
             return;
         }
 
+        // CLASSIC: enforce the same temporary October Diego rank/level gate as the trainer window.
+        if (!ClassicOctoberTraining.CanTrain(wizard, trainerComponent.TrainerTemplateId, spellEntry.TemplateID)) {
+            Logger.Warning("Wizard {0} attempted to train October PvP spell {1} without its approved temporary rank/level.",
+                Logger.Args(wizard.PlayerNameBehavior.GetWizardName(), spellEntry.TemplateID));
+            return;
+        }
+
         // Wizards that are of the same magic school as the spell they are training have a cost of 0.
         var spellCost = TrainRules.Cost(wizard.MagicSchoolBehavior.MagicSchool.ToString(), spellTemplate.m_sMagicSchoolName);
         var refusal = TrainRules.Check(

@@ -62,6 +62,8 @@ public enum TemplateEffectKind {
     AbsorbDamage,
     ModifyPips,
     MaxHealthDamage,
+    StunResist,
+    CriticalBlock,
 }
 
 /// <summary>

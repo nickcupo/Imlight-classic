@@ -85,6 +85,8 @@ public sealed class SpellTemplateMappingTests {
     [InlineData("kAbsorbDamage", TemplateEffectKind.AbsorbDamage)]
     [InlineData("kModifyPips", TemplateEffectKind.ModifyPips)]
     [InlineData("kMaxHealthDamage", TemplateEffectKind.MaxHealthDamage)]
+    [InlineData("kStunResist", TemplateEffectKind.StunResist)]
+    [InlineData("kCritBlock", TemplateEffectKind.CriticalBlock)]
     [InlineData("kStun", TemplateEffectKind.Other)]
     [InlineData("kCritBoost", TemplateEffectKind.Other)]
     [InlineData("kInvalidSpellEffect", TemplateEffectKind.Other)]
