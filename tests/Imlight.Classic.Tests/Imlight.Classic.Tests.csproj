@@ -75,6 +75,8 @@
     <ServerIntegrationTest Include="ClassicRevivalTests.cs" />
     <ServerIntegrationTest Include="HousingTests.cs" />
     <ServerIntegrationTest Include="HousingInventoryConcurrencyTests.cs" />
+    <ServerIntegrationTest Include="ArenaAmbientActorTransportTests.cs" />
+    <ServerIntegrationTest Include="ActorLoggingTests.cs" />
   </ItemGroup>
   <!-- security-auth -->
   <ItemGroup>

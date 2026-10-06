@@ -77,6 +77,7 @@ internal static class ArenaAmbientParticipants {
                     if (!s_entries.TryAdd(id, entry)) continue;
                     try {
                         entry.Actor = system.ActorOf(ArenaAmbientParticipant.Props(entry, s_server), $"arena-ambient-{id:x}-{Interlocked.Increment(ref s_serial):x}");
+                        Logger.Debug("Arena: reserved ambient participant {0} at {1}.", Logger.Args(id, entry.Actor.Path));
                         return ServerArenaWorld.PlayerOf(character) with { Ambient = true };
                     } catch {
                         s_entries.TryRemove(id, out _); throw;
@@ -107,7 +108,8 @@ internal sealed class ArenaAmbientParticipant : ReceiveActor, IWithTimers {
     private string _destination = "";
     private bool _transferring;
     private IActorRef? _duelActor;
-    internal ArenaAmbientParticipant(ArenaAmbientParticipants.Entry entry, IActorRef server) {
+    // CLASSIC: Props.Create's new-expression uses Akka's public-constructor activator, even for an internal actor type.
+    public ArenaAmbientParticipant(ArenaAmbientParticipants.Entry entry, IActorRef server) {
         _entry = entry; _server = server;
         Receive<Trip>(Transfer);
         Receive<Release>(_ => Context.Stop(Self));
@@ -126,12 +128,16 @@ internal sealed class ArenaAmbientParticipant : ReceiveActor, IWithTimers {
         ActiveWizardDirectory.SetWizard(Wizard.Endpoint, Wizard.Wizard);
         ActiveWizardDirectory.SetGameObject(Wizard.Endpoint, Wizard.Wizard.GameObject);
         Timers.StartPeriodicTimer("fish", new Fish(), TimeSpan.FromSeconds(1));
+        Logger.Debug("Arena: ambient participant {0} ready at {1}; game server {2}.",
+            Logger.Args(Wizard.CharId, Wizard.Endpoint.Path, _server.Path));
     }
 
     private void Transfer(Trip trip) {
         if (_run == trip.Run && (Wizard.Present || _transferring)) return;
         RemoveFromZone();
         _run = trip.Run; _destination = trip.Zone; _transferring = true;
+        Logger.Debug("Arena: ambient participant {0} requests {1} instance {2} through {3}.",
+            Logger.Args(Wizard.CharId, trip.Zone, trip.Run, _server.Path));
         _server.Tell(new ZONE_102_PROTOCOL.MSG_ZONETRANSFER {
             DestinationZone = trip.Zone, DestinationLocation = trip.Location, SendToClient = false,
             OwnerCharId = trip.Run, IsPrivate = true, ResetInstance = false,
@@ -145,6 +151,8 @@ internal sealed class ArenaAmbientParticipant : ReceiveActor, IWithTimers {
             case ZONE_102_PROTOCOL.MSG_ADDPLAYERRSP:
                 if (Wizard.Present) break;
                 Wizard.Present = true; _transferring = false;
+                Logger.Debug("Arena: ambient participant {0} entered {1} instance {2}.",
+                    Logger.Args(Wizard.CharId, Wizard.Zone, _run));
                 Spawn(null); FishPosition(); break;
             case ZONE_102_PROTOCOL.MSG_PLAYERADDEDTOZONE added when Wizard.Present && added.PlayerActor is not null:
                 Spawn(added.PlayerActor); break;
