@@ -115,6 +115,30 @@ public sealed class RealSpellsTests {
         Assert.Equal("spell.storm.wild_bolt", book.FindTreasureCardOf("Spells/TreasureCards/Wild Bolt TC.xml", "Wild Bolt TC")?.Id);
     }
 
+    [Theory]
+    [InlineData("late-2009")]
+    [InlineData("october-2010-arc1")]
+    public void OwnerSelectedWildBoltKeepsOriginalAccuracyAndFlatDamage(string profileId) {
+        var overrides = new ClassicSpellOverrides(LoadBook(), ClassicDataFixture.LoadProfile(profileId));
+        var record = overrides.Book.FindByTemplate("Spells/Wild Bolt.xml")!;
+        var values = overrides.ValuesOf(record);
+        Assert.Equal(0.1, values.Accuracy);
+        Assert.Equal(1000, Assert.Single(values.Effects).Min);
+        Assert.Equal(1000, Assert.Single(values.Effects).Max);
+        Assert.Empty(Assert.Single(values.Effects).Outcomes);
+
+        var shape = SpellFixture.Shape(2, 70, SpellFixture.Random([.. new[] { 10, 100, 100, 1000 }.Select(value =>
+            SpellFixture.Plain(TemplateEffectKind.Damage, value, damageType: "Storm"))])) with {
+            Path = "Spells/Wild Bolt.xml", Name = "Wild Bolt",
+        };
+        var plan = overrides.PlanFor(shape)!;
+        var result = SpellPlanSimulator.Apply(shape, plan);
+        Assert.Equal(10, result.Accuracy);
+        Assert.All(Assert.Single(result.Effects).Children, child => Assert.Equal(1000, child.Param));
+        Assert.Empty(plan.RandomChildren);
+        Assert.Empty(plan.RemainingIssues);
+    }
+
     [Fact]
     public void EveryNamedProfileExistsAndTheCanonicalOneIsTheSchemas() {
         var profiles = ClassicProfileLoader.LoadAll(ClassicDataFixture.ProfilesPath);
