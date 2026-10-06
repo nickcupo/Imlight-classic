@@ -39,7 +39,7 @@ internal static class ArenaPvpCombat {
                 var stats = me.ParticipantGameStats;
                 var gear = me.GetStatBySchool(stats?.m_accBonusPercent, name) + (stats?.m_accBonusPercentAll ?? 0)
                          - me.GetStatBySchool(stats?.m_accReducePercent, name) - (stats?.m_accReducePercentAll ?? 0);
-                var charms = (me._hangingEffects ?? []).Where(e => e.m_effectType == kSpellEffects.kModifyAccuracy
+                var charms = VisibleEffects(me._hangingEffects).Where(e => e.m_effectType == kSpellEffects.kModifyAccuracy
                     && (string.Equals(e.m_sDamageType, "All", StringComparison.OrdinalIgnoreCase)
                         || string.Equals(e.m_sDamageType, name, StringComparison.OrdinalIgnoreCase)))
                     .Sum(e => e.m_effectParam);
@@ -64,14 +64,17 @@ internal static class ArenaPvpCombat {
             return new ArenaPvpCombatant(circle.SlotIndex, circle.OccupiedTeam == me.OccupiedTeam, school,
                 Math.Max(0, stats?.m_currentHitpoints ?? 0), Math.Max(1, stats?.m_baseHitpoints ?? 1),
                 pips is null ? 0 : pips.m_genericPips + pips.m_powerPips * 2,
-                (circle._hangingEffects ?? []).Where(e => !e.m_cloaked || circle.OccupiedTeam == me.OccupiedTeam)
-                    .Select(e => ModifierFor(e, hanging: true)).OfType<ArenaModifier>().ToList(),
+                VisibleEffects(circle._hangingEffects).Select(e => ModifierFor(e, hanging: true)).OfType<ArenaModifier>().ToList(),
                 focus.GetValueOrDefault(circle.SlotIndex), damage, resist,
                 stats?.m_healBonusPercentAll ?? 0, stats?.m_healIncBonusPercentAll ?? 0,
                 circle.IsWizard && !circle.IsAlive);
         }).ToList();
         return new ArenaPvpView(me.SlotIndex, (me.CombatParticipant?.m_stunned ?? 0) > 0, (int) me.AvailableSpells, cards, combatants);
     }
+
+    // A hidden trap or weakness is unknown even when it hangs on the NPC or a teammate.
+    internal static IEnumerable<SpellEffect> VisibleEffects(IEnumerable<SpellEffect> effects)
+        => (effects ?? []).Where(e => e is not null && !e.m_cloaked);
 
     internal static ArenaPvpCard CardFor(int index, Spell spell, int availablePips, bool castable) {
         if (CoreObjectFactory.GetCoreTemplate(spell.m_templateID) is not SpellTemplate template) return null;

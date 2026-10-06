@@ -1,6 +1,7 @@
 // CLASSIC: generated native spell structures are interpreted as choices, consecutive hits and exact X tiers.
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Reflection;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Classic.Pvp;
@@ -8,10 +9,12 @@ using Imlight.CoreLib.Classic.Pvp;
 using Imlight.CoreLib.Game.Combat;
 using Imlight.CoreLib.Game.Spells;
 using Imlight.CoreLib.Shared.Behaviors;
+using Imlight.CoreLib.Shared.Resources;
 using Xunit;
 
 namespace Imlight.Classic.Tests;
 
+[Collection(nameof(ClassicRuntimeCollection))]
 public sealed class ArenaPvpRuntimeTests {
     private static SpellEffect Damage(int amount, int pips = 0, kSpellEffects kind = kSpellEffects.kDamage,
         kEffectTarget target = kEffectTarget.kEnemySingle)
@@ -28,7 +31,7 @@ public sealed class ArenaPvpRuntimeTests {
     public void NativeRandomOutcomeIsOneShieldedHitRatherThanThreeConsecutiveHits() {
         var card = Card(Template(new RandomSpellEffect { m_effectList = [Damage(10), Damage(100), Damage(1000)] }));
         var result = ArenaPvpBrain.DamageTo(card, Wizard(0, true), Wizard(4, false,
-            new(2, ArenaModifierKind.IncomingDamage, "Fire", -50)));
+            new ArenaModifier(2, ArenaModifierKind.IncomingDamage, "Fire", -50)));
         Assert.Equal(148, result.Immediate, 6); // mean370 *80%accuracy *50%shield
         Assert.Equal(3, card.DamageBranches!.Count);
         Assert.All(card.DamageBranches, b => Assert.Single(b.Parts));
@@ -39,7 +42,7 @@ public sealed class ArenaPvpRuntimeTests {
         var card = Card(Template(new EffectListSpellEffect { m_effectList = [Damage(100), Damage(100)] },
             Damage(300, kind: kSpellEffects.kDamageOverTime)));
         var hit = ArenaPvpBrain.DamageTo(card, Wizard(0, true), Wizard(4, false,
-            new(2, ArenaModifierKind.IncomingDamage, "Fire", -50)));
+            new ArenaModifier(2, ArenaModifierKind.IncomingDamage, "Fire", -50)));
         Assert.Equal(120, hit.Immediate, 6);
         Assert.Equal(360, hit.Total, 6);
     }
@@ -79,13 +82,25 @@ public sealed class ArenaPvpRuntimeTests {
         stats.m_schoolID = (uint) MagicSchool.Fire;
         var participant = new CombatParticipant { m_pipCount = new PipCount { m_genericPips = 0, m_powerPips = 2 }, m_pGameStats = new WizGameStats() };
         Set("ParticipantGameStats", stats); Set("CombatParticipant", participant);
-        var spell = SpellFactory.GetSpell(Template(Damage(100)), 1);
-        spell.m_pipCost.m_spellRank = 3;
-        Assert.True(circle.HasPipsForSpell(spell));
-        spell.m_magicSchoolID = (uint) MagicSchool.Life;
-        Assert.False(circle.HasPipsForSpell(spell));
-        stats.m_lifeMastery = 1;
-        Assert.True(circle.HasPipsForSpell(spell));
+        const uint id = 4294966450;
+        var cache = (IDictionary<ulong, CoreTemplate>) typeof(CoreObjectFactory).GetField("s_templateCache",
+            BindingFlags.Static | BindingFlags.NonPublic)!.GetValue(null)!;
+        var hadPrevious = cache.TryGetValue(id, out var previous);
+        var template = Template(Damage(100));
+        cache[id] = template;
+        try {
+            var spell = SpellFactory.GetSpell(template, id);
+            spell.m_pipCost.m_spellRank = 3;
+            Assert.True(circle.HasPipsForSpell(spell));
+            spell.m_magicSchoolID = (uint) MagicSchool.Life;
+            Assert.False(circle.HasPipsForSpell(spell));
+            stats.m_lifeMastery = 1;
+            Assert.True(circle.HasPipsForSpell(spell));
+        }
+        finally {
+            if (hadPrevious) cache[id] = previous!;
+            else cache.Remove(id);
+        }
         void Set(string name, object value) => typeof(CombatDuelSubCircle).GetProperty(name,
             BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(circle, value);
     }
@@ -97,5 +112,18 @@ public sealed class ArenaPvpRuntimeTests {
         Assert.False(Card(template).Discardable);
         template.m_noDiscard = false; template.m_Treasure = true;
         Assert.False(Card(template).Discardable);
+    }
+
+    [Fact]
+    public void CloakedModifiersRemainUnknownOnSelfAlliesAndOpponentsIncludingAccuracy() {
+        var visible = new SpellEffect { m_effectType = kSpellEffects.kModifyIncomingDamage,
+            m_effectParam = -50, m_effectTarget = kEffectTarget.kSelf };
+        var effects = new List<SpellEffect> { visible };
+        foreach (var target in new[] { kEffectTarget.kSelf, kEffectTarget.kFriendlySingle, kEffectTarget.kEnemySingle })
+            foreach (var kind in new[] { kSpellEffects.kModifyOutgoingDamage, kSpellEffects.kModifyIncomingDamage,
+                         kSpellEffects.kModifyAccuracy, kSpellEffects.kAbsorbDamage })
+                effects.Add(new SpellEffect { m_effectType = kind, m_effectParam = -25, m_effectTarget = target, m_cloaked = true });
+        Assert.Same(visible, Assert.Single(ArenaPvpCombat.VisibleEffects(effects)));
+        Assert.Equal(12, effects.Count(e => e.m_cloaked)); // Snapshot filtering does not reveal, mutate or consume them.
     }
 }

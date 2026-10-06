@@ -10,6 +10,7 @@ using Imlight.CoreLib.Game.Combat;
 using Imlight.CoreLib.Game.Zone.Components;
 using Imlight.CoreLib.Shared.Behaviors;
 using Xunit;
+using CombatResolver = Imlight.CoreLib.Game.Combat.CombatResolver;
 
 namespace Imlight.Classic.Tests;
 

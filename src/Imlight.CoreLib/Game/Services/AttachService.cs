@@ -99,6 +99,10 @@ internal class AttachService(SessionActor sessionActor) : MessageService(session
 
         _instanceOwnerId = zoneDetails.InstanceOwnerId; // CLASSIC
         _zoneHardLimit = zoneDetails.ZoneHardLimit; // CLASSIC
+        // CLASSIC: housing services consume only this validated, in-process ownership context.
+        // Login/attach packet bytes remain unchanged (the native blob cache uses the existing ZoneID).
+        SessionActor.PublishHousingAttach(new HousingAttachContext(_wizard.CharId, zoneDetails.InstanceOwnerId,
+            message.ZoneName, zoneDetails.DynamicZoneId, message.ZoneID));
 
         // CLASSIC: logging back in to an arena whose match is over (or a copy of one nobody fights in): back to the arena
         // hall once the attach is done.

@@ -73,6 +73,7 @@
     <ServerIntegrationTest Include="ArenaPvpRuntimeTests.cs" />
     <ServerIntegrationTest Include="ArenaAmbientMatchmakerTests.cs" />
     <ServerIntegrationTest Include="ClassicRevivalTests.cs" />
+    <ServerIntegrationTest Include="HousingTests.cs" />
   </ItemGroup>
   <!-- security-auth -->
   <ItemGroup>
