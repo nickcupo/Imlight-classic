@@ -4,7 +4,7 @@ using System.Linq;
 
 namespace Imlight.CoreLib.Classic.Housing;
 
-// CLASSIC: ordinary furniture in the existing Ravenwood dorm. Castles, custom-object blobs, attic,
+// CLASSIC: ordinary furniture in the existing Ravenwood dorm. Castles, custom-object blobs,
 // pets, housing games and later scale/brightness editing require their own verified native paths.
 internal static class HousingRules {
     internal const string DormZone = "WizardCity/Interiors/WC_Housing_Dorm_Interior";
@@ -13,6 +13,24 @@ internal static class HousingRules {
     // r806919 ClientHousingBlobStrategy's lookup range is [UserData, UserData + 200).
     // This is a native package bound, not a claim about the historical room's furniture allowance.
     internal const int PackageSlots = 200;
+    internal const string AtticSubType = "Attic";
+    // Native ClientAtticBehavior::GetCapacity (r806919 0x140f148d0) returns300. This is
+    // a current-client compatibility ceiling, NOT evidence of the October2010 allowance.
+    internal const int AtticCompatibilityCeiling = 300;
+    // Historical allowance awaits dated evidence or an explicit owner ruling. Backend/codec
+    // tests use an explicit capacity; the real handlers stay closed while this is zero.
+    internal const int ApprovedAtticCapacity = 0;
+    internal const int AtticPackageCount = 2;
+    internal static uint AtticUserData(int packageIndex) => checked((uint)((packageIndex + 1) * PackageSlots));
+
+    internal static bool TryAtticSlot(ulong id, uint dynamicProc, int packageIndex, int count, out int slot) {
+        slot = -1;
+        if (packageIndex < 0 || packageIndex >= AtticPackageCount || count < 0 || count > PackageSlots) return false;
+        var first = AtticUserData(packageIndex);
+        var index = (uint)id;
+        slot = index >= first && index - first <= int.MaxValue ? (int)(index - first) : -1;
+        return slot >= 0 && slot < count && id == PlacedGlobalId(index, dynamicProc);
+    }
 
     internal static bool IsDorm(string zone) => string.Equals(zone, DormZone, StringComparison.OrdinalIgnoreCase);
     internal static bool CanEdit(ulong character, ulong owner, string zone)

@@ -23,13 +23,13 @@ internal readonly record struct HousingResult(string Error, HousingLedger Ledger
 // CLASSIC: placement transfers the original item out of the backpack in the same Raven transaction
 // as the room ledger. Its existing item document is retained, and pickup returns that exact id.
 internal static class HousingCollection {
-    private static readonly object s_packageLock = new();
-    private static IDocumentSession Open()
+    internal static readonly object PackageLock = new();
+    internal static IDocumentSession Open()
         => WizardCollection.TestStoreScope.Value?.Open() ?? PlayerDatabase.Instance.Store.OpenSession();
 
     internal static HousingLedger Load(ulong owner, bool create = false) {
         if (owner == 0) return null;
-        lock (s_packageLock) {
+        lock (PackageLock) {
             using var session = Open();
             var ledger = session.Load<HousingLedger>(HousingLedger.DocumentId(owner));
             if (ledger is not null || !create) return ledger;
@@ -128,11 +128,11 @@ internal static class HousingCollection {
     internal static bool InBackpack(Wizard wizard, ulong item)
         => wizard.InventoryBehavior?.InventoryItemIds?.Contains(item) == true && !OutsideBackpack(wizard, item);
 
-    private static bool OutsideBackpack(Wizard wizard, ulong item)
+    internal static bool OutsideBackpack(Wizard wizard, ulong item)
         => wizard.EquipmentBehavior?.EquippedItemIds?.Contains(item) == true
             || wizard.StorageBehavior?.BankItemIds?.Contains(item) == true;
 
-    private static bool Ordinary(WizClientObjectItem item) {
+    internal static bool Ordinary(WizClientObjectItem item) {
         if (item is null || item.m_templateID.Full >= (1UL << 28)
             || CoreObjectFactory.GetCoreTemplate(item.m_templateID) is not WizItemTemplate template) return false;
         return HousingRules.OrdinaryFurniture(template.m_adjectiveList, template.m_behaviors?.Select(b => b?.GetType().Name),

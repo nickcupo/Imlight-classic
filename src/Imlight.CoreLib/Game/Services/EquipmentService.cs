@@ -44,6 +44,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using Akka.Actor;
 using Imcodec.CoreObject;
 using Imcodec.IO;
@@ -52,6 +53,7 @@ using Imcodec.ObjectProperty;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
 using Imlight.CoreLib.Classic;
+using Imlight.CoreLib.Classic.Elixirs;
 using Imlight.CoreLib.Shared.Items;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Resources;
@@ -131,6 +133,18 @@ internal class EquipmentService(SessionActor sessionActor) : MessageService(sess
             return;
         }
 
+        // CLASSIC: native backpack activation uses the explicit Elixir slot, ownership is checked above.
+        // A slot string cannot turn an ordinary item into a potion, or bypass the historical allowlist.
+        var itemTemplate = ItemHelper.GetItemTemplate(item);
+        if (ElixirRules.IsElixir(item, itemTemplate) || message.SlotName == ElixirRules.SlotName) {
+            if (message.SlotName != ElixirRules.SlotName || !ElixirRules.IsElixir(item, itemTemplate)) return;
+            var activated = ElixirCollection.Activate(wizard, itemId);
+            if (!activated.Saved) return;
+            SendEquipItem(activated.Item, ElixirRules.SlotName);
+            TellOtherServices(new CLASSIC_FEATURES_PROTOCOL.MSG_ELIXIRCHANGED { CharacterId = wizard.CharId });
+            return;
+        }
+
         // CLASSIC: the item must have a slot, the wizard must meet its equip requirements, and gear does not change
         // during a duel.
         var refusal = EquipRules.Check(wizard, ItemHelper.GetItemTemplate(item));
@@ -198,6 +212,10 @@ internal class EquipmentService(SessionActor sessionActor) : MessageService(sess
 
             return;
         }
+
+        // CLASSIC: active elixirs are consumed/timed items, never ordinary gear returned to the
+        // backpack by an unverified unequip request. No native cancellation flow is enabled yet.
+        if (wizEquipmentBehavior.SlotList.Any(s => s.SlotType == EquipmentSlotType.Elixir && s.ItemId == itemId)) return;
 
         // CLASSIC: gear does not change during a duel (the server's own mount stow does not come through here).
         if (wizard.IsInDuel) {
@@ -493,4 +511,3 @@ internal class EquipmentService(SessionActor sessionActor) : MessageService(sess
         }
     }
 }
-
