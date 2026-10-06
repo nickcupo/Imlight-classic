@@ -74,6 +74,7 @@
     <ServerIntegrationTest Include="ArenaAmbientMatchmakerTests.cs" />
     <ServerIntegrationTest Include="ClassicRevivalTests.cs" />
     <ServerIntegrationTest Include="HousingTests.cs" />
+    <ServerIntegrationTest Include="HousingInventoryConcurrencyTests.cs" />
   </ItemGroup>
   <!-- security-auth -->
   <ItemGroup>

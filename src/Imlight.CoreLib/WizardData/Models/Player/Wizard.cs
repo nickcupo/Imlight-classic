@@ -551,7 +551,9 @@ public class Wizard {
     /// stay behind forever. False, and nothing deleted, when the backpack no longer holds it: the removal is the check,
     /// so of two actors spending the same item only one succeeds.
     /// </summary>
-    public bool DestroyInventoryItem(ulong itemId) {
+    public bool DestroyInventoryItem(ulong itemId) => WizardCollection.WithCharacterLock(CharId, () => {
+        // CLASSIC: claim the live item under the same lane as housing/bank commits. Removing it before
+        // taking this lane lets a simultaneous placement save the furniture, then this path delete its document.
         if (!RemoveItemFromInventory(itemId)) {
             return false;
         }
@@ -568,7 +570,7 @@ public class Wizard {
         }
 
         return true;
-    }
+    });
 
     public bool InventoryToEquipmentTransfer(ulong itemId, out List<GameEffectBase> equipEffects, out List<GameEffectBase> unequipEffects) {
         equipEffects = null;
