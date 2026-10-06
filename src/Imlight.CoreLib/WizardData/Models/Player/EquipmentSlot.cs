@@ -35,7 +35,8 @@ public enum EquipmentSlotType {
     Ring,
     Pet,
     Mount,
-    Deck
+    Deck,
+    Elixir // CLASSIC: append only; preserve all persisted gear-slot values.
 
 }
 
