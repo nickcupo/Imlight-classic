@@ -626,6 +626,17 @@ internal static class CombatEffectApplicator {
         int current = target.ParticipantGameStats.m_currentHitpoints;
         int max = target.ParticipantGameStats.m_baseHitpoints;
         long next = Math.Clamp((long) current + heal, 0L, max > 0 ? max : int.MaxValue);
+        // CLASSIC: a revived wizard comes back without their previous buffs or pips (PvP Overview, 2009-03-09).
+        // Existing HoT resolution skips defeated casters; this boundary also covers team direct heals.
+        if (current <= 0 && next > 0 && target.IsWizard) {
+            target._hangingEffects?.Clear();
+            if (target.CombatParticipant?.m_pipCount is { } pips) {
+                pips.m_genericPips = 0;
+                pips.m_powerPips = 0;
+            }
+            if (target.CombatParticipant is { } participant) participant.m_stunned = 0;
+            target.BeguiledActions = 0;
+        }
         // Valid participant health is nonnegative, so this delta fits and HealParticipant's sum cannot overflow.
         target.HealParticipant((int) (next - current));
     }
