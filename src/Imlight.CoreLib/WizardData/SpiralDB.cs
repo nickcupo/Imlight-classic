@@ -210,6 +210,10 @@ public static partial class SpiralDB {
     /// </summary>
     public static void RegisterNpcInventory(NPCInventory inventory) => s_npcInventories[inventory.TemplateID] = inventory;
 
+    /// <summary>CLASSIC: replaces a trainer inventory after applying dated, profile-specific corrections.</summary>
+    internal static void RegisterNpcSpellInventory(NPCSpellInventory inventory)
+        => s_npcSpellInventories[inventory.TemplateID] = inventory;
+
     /// <summary>
     /// CLASSIC: sets global registry entries (the holiday events of classic-data/holidays). Readers on other threads see
     /// either the old or the new values: the dictionary is replaced, never changed in place.

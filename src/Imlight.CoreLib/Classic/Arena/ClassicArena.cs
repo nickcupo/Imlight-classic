@@ -46,6 +46,7 @@ using Imlight.CoreLib.Shared.Packets;
 using Imlight.CoreLib.Shared.Utilities;
 using Imlight.CoreLib.WizardData.Collections;
 using Imlight.CoreLib.WizardData.Models.Player;
+using Imlight.CoreLib.WizardData.Models.World;
 
 namespace Imlight.CoreLib.Classic.Arena;
 
@@ -62,7 +63,14 @@ public static class ClassicArena {
         && (!ClassicRuntime.IsActive || ClassicRuntime.Rules.IsFeatureEnabled(ClassicFeatures.PvpArena));
 
     public static void Initialize(string? classicDataRoot, string profileId) {
-        if (s_config is not null || classicDataRoot is null || !Directory.Exists(Path.Combine(classicDataRoot, "pvp"))) {
+        if (s_config is not null) {
+            // CLASSIC: every GameServer resource load replaces SpiralDB's inventories. Keep the parsed arena data,
+            // but restore its vendors after each load, including another realm or an actor restart.
+            RefreshTicketVendorInventories();
+            return;
+        }
+
+        if (classicDataRoot is null || !Directory.Exists(Path.Combine(classicDataRoot, "pvp"))) {
             return;
         }
 
@@ -88,22 +96,33 @@ public static class ClassicArena {
         Logger.Information("Classic arena: guards {0} (Practice) and {1} (Ranked), {2} arenas ({3}).",
             Logger.Args(s_config.PracticeKiosk, s_config.RankedKiosk, s_config.Arenas.Length, s_config.SourceFile));
 
-        // The Arena Ticket vendors' 2009 stock (Diego's Deluxe Raiments, Silverheart's Trophies).
-        foreach (var vendor in s_config.TicketVendors) {
-            Imlight.CoreLib.WizardData.SpiralDB.RegisterNpcInventory(new Imlight.CoreLib.WizardData.Models.World.NPCInventory {
-                TemplateID = vendor.Npc,
-                Inventory = [.. vendor.Items.Select(item => new Imcodec.Types.GID(item.Template))],
-            });
+        RefreshTicketVendorInventories();
+
+        AdminDashboard.AddSection("Arena matches", () => ArenaMatchmaker.Instance?.Snapshot()
+            .Select(m => new { m.Id, kind = m.Kind.ToString(), phase = m.Phase, size = $"{m.TeamSize}v{m.TeamSize}", seats = $"{m.Side0} v {m.Side1}" })
+            .ToList<object>() ?? []);
+    }
+
+    // CLASSIC: idempotently replace, never append, the ticket vendors' stock from the dated arena configuration.
+    private static void RefreshTicketVendorInventories() {
+        foreach (var vendor in s_config!.TicketVendors) {
+            Imlight.CoreLib.WizardData.SpiralDB.RegisterNpcInventory(InventoryOf(vendor));
         }
 
         if (s_config.TicketVendors.Length > 0) {
             Logger.Information("Classic arena: {0} Arena Ticket vendors, {1} items.",
                 Logger.Args(s_config.TicketVendors.Length, s_config.TicketVendors.Sum(v => v.Items.Length)));
         }
-        AdminDashboard.AddSection("Arena matches", () => ArenaMatchmaker.Instance?.Snapshot()
-            .Select(m => new { m.Id, kind = m.Kind.ToString(), phase = m.Phase, size = $"{m.TeamSize}v{m.TeamSize}", seats = $"{m.Side0} v {m.Side1}" })
-            .ToList<object>() ?? []);
     }
+
+    private static NPCInventory InventoryOf(ArenaVendor vendor) => new() {
+        TemplateID = vendor.Npc,
+        Inventory = [.. vendor.Items.Select(item => new Imcodec.Types.GID(item.Template))],
+    };
+
+    /// <summary>CLASSIC: a ticket shop's stock directly from the active arena data, also if SpiralDB was reloaded.</summary>
+    internal static NPCInventory? TicketInventory(uint npcTemplate)
+        => TicketVendor(npcTemplate) is { } vendor ? InventoryOf(vendor) : null;
 
     /// <summary>For tests: use this data.</summary>
     internal static void UseForTests(ArenaConfig? config) => s_config = config;

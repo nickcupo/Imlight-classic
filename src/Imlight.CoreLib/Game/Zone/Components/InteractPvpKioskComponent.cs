@@ -72,7 +72,9 @@ internal sealed class InteractPvpKioskComponent(ZoneEntity entity) : ZoneEntityC
                 m_displayKey = DisplayKey,
                 m_iconKey = "Kiosk",
                 m_serviceName = ServiceName,
-                m_forceInteract = true,
+                // CLASSIC: the arena guards open their lobby only on X/interact (owner ruling, 2026-10-05).
+                // The normal service range and interaction checks still apply; proximity only offers this option.
+                m_forceInteract = false,
                 m_tournamentName = kind == ArenaKind.Ranked ? config.RankedTournament : config.PracticeTournament,
             }]
             : [];
