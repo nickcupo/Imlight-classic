@@ -56,10 +56,11 @@ public static class CrownShopCategories {
     public const string ClothingBundles = "clothing_bundles";
     public const string Boosters = "boosters";
     public const string Furniture = "furniture";
+    public const string Houses = "houses"; // CLASSIC: independently approved deed catalog.
     public const string Gear = "gear";
 
     public static ImmutableArray<string> All { get; } =
-        [PermanentMounts, RentalMounts, Henchmen, Elixirs, Transformations, ClothingBundles, Boosters, Furniture, Gear];
+        [PermanentMounts, RentalMounts, Henchmen, Elixirs, Transformations, ClothingBundles, Boosters, Furniture, Gear, Houses];
 
 }
 

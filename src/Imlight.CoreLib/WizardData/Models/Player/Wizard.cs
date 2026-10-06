@@ -552,6 +552,9 @@ public class Wizard {
     /// so of two actors spending the same item only one succeeds.
     /// </summary>
     public bool DestroyInventoryItem(ulong itemId) => WizardCollection.WithCharacterLock(CharId, () => {
+        // CLASSIC: a deed owns persisted rooms. Only the atomic furnished-house sale may
+        // retire it; forged trash/quick-sell requests cannot strand its contents.
+        if (ClassicRuntime.IsInitialized && ClassicRuntime.IsActive && Imlight.CoreLib.Classic.Housing.HouseCollection.IsDeed(InventoryBehavior.GetItem(itemId))) return false;
         // CLASSIC: claim the live item under the same lane as housing/bank commits. Removing it before
         // taking this lane lets a simultaneous placement save the furniture, then this path delete its document.
         if (!RemoveItemFromInventory(itemId)) {

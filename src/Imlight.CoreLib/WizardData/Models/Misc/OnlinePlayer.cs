@@ -30,6 +30,7 @@ public class OnlinePlayer {
 
     /// <summary>CLASSIC: the instance (owner or sigil run) of the zone the player is in; 0 for a public zone.</summary>
     public ulong InstanceOwnerId;
+    public ulong HousingDeedId; // CLASSIC: ephemeral, validated house identity; never a client claim.
 
     /// <summary>CLASSIC: the hard player limit of the zone the player is in.</summary>
     public int ZoneHardLimit;

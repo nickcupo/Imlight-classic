@@ -1,7 +1,9 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
 using Akka.Actor;
+using Imcodec.MessageLayer;
 using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty;
 using Imcodec.ObjectProperty.TypeCache;
@@ -114,13 +116,39 @@ internal class ElixirService : MessageService {
         }
         _clock.Commit(elapsed);
         _checkpointWarning = false;
-        foreach (var removed in result.Removed ?? []) {
-            var template = CoreObjectFactory.GetCoreTemplate(removed.TemplateId) as WizItemTemplate;
-            var effects = ElixirRuntime.RemoveItemEffects(_wizard, removed.ItemId, template);
-            if (!publish) continue;
-            SendRemoved(effects);
-            SendTimer(removed.ItemId, 0);
-        }
+        foreach (var message in ExpireCommitted(_wizard, result, publish)) SendToSocket(message);
+    }
+
+    // CLASSIC: the native EquipItem confirmation transfers an unequipped item back to
+    // inventory. Its separate equipment-behavior message only removes the original item
+    // and slot. Clear the timer/benefit/effects first, while the client can still find it.
+    internal static List<IMessage> ExpireCommitted(Wizard wizard, ElixirResult result, bool publish,
+        Func<uint, WizItemTemplate> templateFor = null) {
+        if (!result.Saved || wizard is null) return [];
+        return WizardCollection.WithCharacterLock(wizard.CharId, () => {
+            var messages = new List<IMessage>();
+            foreach (var removed in result.Removed ?? []) {
+                var template = templateFor is null
+                    ? CoreObjectFactory.GetCoreTemplate(removed.TemplateId) as WizItemTemplate
+                    : templateFor(removed.TemplateId);
+                var effects = ElixirRuntime.RemoveItemEffects(wizard, removed.ItemId, template);
+                if (!publish) continue;
+                messages.Add(new WIZARD2_53_PROTOCOL.MSG_SETELIXIRTIMER {
+                    GlobalID = removed.ItemId, TimerTime = 0,
+                });
+                messages.Add(new WIZARD_12_PROTOCOL.MSG_ELIXIRSTATECHANGE {
+                    parentID = removed.ItemId, EffectEnabled = 0,
+                });
+                foreach (var effect in effects) messages.Add(new GAME_5_PROTOCOL.MSG_REMOVEEFFECT {
+                    GameObjectID = wizard.GameObjectID, EffectNameID = effect.m_effectNameID,
+                    InternalID = effect.m_internalID,
+                });
+                messages.Add(new GAME_5_PROTOCOL.MSG_EQUIPMENTBEHAVIOR_UNEQUIPITEM {
+                    GlobalID = wizard.GameObjectID, ItemID = removed.ItemId,
+                });
+            }
+            return messages;
+        });
     }
 
     private void SendRemoved(System.Collections.Generic.IEnumerable<GameEffectBase> effects) {

@@ -57,8 +57,9 @@ internal static class HousingAtticCollection {
     }
 
     internal static HousingAtticResult MoveToAttic(Wizard live, ulong owner, ulong itemId, uint dynamicProc, int capacity,
-        Func<IDocumentSession, ulong, ulong, WizClientObjectItem> findDocument = null) {
-        if (!Editable(live, owner, capacity)) return Refused();
+        Func<IDocumentSession, ulong, ulong, WizClientObjectItem> findDocument = null, HousingRoomIdentity roomIdentity = null) {
+        roomIdentity ??= HousingRoomIdentity.Dorm(owner);
+        if (!Editable(live, roomIdentity, capacity)) return Refused();
         return Mutate(live, owner, (session, wizard, room, attic) => {
             HousingEntry entry;
             WizClientObjectItem item;
@@ -76,7 +77,7 @@ internal static class HousingAtticCollection {
                 entry = new() { ItemId = itemId, ItemDocumentId = session.Advanced.GetDocumentId(item), TemplateId = (uint)item.m_templateID.Full };
             }
             else {
-                if (!HousingRules.TrySlot(itemId, dynamicProc, room.Entries.Count, out slot) || !room.Active(slot)) return Refused();
+                if (!room.TrySlot(itemId, dynamicProc, out slot) || !room.Active(slot)) return Refused();
                 entry = room.Entries[slot].Copy();
                 item = Original(session, wizard, owner, entry);
                 if (item is null || !HousingCollection.Ordinary(item)) return Refused();
@@ -86,15 +87,17 @@ internal static class HousingAtticCollection {
             if (backpack) wizard.InventoryBehavior.InventoryItemIds = wizard.InventoryBehavior.InventoryItemIds.Where(id => id != entry.ItemId).ToList();
             else if (!room.TryPickup(slot)) return Refused();
             return new(null) { Attic = attic.Copy(), Room = room.Copy(), Entry = entry.Copy(), Item = item,
-                FromBackpack = backpack, Added = [add], RoomDeleted = backpack ? [] : [new(room.Version, slot)] };
+                FromBackpack = backpack, Added = [add], RoomDeleted = backpack ? [] : [new(room.VersionForSlot(slot), slot)] };
         }, result => {
             if (result.FromBackpack && !live.InventoryBehavior.RemoveItem(result.Entry.ItemId, out _))
                 throw new InvalidOperationException("Committed attic transfer needs inventory resynchronization.");
-        });
+        }, roomIdentity);
     }
 
-    internal static HousingAtticResult MoveFromAttic(Wizard live, ulong owner, ulong syntheticId, uint dynamicProc, int capacity) {
-        if (!Editable(live, owner, capacity)) return Refused();
+    internal static HousingAtticResult MoveFromAttic(Wizard live, ulong owner, ulong syntheticId, uint dynamicProc, int capacity,
+        HousingRoomIdentity roomIdentity = null) {
+        roomIdentity ??= HousingRoomIdentity.Dorm(owner);
+        if (!Editable(live, roomIdentity, capacity)) return Refused();
         return Mutate(live, owner, (session, wizard, room, attic) => {
             if (!attic.TryFind(syntheticId, dynamicProc, out var p, out var slot)) return Refused();
             var entry = attic.Packages[p].Entries[slot];
@@ -108,12 +111,13 @@ internal static class HousingAtticCollection {
             return new(null) { Attic = attic.Copy(), Room = room.Copy(), Entry = entry.Copy(), Item = item, ItemData = data, Deleted = [del] };
         }, result => {
             if (!live.InventoryBehavior.AddItem(result.Item)) throw new InvalidOperationException("Committed attic pickup needs inventory resynchronization.");
-        });
+        }, roomIdentity);
     }
 
     internal static HousingAtticResult PlaceFromAttic(Wizard live, ulong owner, ulong syntheticId, uint dynamicProc, int capacity,
-        float x, float y, float z, float yaw) {
-        if (!Editable(live, owner, capacity) || !HousingRules.ValidPosition(x, y, z, yaw)) return Refused();
+        float x, float y, float z, float yaw, HousingRoomIdentity roomIdentity = null) {
+        roomIdentity ??= HousingRoomIdentity.Dorm(owner);
+        if (!Editable(live, roomIdentity, capacity) || !HousingRules.ValidPosition(x, y, z, yaw)) return Refused();
         return Mutate(live, owner, (session, wizard, room, attic) => {
             if (!attic.TryFind(syntheticId, dynamicProc, out var p, out var slot)) return Refused();
             var entry = attic.Packages[p].Entries[slot].Copy();
@@ -122,35 +126,44 @@ internal static class HousingAtticCollection {
             (entry.X, entry.Y, entry.Z, entry.Yaw) = (x, y, z, yaw);
             if (!room.TryPlace(entry, out var placed) || !attic.TryRemove(p, slot, out var del)) return Refused();
             return new(null) { Attic = attic.Copy(), Room = room.Copy(), Entry = entry.Copy(), RoomSlot = placed, Deleted = [del] };
-        });
+        }, roomIdentity: roomIdentity);
     }
 
-    internal static HousingAtticResult PickUpAll(Wizard live, ulong owner, uint dynamicProc, int capacity, ByteString exceptions) {
-        if (!Editable(live, owner, capacity)) return Refused();
+    internal static HousingAtticResult PickUpAll(Wizard live, ulong owner, uint dynamicProc, int capacity, ByteString exceptions,
+        HousingRoomIdentity roomIdentity = null) {
+        roomIdentity ??= HousingRoomIdentity.Dorm(owner);
+        if (!Editable(live, roomIdentity, capacity)) return Refused();
         return Mutate(live, owner, (session, wizard, room, attic) => {
             if (!HousingAtticCodec.TryExceptions(exceptions, room, dynamicProc, out var excluded)) return Refused();
             var slots = Enumerable.Range(0, room.Entries.Count).Where(i => room.Active(i) && !excluded.Contains(i)).ToArray();
             if (attic.Count + slots.Length > capacity) return Full();
+            var originals = session.Load<WizClientObjectItem>(slots.Select(slot => room.Entries[slot].ItemDocumentId).Distinct().ToArray());
             // Validate the entire batch before changing tracked documents. One unsupported/foreign
             // item refuses the operation; partial pickup is never reported as complete.
             foreach (var slot in slots) {
-                var item = Original(session, wizard, owner, room.Entries[slot]);
+                var entry = room.Entries[slot];
+                if (!originals.TryGetValue(entry.ItemDocumentId, out var item)
+                    || wizard.InventoryBehavior?.InventoryItemIds?.Contains(entry.ItemId) != false
+                    || HousingCollection.OutsideBackpack(wizard, entry.ItemId) || !Owned(item, owner, entry.ItemId)
+                    || item.m_templateID != entry.TemplateId) return Refused();
                 if (item is null || !HousingCollection.Ordinary(item)) return Refused();
             }
             var added = new List<AtticPatch>();
             var deleted = new List<HousingDeletePatch>();
             foreach (var slot in slots) {
                 if (!attic.TryAdd(room.Entries[slot], capacity, out var add) || !room.TryPickup(slot)) return Refused();
-                added.Add(add); deleted.Add(new(room.Version, slot));
+                added.Add(add); deleted.Add(new(room.VersionForSlot(slot), slot));
             }
             return new(null) { Attic = attic.Copy(), Room = room.Copy(), Added = added, RoomDeleted = deleted };
-        });
+        }, roomIdentity: roomIdentity);
     }
 
     // The player can discard furniture, but the server does not permanently delete its document.
     // An inaccessible archive records the original reference in the same transaction as removal.
-    internal static HousingAtticResult Discard(Wizard live, ulong owner, ulong syntheticId, uint dynamicProc, int capacity) {
-        if (!Editable(live, owner, capacity)) return Refused();
+    internal static HousingAtticResult Discard(Wizard live, ulong owner, ulong syntheticId, uint dynamicProc, int capacity,
+        HousingRoomIdentity roomIdentity = null) {
+        roomIdentity ??= HousingRoomIdentity.Dorm(owner);
+        if (!Editable(live, roomIdentity, capacity)) return Refused();
         return Mutate(live, owner, (session, wizard, room, attic) => {
             if (!attic.TryFind(syntheticId, dynamicProc, out var p, out var slot)) return Refused();
             var entry = attic.Packages[p].Entries[slot];
@@ -158,18 +171,20 @@ internal static class HousingAtticCollection {
                 || !attic.TryRemove(p, slot, out var del)) return Refused();
             session.Store(new DiscardedHousingItem { OwnerId = owner, Entry = entry.Copy() }, $"ClassicDiscardedHousing/{owner}/{entry.ItemId}");
             return new(null) { Attic = attic.Copy(), Room = room.Copy(), Deleted = [del] };
-        });
+        }, roomIdentity: roomIdentity);
     }
 
     private static HousingAtticResult Mutate(Wizard live, ulong owner,
         Func<IDocumentSession, Wizard, HousingLedger, AtticLedger, HousingAtticResult> operation,
-        Action<HousingAtticResult> after = null) {
+        Action<HousingAtticResult> after = null, HousingRoomIdentity roomIdentity = null) {
+        roomIdentity ??= HousingRoomIdentity.Dorm(owner);
         var result = Refused();
         try {
             var saved = WizardCollection.CommitCharacterMutation(owner, (session, wizard) => {
-                var room = session.Load<HousingLedger>(HousingLedger.DocumentId(owner));
+                var room = session.Load<HousingLedger>(HousingLedger.DocumentId(roomIdentity));
                 var attic = session.Load<AtticLedger>(AtticLedger.DocumentId(owner));
-                if (wizard.CharId != owner || room?.OwnerId != owner || attic?.OwnerId != owner || !attic.Valid()) return false;
+                if (wizard.CharId != owner || !HousingCollection.ValidRoom(session, wizard, roomIdentity, room)
+                    || attic?.OwnerId != owner || !attic.Valid()) return false;
                 result = operation(session, wizard, room, attic);
                 return result.Saved;
             }, _ => after?.Invoke(result));
@@ -188,8 +203,8 @@ internal static class HousingAtticCollection {
     }
     private static bool Owned(WizClientObjectItem item, ulong owner, ulong itemId)
         => item is not null && item.m_characterId == owner && item.m_globalID == itemId;
-    private static bool Editable(Wizard live, ulong owner, int capacity)
-        => HousingRules.CanEdit(live?.CharId ?? 0, owner, live?.Zone) && !live.IsInDuel
+    private static bool Editable(Wizard live, HousingRoomIdentity room, int capacity)
+        => HousingCollection.Editable(live, room) && !live.IsInDuel
             && capacity > 0 && capacity <= HousingRules.AtticCompatibilityCeiling;
     private static HousingAtticResult Refused() => new("That furniture cannot be moved to or from the attic here.");
     private static HousingAtticResult Full() => new("Your attic is full.") { CapacityExceeded = true };

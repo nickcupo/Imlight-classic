@@ -62,10 +62,11 @@ using Imlight.CoreLib.WizardData.Collections;
 using Imlight.CoreLib.WizardData.Models.Misc;
 using Imlight.CoreLib.Game.Pet;
 using Imlight.CoreLib.WizardData.Models.Player;
+using Imlight.Classic;
 
 namespace Imlight.CoreLib.Game.Services;
 
-internal class EquipmentService(SessionActor sessionActor) : MessageService(sessionActor) {
+internal partial class EquipmentService(SessionActor sessionActor) : MessageService(sessionActor) {
 
     private readonly CoreObjectSerializer _itemSerializer = new(
         versionable: false,
@@ -78,7 +79,7 @@ internal class EquipmentService(SessionActor sessionActor) : MessageService(sess
     private ulong _summonedPetId;
 
     protected static Props Props(SessionActor parentActor)
-        => Akka.Actor.Props.Create(() => new InventoryService(parentActor));
+        => Akka.Actor.Props.Create(() => new EquipmentService(parentActor));
 
     [MessageHandler(typeof(GAME_5_PROTOCOL.MSG_EQUIPITEM))]
     private void ReceiveEquipItem(GAME_5_PROTOCOL.MSG_EQUIPITEM message) {
@@ -136,6 +137,11 @@ internal class EquipmentService(SessionActor sessionActor) : MessageService(sess
         // CLASSIC: native backpack activation uses the explicit Elixir slot, ownership is checked above.
         // A slot string cannot turn an ordinary item into a potion, or bypass the historical allowlist.
         var itemTemplate = ItemHelper.GetItemTemplate(item);
+        if (ClassicRuntime.IsInitialized && ClassicRuntime.IsActive && (Classic.Housing.HouseCatalog.IsDeed(itemTemplate) || message.SlotName == "Islands")) {
+            if (!Classic.Housing.HouseCatalog.IsDeed(itemTemplate) || message.SlotName != "Islands") return;
+            SelectHouse(wizard, itemId, true);
+            return;
+        }
         if (ElixirRules.IsElixir(item, itemTemplate) || message.SlotName == ElixirRules.SlotName) {
             if (message.SlotName != ElixirRules.SlotName || !ElixirRules.IsElixir(item, itemTemplate)) return;
             var activated = ElixirCollection.Activate(wizard, itemId);
@@ -216,6 +222,10 @@ internal class EquipmentService(SessionActor sessionActor) : MessageService(sess
         // CLASSIC: active elixirs are consumed/timed items, never ordinary gear returned to the
         // backpack by an unverified unequip request. No native cancellation flow is enabled yet.
         if (wizEquipmentBehavior.SlotList.Any(s => s.SlotType == EquipmentSlotType.Elixir && s.ItemId == itemId)) return;
+        if (ClassicRuntime.IsInitialized && ClassicRuntime.IsActive && wizEquipmentBehavior.SlotList.Any(s => s.SlotType == EquipmentSlotType.Islands && s.ItemId == itemId)) {
+            SelectHouse(wizard, itemId, false);
+            return;
+        }
 
         // CLASSIC: gear does not change during a duel (the server's own mount stow does not come through here).
         if (wizard.IsInDuel) {

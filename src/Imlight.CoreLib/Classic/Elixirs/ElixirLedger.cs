@@ -27,18 +27,14 @@ internal sealed class ElixirLedger {
         OwnerId = OwnerId, Version = Version, Active = Active.Select(e => e.Copy()).ToList(),
     };
 
-    internal bool TryActivate(ElixirEntry entry, bool replaceMatching, out ElixirEntry[] replaced) {
-        replaced = [];
+    internal bool TryActivate(ElixirEntry entry) {
         if (OwnerId == 0 || Version == uint.MaxValue || entry is null || entry.ItemId == 0
             || entry.TemplateId == 0 || entry.RemainingSeconds == 0 || string.IsNullOrEmpty(entry.ItemDocumentId)
             || entry.Families is not { Count: > 0 } || entry.Families.Any(string.IsNullOrWhiteSpace)
             || Active.Any(e => e.ItemId == entry.ItemId || e.RemainingSeconds == 0)) return false;
-        var overlapping = Active.Where(e => ElixirRules.Overlaps(e.Families, entry.Families)).ToArray();
-        if ((!replaceMatching && overlapping.Length > 0)
-            || Active.Count - overlapping.Length >= ElixirRules.MaximumActive) return false;
-        // Replacement is reserved for the native Crown Shop confirmation, never backpack equip.
-        replaced = overlapping.Select(e => e.Copy()).ToArray();
-        Active = Active.Where(e => !overlapping.Contains(e)).Append(entry.Copy()).ToList();
+        if (Active.Count >= ElixirRules.MaximumActive
+            || Active.Any(e => ElixirRules.Overlaps(e.Families, entry.Families))) return false;
+        Active = Active.Append(entry.Copy()).ToList();
         Version++;
         return true;
     }

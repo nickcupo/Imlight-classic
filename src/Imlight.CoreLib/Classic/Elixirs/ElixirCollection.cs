@@ -71,7 +71,7 @@ internal static class ElixirCollection {
                     TemplateId = definition.TemplateId, RemainingSeconds = definition.DurationSeconds,
                     Families = [.. definition.Families],
                 };
-                if (!ledger.TryActivate(entry, replaceMatching: false, out var removed)) return false;
+                if (!ledger.TryActivate(entry)) return false;
                 var activeItems = ledger.Active.Select(e => e.ItemId == itemId ? stored
                     : session.Load<WizClientObjectItem>(e.ItemDocumentId)).ToArray();
                 timed.m_expireTime = entry.RemainingSeconds;
@@ -84,7 +84,7 @@ internal static class ElixirCollection {
                     EquippedSince = DateTime.UtcNow,
                 }];
                 session.Store(ledger, ElixirLedger.DocumentId(live.CharId));
-                result = new(null, ledger.Copy(), stored, removed, activeItems);
+                result = new(null, ledger.Copy(), stored, [], activeItems);
                 return true;
             }, committed => {
                 live.InventoryBehavior.RemoveItem(itemId, out var removedItem);

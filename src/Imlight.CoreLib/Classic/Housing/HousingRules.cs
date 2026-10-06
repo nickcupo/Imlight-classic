@@ -13,6 +13,8 @@ internal static class HousingRules {
     // r806919 ClientHousingBlobStrategy's lookup range is [UserData, UserData + 200).
     // This is a native package bound, not a claim about the historical room's furniture allowance.
     internal const int PackageSlots = 200;
+    // UserData200/400 belong to the owner's attic. A second room package occupies600..799.
+    internal const uint SecondRoomUserData = 600;
     internal const string AtticSubType = "Attic";
     // Native ClientAtticBehavior::GetCapacity (r806919 0x140f148d0) returns300. This is
     // a current-client compatibility ceiling, NOT evidence of the October2010 allowance.
@@ -34,7 +36,7 @@ internal static class HousingRules {
 
     internal static bool IsDorm(string zone) => string.Equals(zone, DormZone, StringComparison.OrdinalIgnoreCase);
     internal static bool CanEdit(ulong character, ulong owner, string zone)
-        => character != 0 && character == owner && IsDorm(zone);
+        => character != 0 && character == owner && (IsDorm(zone) || HouseCatalog.IsApprovedRoom(zone));
 
     internal static bool OrdinaryFurniture(IEnumerable<string> adjectives, IEnumerable<string> behaviors,
         int primaryColors = 0, int secondaryColors = 0) {

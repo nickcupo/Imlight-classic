@@ -29,12 +29,27 @@ public sealed class ElixirTests {
     [Fact]
     public void ThreeDistinctFamiliesFitAndACompositeFamilyCannotEvadeOverlap() {
         var ledger = new ElixirLedger { OwnerId = 42 };
-        Assert.True(ledger.TryActivate(Entry(1, "Damage"), false, out _));
-        Assert.True(ledger.TryActivate(Entry(2, "Accuracy"), false, out _));
-        Assert.False(ledger.TryActivate(Entry(3, "Damage", "Accuracy"), false, out _));
-        Assert.True(ledger.TryActivate(Entry(4, "PowerPip"), false, out _));
-        Assert.False(ledger.TryActivate(Entry(5, "MaxHealth"), false, out _));
+        Assert.True(ledger.TryActivate(Entry(1, "Damage")));
+        Assert.True(ledger.TryActivate(Entry(2, "Accuracy")));
+        Assert.False(ledger.TryActivate(Entry(3, "Damage", "Accuracy")));
+        Assert.True(ledger.TryActivate(Entry(4, "PowerPip")));
+        Assert.False(ledger.TryActivate(Entry(5, "MaxHealth")));
         Assert.Equal(new ulong[] { 1, 2, 4 }, ledger.Active.Select(e => e.ItemId));
+    }
+
+    [Fact]
+    public void MatchingFamilyCannotReplaceOrRenewTheOriginalActiveElixir() {
+        var ledger = new ElixirLedger { OwnerId = 42 };
+        Assert.True(ledger.TryActivate(Entry(1, "Damage")));
+        Assert.Empty(ledger.AdvanceOnline(600));
+        var version = ledger.Version;
+        Assert.False(ledger.TryActivate(Entry(2, "Damage")));
+        Assert.False(ledger.TryActivate(Entry(1, "Damage")));
+        Assert.Equal(version, ledger.Version);
+        var original = Assert.Single(ledger.Active);
+        Assert.Equal(1ul, original.ItemId);
+        Assert.Equal("item/1", original.ItemDocumentId);
+        Assert.Equal(1200u, original.RemainingSeconds);
     }
 
     [Fact]
@@ -43,7 +58,7 @@ public sealed class ElixirTests {
         Assert.True(ElixirRules.EffectsEnabled(definition, true, false));
         Assert.False(ElixirRules.EffectsEnabled(definition, true, true));
         var ledger = new ElixirLedger { OwnerId = 42 };
-        Assert.True(ledger.TryActivate(Entry(1, "Damage"), false, out _));
+        Assert.True(ledger.TryActivate(Entry(1, "Damage")));
         var reloaded = ledger.Copy();
         Assert.Equal(1800u, Assert.Single(reloaded.Active).RemainingSeconds);
         Assert.Empty(reloaded.AdvanceOnline(60));

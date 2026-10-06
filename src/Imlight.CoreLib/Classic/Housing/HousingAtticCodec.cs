@@ -60,15 +60,15 @@ internal static class HousingAtticCodec {
     internal static bool TryExceptions(ByteString data, HousingLedger room, uint dynamicProc, out HashSet<int> excluded) {
         excluded = [];
         byte[] bytes = data;
-        if (room is null || bytes is null || bytes.Length < 8 || bytes.Length > 8 + HousingRules.PackageSlots * 8) return false;
+        if (room is null || bytes is null || bytes.Length < 8 || bytes.Length > 8 + room.PackageCount * HousingRules.PackageSlots * 8) return false;
         try {
             using var stream = new MemoryStream(bytes, false);
             using var r = new BinaryReader(stream);
             if (r.ReadUInt32() != new HousingItemList().GetHash()) return false;
             var count = r.ReadUInt32();
-            if (count > HousingRules.PackageSlots || bytes.Length != 8 + count * 8) return false;
+            if (count > room.PackageCount * HousingRules.PackageSlots || bytes.Length != 8 + count * 8) return false;
             for (var i = 0; i < count; i++) {
-                if (!HousingRules.TrySlot(r.ReadUInt64(), dynamicProc, room.Entries.Count, out var slot)
+                if (!room.TrySlot(r.ReadUInt64(), dynamicProc, out var slot)
                     || !room.Active(slot) || !excluded.Add(slot)) return false;
             }
             return stream.Position == stream.Length;

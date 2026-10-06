@@ -130,8 +130,9 @@ public class Zone : ReceiveProtocolDispatcher, IWithTimers {
     /// <summary>
     /// CLASSIC: an instanced zone (a dungeon) knows whose instance container holds it.
     /// </summary>
-    public Zone(string zonePath, uint dynamicZoneId, ulong instanceOwnerId) {
+    public Zone(string zonePath, uint dynamicZoneId, ulong instanceOwnerId, ulong housingDeedId = 0) {
         this.InstanceOwnerId = instanceOwnerId;
+        this.HousingDeedId = housingDeedId; // CLASSIC: trusted physical house identity.
         this.ZonePath = zonePath;
         this._dynamicZoneId = dynamicZoneId;
         this._isLoading = true;
@@ -165,14 +166,15 @@ public class Zone : ReceiveProtocolDispatcher, IWithTimers {
             .WithMailbox("akka.actor.mailbox.zone-priority");
 
     // CLASSIC: an instanced zone, held by the instance container of instanceOwnerId.
-    public static Props Props(string zonePath, uint dynamicZoneId, ulong instanceOwnerId)
-        => Akka.Actor.Props.Create(() => new Zone(zonePath, dynamicZoneId, instanceOwnerId))
+    public static Props Props(string zonePath, uint dynamicZoneId, ulong instanceOwnerId, ulong housingDeedId = 0)
+        => Akka.Actor.Props.Create(() => new Zone(zonePath, dynamicZoneId, instanceOwnerId, housingDeedId))
             .WithMailbox("akka.actor.mailbox.zone-priority");
 
     /// <summary>
     /// CLASSIC: the character whose instance container holds this zone; 0 for a public zone.
     /// </summary>
     public ulong InstanceOwnerId { get; }
+    public ulong HousingDeedId { get; } // CLASSIC
 
     // CLASSIC: a party lost a fight here; once the zone is empty, the instance is dropped so the next entry is fresh.
     private bool _resetWhenEmpty;
@@ -523,7 +525,9 @@ public class Zone : ReceiveProtocolDispatcher, IWithTimers {
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_QUERYZONEDATA))]
     private void ReceiveQueryZoneData() {
         Sender.Tell(new ZONE_102_PROTOCOL.MSG_QUERYZONEDATARSP {
-            ZoneData = ZoneData
+            ZoneData = ZoneData,
+            InstanceOwnerId = InstanceOwnerId, // CLASSIC
+            HousingDeedId = HousingDeedId,
         });
     }
 
@@ -633,6 +637,7 @@ public class Zone : ReceiveProtocolDispatcher, IWithTimers {
                 ErrorCode = Imcodec.Cryptography.StringHash.Compute(Classic.GroupInstances.FullInstanceError),
                 ErrorMessage = Classic.GroupInstances.FullInstanceMessage,
                 InstanceOwnerId = InstanceOwnerId,
+                HousingDeedId = HousingDeedId, // CLASSIC
                 ZoneHardLimit = hardLimit,
             });
 
@@ -647,6 +652,7 @@ public class Zone : ReceiveProtocolDispatcher, IWithTimers {
             ZoneDisplayName = ZoneName,
             CriticalObjects = [.. _criticalObjectIds],
             InstanceOwnerId = InstanceOwnerId, // CLASSIC
+            HousingDeedId = HousingDeedId,
             ZoneHardLimit = hardLimit, // CLASSIC
         };
 

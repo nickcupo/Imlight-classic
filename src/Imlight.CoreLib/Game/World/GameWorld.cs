@@ -71,8 +71,9 @@ public class GameWorld : ReceiveProtocolDispatcher, IWithTimers {
     private readonly Dictionary<string, IActorRef> _zoneLoaderActors = [];
     private readonly GameServer _server;
 
-    private readonly Dictionary<ulong, IActorRef> _instanceContainers = [];
-    private readonly Dictionary<string, (ulong Owner, bool Private)> _instanceCreationCalledByMap = [];
+    // CLASSIC: two deeds with the same zone template still represent different physical houses.
+    private readonly Dictionary<ZoneInstanceIdentity, IActorRef> _instanceContainers = [];
+    private readonly Dictionary<string, (ulong Owner, ulong Deed, bool Private)> _instanceCreationCalledByMap = [];
 
     // ctor
     public GameWorld(GameServer server) {
@@ -103,11 +104,13 @@ public class GameWorld : ReceiveProtocolDispatcher, IWithTimers {
             return;
         }
 
-        var hasContainer = _instanceContainers.TryGetValue(message.OwnerCharId, out var instanceContainer);
+        if (message.HousingDeedId != 0) message.IsPrivate = true; // CLASSIC: a house can never use a public copy.
+        var identity = new ZoneInstanceIdentity(message.OwnerCharId, message.HousingDeedId);
+        var hasContainer = _instanceContainers.TryGetValue(identity, out var instanceContainer);
 
         // If IsPrivate is set but no instance container exists, create one proactively.
         if (message.IsPrivate && !hasContainer) {
-            instanceContainer = CreateInstanceContainer(message.OwnerCharId);
+            instanceContainer = CreateInstanceContainer(message.OwnerCharId, message.HousingDeedId);
             hasContainer = true;
         }
 
@@ -136,11 +139,12 @@ public class GameWorld : ReceiveProtocolDispatcher, IWithTimers {
     // CLASSIC: a sigil run's instance container has dropped its last zone; forget and stop it.
     [MessageHandler(typeof(CLASSIC_FEATURES_PROTOCOL.MSG_RUNCONTAINEREMPTY))]
     private void ReceiveRunContainerEmpty(CLASSIC_FEATURES_PROTOCOL.MSG_RUNCONTAINEREMPTY message) {
-        if (!_instanceContainers.TryGetValue(message.OwnerId, out var container) || !container.Equals(Sender)) {
+        var identity = new ZoneInstanceIdentity(message.OwnerId); // CLASSIC: sigil runs have no housing deed.
+        if (!_instanceContainers.TryGetValue(identity, out var container) || !container.Equals(Sender)) {
             return;
         }
 
-        _instanceContainers.Remove(message.OwnerId);
+        _instanceContainers.Remove(identity);
         Classic.GroupInstances.EndRun(message.OwnerId);
         Context.Stop(container);
         Logger.Information("Game world forgets the empty instance container of sigil run {0}.", Logger.Args(message.OwnerId));
@@ -148,6 +152,7 @@ public class GameWorld : ReceiveProtocolDispatcher, IWithTimers {
 
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_ZONELOADTIMER))]
     private void ReceiveZoneTimerEnd(ZONE_102_PROTOCOL.MSG_ZONELOADTIMER message) {
+        _instanceCreationCalledByMap.Remove(message.ZonePath); // CLASSIC: expired loads retain no private lot identity.
         // If the timer is reached, the zone did not load within the timeout.
         if (_zoneLoaderActors.TryGetValue(message.ZonePath, out var loaderRef)) {
             _zoneLoaderActors.Remove(message.ZonePath);
@@ -198,7 +203,8 @@ public class GameWorld : ReceiveProtocolDispatcher, IWithTimers {
         var zonePath = message.ZonePath;
 
         // Search for the user who called for the creation of this zone.
-        var (ownerId, wasPrivateRequest) = _instanceCreationCalledByMap[zonePath];
+        if (!_instanceCreationCalledByMap.TryGetValue(zonePath, out var identity)) return; // CLASSIC: ignore a timed-out loader.
+        var (ownerId, deedId, wasPrivateRequest) = identity;
         _instanceCreationCalledByMap.Remove(zonePath);
 
         // Determine if this zone is instanced. It is instanced when ANY of:
@@ -218,15 +224,15 @@ public class GameWorld : ReceiveProtocolDispatcher, IWithTimers {
                     Classic.GroupInstances.IsRun(ownerId) ? ", sigil run" : "")); // CLASSIC
 
             // Create a new instance container for this zone, if one does not already exist.
-            if (!_instanceContainers.TryGetValue(ownerId, out var instanceContainer)) {
-                instanceContainer = CreateInstanceContainer(ownerId);
+            if (!_instanceContainers.TryGetValue(new(ownerId, deedId), out var instanceContainer)) {
+                instanceContainer = CreateInstanceContainer(ownerId, deedId);
             }
 
             // Inform the instance container of the load results.
             // This will cause the instance container to create the zone actor.
             instanceContainer.Tell(message);
 
-            ProcessTransfersForInstanceContainer(zonePath, ownerId);
+            ProcessTransfersForInstanceContainer(zonePath, ownerId, deedId);
         }
         else {
             // Create the new public zone and inform it of the load results.
@@ -251,7 +257,7 @@ public class GameWorld : ReceiveProtocolDispatcher, IWithTimers {
     private void HandleInstancedZoneTransfer(ZONE_102_PROTOCOL.MSG_ZONETRANSFER message) {
         // A PRIVATE transfer (sigil dungeon / solo entry) must NEVER be satisfied by a shared public copy;
         // that would drop the player into a public instance of a dungeon they asked to enter privately.
-        if (!message.IsPrivate && _publicZones.TryGetValue(message.DestinationZone, out var zone)) {
+        if (!message.IsPrivate && message.HousingDeedId == 0 && _publicZones.TryGetValue(message.DestinationZone, out var zone)) {
             zone.Forward(message);
 
             return;
@@ -261,11 +267,13 @@ public class GameWorld : ReceiveProtocolDispatcher, IWithTimers {
         var originalSender = Sender;
 
         var hasZoneMsg = new ZONE_102_PROTOCOL.MSG_INSTANCECONTAINERHASZONE {
-            ZoneName = message.DestinationZone
+            ZoneName = message.DestinationZone,
+            OwnerCharId = message.OwnerCharId, // CLASSIC
+            HousingDeedId = message.HousingDeedId,
         };
         var timeOut = TimeSpan.FromSeconds(5);
 
-        _instanceContainers[message.OwnerCharId]
+        _instanceContainers[new(message.OwnerCharId, message.HousingDeedId)]
             .Ask<ZONE_102_PROTOCOL.MSG_INSTANCECONTAINERHASZONERSP>(hasZoneMsg, timeOut)
             .ContinueWith(t => new ZONE_102_PROTOCOL.MSG_INSTANCECONTAINER_QUERY_RESULT {
                 OriginalSender = originalSender,
@@ -287,7 +295,7 @@ public class GameWorld : ReceiveProtocolDispatcher, IWithTimers {
             // duplicate loader or a duplicate owner registration.
             if (!_zoneLoaderActors.ContainsKey(message.DestinationZone)) {
                 CreateZoneLoader(message.DestinationZone);
-                _instanceCreationCalledByMap.Add(message.DestinationZone, (message.OwnerCharId, message.IsPrivate));
+                _instanceCreationCalledByMap.Add(message.DestinationZone, (message.OwnerCharId, message.HousingDeedId, message.IsPrivate));
             }
             _awaitingTransfers.Add(message, result.OriginalSender);
 
@@ -295,7 +303,7 @@ public class GameWorld : ReceiveProtocolDispatcher, IWithTimers {
         }
 
         // Instance container has the zone; forward the transfer to it.
-        _instanceContainers[message.OwnerCharId].Tell(message, result.OriginalSender);
+        _instanceContainers[new(message.OwnerCharId, message.HousingDeedId)].Tell(message, result.OriginalSender);
     }
 
     public void HandleOtherZoneTransfer(ZONE_102_PROTOCOL.MSG_ZONETRANSFER message) {
@@ -304,7 +312,7 @@ public class GameWorld : ReceiveProtocolDispatcher, IWithTimers {
             // A second player entering while the zone still loads waits for the same load.
             if (!_zoneLoaderActors.ContainsKey(message.DestinationZone)) {
                 CreateZoneLoader(message.DestinationZone);
-                _instanceCreationCalledByMap.AddOrSet(message.DestinationZone, (message.OwnerCharId, message.IsPrivate));
+                _instanceCreationCalledByMap.AddOrSet(message.DestinationZone, (message.OwnerCharId, message.HousingDeedId, message.IsPrivate));
             }
 
             // We want to wait until the zone is fully loaded before transferring the player.
@@ -363,11 +371,11 @@ public class GameWorld : ReceiveProtocolDispatcher, IWithTimers {
         return zone;
     }
 
-    private IActorRef CreateInstanceContainer(ulong ownerId) {
-        var zoneActorName = $"{nameof(InstanceContainer)}_{ownerId}"; // Append the owner ID to the zone name.
+    private IActorRef CreateInstanceContainer(ulong ownerId, ulong deedId = 0) {
+        var zoneActorName = $"{nameof(InstanceContainer)}_{ownerId}" + (deedId == 0 ? "" : $"_house_{deedId}"); // CLASSIC
 
-        var instanceContainer = Context.ActorOf(InstanceContainer.Props(ownerId), zoneActorName);
-        _instanceContainers.Add(ownerId, instanceContainer);
+        var instanceContainer = Context.ActorOf(InstanceContainer.Props(ownerId, deedId), zoneActorName);
+        _instanceContainers.Add(new(ownerId, deedId), instanceContainer);
 
         // Log the new instance container creation.
         Logger.Information("Game world creates new instance container {0}, owned by {1}",
@@ -382,6 +390,7 @@ public class GameWorld : ReceiveProtocolDispatcher, IWithTimers {
         Timers.Cancel(loadZoneTimeoutKey);
 
         if (zonePath is not null) {
+            _instanceCreationCalledByMap.Remove(zonePath); // CLASSIC: a failed load must not retain another lot's identity.
             if (_zoneLoaderActors.TryGetValue(zonePath, out var loaderRef)) {
                 _zoneLoaderActors.Remove(zonePath);
                 Context.Stop(loaderRef);
@@ -399,13 +408,15 @@ public class GameWorld : ReceiveProtocolDispatcher, IWithTimers {
         }
 
         foreach (var (transferMsg, transferActor) in transfers) {
-            _publicZones[zonePath].Tell(transferMsg, transferActor);
+            // CLASSIC: a house/private request queued behind a public load still needs its own physical instance.
+            if (transferMsg.IsPrivate || transferMsg.HousingDeedId != 0) Self.Tell(transferMsg, transferActor);
+            else _publicZones[zonePath].Tell(transferMsg, transferActor);
 
             _awaitingTransfers.Remove(transferMsg);
         }
     }
 
-    private void ProcessTransfersForInstanceContainer(string zonePath, ulong ownerId) {
+    private void ProcessTransfersForInstanceContainer(string zonePath, ulong ownerId, ulong deedId = 0) {
         var transfers = _awaitingTransfers.Where(t => t.Key.DestinationZone == zonePath);
         if (transfers is null || !transfers.Any()) {
             Logger.Error("{Name} received unexpected zone load result for {ZoneName}",
@@ -417,8 +428,8 @@ public class GameWorld : ReceiveProtocolDispatcher, IWithTimers {
         foreach (var (transferMsg, transferActor) in transfers) {
             // The instance was loaded for its owner. Anyone else who asked for this zone meanwhile gets their own
             // instance, through a fresh transfer.
-            if (transferMsg.OwnerCharId == ownerId) {
-                _instanceContainers[ownerId].Tell(transferMsg, transferActor);
+            if (transferMsg.OwnerCharId == ownerId && transferMsg.HousingDeedId == deedId) { // CLASSIC
+                _instanceContainers[new(ownerId, deedId)].Tell(transferMsg, transferActor);
             } else {
                 Self.Tell(transferMsg, transferActor);
             }

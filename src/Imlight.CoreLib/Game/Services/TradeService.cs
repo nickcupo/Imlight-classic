@@ -127,7 +127,8 @@ internal sealed class TradeService(SessionActor sessionActor) : MessageService(s
 
             s_live.TryGetValue(charId, out var wizard);
 
-            return new TradeParty(charId, wizard, wizard?.Zone ?? online.CurrentZone, online.InstanceOwnerId, wizard?.Location);
+            return new TradeParty(charId, wizard, wizard?.Zone ?? online.CurrentZone, online.InstanceOwnerId, wizard?.Location,
+                online.HousingDeedId); // CLASSIC
         }
 
         public bool AreFriends(ulong charId, ulong otherCharId)

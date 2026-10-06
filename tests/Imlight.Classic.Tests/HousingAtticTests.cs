@@ -336,6 +336,12 @@ public sealed class HousingAtticTests : IDisposable {
                     if (_advanced is null) { _advanced = DispatchProxy.Create<IAdvancedSessionOperations, AtticAdvancedProxy>();
                         ((AtticAdvancedProxy)(object)_advanced).Owner = this; } return _advanced;
                 case "Load":
+                    if (args![0] is IEnumerable<string> ids) {
+                        return ids.ToDictionary(key => key, key => {
+                            if (Working.TryGetValue(key, out var loaded)) return (WizClientObjectItem)loaded;
+                            return Saved.TryGetValue(key, out var original) ? (WizClientObjectItem)(Working[key] = Clone(original)) : null!;
+                        });
+                    }
                     var id = (string)args![0]!;
                     if (Working.TryGetValue(id, out var found)) return found;
                     return Saved.TryGetValue(id, out var saved) ? Working[id] = Clone(saved) : null;
