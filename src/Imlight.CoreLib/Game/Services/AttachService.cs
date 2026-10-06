@@ -256,7 +256,15 @@ internal class AttachService(SessionActor sessionActor) : MessageService(session
 
     private void ValidateAttach(GAME_5_PROTOCOL.MSG_ATTACH message) {
         var loadedAtUtc = DateTime.UtcNow; // CLASSIC: the key check below loads the account (Game/AccountSessions.cs)
-        if (!ValidateLoginKey(message.LoginKey, message.UserID, out var account)) {
+        if (!ValidateLoginKey(message.LoginKey, message.UserID, message.SessionID, out var account)) {
+            // CLASSIC: what the client sent in place of a valid proof (never the key itself).
+            Logger.Debug("Refused MSG_ATTACH: user {User} char {Char} zone {Zone} ({ZoneId}) slot {Slot} session slot {SessionSlot} " +
+                         "target {Target} reattach {Reattach} retry {Retry}; login key {KeyLength} chars, pass key {PassLength} chars, " +
+                         "session id {Sid}",
+                Logger.Args((ulong) message.UserID, (ulong) message.CharID, message.ZoneName, (ulong) message.ZoneID, message.Slot,
+                    message.SessionSlot, (ulong) message.TargetPlayerID, message.Reattach, message.Retry,
+                    message.LoginKey.ToString()?.Length ?? 0, message.PassKey.ToString()?.Length ?? 0,
+                    (ulong) message.SessionID == 0 ? "0" : "set"));
             SendToSocket(new GAME_5_PROTOCOL.MSG_ATTACHFAILED() {
                 Error = 1,
                 Rejected = 1,
@@ -302,12 +310,13 @@ internal class AttachService(SessionActor sessionActor) : MessageService(session
         SetCharacterInternally(wizard);
     }
 
-    private bool ValidateLoginKey(ByteString key, ulong userId, out Account account) {
+    private bool ValidateLoginKey(ByteString key, ulong userId, ulong sessionId, out Account account) {
         account = null;
 
         var msg = new SERVER_100_PROTOCOL.MSG_VALIDATESESSIONKEY() {
             Key = key,
             UserID = userId,
+            SessionID = sessionId, // CLASSIC: a transfer's proof (GameSessionKeys)
             SessionActor = SessionActor
         };
         var rsp = AskServer<SERVER_100_PROTOCOL.MSG_VALIDATESESSIONKEYRSP>(msg);
@@ -449,8 +458,8 @@ internal class AttachService(SessionActor sessionActor) : MessageService(session
                 IP = rsp.GameServerIp,
                 TCPPort = rsp.GameServerPort,
                 UDPPort = rsp.GameServerPort,
-                Key = transferKey,
-                FallbackKey = transferKey,
+                Key = transferKey.Key,
+                FallbackKey = transferKey.Key,
                 UserID = rsp.UserId,
                 CharID = rsp.CharId,
                 ZoneName = rsp.FallbackZone,
@@ -458,7 +467,7 @@ internal class AttachService(SessionActor sessionActor) : MessageService(session
                 Location = rsp.FallbackLocation,
                 Slot = 0,
                 SessionSlot = 0,
-                SessionID = 0,
+                SessionID = transferKey.SessionId, // CLASSIC: the client echoes it in MSG_ATTACH (the proof)
                 TargetPlayerID = rsp.CharId,
                 TransitionID = 1,
                 FallbackIP = rsp.GameServerIp,
@@ -467,6 +476,7 @@ internal class AttachService(SessionActor sessionActor) : MessageService(session
                 FallbackZone = rsp.FallbackZone,
                 FallbackZoneID = rsp.FallbackZoneId
             };
+            ZoneService.LogTransfer(serverTransfer); // CLASSIC
             SendToSocket(serverTransfer);
 
             // Remove the fallback entry now that we've consumed it.

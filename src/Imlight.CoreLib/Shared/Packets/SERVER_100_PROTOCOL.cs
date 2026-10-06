@@ -146,6 +146,7 @@ public sealed class SERVER_100_PROTOCOL : IServerProtocol {
 
         public ByteString Key;
         public ulong UserID;
+        public ulong SessionID; // CLASSIC: MSG_ATTACH.SessionID, a transfer's proof (Imlight.Classic.Net.GameSessionKeys)
         public SessionActor SessionActor;
         
     }
