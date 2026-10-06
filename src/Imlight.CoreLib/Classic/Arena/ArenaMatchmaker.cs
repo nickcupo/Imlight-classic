@@ -61,7 +61,8 @@ namespace Imlight.CoreLib.Classic.Arena;
 
 /// <summary>What one wizard got from a finished match.</summary>
 internal sealed record ArenaOutcome(ulong MatchId, ArenaKind Kind, bool Won, bool Fled, int RatingBefore, int RatingAfter,
-    string Rank, int Tickets, IMessage Result, string HallZone, string HallLocation, int ReturnSeconds);
+    string Rank, int Tickets, IMessage Result, string HallZone, string HallLocation, int ReturnSeconds, bool NoContest = false);
+internal sealed record ArenaAmbientFailed(ulong RunId); // CLASSIC: internal actor-only cleanup, never a client message.
 
 /// <summary>What the matchmaker needs from the server (fakes in tests).</summary>
 internal interface IArenaWorld {
@@ -94,6 +95,14 @@ internal interface IArenaWorld {
 }
 
 /// <summary>A match's arena trip, as the arena's duel circle sees it.</summary>
+// CLASSIC: optional server-side participants; worlds with ambient wizards off retain human-only play.
+internal interface IArenaAmbientWorld {
+    bool AmbientEnabled { get; }
+    bool IsAmbient(ulong charId);
+    ArenaPlayer? ReserveAmbient(int level, int preferredSchool);
+    void ReleaseAmbient(ulong charId);
+}
+
 internal sealed record ArenaRun(ulong RunId, ulong MatchId, ArenaKind Kind, string Zone, IReadOnlyList<ulong> Side0,
     IReadOnlyList<ulong> Side1, DateTime ArrivalEndsUtc);
 
@@ -124,6 +133,9 @@ internal sealed class ArenaMatchmaker {
         public ulong RunId;
         public string Zone = "";
         public DateTime TravelledUtc;
+        public bool Autonomous;
+        public DateTime NextAmbientUtc;
+        public DateTime? AmbientEndsUtc;
 
         public IEnumerable<ulong> Members => Sides[0].Concat(Sides[1]);
 
@@ -146,6 +158,7 @@ internal sealed class ArenaMatchmaker {
     }
 
     private readonly object _gate = new();
+    private readonly object _resultsGate = new(); // CLASSIC: serialize complete ranked result batches.
     private readonly ArenaConfig _config;
     private readonly IArenaWorld _world;
     private readonly Dictionary<ulong, Match> _matches = [];
@@ -155,6 +168,18 @@ internal sealed class ArenaMatchmaker {
     private readonly ConcurrentDictionary<ulong, ArenaRun> _runs = new();
     private readonly Random _random = new();
     private ulong _nextId = (ulong) DateTime.UtcNow.Ticks & 0x0000_FFFF_FFFF_FFFF;
+    internal const int AmbientWaitSeconds = 30;
+    internal static readonly TimeSpan AmbientFightLimit = TimeSpan.FromMinutes(20); // CLASSIC: operational no-contest cleanup, not a historical duel rule.
+    private readonly Dictionary<ulong, ulong> _spectators = [];
+    private int _ambientSchool;
+    private readonly Dictionary<ArenaKind, int> _autonomousRounds = [];
+    private readonly Dictionary<ArenaKind, int> _autonomousSizes = [];
+    private readonly Dictionary<ArenaKind, DateTime> _nextAutonomous = [];
+    private IArenaAmbientWorld? Ambient => _world is IArenaAmbientWorld { AmbientEnabled: true } enabled ? enabled : null;
+    private bool IsAmbient(ulong member) => _players.GetValueOrDefault(member)?.Ambient == true || _world is IArenaAmbientWorld world && world.IsAmbient(member);
+    private bool Replaceable(Match match) => !match.Autonomous && (match.Phase == Phase.Open
+        || match.Phase == Phase.Confirming && match.Members.Any(IsAmbient));
+    private bool Listed(Match match) => match.Phase == Phase.Open || match.Autonomous || Replaceable(match) && match.Members.Any(IsAmbient);
 
     public ArenaMatchmaker(ArenaConfig config, IArenaWorld world) {
         _config = config;
@@ -203,7 +228,7 @@ internal sealed class ArenaMatchmaker {
 
         lock (_gate) {
             _watchers[kind].Add(charId);
-            var open = _matches.Values.Where(m => m.Kind == kind && m.Phase == Phase.Open).OrderBy(m => m.CreatedUtc).Take(40).ToList();
+            var open = _matches.Values.Where(m => m.Kind == kind && Listed(m)).OrderBy(m => m.Autonomous).ThenBy(m => m.CreatedUtc).Take(40).ToList();
             var names = new Dictionary<ulong, byte[]>();
             var list = new NewListUpdate {
                 m_tournamentID = 0,
@@ -277,7 +302,7 @@ internal sealed class ArenaMatchmaker {
             }
 
             var side = match.TeamIds[1] == teamId ? 1 : match.TeamIds[0] == teamId ? 0
-                : ArenaRules.QuickJoinSide(match.Sides[0].Count, match.Sides[1].Count, match.TeamSize);
+                : JoinSide(match);
             var error = side < 0 ? ArenaErrors.NoSlots : JoinError(match, side, player);
             if (error is not null) {
                 Logger.Information("Arena: {0} could not join match {1} side {2}: {3}.", Logger.Args(player.Name, match.Id, side + 1, error));
@@ -290,6 +315,7 @@ internal sealed class ArenaMatchmaker {
                 return;
             }
 
+            MakeRoomForHuman(match, side);
             SeatLocked(match, player, side);
         }
     }
@@ -310,8 +336,8 @@ internal sealed class ArenaMatchmaker {
             LeaveLocked(charId, quiet: true);
             var rating = Standing(charId).Rating;
             var candidates = _matches.Values
-                .Where(m => m.Kind == kind && m.Phase == Phase.Open && (size == 0 || m.TeamSize == size))
-                .Select(m => (Match: m, Side: ArenaRules.QuickJoinSide(m.Sides[0].Count, m.Sides[1].Count, m.TeamSize)))
+                .Where(m => m.Kind == kind && Replaceable(m) && (size == 0 || m.TeamSize == size))
+                .Select(m => (Match: m, Side: JoinSide(m)))
                 .Where(c => c.Side >= 0 && JoinError(c.Match, c.Side, player) is null);
 
             // Ranked: "matches Wizard101 subscribers with similarly ranked Wizards" (Engadget 2009-01-20): the open
@@ -329,6 +355,7 @@ internal sealed class ArenaMatchmaker {
             }
 
             Logger.Information("Arena: {0} quick joined match {1} side {2}.", Logger.Args(player.Name, pick.Match.Id, pick.Side + 1));
+            MakeRoomForHuman(pick.Match, pick.Side);
             SeatLocked(pick.Match, player, pick.Side);
         }
     }
@@ -336,6 +363,10 @@ internal sealed class ArenaMatchmaker {
     /// <summary>Leave (the status window's Leave, or the window's own leave): out of a match that has not started.</summary>
     public void Leave(ulong charId) {
         lock (_gate) {
+            if (_spectators.Remove(charId)) {
+                ReturnSpectator(charId);
+                return;
+            }
             if (LeaveLocked(charId, quiet: false)) {
                 return;
             }
@@ -366,6 +397,8 @@ internal sealed class ArenaMatchmaker {
     }
 
     private void SweepOffline(DateTime nowUtc) {
+        foreach (var spectator in _spectators.Keys.Where(c => _world.Player(c) is null).ToList())
+            _goneSince.TryAdd(spectator, nowUtc);
         // Every wizard waiting in a match is checked: one whose session ended (logged out, dropped) for good leaves it.
         foreach (var member in _matches.Values.Where(m => m.Phase is Phase.Open or Phase.Confirming).SelectMany(m => m.Members)) {
             if (_world.Player(member) is null) {
@@ -381,6 +414,7 @@ internal sealed class ArenaMatchmaker {
                 _goneSince.Remove(charId);
                 Logger.Information("Arena: {0} went offline; out of their waiting match.", Logger.Args(charId));
                 LeaveLocked(charId, quiet: true);
+                _spectators.Remove(charId);
                 foreach (var watchers in _watchers.Values) {
                     watchers.Remove(charId);
                 }
@@ -420,6 +454,13 @@ internal sealed class ArenaMatchmaker {
     /// arrived, the zone failed) ends without a contest a minute after its arrival time.
     /// </summary>
     public void Tick(DateTime nowUtc) {
+        List<ulong> expiredAmbient;
+        lock (_gate) expiredAmbient = _matches.Values.Where(m => m.Phase == Phase.Fighting && m.AmbientEndsUtc is { } ends && ends <= nowUtc)
+            .Select(m => m.RunId).ToList();
+        foreach (var runId in expiredAmbient) {
+            Logger.Warning("Arena: ambient match instance {0} reached its operational time limit; no contest.", Logger.Args(runId));
+            Finish(runId, -1, []);
+        }
         foreach (var stale in _runs.Values.Where(r => nowUtc >= r.ArrivalEndsUtc.AddSeconds(60)).ToList()) {
             bool travelling;
             lock (_gate) {
@@ -434,6 +475,8 @@ internal sealed class ArenaMatchmaker {
 
         lock (_gate) {
             SweepOffline(nowUtc);
+            FillWaitingMatches(nowUtc);
+            ScheduleAutonomous(nowUtc);
 
             // A wizard whose trip did not happen (they were changing zones when it was sent) is sent again, every 10 s
             // until the arena's arrival time is over.
@@ -466,90 +509,253 @@ internal sealed class ArenaMatchmaker {
     /// </summary>
     public void Finish(ulong runId, int winningSide, IReadOnlyCollection<ulong> fled) {
         Match? match;
+        ArenaMatchView matchView;
+        Dictionary<ulong, ArenaPlayer?> playerSnapshot;
+        HashSet<ulong> ambientMembers;
         lock (_gate) {
             if (!_runs.TryRemove(runId, out var run) || !_matches.TryGetValue(run.MatchId, out match)) {
                 return;
             }
 
             _matches.Remove(match.Id);
+            BroadcastRemoved(match);
             foreach (var member in match.Members) {
                 _matchOf.Remove(member);
             }
+            playerSnapshot = match.Members.ToDictionary(member => member, member => _players.GetValueOrDefault(member) ?? _world.Player(member));
+            ambientMembers = match.Members.Where(IsAmbient).ToHashSet();
+            matchView = View(match);
+            if (match.Autonomous) _nextAutonomous[match.Kind] = DateTime.UtcNow.AddSeconds(10);
         }
 
         var members = match.Members.ToList();
-        var standings = members.ToDictionary(m => m, Standing);
-        double Average(int side) => match.Sides[side].Count == 0 ? _config.StartRating
-            : match.Sides[side].Average(m => standings[m].Rating);
-        var names = new Dictionary<ulong, byte[]>();
-        var actorResults = new List<(ulong CharId, MatchActorResult Result, bool Won, bool Fled, ArenaStanding Before, ArenaStanding After, int Tickets)>();
-        foreach (var member in members) {
-            var side = match.SideOf(member);
-            var fledHere = fled.Contains(member);
-            var won = winningSide >= 0 && ArenaRules.CountsAsWin(side == winningSide, fledHere);
-            var before = standings[member];
-            var after = before;
-            var tickets = 0;
-            if (winningSide >= 0 && match.Kind == ArenaKind.Ranked) {
-                var change = ArenaRules.RatingChange(Average(side), Average(1 - side), won, _config.KFactor);
-                after = ArenaRules.After(before, change, won, _config.MinRating);
-                tickets = ArenaRules.Tickets(match.Kind, won, _config);
-                _world.Ladder.Save(new ArenaLadderEntry {
-                    CharId = member, Rating = after.Rating, Wins = after.Wins, Losses = after.Losses, LastMatchUtc = DateTime.UtcNow,
-                });
-            }
+        var delivered = new HashSet<ulong>();
+        try {
+            lock (_resultsGate) {
+                var standings = members.ToDictionary(m => m, Standing);
+                var ladderUpdates = new List<ArenaLadderEntry>();
+                double Average(int side) => match.Sides[side].Count == 0 ? _config.StartRating
+                    : match.Sides[side].Average(m => standings[m].Rating);
+                var names = new Dictionary<ulong, byte[]>();
+                var actorResults = new List<(ulong CharId, MatchActorResult Result, bool Won, bool Fled, ArenaStanding Before, ArenaStanding After, int Tickets)>();
+                foreach (var member in members) {
+                    var side = match.SideOf(member);
+                    var fledHere = fled.Contains(member);
+                    var won = winningSide >= 0 && ArenaRules.CountsAsWin(side == winningSide, fledHere);
+                    var before = standings[member];
+                    var after = before;
+                    var tickets = 0;
+                    if (winningSide >= 0 && match.Kind == ArenaKind.Ranked) {
+                        var change = ArenaRules.RatingChange(Average(side), Average(1 - side), won, _config.KFactor);
+                        after = ArenaRules.After(before, change, won, _config.MinRating);
+                        tickets = ArenaRules.Tickets(match.Kind, won, _config);
+                        ladderUpdates.Add(new ArenaLadderEntry {
+                            CharId = member, Rating = after.Rating, Wins = after.Wins, Losses = after.Losses, LastMatchUtc = DateTime.UtcNow,
+                        });
+                    }
 
-            var player = _players.GetValueOrDefault(member) ?? _world.Player(member);
-            var actor = player is null ? null : ArenaMessages.Actor(player, View(match), side, 0, after.Rating, RankIndex(after.Rating));
-            if (player is not null) {
-                names[player.ActorId] = player.NameBlob;
-            }
+                    var player = playerSnapshot[member];
+                    var actor = player is null ? null : ArenaMessages.Actor(player, matchView, side, 0, after.Rating, RankIndex(after.Rating));
+                    if (player is not null) {
+                        names[player.ActorId] = player.NameBlob;
+                    }
 
-            actorResults.Add((member, new MatchActorResult {
-                m_pActor = actor,
-                m_place = won ? 1 : 2,
-                m_ratingGained = after.Rating - before.Rating,
-                m_arenaPoints = tickets,
-                m_pvpCurrency = 0,
-                m_pvpTourneyCurrency = 0,
-                m_gold = 0,
-                m_gameResult = (byte) (winningSide < 0 ? 2 : won ? 0 : 1),
-            }, won, fledHere, before, after, tickets));
-        }
-
-        var results = new ArenaMatchResults {
-            m_matchID = match.Id,
-            m_matchNameID = match.MatchNameId,
-            m_matchResolution = winningSide,
-            m_actorList = [.. actorResults.Select(r => r.Result)],
-            m_teamResults = [.. Enumerable.Range(0, 2).Select(side => new MatchTeamResult {
-                m_teamID = match.TeamIds[side], m_teamResolution = (byte) (winningSide < 0 ? 2 : side == winningSide ? 0 : 1),
-            })],
-            m_timeOutDraw = false,
-        };
-        var blob = ArenaMessages.Blob(results, names);
-        foreach (var r in actorResults) {
-            var message = new GAME_5_PROTOCOL.MSG_MATCHRESULT {
-                CharacterID = _players.GetValueOrDefault(r.CharId)?.ActorId ?? 0, ResultData = blob, AwardData = "",
-            };
-            _world.Deliver(r.CharId, new ArenaOutcome(match.Id, match.Kind, r.Won, r.Fled, r.Before.Rating, r.After.Rating,
-                ArenaRules.RankOf(r.After.Rating, _config.Ranks), r.Tickets, message, _config.HallZone, _config.HallLocation,
-                _config.ReturnSeconds));
-            Logger.Information("Arena: match {0} ({1}) result for {2}: {3}{4}, rating {5} -> {6}, tickets +{7}.",
-                Logger.Args(match.Id, match.Kind, r.CharId, winningSide < 0 ? "no contest" : r.Won ? "win" : "loss",
-                    r.Fled ? " (fled)" : "", r.Before.Rating, r.After.Rating, r.Tickets));
-        }
-
-        lock (_gate) {
-            foreach (var member in members) {
-                if (!_matchOf.ContainsKey(member)) {
-                    _players.Remove(member);
+                    actorResults.Add((member, new MatchActorResult {
+                        m_pActor = actor,
+                        m_place = won ? 1 : 2,
+                        m_ratingGained = after.Rating - before.Rating,
+                        m_arenaPoints = tickets,
+                        m_pvpCurrency = 0,
+                        m_pvpTourneyCurrency = 0,
+                        m_gold = 0,
+                        m_gameResult = (byte) (winningSide < 0 ? 2 : won ? 0 : 1),
+                    }, won, fledHere, before, after, tickets));
                 }
+
+                if (ladderUpdates.Count > 0) _world.Ladder.SaveMany(ladderUpdates);
+
+                var results = new ArenaMatchResults {
+                    m_matchID = match.Id,
+                    m_matchNameID = match.MatchNameId,
+                    m_matchResolution = winningSide,
+                    m_actorList = [.. actorResults.Select(r => r.Result)],
+                    m_teamResults = [.. Enumerable.Range(0, 2).Select(side => new MatchTeamResult {
+                        m_teamID = match.TeamIds[side], m_teamResolution = (byte) (winningSide < 0 ? 2 : side == winningSide ? 0 : 1),
+                    })],
+                    m_timeOutDraw = false,
+                };
+                var blob = ArenaMessages.Blob(results, names);
+                foreach (var r in actorResults) {
+                    var message = new GAME_5_PROTOCOL.MSG_MATCHRESULT {
+                        CharacterID = playerSnapshot[r.CharId]?.ActorId ?? 0, ResultData = blob, AwardData = "",
+                    };
+                    try {
+                        _world.Deliver(r.CharId, new ArenaOutcome(match.Id, match.Kind, r.Won, r.Fled, r.Before.Rating, r.After.Rating,
+                            ArenaRules.RankOf(r.After.Rating, _config.Ranks), r.Tickets, message, _config.HallZone, _config.HallLocation,
+                            _config.ReturnSeconds, winningSide < 0));
+                        delivered.Add(r.CharId);
+                    }
+                    catch (Exception ex) {
+                        Logger.Error("Arena: match {0} delivery to {1} failed: {2}", Logger.Args(match.Id, r.CharId, ex.Message));
+                    }
+                    Logger.Information("Arena: match {0} ({1}) result for {2}: {3}{4}, rating {5} -> {6}, tickets +{7}.",
+                        Logger.Args(match.Id, match.Kind, r.CharId, winningSide < 0 ? "no contest" : r.Won ? "win" : "loss",
+                            r.Fled ? " (fled)" : "", r.Before.Rating, r.After.Rating, r.Tickets));
+                }
+            }
+        }
+        catch (Exception ex) {
+            // CLASSIC: failure to save a result must never strand an arena participant or leak NPC reservations.
+            Logger.Error("Arena: match {0} result failed; returning remaining participants: {1}", Logger.Args(match.Id, ex.Message));
+        }
+        finally {
+            foreach (var member in members) {
+                try {
+                    if (ambientMembers.Contains(member)) (_world as IArenaAmbientWorld)?.ReleaseAmbient(member);
+                    else if (!delivered.Contains(member)) {
+                        if (playerSnapshot[member] is { } player) SendStatus(member, player, null, -1, 0);
+                        _world.Inform(member, "The arena result could not be completed. Returning to the arena hall; please tell the server owner.");
+                        _world.Travel(member, _config.HallZone, _config.HallLocation, 0);
+                    }
+                }
+                catch (Exception ex) {
+                    Logger.Error("Arena: match {0} cleanup for {1} failed: {2}", Logger.Args(match.Id, member, ex.Message));
+                }
+            }
+            List<ulong> spectators;
+            lock (_gate) {
+                spectators = _spectators.Where(pair => pair.Value == match.Id).Select(pair => pair.Key).ToList();
+                foreach (var spectator in spectators) _spectators.Remove(spectator);
+                foreach (var member in members) if (!_matchOf.ContainsKey(member)) _players.Remove(member);
+            }
+            foreach (var spectator in spectators) {
+                try { ReturnSpectator(spectator); }
+                catch (Exception ex) { Logger.Error("Arena: spectator {0} return failed: {1}", Logger.Args(spectator, ex.Message)); }
             }
         }
     }
 
     // ---------------------------------------------------------------- state helpers (under _gate)
+
+    // CLASSIC: a real wizard can replace a waiting NPC until the existing human confirmations start the trip.
+    private int JoinSide(Match match) => ArenaRules.QuickJoinSide(
+        Replaceable(match) ? match.Sides[0].Count(m => !IsAmbient(m)) : match.Sides[0].Count,
+        Replaceable(match) ? match.Sides[1].Count(m => !IsAmbient(m)) : match.Sides[1].Count, match.TeamSize);
+
+    private void RemoveAmbient(Match match, ulong member) {
+        match.Sides[0].Remove(member); match.Sides[1].Remove(member); match.Confirmed.Remove(member);
+        _matchOf.Remove(member); _players.Remove(member);
+        (_world as IArenaAmbientWorld)?.ReleaseAmbient(member);
+    }
+
+    private void MakeRoomForHuman(Match match, int side) {
+        if (!Replaceable(match)) return;
+        if (match.Sides[side].Count >= match.TeamSize && match.Sides[side].FirstOrDefault(IsAmbient) is var ambient && ambient != 0)
+            RemoveAmbient(match, ambient);
+        if (match.Phase == Phase.Confirming) {
+            match.Phase = Phase.Open;
+            match.Confirmed.Clear(); // changed teams require every human to confirm the new lineup themselves
+        }
+        match.NextAmbientUtc = DateTime.UtcNow.AddSeconds(AmbientWaitSeconds);
+    }
+
+    private bool ReserveSeats(Match match, int level) {
+        if (Ambient is not { } world) return false;
+        var reserved = new List<(ArenaPlayer Player, int Side)>();
+        try {
+            for (var side = 0; side < 2; side++) {
+                for (var vacancy = match.Sides[side].Count; vacancy < match.TeamSize; vacancy++) {
+                    var player = world.ReserveAmbient(level, _ambientSchool++ % 7);
+                    if (player is null) { foreach (var seat in reserved) world.ReleaseAmbient(seat.Player.CharId); return false; }
+                    reserved.Add((player, side));
+                }
+            }
+        } catch (Exception ex) {
+            foreach (var seat in reserved) world.ReleaseAmbient(seat.Player.CharId);
+            Logger.Warning("Arena: NPC reservation failed: {0}", Logger.Args(ex.Message));
+            return false;
+        }
+        foreach (var seat in reserved) SeatLocked(match, seat.Player, seat.Side);
+        return true;
+    }
+
+    private void FillWaitingMatches(DateTime now) {
+        if (Ambient is null) return;
+        foreach (var match in _matches.Values.Where(m => !m.Autonomous && !m.FriendsOnly && m.Phase == Phase.Open
+                     && now >= m.NextAmbientUtc && m.Members.Any(c => !IsAmbient(c))).OrderBy(m => m.CreatedUtc).ToList()) {
+            match.NextAmbientUtc = now.AddSeconds(AmbientWaitSeconds);
+            var humanLevel = (int) Math.Round(match.Members.Where(c => !IsAmbient(c)).Average(c => _players[c].Level));
+            var minimum = Math.Clamp(match.MinLevel > 0 ? match.MinLevel : 1, 1, 50);
+            var maximum = Math.Clamp(match.MaxLevel > 0 ? match.MaxLevel : 50, minimum, 50);
+            if (ReserveSeats(match, Math.Clamp(humanLevel, minimum, maximum))) {
+                if (match.Phase == Phase.Confirming) match.ConfirmEndsUtc = now.AddSeconds(_config.ConfirmSeconds);
+                foreach (var human in match.Members.Where(c => !IsAmbient(c)))
+                    _world.Inform(human, "Friendly wizards joined the empty arena seats. Confirm Go to Arena when your team is ready.");
+            }
+        }
+    }
+
+    private void ScheduleAutonomous(DateTime now) {
+        if (Ambient is null || _matches.Values.Any(m => !m.Autonomous && m.Phase is Phase.Open or Phase.Confirming)) return;
+        foreach (var kind in new[] { ArenaKind.Practice, ArenaKind.Ranked }) {
+            if (_matches.Values.Any(m => m.Autonomous && m.Kind == kind) || _nextAutonomous.GetValueOrDefault(kind) > now) continue;
+            var round = _autonomousRounds.GetValueOrDefault(kind);
+            _autonomousRounds[kind] = (round + 1) % 50;
+            var size = 1 + _autonomousSizes.GetValueOrDefault(kind) % 4;
+            var level = 1 + (round % 50) * 11 % 50;
+            var match = NewMatch(kind, size, 0, false, level, level);
+            match.Autonomous = true;
+            if (!ReserveSeats(match, level)) {
+                _matches.Remove(match.Id); BroadcastRemoved(match);
+                _nextAutonomous[kind] = now.AddSeconds(30);
+            } else {
+                _autonomousSizes[kind] = _autonomousSizes.GetValueOrDefault(kind) + 1;
+            }
+        }
+    }
+
+    // CLASSIC: onlookers use the existing arena trip, never the combat seating or ladder paths.
+    public void Watch(ulong charId, ulong matchId) {
+        lock (_gate) {
+            if (_world.Player(charId) is not { } player || _matchOf.ContainsKey(charId) || _spectators.Count >= 64 || !_matches.TryGetValue(matchId, out var match)
+                || match.Phase is not (Phase.Travelling or Phase.Fighting)) {
+                _world.Send(charId, ArenaMessages.Error(ArenaErrors.MatchStarted)); return;
+            }
+            _spectators[charId] = match.Id;
+            SendStatus(charId, player, match, -1, 11); // retain the existing PvP status window/Leave path without assigning a team
+            _world.Travel(charId, match.Zone, _config.ArenaLocation, match.RunId);
+            _world.Inform(charId, "Watching this arena match. Use the PvP window's Leave button to return to the arena hall.");
+        }
+    }
+
+    public bool IsSpectator(ulong charId, ulong matchId = 0) {
+        lock (_gate) return _spectators.TryGetValue(charId, out var watched) && (matchId == 0 || watched == matchId);
+    }
+
+    private void ReturnSpectator(ulong charId) {
+        if (_world.Player(charId) is { } player) SendStatus(charId, player, null, -1, 0);
+        _world.Inform(charId, "The arena match is over. Returning to the arena hall.");
+        _world.Travel(charId, _config.HallZone, _config.HallLocation, 0);
+    }
+
+    // A failed NPC actor/transfer aborts a travelling or active match without awards, rather than wedging a round.
+    internal void AmbientLost(ulong charId) {
+        ulong run = 0;
+        lock (_gate) {
+            if (!_matchOf.TryGetValue(charId, out var id) || !_matches.TryGetValue(id, out var match)) return;
+            if (match.Phase is Phase.Travelling or Phase.Fighting) run = match.RunId;
+            else {
+                RemoveAmbient(match, charId);
+                match.Phase = Phase.Open; match.Confirmed.Clear();
+                match.NextAmbientUtc = DateTime.UtcNow.AddSeconds(AmbientWaitSeconds);
+                if (match.Autonomous || !match.Members.Any(c => !IsAmbient(c))) {
+                    foreach (var remaining in match.Members.ToList()) RemoveAmbient(match, remaining);
+                    _matches.Remove(match.Id); BroadcastRemoved(match);
+                } else { UpdateMembers(match); BroadcastMatch(match); }
+            }
+        }
+        if (run != 0) Finish(run, -1, []);
+    }
 
     private Match NewMatch(ArenaKind kind, int teamSize, ulong creator, bool friendsOnly, int minLevel, int maxLevel) {
         var tournament = Tournament(kind);
@@ -557,6 +763,7 @@ internal sealed class ArenaMatchmaker {
             Id = NextId(), Kind = kind, Tournament = tournament, TournamentId = ArenaRules.Hash(tournament), TeamSize = teamSize,
             MatchName = ArenaRules.MatchName(tournament, teamSize), Creator = creator, FriendsOnly = friendsOnly,
             MinLevel = minLevel, MaxLevel = maxLevel, Phase = Phase.Open, CreatedUtc = DateTime.UtcNow,
+            NextAmbientUtc = DateTime.UtcNow.AddSeconds(AmbientWaitSeconds),
         };
         match.MatchNameId = ArenaRules.Hash(match.MatchName);
         match.TeamIds[0] = NextId();
@@ -569,10 +776,11 @@ internal sealed class ArenaMatchmaker {
     private ulong NextId() => ++_nextId;
 
     private string? JoinError(Match match, int side, ArenaPlayer player)
-        => ArenaRules.JoinError(match.Phase != Phase.Open, match.Sides[side].Count, match.TeamSize, player.Level, match.MinLevel,
+        => ArenaRules.JoinError(!Replaceable(match), Replaceable(match) ? match.Sides[side].Count(m => !IsAmbient(m)) : match.Sides[side].Count, match.TeamSize, player.Level, match.MinLevel,
             match.MaxLevel, match.FriendsOnly, player.CharId == match.Creator || _world.AreFriends(match.Creator, player.CharId));
 
     private void SeatLocked(Match match, ArenaPlayer player, int side) {
+        if (match.Autonomous && match.Creator == 0) match.Creator = player.CharId;
         match.Sides[side].Add(player.CharId);
         _matchOf[player.CharId] = match.Id;
         _players[player.CharId] = player;
@@ -589,6 +797,7 @@ internal sealed class ArenaMatchmaker {
 
     /// <summary>Takes a wizard out of the match they wait in. False when they are in one that has gone to its arena.</summary>
     private bool LeaveLocked(ulong charId, bool quiet) {
+        if (_spectators.Remove(charId)) ReturnSpectator(charId);
         if (!_matchOf.TryGetValue(charId, out var id) || !_matches.TryGetValue(id, out var match)) {
             _matchOf.Remove(charId);
 
@@ -604,7 +813,9 @@ internal sealed class ArenaMatchmaker {
         match.Confirmed.Remove(charId);
         _matchOf.Remove(charId);
         var player = _players.GetValueOrDefault(charId);
+        var wasAmbient = IsAmbient(charId);
         _players.Remove(charId);
+        if (wasAmbient) (_world as IArenaAmbientWorld)!.ReleaseAmbient(charId);
         if (player is not null) {
             SendStatus(charId, player, null, -1, 0);
         }
@@ -618,7 +829,8 @@ internal sealed class ArenaMatchmaker {
             match.Confirmed.Clear();
         }
 
-        if (!match.Members.Any()) {
+        if (!match.Members.Any() || !match.Autonomous && match.Members.All(IsAmbient)) {
+            foreach (var ambient in match.Members.ToList()) RemoveAmbient(match, ambient);
             _matches.Remove(match.Id);
             BroadcastRemoved(match);
         }
@@ -640,8 +852,10 @@ internal sealed class ArenaMatchmaker {
         match.ConfirmEndsUtc = DateTime.UtcNow.AddSeconds(_config.ConfirmSeconds);
         Logger.Information("Arena: match {0} is full ({1}v{1}); asking Go to Arena ({2} s).",
             Logger.Args(match.Id, match.TeamSize, _config.ConfirmSeconds));
-        BroadcastRemoved(match);
+        if (match.Autonomous || match.Members.Any(IsAmbient)) BroadcastMatch(match);
+        else BroadcastRemoved(match);
         foreach (var member in match.Members) {
+            if (IsAmbient(member)) { match.Confirmed.Add(member); continue; }
             var player = _players[member];
             var side = match.SideOf(member);
             var actor = ArenaMessages.Actor(player, View(match), side, 8, Standing(member).Rating, RankIndex(Standing(member).Rating));
@@ -652,6 +866,7 @@ internal sealed class ArenaMatchmaker {
                 MatchActor = ArenaMessages.Blob(actor, new Dictionary<ulong, byte[]> { [player.ActorId] = player.NameBlob }),
             });
         }
+        if (match.Members.All(match.Confirmed.Contains)) Travel(match);
     }
 
     private void Decline(Match match, ulong charId, string why) {
@@ -671,6 +886,8 @@ internal sealed class ArenaMatchmaker {
         var run = new ArenaRun(match.RunId, match.Id, match.Kind, match.Zone, [.. match.Sides[0]], [.. match.Sides[1]],
             DateTime.UtcNow.AddSeconds(_config.ArrivalSeconds));
         _runs[match.RunId] = run;
+        if (match.Autonomous) BroadcastMatch(match);
+        else BroadcastRemoved(match);
         Logger.Information("Arena: match {0} goes to {1} (instance {2}): {3} v {4}.",
             Logger.Args(match.Id, match.Zone, match.RunId, string.Join(",", match.Sides[0]), string.Join(",", match.Sides[1])));
         foreach (var member in match.Members) {
@@ -680,10 +897,11 @@ internal sealed class ArenaMatchmaker {
     }
 
     /// <summary>The fight in the arena has begun (no more leaving through the window).</summary>
-    public void Started(ulong runId) {
+    public void Started(ulong runId, DateTime? nowUtc = null) {
         lock (_gate) {
             if (_runs.TryGetValue(runId, out var run) && _matches.TryGetValue(run.MatchId, out var match)) {
                 match.Phase = Phase.Fighting;
+                if (match.Members.Any(IsAmbient)) match.AmbientEndsUtc ??= (nowUtc ?? DateTime.UtcNow) + AmbientFightLimit;
             }
         }
     }
@@ -722,7 +940,7 @@ internal sealed class ArenaMatchmaker {
         var names = new Dictionary<ulong, byte[]>();
         var update = new TournamentUpdateList {
             m_updates = [new RemoveMatchUpdate { m_matchID = match.Id }, new AddMatchUpdate { m_matchInfo = Info(match, names) }],
-            m_matchCount = _matches.Values.Count(m => m.Kind == match.Kind && m.Phase == Phase.Open),
+            m_matchCount = _matches.Values.Count(m => m.Kind == match.Kind && Listed(m)),
             m_teamCount = 0,
             m_actorCount = match.Members.Count(),
         };
@@ -732,7 +950,7 @@ internal sealed class ArenaMatchmaker {
     private void BroadcastRemoved(Match match) {
         var update = new TournamentUpdateList {
             m_updates = [new RemoveMatchUpdate { m_matchID = match.Id }],
-            m_matchCount = _matches.Values.Count(m => m.Kind == match.Kind && m.Phase == Phase.Open),
+            m_matchCount = _matches.Values.Count(m => m.Kind == match.Kind && Listed(m)),
             m_teamCount = 0,
             m_actorCount = 0,
         };
@@ -752,11 +970,13 @@ internal sealed class ArenaMatchmaker {
     }
 
     private PvPMatchInfo Info(Match match, Dictionary<ulong, byte[]> names)
-        => ArenaMessages.MatchInfo(View(match), [Team(match, 0, names), Team(match, 1, names)]);
+        => ArenaMessages.MatchInfo(View(match), [Team(match, 0, names, true), Team(match, 1, names, true)]);
 
-    private MatchTeam Team(Match match, int side, Dictionary<ulong, byte[]> names) {
+    private MatchTeam Team(Match match, int side, Dictionary<ulong, byte[]> names, bool listing = false) {
         var actors = new List<PvPActor>();
         foreach (var member in match.Sides[side]) {
+            // CLASSIC: list rows expose every human-available seat; NPC reservations never grey out a human's Join.
+            if (listing && Replaceable(match) && IsAmbient(member)) continue;
             if (_players.GetValueOrDefault(member) is not { } p) {
                 continue;
             }
@@ -771,7 +991,7 @@ internal sealed class ArenaMatchmaker {
 
     private ArenaMatchView View(Match match) => new(match.Id, match.TournamentId, match.MatchNameId, match.MatchName, match.TeamSize,
         match.TeamIds, _players.GetValueOrDefault(match.Creator)?.ActorId ?? 0, match.FriendsOnly, match.MinLevel, match.MaxLevel,
-        match.Phase == Phase.Open ? 0 : 1, match.Kind == ArenaKind.Ranked);
+        Replaceable(match) ? 0 : 1, match.Kind == ArenaKind.Ranked);
 
     private double AverageRating(Match match) {
         var members = match.Members.ToList();

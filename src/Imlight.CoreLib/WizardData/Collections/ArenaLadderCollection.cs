@@ -39,6 +39,7 @@
 
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using Imlight.CoreLib.WizardData.Databases;
 
 namespace Imlight.CoreLib.WizardData.Collections;
@@ -62,6 +63,9 @@ internal interface IArenaLadderStore {
 
     void Save(ArenaLadderEntry entry);
 
+    // CLASSIC: a ranked result is one transaction, never half a team's rating update.
+    void SaveMany(IReadOnlyCollection<ArenaLadderEntry> entries);
+
 }
 
 /// <summary>CLASSIC: the Ranked ladder documents.</summary>
@@ -80,20 +84,24 @@ internal static class ArenaLadderCollection {
             return session.Load<ArenaLadderEntry>(DocumentId(charId));
         }
 
-        public void Save(ArenaLadderEntry entry) {
-            using var session = PlayerDatabase.Instance.Store.OpenSession();
-            var id = DocumentId(entry.CharId);
-            var doc = session.Load<ArenaLadderEntry>(id);
-            if (doc is null) {
-                doc = new ArenaLadderEntry { Id = id, CharId = entry.CharId };
-                session.Store(doc, id);
-                session.Advanced.GetMetadataFor(doc)[global::Raven.Client.Constants.Documents.Metadata.Collection] = CollectionName;
-            }
+        public void Save(ArenaLadderEntry entry) => SaveMany([entry]);
 
-            doc.Rating = entry.Rating;
-            doc.Wins = entry.Wins;
-            doc.Losses = entry.Losses;
-            doc.LastMatchUtc = entry.LastMatchUtc;
+        public void SaveMany(IReadOnlyCollection<ArenaLadderEntry> entries) {
+            using var session = PlayerDatabase.Instance.Store.OpenSession();
+            foreach (var entry in entries) {
+                var id = DocumentId(entry.CharId);
+                var doc = session.Load<ArenaLadderEntry>(id);
+                if (doc is null) {
+                    doc = new ArenaLadderEntry { Id = id, CharId = entry.CharId };
+                    session.Store(doc, id);
+                    session.Advanced.GetMetadataFor(doc)[global::Raven.Client.Constants.Documents.Metadata.Collection] = CollectionName;
+                }
+
+                doc.Rating = entry.Rating;
+                doc.Wins = entry.Wins;
+                doc.Losses = entry.Losses;
+                doc.LastMatchUtc = entry.LastMatchUtc;
+            }
             session.SaveChanges();
         }
 
@@ -103,12 +111,25 @@ internal static class ArenaLadderCollection {
     public sealed class Memory : IArenaLadderStore {
 
         private readonly ConcurrentDictionary<ulong, ArenaLadderEntry> _entries = new();
+        private readonly object _gate = new();
 
-        public ArenaLadderEntry? Load(ulong charId) => _entries.TryGetValue(charId, out var e)
-            ? new ArenaLadderEntry { Id = e.Id, CharId = e.CharId, Rating = e.Rating, Wins = e.Wins, Losses = e.Losses, LastMatchUtc = e.LastMatchUtc }
-            : null;
+        public ArenaLadderEntry? Load(ulong charId) {
+            lock (_gate) {
+                return _entries.TryGetValue(charId, out var e)
+                    ? new ArenaLadderEntry { Id = e.Id, CharId = e.CharId, Rating = e.Rating, Wins = e.Wins, Losses = e.Losses, LastMatchUtc = e.LastMatchUtc }
+                    : null;
+            }
+        }
 
-        public void Save(ArenaLadderEntry entry) => _entries[entry.CharId] = entry;
+        public void Save(ArenaLadderEntry entry) => SaveMany([entry]);
+        public void SaveMany(IReadOnlyCollection<ArenaLadderEntry> entries) {
+            lock (_gate) {
+                foreach (var entry in entries) _entries[entry.CharId] = new ArenaLadderEntry {
+                    Id = entry.Id, CharId = entry.CharId, Rating = entry.Rating, Wins = entry.Wins,
+                    Losses = entry.Losses, LastMatchUtc = entry.LastMatchUtc,
+                };
+            }
+        }
 
     }
 

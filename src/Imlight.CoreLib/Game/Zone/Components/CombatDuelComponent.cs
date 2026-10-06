@@ -292,8 +292,10 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
         Message = message
     });
 
-    internal void DuelBroadcast(IMessage message)
-        => EnactActionOnSubCircles(circle => circle.ParticipantActor.Tell(message));
+    internal void DuelBroadcast(IMessage message) {
+        EnactActionOnSubCircles(circle => circle.ParticipantActor.Tell(message));
+        ArenaOnlookerBroadcast(message); // CLASSIC: the arena's public phase/stats, never private hands.
+    }
 
     internal void CreatureBroadcast(IMessage message) => EnactActionOnSubCircles(circle => {
         if (circle.OccupiedTeam == CombatTeam.Monster) {
@@ -1007,7 +1009,7 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
             Logger.Args(Duel.m_duelID.Full, subCircle.SlotIndex, participantObject.m_debugName));
     }
 
-    private void SendCombatPhase(byte phase) {
+    private void SendCombatPhase(byte phase, IActorRef recipient = null) {
         // Determine which sigil slot the client should point its turn indicator at.
         var upFirstSigilSlot = GetUpFirstSigilSlot();
 
@@ -1037,7 +1039,8 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
             Data = phase == 1 ? upFirstData : "",
         };
 
-        DuelBroadcast(msg);
+        if (recipient is not null) recipient.Tell(msg);
+        else DuelBroadcast(msg);
     }
 
     private void SendUpFirst(int roundNum) {

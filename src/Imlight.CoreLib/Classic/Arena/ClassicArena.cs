@@ -219,7 +219,7 @@ public static class ClassicArena {
 }
 
 /// <summary>The live server behind the matchmaker.</summary>
-internal sealed class ServerArenaWorld(ActorSystem system) : IArenaWorld {
+internal sealed class ServerArenaWorld(ActorSystem system) : IArenaWorld, IArenaAmbientWorld {
 
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<ulong, Wizard> s_live = new();
 
@@ -229,8 +229,14 @@ internal sealed class ServerArenaWorld(ActorSystem system) : IArenaWorld {
     public static void Forget(ulong charId) => s_live.TryRemove(charId, out _);
 
     public IArenaLadderStore Ladder { get; } = new ArenaLadderCollection.Raven();
+    public bool AmbientEnabled => ArenaAmbientParticipants.Enabled;
+    public bool IsAmbient(ulong charId) => ArenaAmbientParticipants.IsIdentity(charId);
+    public ArenaPlayer? ReserveAmbient(int level, int preferredSchool) => ArenaAmbientParticipants.Reserve(system, level, preferredSchool);
+    public void ReleaseAmbient(ulong charId) => ArenaAmbientParticipants.Release(charId);
 
     public ArenaPlayer? Player(ulong charId) {
+        if (IsAmbient(charId)) return ArenaAmbientParticipants.Wizard(charId) is { } ambient
+            ? PlayerOf(ambient.Wizard) with { Ambient = true } : null;
         if (OnlinePlayerCollection.GetOnlinePlayer(charId) is null || !s_live.TryGetValue(charId, out var wizard)) {
             return null;
         }
@@ -258,10 +264,13 @@ internal sealed class ServerArenaWorld(ActorSystem system) : IArenaWorld {
 
     public void Inform(ulong charId, string text) => Tell(charId, ClassicChat.Line(text));
 
-    public void Travel(ulong charId, string zone, string location, ulong runId)
-        => Tell(charId, new CLASSIC_FEATURES_PROTOCOL.MSG_ARENATRAVEL { Zone = zone, Location = location, RunId = runId });
+    public void Travel(ulong charId, string zone, string location, ulong runId) {
+        if (IsAmbient(charId)) ArenaAmbientParticipants.Travel(charId, zone, location, runId);
+        else Tell(charId, new CLASSIC_FEATURES_PROTOCOL.MSG_ARENATRAVEL { Zone = zone, Location = location, RunId = runId });
+    }
 
     public void Deliver(ulong charId, ArenaOutcome outcome) {
+        if (IsAmbient(charId)) return; // CLASSIC: their ladder was saved; never write NPC tickets into player documents.
         if (OnlinePlayerCollection.GetOnlinePlayer(charId)?.ActorPath is { Length: > 0 }) {
             Tell(charId, new CLASSIC_FEATURES_PROTOCOL.MSG_ARENAOUTCOME { Outcome = outcome });
 
@@ -281,7 +290,8 @@ internal sealed class ServerArenaWorld(ActorSystem system) : IArenaWorld {
 
     public ulong NewRunId() => GroupInstances.NewRunId(DateTime.UtcNow);
 
-    public string? ZoneOf(ulong charId) => OnlinePlayerCollection.GetOnlinePlayer(charId)?.CurrentZone;
+    public string? ZoneOf(ulong charId) => IsAmbient(charId) ? ArenaAmbientParticipants.Wizard(charId)?.Zone
+        : OnlinePlayerCollection.GetOnlinePlayer(charId)?.CurrentZone;
 
     private void Tell(ulong charId, object message) {
         if (OnlinePlayerCollection.GetOnlinePlayer(charId)?.ActorPath is { Length: > 0 } path) {

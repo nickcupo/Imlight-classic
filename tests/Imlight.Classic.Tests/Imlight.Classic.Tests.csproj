@@ -69,6 +69,10 @@
     <ServerIntegrationTest Include="ArenaInventoryReloadTests.cs" />
     <ServerIntegrationTest Include="FriendPortalTests.cs" />
     <ServerIntegrationTest Include="AccountRegistrationRaceTests.cs" />
+    <ServerIntegrationTest Include="EvermoreWaveReplayTests.cs" />
+    <ServerIntegrationTest Include="ArenaPvpRuntimeTests.cs" />
+    <ServerIntegrationTest Include="ArenaAmbientMatchmakerTests.cs" />
+    <ServerIntegrationTest Include="ClassicRevivalTests.cs" />
   </ItemGroup>
   <!-- security-auth -->
   <ItemGroup>
