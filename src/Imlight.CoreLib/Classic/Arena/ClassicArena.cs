@@ -340,7 +340,7 @@ internal static class ArenaOutcomeDelivery {
 }
 
 /// <summary>The live server behind the matchmaker.</summary>
-internal sealed class ServerArenaWorld(ActorSystem system) : IArenaWorld, IArenaAmbientWorld {
+internal sealed class ServerArenaWorld(ActorSystem system) : IArenaWorld, IArenaAmbientWorld, IArenaFriendlyWorld {
 
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<ulong, Wizard> s_live = new();
     private static readonly ArenaOutcomeReceipts s_outcomes = new();
@@ -354,6 +354,9 @@ internal sealed class ServerArenaWorld(ActorSystem system) : IArenaWorld, IArena
 
     public IArenaLadderStore Ladder { get; } = new ArenaLadderCollection.Raven();
     public bool AmbientEnabled => ArenaAmbientParticipants.Enabled;
+    public bool FriendlyEnabled => AmbientEnabled;
+    public ArenaPlayer? PreviewFriendly(int level, int school, ArenaPvpSkill skill) => ArenaAmbientParticipants.Preview(level, school, skill);
+    public ArenaPlayer? ReserveFriendly(int level, int school, ArenaPvpSkill skill) => ArenaAmbientParticipants.Reserve(system, level, school, skill);
     public bool IsAmbient(ulong charId) => ArenaAmbientParticipants.IsIdentity(charId);
     public ArenaPlayer? ReserveAmbient(int level, int preferredSchool) => ArenaAmbientParticipants.Reserve(system, level, preferredSchool);
     public void ReleaseAmbient(ulong charId) => ArenaAmbientParticipants.Release(charId);

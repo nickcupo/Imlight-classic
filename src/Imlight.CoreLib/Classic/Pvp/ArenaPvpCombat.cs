@@ -6,6 +6,7 @@ using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Classic.Ambient;
 using Imlight.Classic.Pvp;
 using Imlight.CoreLib.Game.Combat;
+using Imlight.CoreLib.Classic.Arena;
 using Imlight.CoreLib.Game.Zone.Components;
 using Imlight.CoreLib.Shared.Behaviors;
 using Imlight.CoreLib.Shared.Packets;
@@ -19,7 +20,8 @@ internal static class ArenaPvpCombat {
     internal static COMBAT_106_PROTOCOL.MSG_ACTORCOMBATMOVE Choose(CombatDuelComponent duel, CombatDuelSubCircle me,
                                                                  out AllyMove move) {
         duel.CycleArenaAmbientHand(me);
-        move = ArenaPvpBrain.Choose(ViewFor(duel, me), duel.ArenaAiRng(me.SlotIndex));
+        move = ArenaPvpBrain.Choose(ViewFor(duel, me), duel.ArenaAiRng(me.SlotIndex),
+            ArenaAmbientParticipants.SkillOf(me._wizard?.CharId ?? 0));
         return move.Kind == AllyMoveKind.Cast
             ? new() { Actor = me.ParticipantActor, MoveType = (byte) CombatMoveType.Attack,
                       SpellSelection = (byte) move.HandIndex, SpellTarget = (uint) move.TargetSlot }

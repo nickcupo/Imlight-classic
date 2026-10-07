@@ -7,6 +7,8 @@ using Imlight.Classic.Ambient;
 
 namespace Imlight.Classic.Pvp;
 
+public enum ArenaPvpSkill { Beginner, Intermediate, Advanced }
+
 public enum ArenaCardRole { Damage, Heal, Blade, Trap, Shield, Weakness, RemoveWard, RemoveCharm, Reshuffle, Other }
 public enum ArenaModifierKind { OutgoingDamage, IncomingDamage, Absorb, OutgoingHeal, IncomingHeal }
 
@@ -70,7 +72,33 @@ public static class ArenaPvpBrain {
         return (immediate, total, drain);
     }
 
-    public static AllyMove Choose(ArenaPvpView view, Random rng) {
+    public static AllyMove Choose(ArenaPvpView view, Random rng, ArenaPvpSkill skill = ArenaPvpSkill.Advanced) {
+        ArgumentNullException.ThrowIfNull(view);
+        ArgumentNullException.ThrowIfNull(rng);
+        if (skill == ArenaPvpSkill.Beginner) return ChooseBeginner(view);
+        if (skill == ArenaPvpSkill.Intermediate)
+            view = view with { Combatants = view.Combatants.Select(c => c with { TeamFocus = 0 }).ToArray() };
+        return ChooseStrategic(view, rng);
+    }
+
+    // CLASSIC: novice opponents still cast legal cards, heal themselves and recover their finite decks.
+    // They do not calculate opponent shields, team focus or next-round combinations. No rolls/stats are changed.
+    private static AllyMove ChooseBeginner(ArenaPvpView view) {
+        var self = view.Combatants.FirstOrDefault(c => c.Slot == view.SelfSlot && c.Alive);
+        if (view.Stunned || self is null) return AllyMove.Pass("stunned or defeated");
+        var target = view.Combatants.FirstOrDefault(c => !c.Ally && c.Alive);
+        if (target is null) return AllyMove.Pass("no enemy standing");
+        var legal = view.Hand.Where(c => c.Castable && (c.SelfDamage <= 0 || c.SelfDamage < self.Health)).ToArray();
+        var heal = legal.FirstOrDefault(c => c.Role == ArenaCardRole.Heal && self.HealthFraction < .35);
+        if (heal is not null) return new(AllyMoveKind.Cast, heal.HandIndex, self.Slot, "beginner self heal");
+        var attack = legal.Where(c => c.Role == ArenaCardRole.Damage).OrderBy(c => c.Pips).ThenBy(c => c.HandIndex).FirstOrDefault();
+        if (attack is not null) return new(AllyMoveKind.Cast, attack.HandIndex, target.Slot, "beginner affordable hit");
+        var recovery = legal.FirstOrDefault(c => c.Role == ArenaCardRole.Reshuffle && view.RemainingCards <= 2);
+        if (recovery is not null) return new(AllyMoveKind.Cast, recovery.HandIndex, self.Slot, "beginner recover deck");
+        return AllyMove.Pass("build pips");
+    }
+
+    private static AllyMove ChooseStrategic(ArenaPvpView view, Random rng) {
         ArgumentNullException.ThrowIfNull(view);
         ArgumentNullException.ThrowIfNull(rng);
         var self = view.Combatants.FirstOrDefault(c => c.Slot == view.SelfSlot && c.Alive);

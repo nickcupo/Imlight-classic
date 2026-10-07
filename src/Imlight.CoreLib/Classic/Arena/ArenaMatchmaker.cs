@@ -97,6 +97,13 @@ internal interface IArenaWorld {
 
 /// <summary>A match's arena trip, as the arena's duel circle sees it.</summary>
 // CLASSIC: optional server-side participants; worlds with ambient wizards off retain human-only play.
+// CLASSIC: a dormant friendly roster costs no actor or reservation until a human joins.
+internal interface IArenaFriendlyWorld {
+    bool FriendlyEnabled { get; }
+    ArenaPlayer? PreviewFriendly(int level, int school, ArenaPvpSkill skill);
+    ArenaPlayer? ReserveFriendly(int level, int school, ArenaPvpSkill skill);
+}
+
 internal interface IArenaAmbientWorld {
     bool AmbientEnabled { get; }
     bool IsAmbient(ulong charId);
@@ -135,6 +142,8 @@ internal sealed class ArenaMatchmaker {
         public string Zone = "";
         public DateTime TravelledUtc;
         public bool Autonomous;
+        public ArenaPvpSkill? FriendlySkill;
+        public int FriendlySchool;
         public DateTime NextAmbientUtc;
         public DateTime? AmbientEndsUtc;
 
@@ -183,6 +192,7 @@ internal sealed class ArenaMatchmaker {
     private readonly Dictionary<ArenaKind, int> _autonomousSizes = [];
     private readonly Dictionary<ArenaKind, DateTime> _nextAutonomous = [];
     private IArenaAmbientWorld? Ambient => _world is IArenaAmbientWorld { AmbientEnabled: true } enabled ? enabled : null;
+    private IArenaFriendlyWorld? Friendly => Ambient is not null && _world is IArenaFriendlyWorld { FriendlyEnabled: true } enabled ? enabled : null;
     private bool IsAmbient(ulong member) => _players.GetValueOrDefault(member)?.Ambient == true || _world is IArenaAmbientWorld world && world.IsAmbient(member);
     private bool Replaceable(Match match) => !match.Autonomous && (match.Phase == Phase.Open
         || match.Phase == Phase.Confirming && match.Members.Any(IsAmbient));
@@ -286,7 +296,8 @@ internal sealed class ArenaMatchmaker {
     }
 
     /// <summary>The window asks for the matches of a tournament.</summary>
-    public void List(ulong charId, uint tournamentId) {
+    public void List(ulong charId, uint tournamentId, int startingIndex = 0, int numberOfElements = 0,
+        bool qualifiedOnly = false, uint qualifiedLevel = 0, int qualifiedRank = -1) {
         if (KindOf(tournamentId) is not { } kind) {
             Logger.Debug("Arena: {0} asked for tournament {1}, not a guard's.", Logger.Args(charId, tournamentId));
 
@@ -296,26 +307,52 @@ internal sealed class ArenaMatchmaker {
         lock (_gate) {
             if (_stopping) return;
             _watchers[kind].Add(charId);
-            var open = _matches.Values.Where(m => m.Kind == kind && Listed(m)).OrderBy(m => m.Autonomous).ThenBy(m => m.CreatedUtc).Take(40).ToList();
+            var viewer = _world.Player(charId);
+            var open = _matches.Values.Where(m => m.Kind == kind && Listed(m))
+                .OrderBy(m => m.Autonomous).ThenBy(m => m.CreatedUtc).ToList();
+            List<ArenaFriendlyChallenge> friendly = Friendly is null || viewer is null ? [] : ArenaFriendlyRoster.Challenges(kind,
+                Math.Clamp(viewer.Level, 1, 50), qualifiedOnly && qualifiedLevel is >= 1 and <= 50 ? (int) qualifiedLevel : null)
+                .Where(c => !qualifiedOnly || qualifiedRank <= 0 || RankIndex(ArenaFriendlyRoster.InitialRating(c.Skill)) == qualifiedRank).ToList();
+            var total = open.Count + friendly.Count;
+            var start = Math.Clamp(startingIndex, 0, total);
+            var count = Math.Clamp(numberOfElements > 0 ? numberOfElements : ArenaFriendlyRoster.DefaultPageSize,
+                1, ArenaFriendlyRoster.DefaultPageSize);
             var names = new Dictionary<ulong, byte[]>();
+            var standings = new Dictionary<ulong, ArenaStanding>();
+            var rows = open.Cast<object>().Concat(friendly).Skip(start).Take(count)
+                .Select(row => row is Match match ? (ArenaMatchInfo) Info(match, names)
+                    : FriendlyInfo((ArenaFriendlyChallenge) row, names, standings)).ToList();
+            // CLASSIC: native pagination is honored; each update's body stays safely below the protocol's ushort length.
+            // The initial list clears the previous page. Existing incremental AddMatchUpdate is the native continuation.
+            var chunks = rows.Chunk(ArenaFriendlyRoster.RowsPerMessage).ToList();
             var list = new NewListUpdate {
                 m_tournamentID = 0,
                 m_tournamentName = Tournament(kind),
                 m_tournamentNameID = TournamentId(kind),
                 m_clearData = true,
-                m_matches = [.. open.Select(m => (ArenaMatchInfo) Info(m, names))],
+                m_matches = chunks.Count > 0 ? [.. chunks[0]] : [],
                 m_teams = [],
                 m_brackets = [],
-                m_totalTeams = open.Count,
+                m_totalTeams = total,
             };
             _world.Send(charId, new GAME_5_PROTOCOL.MSG_PVPUPDATEINFO {
                 TournamentInfo = ArenaMessages.Blob(list, names),
-                CharacterID = _world.Player(charId)?.ActorId ?? 0,
+                CharacterID = viewer?.ActorId ?? 0,
                 PromptMsg = 0,
                 DiffType = 0,
                 IsPvPQueue = 0,
                 IsPlayerAccountAlreadyHosting = 0,
             });
+            foreach (var chunk in chunks.Skip(1)) {
+                var updates = new TournamentUpdateList {
+                    m_updates = [.. chunk.Select(row => new AddMatchUpdate { m_matchInfo = row })],
+                    m_matchCount = total, m_teamCount = 0, m_actorCount = 0,
+                };
+                _world.Send(charId, new GAME_5_PROTOCOL.MSG_TOURNAMENTUPDATE {
+                    Updates = ArenaMessages.Blob(updates, names), CharacterID = 0,
+                });
+            }
+
         }
     }
 
@@ -348,6 +385,7 @@ internal sealed class ArenaMatchmaker {
             Logger.Information("Arena: {0} created {1} match {2} ({3}, levels {4}-{5}{6}).",
                 Logger.Args(player.Name, kind, match.Id, match.MatchName, minLevel, maxLevel, friendsOnly ? ", friends only" : ""));
             SeatLocked(match, player, 0);
+            FillFriendlyNow(match);
         }
     }
 
@@ -359,6 +397,10 @@ internal sealed class ArenaMatchmaker {
 
         lock (_gate) {
             if (_stopping) return;
+            if (Friendly is not null && (ArenaFriendlyRoster.Read(matchId) ?? ArenaFriendlyRoster.Read(teamId)) is { } challenge) {
+                JoinFriendly(player, challenge, teamId);
+                return;
+            }
             var match = _matches.GetValueOrDefault(matchId)
                 ?? _matches.Values.FirstOrDefault(m => m.TeamIds.Contains(teamId) || m.TeamIds.Contains(matchId));
             if (match is null) {
@@ -387,6 +429,7 @@ internal sealed class ArenaMatchmaker {
 
             MakeRoomForHuman(match, side);
             SeatLocked(match, player, side);
+            FillFriendlyNow(match);
         }
     }
 
@@ -418,6 +461,12 @@ internal sealed class ArenaMatchmaker {
                 : candidates.OrderBy(c => c.Match.CreatedUtc).FirstOrDefault();
             if (pick.Match is null) {
                 var newSize = size == 0 ? 1 : size;
+                if (Friendly is not null) {
+                    var skill = ArenaFriendlyRoster.NearestSkill(rating);
+                    JoinFriendly(player, new ArenaFriendlyChallenge(kind, Math.Clamp(player.Level, 1, 50),
+                        _ambientSchool++ % 7, skill, newSize), 0);
+                    return;
+                }
                 var made = NewMatch(kind, newSize, charId, friendsOnly: false, 0, 0);
                 Logger.Information("Arena: {0} quick joined {1} {2}v{2}: no open match, made {3}.", Logger.Args(player.Name, kind, newSize, made.Id));
                 SeatLocked(made, player, 0);
@@ -428,6 +477,7 @@ internal sealed class ArenaMatchmaker {
             Logger.Information("Arena: {0} quick joined match {1} side {2}.", Logger.Args(player.Name, pick.Match.Id, pick.Side + 1));
             MakeRoomForHuman(pick.Match, pick.Side);
             SeatLocked(pick.Match, player, pick.Side);
+            FillFriendlyNow(pick.Match);
         }
     }
 
@@ -777,9 +827,13 @@ internal sealed class ArenaMatchmaker {
         if (Ambient is not { } world) return false;
         var reserved = new List<(ArenaPlayer Player, int Side)>();
         try {
-            for (var side = 0; side < 2; side++) {
+            var sides = match.FriendlySkill is not null ? new[] { 1, 0 } : new[] { 0, 1 };
+            var schoolOffset = 0;
+            foreach (var side in sides) {
                 for (var vacancy = match.Sides[side].Count; vacancy < match.TeamSize; vacancy++) {
-                    var player = world.ReserveAmbient(level, _ambientSchool++ % 7);
+                    var player = match.FriendlySkill is { } skill && Friendly is { } roster
+                        ? roster.ReserveFriendly(level, (match.FriendlySchool + schoolOffset++) % 7, skill)
+                        : world.ReserveAmbient(level, _ambientSchool++ % 7);
                     if (player is null) { foreach (var seat in reserved) world.ReleaseAmbient(seat.Player.CharId); return false; }
                     reserved.Add((player, side));
                 }
@@ -791,6 +845,59 @@ internal sealed class ArenaMatchmaker {
         }
         foreach (var seat in reserved) SeatLocked(match, seat.Player, seat.Side);
         return true;
+    }
+
+    // CLASSIC: reserve only after a human commits to this match. Listing thousands of dormant choices spawns nothing.
+    private void JoinFriendly(ArenaPlayer player, ArenaFriendlyChallenge challenge, ulong teamId) {
+        if (Friendly is null || player.Level != challenge.Level) {
+            _world.Send(player.CharId, ArenaMessages.Error(ArenaErrors.NoSlots)); return;
+        }
+        if (!LeaveLocked(player.CharId, quiet: true)) return;
+        var made = NewMatch(challenge.Kind, challenge.TeamSize, player.CharId, false, challenge.Level, challenge.Level);
+        made.FriendlySkill = challenge.Skill; made.FriendlySchool = challenge.School;
+        var side = teamId == challenge.TeamIds[1] ? 1 : 0;
+        SeatLocked(made, player, side);
+        FillFriendlyNow(made);
+    }
+
+    private void FillFriendlyNow(Match match) {
+        if (Friendly is null || match.FriendsOnly || match.Autonomous || match.Phase != Phase.Open
+            || !match.Members.Any(c => !IsAmbient(c))) return;
+        if (match.FriendlySkill is null) {
+            var humans = match.Members.Where(c => !IsAmbient(c)).ToArray();
+            match.FriendlySkill = ArenaFriendlyRoster.NearestSkill((int) humans.Average(c => Standing(c).Rating));
+            match.FriendlySchool = _ambientSchool++ % 7;
+        }
+        var humanLevel = (int) Math.Round(match.Members.Where(c => !IsAmbient(c)).Average(c => _players[c].Level));
+        var minimum = Math.Clamp(match.MinLevel > 0 ? match.MinLevel : 1, 1, 50);
+        var maximum = Math.Clamp(match.MaxLevel > 0 ? match.MaxLevel : 50, minimum, 50);
+        match.NextAmbientUtc = DateTime.UtcNow.AddSeconds(AmbientWaitSeconds);
+        if (!ReserveSeats(match, Math.Clamp(humanLevel, minimum, maximum)))
+            foreach (var human in match.Members.Where(c => !IsAmbient(c)))
+                _world.Inform(human, "Friendly arena seats are busy. Your match will retry while you wait.");
+    }
+
+    private PvPMatchInfo FriendlyInfo(ArenaFriendlyChallenge challenge, Dictionary<ulong, byte[]> names,
+        Dictionary<ulong, ArenaStanding> standings) {
+        var preview = Friendly!.PreviewFriendly(challenge.Level, challenge.School, challenge.Skill);
+        var view = new ArenaMatchView(challenge.Id, TournamentId(challenge.Kind),
+            ArenaRules.Hash(ArenaRules.MatchName(Tournament(challenge.Kind), challenge.TeamSize)),
+            ArenaRules.MatchName(Tournament(challenge.Kind), challenge.TeamSize), challenge.TeamSize,
+            challenge.TeamIds, preview?.ActorId ?? 0, false, challenge.Level, challenge.Level, 0, challenge.Kind == ArenaKind.Ranked);
+        var actors = new List<PvPActor>();
+        if (preview is not null) {
+            if (!standings.TryGetValue(preview.CharId, out var standing)) {
+                var saved = _world.Ladder.Load(preview.CharId);
+                standings[preview.CharId] = standing = saved is null
+                    ? new ArenaStanding(ArenaFriendlyRoster.InitialRating(challenge.Skill), 0, 0)
+                    : new ArenaStanding(saved.Rating, saved.Wins, saved.Losses);
+            }
+            names[preview.ActorId] = preview.NameBlob;
+            actors.Add(ArenaMessages.Actor(preview, view, 1, 4, standing.Rating, RankIndex(standing.Rating)));
+        }
+        var row = ArenaMessages.MatchInfo(view, [ArenaMessages.Team(view, 0, []), ArenaMessages.Team(view, 1, actors)]);
+        row.m_matchTitle = "Friendly: " + challenge.Skill;
+        return row;
     }
 
     private void FillWaitingMatches(DateTime now) {
@@ -1120,7 +1227,9 @@ internal sealed class ArenaMatchmaker {
     public ArenaStanding Standing(ulong charId) {
         var entry = _world.Ladder.Load(charId);
 
-        return entry is null ? new ArenaStanding(_config.StartRating, 0, 0) : new ArenaStanding(entry.Rating, entry.Wins, entry.Losses);
+        return entry is null ? new ArenaStanding(_players.GetValueOrDefault(charId)?.FriendlySkill is { } skill
+            ? ArenaFriendlyRoster.InitialRating(skill) : _config.StartRating, 0, 0)
+            : new ArenaStanding(entry.Rating, entry.Wins, entry.Losses);
     }
 
     private int RankIndex(int rating) {
