@@ -165,17 +165,12 @@ internal class SpellbookService(SessionActor sessionActor) : MessageService(sess
             Logger.Warning("Could not resolve treasure card spell hash {0} to a template ID.",
                 Logger.Args(message.SpellID));
 
-            SendToSocket(new WIZARD_12_PROTOCOL.MSG_REMOVETREASURESPELLFROMBOOK() {
-                SpellID = message.SpellID,
-                EnchantmentID = message.EnchantmentID
-            });
-
+            // CLASSIC: an unresolved card has no acknowledged saved removal to confirm.
             return;
         }
 
-        // Remove one copy from the book and persist.
-        wizard.SpellbookBehavior.RemoveTreasureCard(templateId);
-        WizardData.Collections.WizardCollection.RemoveTreasureCard(wizard, templateId);
+        // CLASSIC: remove only an acknowledged saved copy; no live mutation before persistence.
+        if (!WizardData.Collections.WizardCollection.TryRemoveTreasureCards(wizard, templateId, 1, out _)) return;
 
         // Echo back to the client to confirm.
         SendToSocket(new WIZARD_12_PROTOCOL.MSG_REMOVETREASURESPELLFROMBOOK() {
@@ -196,15 +191,14 @@ internal class SpellbookService(SessionActor sessionActor) : MessageService(sess
         var wizard = GetActiveWizard();
         if (wizard is null) return;
         var templateId = TreasureTemplateOf(message.SpellID);
-        var owned = templateId == 0 ? 0 : wizard.SpellbookBehavior.TreasureCardCount(templateId);
-        var count = Math.Clamp(message.Quantity, 1, Math.Max(1, owned));
-        Logger.Information("Treasure card delete: wizard {0} spell {1} -> template {2}, {3} of {4}",
-            Logger.Args(wizard.CharId.ToString(), message.SpellID.ToString(), templateId.ToString(), count.ToString(), owned.ToString()));
-        if (templateId == 0 || owned == 0) return;
-        for (var i = 0; i < count; i++) WizardData.Collections.WizardCollection.RemoveTreasureCard(wizard, templateId);
-        var name = (CoreObjectFactory.GetCoreTemplate(templateId) as SpellTemplate)?.m_name ?? "";
+        // CLASSIC: resolve the native receipt before saving, then remove the exact available saved count once.
+        if (templateId == 0 || CoreObjectFactory.GetCoreTemplate(templateId) is not SpellTemplate spell) return;
+        var spellHash = StringHash.Compute(spell.m_name);
+        if (!WizardData.Collections.WizardCollection.TryRemoveTreasureCards(wizard, templateId, message.Quantity, out var count)) return;
+        Logger.Information("Treasure card delete: wizard {0} spell {1} -> template {2}, saved removal {3}",
+            Logger.Args(wizard.CharId.ToString(), message.SpellID.ToString(), templateId.ToString(), count.ToString()));
         SendToSocket(new WIZARD_12_PROTOCOL.MSG_REMOVETREASURESPELLFROMBOOK {
-            SpellID = unchecked((int) StringHash.Compute(name)), EnchantmentID = message.EnchantmentID, Quantity = count,
+            SpellID = unchecked((int) spellHash), EnchantmentID = message.EnchantmentID, Quantity = count,
         });
     }
 

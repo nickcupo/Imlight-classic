@@ -42,9 +42,10 @@
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
+using System.Threading;
 using Akka.Actor;
 using Imcodec.CoreObject;
-using Imcodec.Cryptography;
 using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty;
 using Imcodec.ObjectProperty.TypeCache;
@@ -65,8 +66,13 @@ public static class LootGranter {
     private const uint LOOT_LIST_SERIALIZATION_FLAGS = 4;
     private const uint INVENTORY_ADD_SERIALIZATION_FLAGS =
         (uint) (PropertyFlags.Prop_Transmit | PropertyFlags.Prop_AuthorityTransmit);
-    private const uint REAGENT_ADD_SERIALIZATION_FLAGS = 27;   // CLASSIC: as CommandModifyProtocol's addreagent
     private static readonly CoreObjectSerializer s_itemSerializer = new(behaviors: SerializerFlags.None);
+    // CLASSIC: capture the actual grant-path packets without creating a session or contacting a game server.
+    internal static readonly AsyncLocal<Action<IActorRef, object>> TestSendScope = new();
+    private static void Send(IActorRef playerActor, object message) {
+        if (TestSendScope.Value is { } send) send(playerActor, message);
+        else playerActor.Tell(message);
+    }
 
     /// <summary>
     /// Grants every reward in <paramref name="results"/> to the player and shows the loot popup.
@@ -90,8 +96,7 @@ public static class LootGranter {
         UpdateWizardXP(playerActor, results.ExperienceAmount);
         UpdateWizardTP(playerActor, wizard, results.TrainingPoints);
         UpdateCharacterItems(playerActor, wizard, results.Items);
-        UpdateTreasureCards(playerActor, wizard, results);   // CLASSIC
-        UpdateReagents(playerActor, wizard, results.Reagents);   // CLASSIC
+        UpdateStackRewards(playerActor, wizard, results);   // CLASSIC: one acknowledged card/reagent batch
         if (showPopup) {
             SendLootInfoToClient(playerActor, results, wizard);
         }
@@ -103,11 +108,13 @@ public static class LootGranter {
 
     /// <summary>CLASSIC: adds one treasure card to the wizard's treasure book (a Bazaar purchase).</summary>
     internal static void GrantTreasureCard(IActorRef playerActor, Wizard wizard, uint templateId)
-        => UpdateTreasureCards(playerActor, wizard, new DropTableResult { TreasureCards = [templateId] });
+        => UpdateStackRewards(playerActor, wizard, new DropTableResult { TreasureCards = [templateId] });
 
     /// <summary>CLASSIC: adds reagents to the wizard's reagent bag (a Bazaar purchase).</summary>
     internal static void GrantReagent(IActorRef playerActor, Wizard wizard, ulong templateId, int quantity)
-        => UpdateReagents(playerActor, wizard, [new DropItemResult { ItemId = templateId.ToString(), ItemName = string.Empty, Quantity = quantity }]);
+        => UpdateStackRewards(playerActor, wizard, new DropTableResult {
+            Reagents = [new DropItemResult { ItemId = templateId.ToString(), ItemName = string.Empty, Quantity = quantity }]
+        });
 
     private static void UpdateWizardGold(IActorRef playerActor, Wizard wizard, int goldDelta) {
         if (goldDelta == 0) {
@@ -124,7 +131,7 @@ public static class LootGranter {
             Gold = wizard.GameStats.m_currentGold,
             MaxGold = wizard.GameStats.m_baseGoldPouch
         };
-        playerActor.Tell(networkMessage);
+        Send(playerActor, networkMessage);
     }
 
     private static void UpdateWizardXP(IActorRef playerActor, int xpDelta) {
@@ -136,7 +143,7 @@ public static class LootGranter {
         var internalMsg = new CHARACTER_103_PROTOCOL.MSG_GAINXP {
             XP = xpDelta
         };
-        playerActor.Tell(internalMsg);
+        Send(playerActor, internalMsg);
 
         // That's it. The SessionActor will inform the game client, and level them up if needed.
     }
@@ -158,7 +165,7 @@ public static class LootGranter {
         var msg = new WIZARD_12_PROTOCOL.MSG_UPDATETRAINING() {
             TrainingPoints = (ushort) newTP
         };
-        playerActor.Tell(msg);
+        Send(playerActor, msg);
     }
 
     private static void UpdateCharacterItems(IActorRef playerActor, Wizard wizard, List<DropItemResult> items) {
@@ -166,9 +173,11 @@ public static class LootGranter {
             return;
         }
 
+        // CLASSIC: the popup/Second Chance window lists successful grant results, rather than refused rolls.
+        var acquired = new List<DropItemResult>();
         // Add each item to the wizard's inventory.
         foreach (var item in items) {
-            if (!ulong.TryParse(item.ItemId, out var itemGuid)) {
+            if (item is null || !ulong.TryParse(item.ItemId, out var itemGuid)) {
                 continue;
             }
 
@@ -178,7 +187,7 @@ public static class LootGranter {
 
                 // CLASSIC: tell the player why a reward is missing; with a full backpack it used to vanish silently.
                 if (wizard.InventoryBehavior?.IsFull == true) {
-                    playerActor.Tell(Classic.ClassicChat.Line(
+                    Send(playerActor, Classic.ClassicChat.Line(
                         "Your backpack is full, so a reward item could not be added. Make room and try again later."));
                 }
 
@@ -188,63 +197,44 @@ public static class LootGranter {
             // The attach payload (which carries the inventory) was already sent, so push each
             // item to the client explicitly or the reward stays invisible this session.
             SendInventoryAdd(playerActor, wizard, addedItem);
+            acquired.Add(new DropItemResult { ItemId = item.ItemId, ItemName = item.ItemName, Quantity = 1 });
         }
+        items.Clear();
+        items.AddRange(acquired);
     }
 
-    // CLASSIC: adds dropped Treasure Cards to the treasure book the way a Bazaar/vendor purchase does
-    // (TreasureShopService): the client learns the card by its name hash, the save keeps the spell template.
-    private static void UpdateTreasureCards(IActorRef playerActor, Wizard wizard, DropTableResult results) {
-        results.TreasureCardSpellIds.Clear();
-        foreach (var templateId in results.TreasureCards) {
-            if (CoreObjectFactory.GetCoreTemplate(templateId) is not SpellTemplate spell) {
-                Logger.Warning("Treasure Card drop {0} is not a spell template.", Logger.Args(templateId));
-
-                continue;
-            }
-
-            var spellHash = StringHash.Compute(spell.m_name);
-            playerActor.Tell(new WIZARD_12_PROTOCOL.MSG_ADDTREASURESPELLTOBOOK {
-                SpellID = (int) spellHash,
-                EnchantmentID = 0,
-            });
-
-            wizard.SpellbookBehavior.AddTreasureCard(templateId);
-            WizardCollection.AddTreasureCard(wizard, templateId);
-            results.TreasureCardSpellIds.Add(spellHash);
+    // CLASSIC: native packets, popup counts and Second Chance results follow the same saved receipts.
+    private static void UpdateStackRewards(IActorRef playerActor, Wizard wizard, DropTableResult results) {
+        StackRewardReceipt receipt;
+        try {
+            ClassicStackRewards.TryGrant(wizard, results.TreasureCards, results.Reagents, out receipt);
         }
-    }
+        catch {
+            if (WizardCollection.IsInventorySnapshotUncertain(wizard)) Send(playerActor, "Close");
+            throw; // no automatic retry/refund of a write that may already have committed
+        }
 
-    // CLASSIC: adds dropped reagents to the reagent bag the way the addreagent command does.
-    private static void UpdateReagents(IActorRef playerActor, Wizard wizard, List<DropItemResult> reagents) {
-        foreach (var reagent in reagents) {
-            if (!ulong.TryParse(reagent.ItemId, out var templateId)
-                || CoreObjectFactory.GetCoreTemplate(templateId) is not ReagentItemTemplate) {
-                continue;
-            }
+        var names = results.Reagents.Where(drop => drop is not null && ulong.TryParse(drop.ItemId, out _))
+            .GroupBy(drop => ulong.Parse(drop.ItemId)).ToDictionary(group => group.Key, group => group.First().ItemName);
+        results.TreasureCards = receipt.Cards.Select(card => card.TemplateId).ToList();
+        results.TreasureCardSpellIds = receipt.Cards.Select(card => card.SpellHash).ToList();
+        results.Reagents = receipt.Reagents.Select(acquired => new DropItemResult {
+            ItemId = acquired.Reagent.m_templateID.Full.ToString(),
+            ItemName = names.GetValueOrDefault(acquired.Reagent.m_templateID.Full, string.Empty),
+            Quantity = acquired.Acquired,
+        }).ToList();
 
-            ClientReagentItem added = null;
-            for (var i = 0; i < Math.Max(1, reagent.Quantity); i++) {
-                if (!wizard.AddReagent(templateId, out var reagentObj)) {
-                    Logger.Error("Failed to add reagent {0} to wizard {1}'s reagent bag.",
-                        Logger.Args(templateId, wizard.CharId));
-
-                    break;
-                }
-
-                added = reagentObj;
-            }
-
-            if (added is null || !s_itemSerializer.Serialize(added, REAGENT_ADD_SERIALIZATION_FLAGS, out var serializedReagent)) {
-                continue;
-            }
-
-            playerActor.Tell(new WIZARD_12_PROTOCOL.MSG_REAGENTADD {
+        foreach (var card in receipt.Cards) Send(playerActor, new WIZARD_12_PROTOCOL.MSG_ADDTREASURESPELLTOBOOK {
+            SpellID = (int) card.SpellHash, EnchantmentID = 0,
+        });
+        foreach (var acquired in receipt.Reagents) {
+            Send(playerActor, new WIZARD_12_PROTOCOL.MSG_REAGENTADD {
                 GlobalID = wizard.GameObjectID,
-                Data = serializedReagent,
+                Data = acquired.Data,
             });
-            playerActor.Tell(new WIZARD2_53_PROTOCOL.MSG_ITEMACQUISITION {
-                ItemGlobalID = added.m_globalID,
-                ItemTemplateID = (uint) added.m_templateID,
+            Send(playerActor, new WIZARD2_53_PROTOCOL.MSG_ITEMACQUISITION {
+                ItemGlobalID = acquired.Reagent.m_globalID,
+                ItemTemplateID = (uint) acquired.Reagent.m_templateID,
                 ItemLocation = 1,
             });
         }
@@ -258,7 +248,7 @@ public static class LootGranter {
             return;
         }
 
-        playerActor.Tell(new GAME_5_PROTOCOL.MSG_INVENTORYBEHAVIOR_ADDITEM {
+        Send(playerActor, new GAME_5_PROTOCOL.MSG_INVENTORYBEHAVIOR_ADDITEM {
             GlobalID = wizard.GameObjectID,
             SerializedItem = serializedItem,
         });
@@ -275,7 +265,7 @@ public static class LootGranter {
             PotionMax = newWizardMaxPots,
             PotionCharge = newWizardMaxPots
         };
-        playerActor.Tell(potionChargeUpdateMsg);
+        Send(playerActor, potionChargeUpdateMsg);
     }
 
     private static void SendLootInfoToClient(IActorRef playerActor, DropTableResult results, Wizard wizard) {
@@ -298,7 +288,7 @@ public static class LootGranter {
             LootList = serializedLootList
         };
 
-        playerActor.Tell(lootMsg);
+        Send(playerActor, lootMsg);
     }
 
 }

@@ -182,10 +182,14 @@ public sealed class MonstrologyConcurrencyTests {
         Assert.Empty(f.Live.SpellbookBehavior.TreasureCardTemplateIds);
         Assert.Empty(f.Persisted.SpellbookBehavior.TreasureCardTemplateIds);
         f.FailSave = false;
-        Assert.True(WizardCollection.TryPurchaseTreasureCards(f.Live, 777, 3, 100, f.Open, f.Load));
-        Assert.Equal(700, f.Live.GameStats.m_currentGold);
-        Assert.Equal(3, f.Live.SpellbookBehavior.TreasureCardTemplateIds.Count);
-        Assert.Equal(f.Persisted.SpellbookBehavior.TreasureCardTemplateIds, f.Live.SpellbookBehavior.TreasureCardTemplateIds);
+        // CLASSIC: a failed acknowledgement refuses the old instance; a fresh authoritative login may buy.
+        Assert.True(WizardCollection.IsInventorySnapshotUncertain(f.Live));
+        Assert.False(WizardCollection.TryPurchaseTreasureCards(f.Live, 777, 3, 100, f.Open, f.Load));
+        var reloaded = Fixture.Clone(f.Persisted);
+        Assert.True(WizardCollection.TryPurchaseTreasureCards(reloaded, 777, 3, 100, f.Open, f.Load));
+        Assert.Equal(700, reloaded.GameStats.m_currentGold);
+        Assert.Equal(3, reloaded.SpellbookBehavior.TreasureCardTemplateIds.Count);
+        Assert.Equal(f.Persisted.SpellbookBehavior.TreasureCardTemplateIds, reloaded.SpellbookBehavior.TreasureCardTemplateIds);
     }
 
     [Theory]

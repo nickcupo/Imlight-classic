@@ -177,11 +177,10 @@ internal class CommandModifyProtocol : CommandProtocol {
             return;
         }
 
-        for (var i = 0; i < copies; i++) {
-            Game.DropTables.LootGranter.GrantTreasureCard(Context.SessionActor, Context.Character, id);
-        }
-
-        InformSenderClient($"Added {copies} {spell.m_name} treasure card(s).");
+        // CLASSIC: one acknowledged batch, with the actual fitting count in the QA confirmation.
+        var reward = new WizardData.Models.World.DropTableResult { TreasureCards = Enumerable.Repeat(id, copies).ToList() };
+        Game.DropTables.LootGranter.Grant(Context.SessionActor, Context.Character, reward, showPopup: false);
+        InformSenderClient($"Added {reward.TreasureCards.Count} {spell.m_name} treasure card(s).");
     }
 
     [Help("Add a pet snack by template id.")]

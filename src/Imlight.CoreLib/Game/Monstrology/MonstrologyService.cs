@@ -10,6 +10,7 @@ using Imcodec.MessageLayer.Generated;
 using Imlight.Common;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;
+using Imlight.CoreLib.WizardData.Collections;
 
 namespace Imlight.CoreLib.Game.Monstrology;
 
@@ -44,6 +45,7 @@ internal sealed class MonstrologyService(SessionActor session) : MessageService(
     private void RequestCreate(WIZARD2_53_PROTOCOL.MSG_MONSTERMAGICREQUESTCREATE message) {
         var wizard = GetActiveWizard();
         if (!Available || wizard == null || (message.GlobalID != wizard.CharId && message.GlobalID != wizard.GameObjectID)) return;
+        if (WizardCollection.IsInventorySnapshotUncertain(wizard)) { CloseSession(); return; } // CLASSIC: authoritative reload only.
         var validKind = MonstrologyCreation.TryKind(message.RequestType, out var kind);
         // CLASSIC: every creation request and its result at Information level, so a wrong button mapping shows.
         Logger.Information("Monstrology create: wizard {0} RequestType {1} ({2}) creature {3}",
@@ -97,13 +99,17 @@ internal sealed class MonstrologyService(SessionActor session) : MessageService(
                         wizard.InventoryBehavior.InventoryItemIds = persisted.InventoryBehavior.InventoryItemIds.ToList();
                         wizard.InventoryBehavior.Items.Add(guest);
                     }
-                }));
+                }, liveWizard: wizard));
         }
         catch (Exception ex) {
             Logger.Warning("Monstrology create: wizard {0} {1} creature {2} failed: {3}",
                 Logger.Args(wizard.CharId.ToString(), kind.ToString(), collected.ToString(), ex.Message));
-            Quiet(wizard, "Monstrology creation could not be committed. Refresh the tome before retrying."); return;
+            // CLASSIC: a save may be durable despite a missing acknowledgement. The repository marks inside the
+            // shared lane; close without suggesting another creation against the unchanged attached balances.
+            if (WizardCollection.IsInventorySnapshotUncertain(wizard)) { CloseSession(); return; }
+            Quiet(wizard, "Monstrology creation could not be committed."); return;
         }
+        if (WizardCollection.IsInventorySnapshotUncertain(wizard)) { CloseSession(); return; }
         Logger.Information("Monstrology create: wizard {0} {1} creature {2} -> template {3}: {4} (Animus {5}, gold {6})",
             Logger.Args(wizard.CharId.ToString(), kind.ToString(), collected.ToString(), output.ToString(), result.ToString(),
                 cost.Animus.ToString(), cost.Gold.ToString()));

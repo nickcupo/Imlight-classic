@@ -41,14 +41,16 @@
  * Last Updated: 09/27/2026
  */
 
+using System;
 using System.Collections.Generic;
-using Imcodec.Cryptography;
+using System.Linq;
+using Imcodec.MessageLayer;
 using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Classic;
 using Imlight.Common;
 using Imlight.CoreLib.Classic;
-using Imlight.CoreLib.Shared.Resources;
+using Imlight.CoreLib.Game.DropTables;
 using Imlight.CoreLib.WizardData.Collections;
 using Imlight.CoreLib.WizardData.Models.Player;
 
@@ -63,28 +65,28 @@ internal partial class QuestService {
         }
 
         var school = wizard.MagicSchoolBehavior?.MagicSchool.ToString();
-        foreach (var card in rewards.CardsFor(questName, school)) {
-            if (CoreObjectFactory.GetCoreTemplate(card.Template) is not SpellTemplate spell) {
-                Logger.Warning("Quest {Quest} gives treasure card {Card} ({Template}), which is no client spell; it is not granted.",
-                    Logger.Args(questName, card.Name, card.Template));
-                continue;
-            }
-
-            var spellHash = StringHash.Compute(spell.m_name);
-            for (var i = 0; i < card.Count; i++) {
-                SendToSocket(new WIZARD_12_PROTOCOL.MSG_ADDTREASURESPELLTOBOOK { SpellID = (int) spellHash, EnchantmentID = 0 });
-                wizard.SpellbookBehavior.AddTreasureCard(card.Template);
-                WizardCollection.AddTreasureCard(wizard, card.Template);
-            }
-
-            loot.Add(new TreasureCardLootInfo {
-                m_lootType = LOOT_TYPE.LOOT_TYPE_TREASURE_CARD,
-                m_spellID = card.Template,
-                m_numItems = card.Count,
-            });
-            Logger.Information("Quest {Quest} gave wizard {CharId} the treasure card {Card} x{Count}.",
-                Logger.Args(questName, wizard.CharId, card.Name, card.Count));
+        var rolled = rewards.CardsFor(questName, school).SelectMany(card => Enumerable.Repeat(card.Template, card.Count)).ToArray();
+        try {
+            GrantClassicQuestCardBatch(wizard, rolled, loot, SendToSocket);
+        }
+        catch {
+            if (WizardCollection.IsInventorySnapshotUncertain(wizard)) CloseSession();
+            throw; // CLASSIC: never repeat a reward whose saved acknowledgement may have been lost
         }
     }
 
+    // CLASSIC: use the same fresh saved capacity and ACK-only publication as combat/Second Chance rewards.
+    // Keep this quest window's existing template-ID convention; its counts describe only accepted copies.
+    internal static bool GrantClassicQuestCardBatch(Wizard wizard, IReadOnlyList<uint> rolled,
+        List<LootInfo> loot, Action<IMessage> send) {
+        if (!ClassicStackRewards.TryGrant(wizard, rolled, [], out var receipt)) return false;
+        foreach (var card in receipt.Cards)
+            send(new WIZARD_12_PROTOCOL.MSG_ADDTREASURESPELLTOBOOK { SpellID = (int) card.SpellHash, EnchantmentID = 0 });
+        foreach (var group in receipt.Cards.GroupBy(card => card.TemplateId)) loot.Add(new TreasureCardLootInfo {
+            m_lootType = LOOT_TYPE.LOOT_TYPE_TREASURE_CARD,
+            m_spellID = group.Key,
+            m_numItems = group.Count(),
+        });
+        return true;
+    }
 }

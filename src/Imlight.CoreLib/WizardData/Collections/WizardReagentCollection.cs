@@ -92,8 +92,16 @@ internal sealed class WizardReagentCollection {
     // CLASSIC: validate every identity/ownership/reference before staging any count, then use one fresh tracked
     // row snapshot for all templates. Same-template inputs sum explicit deltas and produce one canonical receipt.
     internal static bool TryStageAcquisitions(IDocumentSession session, Wizard saved,
-        IReadOnlyList<ReagentAcquisition> acquisitions, out IReadOnlyList<ReagentAcquisitionReceipt> receipts) {
+        IReadOnlyList<ReagentAcquisition> acquisitions, out IReadOnlyList<ReagentAcquisitionReceipt> receipts)
+        => TryStageAcquisitions(session, saved, acquisitions, out receipts, out _);
+
+    // CLASSIC: an enclosing card/reagent reward must distinguish validated full stacks from a corrupt bag.
+    // Existing harvest callers keep their false/no-save result when there are no fitting copies.
+    internal static bool TryStageAcquisitions(IDocumentSession session, Wizard saved,
+        IReadOnlyList<ReagentAcquisition> acquisitions, out IReadOnlyList<ReagentAcquisitionReceipt> receipts,
+        out bool validated) {
         receipts = [];
+        validated = false;
         if (session is null || saved is null || saved.CharId == 0 || acquisitions is null || acquisitions.Count == 0
             || acquisitions.Any(acquisition => acquisition is null || acquisition.Candidate is null
                 || acquisition.Quantity <= 0 || acquisition.Candidate.m_characterId.Full != saved.CharId
@@ -122,6 +130,7 @@ internal sealed class WizardReagentCollection {
             if (acquired == 0) continue;
             plans.Add((existing ?? (group.First().Candidate with { m_quantity = 0 }), existing is null, acquired));
         }
+        validated = true; // every bag reference and every input identity has passed, including full stacks
         if (plans.Count == 0) return false;
 
         var updated = new List<ReagentAcquisitionReceipt>();

@@ -118,7 +118,13 @@ internal class TreasureShopService(SessionActor sessionActor) : MessageService(s
         try {
             purchased = WizardCollection.TryPurchaseTreasureCards(playerWizard, spell.m_templateID, quantity, goldCost);
         } catch (Exception) {
-            SendToSocket(new WIZARD_12_PROTOCOL.MSG_TREASUREBUYCONFIRM { Failure = 1 });
+            // CLASSIC: a save can commit before its acknowledgement is lost. Close for authoritative reload,
+            // rather than offering a retry against an unchanged live wallet/book.
+            CloseSession();
+            throw;
+        }
+        if (WizardCollection.IsInventorySnapshotUncertain(playerWizard)) {
+            CloseSession();
             return;
         }
         if (!purchased) {

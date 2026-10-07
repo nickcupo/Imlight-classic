@@ -21,6 +21,9 @@
     <ServerIntegrationTest Include="C6ServerGapTests.cs" />
     <ServerIntegrationTest Include="GlacialTreasurePriceTests.cs" />
     <ServerIntegrationTest Include="ReagentPersistenceRegressionTests.cs" />
+    <ServerIntegrationTest Include="LootRewardPersistenceTests.cs" />
+    <ServerIntegrationTest Include="TreasureMutationSafetyTests.cs" />
+    <ServerIntegrationTest Include="MonstrologyCardSafetyTests.cs" />
     <ServerIntegrationTest Include="BazaarTransactionPersistenceTests.cs" />
     <ServerIntegrationTest Include="BazaarNativeProtocolTests.cs" />
     <ServerIntegrationTest Include="BazaarInventorySafetyTests.cs" />

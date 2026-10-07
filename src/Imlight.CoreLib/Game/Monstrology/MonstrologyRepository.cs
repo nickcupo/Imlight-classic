@@ -24,11 +24,17 @@ internal sealed class MonstrologyRepository(IDocumentStore store) {
     }
     internal static MonstrologyResult CreateCard(ulong owner, AnimusCreation request, out int gold,
         Func<ulong, Func<IDocumentSession, Wizard, bool>, Action<Wizard>, bool> transact = null, WizClientObjectItem guest = null,
-        Action<Wizard> afterCommit = null) {
+        Action<Wizard> afterCommit = null, Wizard liveWizard = null) {
         var resultingGold = 0;
         var result = MonstrologyResult.CommitFailed;
-        var execute = transact ?? WizardCollection.TransactMonstrology;
+        // CLASSIC: production saves quarantine the original live instance before releasing the shared lane.
+        // Keep the existing custom transaction seam; callers without an attached wizard have no live snapshot to mark.
+        var execute = transact ?? ((charId, operation, publish) => WizardCollection.CommitCharacterMutation(
+            charId, operation, publish, onSaveFailure: _ => WizardCollection.MarkInventorySnapshotUncertain(liveWizard)));
         var committed = execute(owner, (session, wizard) => {
+            if (liveWizard != null && (liveWizard.CharId != owner || WizardCollection.IsInventorySnapshotUncertain(liveWizard))) {
+                result = MonstrologyResult.Rejected; return false;
+            }
             var id = DocumentId(owner);
             var state = session.Load<MonstrologyLedger>(id) ?? new MonstrologyLedger { OwnerId = owner };
             if (state.OwnerId != owner || wizard.CharId != owner) { result = MonstrologyResult.Rejected; return false; }
@@ -42,6 +48,12 @@ internal sealed class MonstrologyRepository(IDocumentStore store) {
                     result = MonstrologyResult.Rejected; return false;
                 }
             } else if (guest != null) { result = MonstrologyResult.Rejected; return false; }
+            // CLASSIC: a new treasure card uses the saved free-book cap, not the stale attached book. An already
+            // delivered operation still reaches the existing replay rules without requiring another free slot.
+            if (guest == null && !state.Creations.ContainsKey(request.OperationId ?? string.Empty)
+                && !WizardCollection.CanReceiveTreasureCards(wizard, 1)) {
+                result = MonstrologyResult.Rejected; return false;
+            }
             result = MonstrologyRules.DeliverCard(state, request, wizard.GameStats.m_currentGold);
             if (result != MonstrologyResult.Applied) return false;
             wizard.GameStats.m_currentGold -= request.GoldCost;
