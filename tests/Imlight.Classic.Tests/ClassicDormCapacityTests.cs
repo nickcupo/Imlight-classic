@@ -191,8 +191,15 @@ public sealed class ClassicDormCapacityTests : IDisposable {
         internal WizClientObjectItem FindItem(IDocumentSession session, ulong item, ulong owner) => session.Load<WizClientObjectItem>("item/backpack");
         internal IDisposable Scope() {
             var previous = WizardCollection.TestStoreScope.Value;
+            var previousRows = WizardInventoryTransactions.TestRowsScope.Value;
             WizardCollection.TestStoreScope.Value = new(Open, (session, _) => session.Load<Wizard>("wizard/1"));
-            return new Restore(() => WizardCollection.TestStoreScope.Value = previous);
+            WizardInventoryTransactions.TestRowsScope.Value = session => Documents
+                .Where(pair => pair.Value is WizClientObjectItem)
+                .Select(pair => session.Load<WizClientObjectItem>(pair.Key)).ToList();
+            return new Restore(() => {
+                WizardCollection.TestStoreScope.Value = previous;
+                WizardInventoryTransactions.TestRowsScope.Value = previousRows;
+            });
         }
         internal IDocumentSession Open() {
             var session = DispatchProxy.Create<IDocumentSession, CountingSession>();

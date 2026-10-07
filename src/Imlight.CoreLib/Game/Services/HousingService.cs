@@ -4,6 +4,7 @@ using Imlight.Classic;
 using Imlight.CoreLib.Classic.Housing;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;
+using Imlight.CoreLib.WizardData.Collections;
 using Imlight.CoreLib.WizardData.Models.Player;
 
 namespace Imlight.CoreLib.Game.Services;
@@ -20,6 +21,7 @@ internal sealed class HousingService(SessionActor sessionActor) : MessageService
     private void ReceiveAttached(SERVICE_101_PROTOCOL.MSG_ATTACHCOMPLETE message) {
         var context = SessionActor.HousingAttach;
         var wizard = GetActiveWizard();
+        if (WizardCollection.IsInventorySnapshotUncertain(wizard)) { CloseSession(); return; }
         if (context is null || wizard is null || context.CharacterId != wizard.CharId || context.OwnerId == 0
             || !RoomKnown(context) || !string.Equals(context.Zone, wizard.Zone, System.StringComparison.OrdinalIgnoreCase)
             || !Enabled()) return;
@@ -58,10 +60,18 @@ internal sealed class HousingService(SessionActor sessionActor) : MessageService
             SendRoomAdd(placed.Room, placed.Entry, placed.RoomSlot);
             return;
         }
-        var result = HousingCollection.Place(wizard, _attach.OwnerId, message.ObjectID, message.LocX, message.LocY, message.LocZ, message.Yaw, room: Room);
+        GAME_5_PROTOCOL.MSG_INVENTORYBEHAVIOR_REMOVEITEM inventory = null;
+        WIZARDHOUSING_50_PROTOCOL.MSG_PATCHADDHOUSINGOBJECT roomAdd = null;
+        var result = HousingCollection.Place(wizard, _attach.OwnerId, message.ObjectID, message.LocX, message.LocY, message.LocZ, message.Yaw, room: Room,
+            preparePublication: prepared => {
+                inventory = new() { GlobalID = wizard.GameObjectID, ItemID = prepared.Entry.ItemId };
+                roomAdd = PrepareRoomAdd(prepared.Ledger, prepared.Entry, prepared.Slot);
+                return true;
+            }, afterCommit: _ => {
+                SendToSocket(inventory);
+                ZoneBroadcast(roomAdd, isSelfless: false);
+            });
         if (!result.Saved) { Refuse(result.Error); return; }
-        SendToSocket(new GAME_5_PROTOCOL.MSG_INVENTORYBEHAVIOR_REMOVEITEM { GlobalID = wizard.GameObjectID, ItemID = result.Entry.ItemId });
-        SendRoomAdd(result.Ledger, result.Entry, result.Slot);
     }
 
     [MessageHandler(typeof(WIZARDHOUSING_50_PROTOCOL.MSG_UPDATEHOUSINGOBJECT))]
@@ -70,26 +80,38 @@ internal sealed class HousingService(SessionActor sessionActor) : MessageService
         // Native ordinary scale is1; MSG_UpdateHousingObject rounds brightness*100 (+.005).
         // Later scale/brightness and castle-block changes are not part of this room implementation.
         if (message.SwitchCastleBlock != 0 || message.Scale != 1 || message.Brightness != 100) { Refuse(); return; }
+        WIZARDHOUSING_50_PROTOCOL.MSG_PATCHUPDATEHOUSINGOBJECT roomUpdate = null;
         var result = HousingCollection.Update(wizard, _attach.OwnerId, message.ObjectGID, _attach.DynamicServerProcId,
-            message.LocX, message.LocY, message.LocZ, message.Yaw, Room);
+            message.LocX, message.LocY, message.LocZ, message.Yaw, Room,
+            preparePublication: prepared => {
+                roomUpdate = new() {
+                    ObjectID = prepared.Entry.TemplateId, LocX = prepared.Entry.X, LocY = prepared.Entry.Y, LocZ = prepared.Entry.Z, Yaw = prepared.Entry.Yaw,
+                    SubType = HousingRules.SubType, PackageNumber = (uint)prepared.Ledger.PackageForSlot(prepared.Slot), VersionNumber = prepared.Ledger.VersionForSlot(prepared.Slot),
+                    GIDID = prepared.Ledger.CacheIndex(prepared.Slot), SwitchTemplateID = 0, UseExtendedYaw = message.UseExtendedYaw, Scale = 1, Brightness = 100,
+                };
+                return true;
+            }, afterCommit: _ => ZoneBroadcast(roomUpdate, isSelfless: false));
         if (!result.Saved) { Refuse(result.Error); return; }
-        ZoneBroadcast(new WIZARDHOUSING_50_PROTOCOL.MSG_PATCHUPDATEHOUSINGOBJECT {
-            ObjectID = result.Entry.TemplateId, LocX = result.Entry.X, LocY = result.Entry.Y, LocZ = result.Entry.Z, Yaw = result.Entry.Yaw,
-            SubType = HousingRules.SubType, PackageNumber = (uint)result.Ledger.PackageForSlot(result.Slot), VersionNumber = result.Ledger.VersionForSlot(result.Slot),
-            GIDID = result.Ledger.CacheIndex(result.Slot), SwitchTemplateID = 0, UseExtendedYaw = message.UseExtendedYaw, Scale = 1, Brightness = 100,
-        }, isSelfless: false);
     }
 
     [MessageHandler(typeof(GAME_5_PROTOCOL.MSG_PICKUPOBJECT))]
     private void ReceivePickup(GAME_5_PROTOCOL.MSG_PICKUPOBJECT message) {
         if (!Editable(out var wizard)) return;
-        var result = HousingCollection.Pickup(wizard, _attach.OwnerId, message.GameObjectID, _attach.DynamicServerProcId, Room);
+        GAME_5_PROTOCOL.MSG_INVENTORYBEHAVIOR_ADDITEM inventory = null;
+        WIZARDHOUSING_50_PROTOCOL.MSG_PATCHDELETEHOUSINGOBJECT roomDelete = null;
+        var result = HousingCollection.Pickup(wizard, _attach.OwnerId, message.GameObjectID, _attach.DynamicServerProcId, Room,
+            preparePublication: prepared => {
+                inventory = new() { GlobalID = wizard.GameObjectID, SerializedItem = prepared.ItemData };
+                roomDelete = new() {
+                    SubType = HousingRules.SubType, PackageNumber = (uint)prepared.Ledger.PackageForSlot(prepared.Slot),
+                    VersionNumber = prepared.Ledger.VersionForSlot(prepared.Slot), GIDID = prepared.Ledger.CacheIndex(prepared.Slot),
+                };
+                return true;
+            }, afterCommit: _ => {
+                SendToSocket(inventory);
+                ZoneBroadcast(roomDelete, isSelfless: false);
+            });
         if (!result.Saved) { Refuse(result.Error); return; }
-        SendToSocket(new GAME_5_PROTOCOL.MSG_INVENTORYBEHAVIOR_ADDITEM { GlobalID = wizard.GameObjectID, SerializedItem = result.ItemData });
-        ZoneBroadcast(new WIZARDHOUSING_50_PROTOCOL.MSG_PATCHDELETEHOUSINGOBJECT {
-            SubType = HousingRules.SubType, PackageNumber = (uint)result.Ledger.PackageForSlot(result.Slot),
-            VersionNumber = result.Ledger.VersionForSlot(result.Slot), GIDID = result.Ledger.CacheIndex(result.Slot),
-        }, isSelfless: false);
     }
 
     private void SendManifest(HousingLedger ledger) {
@@ -164,12 +186,14 @@ internal sealed class HousingService(SessionActor sessionActor) : MessageService
     }
 
     private void SendRoomAdd(HousingLedger ledger, HousingEntry entry, int slot) {
-        ZoneBroadcast(new WIZARDHOUSING_50_PROTOCOL.MSG_PATCHADDHOUSINGOBJECT {
+        ZoneBroadcast(PrepareRoomAdd(ledger, entry, slot), isSelfless: false);
+    }
+    private static WIZARDHOUSING_50_PROTOCOL.MSG_PATCHADDHOUSINGOBJECT PrepareRoomAdd(HousingLedger ledger, HousingEntry entry, int slot)
+        => new() {
             ObjectID = entry.TemplateId, LocX = entry.X, LocY = entry.Y, LocZ = entry.Z, Yaw = entry.Yaw,
             SubType = HousingRules.SubType, PackageNumber = (uint)ledger.PackageForSlot(slot), VersionNumber = ledger.VersionForSlot(slot),
             GIDID = ledger.CacheIndex(slot), Data = "", ColorBits = 0,
-        }, isSelfless: false);
-    }
+        };
 
     private void SendRoomDeletes(HousingAtticResult result) {
         foreach (var patch in result.RoomDeleted) ZoneBroadcast(new WIZARDHOUSING_50_PROTOCOL.MSG_PATCHDELETEHOUSINGOBJECT {
@@ -218,6 +242,8 @@ internal sealed class HousingService(SessionActor sessionActor) : MessageService
         wizard = null;
         if (_attach is null || SessionActor.TransferringOut || !Enabled() || SessionActor.HousingAttach != _attach) return false;
         wizard = GetActiveWizard();
+        // CLASSIC: a possibly durable mutation cannot be retried or refreshed from this old live inventory.
+        if (WizardCollection.IsInventorySnapshotUncertain(wizard)) { CloseSession(); return false; }
         return wizard is not null && wizard.CharId == _attach.CharacterId && HouseCatalog.Same(wizard.Zone, _attach.Zone) && RoomKnown(_attach);
     }
 
@@ -229,6 +255,7 @@ internal sealed class HousingService(SessionActor sessionActor) : MessageService
     }
 
     private void Refuse(string reason = null) {
+        if (WizardCollection.IsInventorySnapshotUncertain(GetActiveWizard())) { CloseSession(); return; }
         InformGameClient(reason ?? "That furniture change is not supported in the dorm.");
         // A refused placement/move must restore the real client's optimistic view from saved state.
         if (_attach is not null && HousingCollection.Load(Room) is { } ledger) {
