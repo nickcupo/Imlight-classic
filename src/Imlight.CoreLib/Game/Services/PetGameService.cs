@@ -90,6 +90,7 @@ internal sealed partial class PetGameService(SessionActor sessionActor) : Messag
     private sealed record SendNextRound(Session Session, int Round);
 
     private Session _session;
+    private bool _closing; // CLASSIC: queued joins cannot recreate a game after graceful shutdown begins.
 
     protected static Props Props(SessionActor parentActor)
         => Akka.Actor.Props.Create(() => new PetGameService(parentActor));
@@ -98,6 +99,7 @@ internal sealed partial class PetGameService(SessionActor sessionActor) : Messag
 
     [MessageHandler(typeof(PET_9_PROTOCOL.MSG_PETGAMEJOIN))]
     private void ReceiveJoin(PET_9_PROTOCOL.MSG_PETGAMEJOIN message) {
+        if (_closing) return;
         var game = message.Game.ToString();
         var wizard = GetActiveWizard();
         if (game == MorphGame) {

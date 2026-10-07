@@ -15,6 +15,7 @@ using Imlight.Classic.Pets;
 using Imlight.CoreLib.Game.Pet;
 using Imlight.CoreLib.Game.Services;
 using Imlight.CoreLib.Shared.Networking;
+using Imlight.CoreLib.Shared.Packets;
 using Imlight.CoreLib.Shared.Resources;
 using Imlight.CoreLib.WizardData.Collections;
 using Imlight.CoreLib.WizardData.Models.Player;
@@ -313,6 +314,31 @@ public sealed class PetGameSessionAdmissionTests {
         }
     }
 
+    [Theory]
+    [InlineData(false, false)] [InlineData(true, false)]
+    [InlineData(false, true)] [InlineData(true, true)]
+    public async Task GracefulSessionCloseRetiresTrainingBeforeItsAcknowledgementAndRejectsQueuedWork(bool started, bool directDispose) {
+        using var f = await Fixture.Create(); await f.Join(Dance);
+        object? queued = null;
+        if (started) {
+            await f.Send(new PET_9_PROTOCOL.MSG_PETGAMEREADY());
+            queued = (await f.State()).Timer!;
+        }
+        await f.Drain();
+        if (directDispose) await f.Send(new SERVICE_101_PROTOCOL.MSG_DISPOSE());
+        else await f.PreDispose();
+        var closed = await f.State();
+        Assert.Null(closed.Session); Assert.Null(closed.Timer);
+        if (queued is not null) await f.Fire(queued);
+        await f.Send(new PET_9_PROTOCOL.MSG_PETGAMEREADY());
+        await f.Send(new PET_9_PROTOCOL.MSG_PETGAMEDANCE { Moves = "abc" });
+        await f.Send(new PET_9_PROTOCOL.MSG_PETGAMEDATA { Game = Dance, Data = new ByteString(new byte[] { 1 }) });
+        await f.Join(Dance); await f.Join(Morph);
+        await f.PreDispose(); // The existing close acknowledgement remains idempotent.
+        var after = await f.State(); Assert.Null(after.Session); Assert.Null(after.Lobby); Assert.Null(after.Timer);
+        Assert.Empty(await f.Drain()); Assert.Equal(0, f.Store.Saves);
+    }
+
     private static Array Sides(object lobby) => (Array)lobby.GetType().GetField("Sides")!.GetValue(lobby)!;
     private sealed record Ready;
     private sealed record Inspect;
@@ -406,6 +432,9 @@ public sealed class PetGameSessionAdmissionTests {
         }
         internal Task<bool> Send(object message) => _service.Ask<bool>(new Send(message), Timeout, TestContext.Current.CancellationToken);
         internal Task<bool> Fire(object message) => Send(message);
+        internal Task<SERVICE_101_PROTOCOL.MSG_PREDISPOSE> PreDispose()
+            => _service.Ask<SERVICE_101_PROTOCOL.MSG_PREDISPOSE>(new Send(new SERVICE_101_PROTOCOL.MSG_PREDISPOSE()),
+                Timeout, TestContext.Current.CancellationToken);
         internal Task<bool> Join(string game) {
             if (game == Morph) _morphKeys.Add(Store.Live.Zone);
             return Send(new PET_9_PROTOCOL.MSG_PETGAMEJOIN { Game = game, Track = "0" });
@@ -485,7 +514,9 @@ public sealed class PetGameSessionAdmissionTests {
                 if (message is not Send send) return true;
                 using var scope = EnterScope();
                 var dispatch = MessageHandlerTable.DispatcherFor(typeof(PetGameService), send.Message.GetType());
-                Assert.NotNull(dispatch); dispatch(service, send.Message); sender.Tell(true);
+                Assert.NotNull(dispatch); dispatch(service, send.Message);
+                // The actual graceful-close handler replies itself, after retiring its session state.
+                if (send.Message is not SERVICE_101_PROTOCOL.MSG_PREDISPOSE) sender.Tell(true);
             } catch (Exception error) { sender.Tell(new Status.Failure(error)); }
             return true;
         }
