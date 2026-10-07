@@ -30,7 +30,9 @@ public class ServerPetSnackBehavior : IClientBehaviorProvider<ClientPetSnackBeha
 
     [JsonIgnore] public bool NoTransfer { get; set; } = false;
 
-    private static readonly int s_maxSnackStackAllowed = 999;
+    // CLASSIC: transactions share the existing native snack-stack limit.
+    internal const int MaxSnackStackAllowed = 999;
+    private static readonly int s_maxSnackStackAllowed = MaxSnackStackAllowed;
 
     public List<ulong> SnackItemIds { get; set; }
 

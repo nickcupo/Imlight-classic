@@ -651,8 +651,14 @@ public static class WizardCollection {
     /// </summary>
     /// <param name="wizard">The wizard object containing the updated pet owner behavior.</param>
     public static void UpdateCharacterPetOwnerBehavior(Wizard wizard) {
-        UpdateCharacter(wizard.CharId, existingCharacter =>
-            existingCharacter.PetOwnerBehavior = wizard.PetOwnerBehavior);
+        if (wizard is null) return;
+        // CLASSIC: a queued energy tick cannot replace an acknowledged cost/cooldown from an
+        // uncertain attached snapshot while its close/reload is still being processed.
+        WithCharacterLock(wizard.CharId, () => {
+            if (IsInventorySnapshotUncertain(wizard)) return false;
+            return UpdateCharacter(wizard.CharId, existingCharacter =>
+                existingCharacter.PetOwnerBehavior = wizard.PetOwnerBehavior);
+        });
     }
 
     /// <summary>
@@ -867,9 +873,7 @@ public static class WizardCollection {
         // `Wizard` only keeps track of the IDs of the items in the inventory.
         // The actual items are stored in the `WizClientObjectItem` collection.
         // Load the items in the inventory.
-        var items = session.Query<WizClientObjectItem>(collectionName: WizardItemCollection.CollectionName)
-            .Where(x => x.m_characterId == wizard.CharId)
-            .ToList();
+        var items = ReadLoadedItemRows(session, wizard.CharId);
 
         // CLASSIC: a rental (a 1- or 7-day mount) whose time has run out is gone when the wizard next loads.
         var now = DateTimeOffset.UtcNow;
@@ -905,9 +909,7 @@ public static class WizardCollection {
 
         // CLASSIC: the snack bag lives in its own collection and was never read back, so bought snacks were gone at the
         // next zone. Load it like the backpack.
-        var snacks = session.Query<ClientPetSnackItem>(collectionName: WizardPetSnackCollection.CollectionName)
-            .Where(x => x.m_characterId == wizard.CharId)
-            .ToList();
+        var snacks = ReadLoadedSnackRows(session, wizard.CharId);
         wizard.PetSnackBehavior ??= new();
         var snackIds = wizard.PetSnackBehavior.SnackItemIds;
         wizard.PetSnackBehavior.Snacks = [.. snacks.Where(s => s.m_quantity > 0 && (snackIds is null || snackIds.Contains(s.m_globalID)))];
@@ -963,6 +965,16 @@ public static class WizardCollection {
 
         return wizard;
     }
+
+    // CLASSIC: the 150-item backpack and unconstrained number of snack types exceed Raven's default
+    // result page. Loading every owned original retains the existing saved-reference filters below.
+    internal static List<WizClientObjectItem> ReadLoadedItemRows(IDocumentSession session, ulong charId)
+        => session.Query<WizClientObjectItem>(collectionName: WizardItemCollection.CollectionName)
+            .Where(item => item.m_characterId == charId).Take(int.MaxValue).ToList();
+
+    internal static List<ClientPetSnackItem> ReadLoadedSnackRows(IDocumentSession session, ulong charId)
+        => session.Query<ClientPetSnackItem>(collectionName: WizardPetSnackCollection.CollectionName)
+            .Where(snack => snack.m_characterId == charId).Take(int.MaxValue).ToList();
 
     private static Wizard GetCharacterByCharId(IDocumentSession session, ulong charId)
         => session.Query<Wizard>(collectionName: CollectionName)

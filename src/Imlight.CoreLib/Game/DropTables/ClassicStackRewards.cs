@@ -57,7 +57,7 @@ internal static class ClassicStackRewards {
                 // CLASSIC: ordinary rolled gear has always granted one copy per entry; do not change its roll.
                 if (drop is null || !ulong.TryParse(drop.ItemId, out var id) || Resolve(d, id) is not WizItemTemplate template
                     || template is ReagentItemTemplate) continue; // CLASSIC: reagents have their own bag/delivery path
-                if (Create(d, id) is not WizClientObjectItem item) return false;
+                if (Create(d, id, live.CharId) is not WizClientObjectItem item) return false;
                 var prepared = WizardInventoryTransactions.Prepare(live, item, initializeBehaviors: false);
                 if (prepared is null || prepared.m_templateID.Full != id) return false;
                 // A prepared pet owns its egg/name/talent state. Other items retain the previous template init.
@@ -149,8 +149,12 @@ internal static class ClassicStackRewards {
 
     private static CoreTemplate Resolve(StackRewardDependencies d, ulong id)
         => d.Template is null ? CoreObjectFactory.GetCoreTemplate(id) : d.Template(id);
-    private static CoreObject Create(StackRewardDependencies d, ulong id)
-        => d.Create is null ? CoreObjectFactory.FinalizeCoreObject(id) : d.Create(id);
+    private static CoreObject Create(StackRewardDependencies d, ulong id, ulong owner = 0)
+        => d.Create is not null ? d.Create(id)
+            // CLASSIC: quest/combat pet rewards need the same template egg/name state as shop pets.
+            : owner != 0 && id <= uint.MaxValue && PetFactory.IsPetTemplate((uint)id)
+                ? PetFactory.CreatePet(owner, (uint)id)
+                : CoreObjectFactory.FinalizeCoreObject(id);
     private static ByteString Serialize(StackRewardDependencies d, ClientReagentItem reagent)
         => d.SerializeReagent is not null ? d.SerializeReagent(reagent)
             : new CoreObjectSerializer(behaviors: SerializerFlags.None).Serialize(reagent, 27, out var data) ? data : default;

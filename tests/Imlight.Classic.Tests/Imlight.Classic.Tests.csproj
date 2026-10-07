@@ -25,6 +25,9 @@
     <ServerIntegrationTest Include="ItemInventoryPersistenceTests.cs" />
     <ServerIntegrationTest Include="AtomicShopInventoryTests.cs" />
     <ServerIntegrationTest Include="ItemPurchaseAndHatchPersistenceTests.cs" />
+    <ServerIntegrationTest Include="SnackPurchasePersistenceTests.cs" />
+    <ServerIntegrationTest Include="PaidItemChangePersistenceTests.cs" />
+    <ServerIntegrationTest Include="PetProgressPersistenceTests.cs" />
     <ServerIntegrationTest Include="TreasureMutationSafetyTests.cs" />
     <ServerIntegrationTest Include="MonstrologyCardSafetyTests.cs" />
     <ServerIntegrationTest Include="BazaarTransactionPersistenceTests.cs" />
