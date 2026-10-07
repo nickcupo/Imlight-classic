@@ -1,4 +1,4 @@
-/*
+﻿/*
  * Imlight
  * Copyright (C) 2025 Revive101
  *
@@ -41,8 +41,8 @@ internal sealed partial class TutorialService(SessionActor sessionActor) : Messa
     private const string TUTORIAL_INTRO_QUEST_NAME = "Tutorial_Intro";
     private const string TUTORIAL_INTRO_GOAL_NAME = "OnlyGoal";
     private const uint TUTORIAL_NAME_STRING_ID = 600062081;
-    private const string TUTORIAL_EXTERIOR_ZONE_NAME_CONTENTS = "Tutorial_Exterior";
-    private const string TUTORIAL_INTERIOR_ZONE_NAME_CONTENTS = "Tutorial_Interior";
+    private const string TUTORIAL_EXTERIOR_ZONE = "WizardCity/Tutorial_Exterior";
+    private const string TUTORIAL_INTERIOR_ZONE = "WizardCity/Tutorial_Interior";
     private const string TUTORIAL_HEALTH_REFILL_QUEST = "WC-TUT-C09-014";
     private const string TUTORIAL_MANA_REFILL_QUEST = "WC-TUT-C09-016";
     private const ulong AMBROSE_TEMPLATE_ID = 39394;
@@ -72,8 +72,8 @@ internal sealed partial class TutorialService(SessionActor sessionActor) : Messa
     };
 
     private static bool IsTutorialZone(string zoneName)
-        => zoneName.Contains(TUTORIAL_EXTERIOR_ZONE_NAME_CONTENTS)
-            || zoneName.Contains(TUTORIAL_INTERIOR_ZONE_NAME_CONTENTS);
+        // CLASSIC: the native startup script names these two zones exactly.
+        => zoneName == TUTORIAL_EXTERIOR_ZONE || zoneName == TUTORIAL_INTERIOR_ZONE;
 
     internal static Props Props(SessionActor parentActor)
         => Akka.Actor.Props.Create(() => new TutorialService(parentActor));
@@ -180,35 +180,41 @@ internal sealed partial class TutorialService(SessionActor sessionActor) : Messa
             return;
         }
 
+        // CLASSIC: validate every packed field against the native startup contract before an earlier
+        // field can add a quest, refill resources or complete a goal. Goal requests also name their quest.
+        if (!TutorialCommandAdmission.TryPreflight(wizard, msg, out var admitted)) {
+            Logger.Warning("Dropping tutorial command outside the native startup contract.");
+            return;
+        }
         var playerObj = GetActiveGameObject();
 
         // The fields are not mutually exclusive: the client packs QuestToAdd + GoalToComplete into one message.
         // Add must run first so the goal has an instance to resolve against.
         var commandSuccess = true;
 
-        if (msg.QuestToAdd != string.Empty) {
-            commandSuccess = commandSuccess && HandleCommandAddQuest(wizard, msg.QuestToAdd);
+        if (admitted.QuestToAdd != string.Empty) {
+            commandSuccess = commandSuccess && HandleCommandAddQuest(wizard, admitted);
 
             // The C09-014/016 levers are ADD->REMOVE with no goal ever completed, so the health/mana refill
             // happens here on ADD.
-            if (commandSuccess && msg.QuestToAdd == TUTORIAL_HEALTH_REFILL_QUEST) {
+            if (commandSuccess && admitted.QuestToAdd == TUTORIAL_HEALTH_REFILL_QUEST) {
                 RefillHealth(wizard);
             }
-            else if (commandSuccess && msg.QuestToAdd == TUTORIAL_MANA_REFILL_QUEST) {
+            else if (commandSuccess && admitted.QuestToAdd == TUTORIAL_MANA_REFILL_QUEST) {
                 RefillMana(wizard);
             }
         }
-        if (msg.GoalToComplete != string.Empty) {
-            commandSuccess = commandSuccess && HandleCommandCompleteGoal(wizard, playerObj, msg.GoalToComplete);
+        if (admitted.Goal.Kind != TutorialGoalKind.None) {
+            commandSuccess = commandSuccess && HandleCommandCompleteGoal(wizard, playerObj, admitted.Goal);
         }
-        if (msg.QuestToRemove != string.Empty) {
-            commandSuccess = commandSuccess && HandleCommandRemoveQuest(wizard, msg.QuestToRemove);
+        if (admitted.QuestToRemove != string.Empty) {
+            commandSuccess = commandSuccess && HandleCommandRemoveQuest(wizard, admitted.QuestToRemove);
         }
-        if (msg.EventToPost != string.Empty) {
-            commandSuccess = commandSuccess && HandleCommandPostEvent(msg.EventToPost);
+        if (admitted.EventToPost != string.Empty) {
+            commandSuccess = commandSuccess && HandleCommandPostEvent(admitted.EventToPost);
         }
-        if (msg.Action != string.Empty) {
-            commandSuccess = commandSuccess && HandleCommandAction(msg.Action, msg.Value);
+        if (admitted.Action != string.Empty) {
+            commandSuccess = commandSuccess && HandleCommandAction(admitted.Action, admitted.Value);
         }
 
         StopUncertainTutorialSession(wizard); // CLASSIC: no following native command fields after refusal.
@@ -256,25 +262,16 @@ internal sealed partial class TutorialService(SessionActor sessionActor) : Messa
             return true;
         }
 
-        Logger.Debug("Unknown tutorial action '{0}' (value {1}), ignoring.", Logger.Args(action, value));
-
-        return true;
+        return false;
     }
 
-    private static bool HandleCommandAddQuest(Wizard wizard, string questName) {
+    private static bool HandleCommandAddQuest(Wizard wizard, TutorialCommandDecision admitted) {
         // The client re-adds quests it already holds (add/remove flickers); re-adds are idempotent.
-        if (wizard.QuestBehavior.CurrentQuestInstances.Any(q => q.QuestName == questName)) {
+        if (admitted.ExistingAddQuest is not null) {
             return true;
         }
 
-        var questTemplate = QuestTemplateCollection.GetQuestByName(questName);
-        if (questTemplate == null) {
-            Logger.Error("Tutorial quest template not found for '{0}'", Logger.Args(questName));
-
-            return false;
-        }
-
-        var qInstance = new QuestInstance(questTemplate, wizard.CharId);
+        var qInstance = new QuestInstance(admitted.AddTemplate, wizard.CharId);
 
         return wizard.AddQuest(qInstance);
     }
@@ -284,7 +281,8 @@ internal sealed partial class TutorialService(SessionActor sessionActor) : Messa
 
     private bool RemoveQuestAndClearFromJournal(Wizard wizard, string questName) {
         if (StopUncertainTutorialSession(wizard)) return false;
-        var instance = wizard.QuestBehavior.CurrentQuestInstances.FirstOrDefault(q => q.QuestName == questName);
+        // CLASSIC: skip may remove absent controls; a held row must still have unique owned identities.
+        if (!TutorialCommandAdmission.TryResolveHeldQuest(wizard, questName, out var instance)) return false;
         if (instance is null) return true; // Existing skip commands remove absent control quests harmlessly.
         var packet = new QUEST_MESSAGES_52_PROTOCOL.MSG_REMOVEQUEST { QuestID = instance.ID };
         if (ClassicQuestEngine.IsActive) {
@@ -298,127 +296,57 @@ internal sealed partial class TutorialService(SessionActor sessionActor) : Messa
         return true;
     }
 
-    private bool HandleCommandCompleteGoal(Wizard wizard,
-                                           CoreObject playerObj,
-                                           string goalName) {
-        // Skip: the client fires this when the player presses the Skip button. Mark the tutorial done, clear
-        // the control quests so none leak into the normal world, and move the player to the headmaster's office.
-        if (goalName == "SkipTutorialGoal") {
+    private bool HandleCommandCompleteGoal(Wizard wizard, CoreObject playerObj, TutorialGoalAdmission admitted) {
+        var goalName = admitted.GoalName;
+        // CLASSIC: special beats were admitted against their native quest pair before any packed field ran.
+        if (admitted.Kind == TutorialGoalKind.Skip) {
             _tutorialInfo.m_tutorialStage = 99;
             if (!RemoveControlQuests(wizard) || !CompleteTutorialIntro(wizard, playerObj)) return false;
             EquipStarterWandAndDeck(wizard);
-            return CompleteStarterExit(() => FinishClassicStart(wizard), () => Teleport(TutorialExitZone())); // CLASSIC
+            return CompleteStarterExit(() => FinishClassicStart(wizard), () => Teleport(TutorialExitZone()));
         }
-
-        // Teleport: the finale (stage 8) fires this then blocks on OnTeleported; the server must move the
-        // player out of the tutorial interior.
-        if (goalName == "Teleport") {
+        if (admitted.Kind == TutorialGoalKind.Finale) {
             if (!RemoveControlQuests(wizard)) return false;
-            return CompleteStarterExit(() => CompleteClassicStart(wizard), () => Teleport(TutorialExitZone())); // CLASSIC
+            return CompleteStarterExit(() => CompleteClassicStart(wizard), () => Teleport(TutorialExitZone()));
         }
-
-        // ConfigurePlayer: right after firing this the client blocks on OnItemAddedToInventory waiting for an
-        // inventory item. C08-001's goals are not active, so the goal lookup below would never unblock it.
-        if (goalName == "ConfigurePlayer") {
-            SendConfigurePlayerInventoryAdd(wizard);
-
-            return true;
+        if (admitted.Kind == TutorialGoalKind.NoOp) return true;
+        if (admitted.Kind == TutorialGoalKind.Cinematic) {
+            if (goalName == "Transplant Player") {
+                InZoneTeleport(wizard, 51.59f, -194.80f, 0.02f, 2.77f);
+                return true;
+            }
+            if (goalName == "Trigger Wand Effect") return HandleCommandPostEvent("WandFX");
+            return s_goalEventPosts.TryGetValue(goalName, out var eventName) && HandleCommandPostEvent(eventName);
         }
+        if (!TutorialCommandAdmission.TryResolveAcknowledgedGoal(wizard, admitted, out var selected)) return false;
 
-        // Transplant Player: a cinematic-only beat with no template goal. The client expects the server to
-        // reposition the player in-zone to the vantage point facing Ambrose's walk.
-        if (goalName == "Transplant Player") {
-            InZoneTeleport(wizard, 51.59f, -194.80f, 0.02f, 2.77f);
+        // CLASSIC: result templates and exact owned instances are resolved before the completion save.
+        // Re-resolution also proves that a prospective add has published its acknowledged instance.
+        var status = CompleteAcknowledgedTutorialGoal(wizard, selected.Quest, selected.Goal);
+        if (status == QuestMutationStatus.Refused) return false;
+        if (status == QuestMutationStatus.Unchanged) return true;
+        var goalTemplate = selected.GoalTemplate;
 
-            return true;
-        }
-
-        // Walk Ambrose: despawn the stationary Ambrose now so he and the walking one never overlap, then fall
-        // through to the normal goal path that posts WalkAmbrose (the client spawns the walking Ambrose).
+        // Walk Ambrose's despawns belong to the admitted, acknowledged goal, so a refusal/retry cannot run them.
         if (goalName == "Walk Ambrose") {
             DespawnTutorialObject(AMBROSE_TEMPLATE_ID, 0);
             DespawnTutorialObject(WALKING_AMBROSE_TEMPLATE_ID, WALKING_AMBROSE_DESPAWN_SECONDS);
         }
-
-        // Trigger Wand Effect: the wand glare beat. The starter wand and deck were granted at character
-        // creation, so only the glare event is needed.
-        if (goalName == "Trigger Wand Effect") {
-            HandleCommandPostEvent("WandFX");
-
-            return true;
+        if (goalName == "Give 3 pips to player" || goalName == "give 4 pips to player") {
+            var pipCount = goalTemplate.m_tallyCounter?.m_count ?? 0;
+            if (pipCount > 0) SessionActor.ActorRef.Tell(new TUTORIAL_108_PROTOCOL.MSG_TUTORIALGRANTPIPS { Count = pipCount });
         }
-
-        // End-of-tutorial trigger beats: post the zone event the interior trigger listens for.
-        if (s_goalEventPosts.TryGetValue(goalName, out var eventName)) {
-            HandleCommandPostEvent(eventName);
-
-            return true;
-        }
-
-        // We need to find the quest that contains this goal.
-        // We can search the player for quest/goal instances, as they do carry a name.
-        var allWizardQuestInstances = wizard.QuestBehavior.CurrentQuestInstances;
-        var goalInstance = allWizardQuestInstances
-            .SelectMany(q => q.GoalProgress, (quest, goal) => new { quest, goal })
-            .FirstOrDefault(x => x.goal.GoalName == goalName);
-
-        if (goalInstance != null) {
-            // We can remove it from the Wizard, but we need to post the completion events as well.
-            var status = CompleteAcknowledgedTutorialGoal(wizard, goalInstance.quest, goalInstance.goal);
-            if (status == QuestMutationStatus.Refused) return false;
-            if (status == QuestMutationStatus.Unchanged) return true; // CLASSIC: do not repeat pip/result/equipment effects.
-
-            // We need the actual goal instance template to get the completion results.
-            var questTemplate = QuestTemplateCollection.GetQuestByName(goalInstance.quest.QuestName);
-            if (questTemplate == null) {
-                Logger.Error("Tutorial quest template not found");
-
-                return false;
-            }
-
-            // Find the goal template within the quest template.
-            var goalTemplate = questTemplate.m_goals
-                .FirstOrDefault(g => g.m_goalName == goalName);
-            if (goalTemplate == null) {
-                Logger.Error("Tutorial goal template not found");
-
-                return false;
-            }
-
-            // The pip goals carry their count in the goal's tally counter: the pip result types have no
-            // fields, so the template's m_tallyCounter.m_count is the data source.
-            if (goalName.Equals("Give 3 pips to player", StringComparison.OrdinalIgnoreCase)
-                || goalName.Equals("give 4 pips to player", StringComparison.OrdinalIgnoreCase)) {
-                var pipCount = goalTemplate.m_tallyCounter?.m_count ?? 0;
-                if (pipCount > 0) {
-                    SessionActor.ActorRef.Tell(new TUTORIAL_108_PROTOCOL.MSG_TUTORIALGRANTPIPS { Count = pipCount });
-                }
-            }
-
-            ResultDispatcher.ExecuteResults(
-                actorContext: Context,
-                results: goalTemplate.m_completeResults,
-                playerRef: SessionActor.ActorRef,
-                playerObj: playerObj,
-                questName: goalInstance.quest.QuestName,
-                goalName: goalInstance.goal.GoalName,
-                zoneActor: SessionActor.GetZoneActor()
-            );
-
-            // The intro quest is the shared finale for the tutorial and the skip flow;
-            // the starter wand and deck must be equipped in both.
-            if (goalInstance.quest.QuestName == TUTORIAL_INTRO_QUEST_NAME) {
-                EquipStarterWandAndDeck(wizard);
-            }
-
-            return !StopUncertainTutorialSession(wizard);
-        }
-
-        // Client-only cinematic beats (e.g. "StopRain") have no template goal; acknowledge them as no-op successes.
-        Logger.Debug("Tutorial goal '{0}' not found on any active quest (client-only beat, ignoring).",
-            Logger.Args(goalName));
-
-        return true;
+        ResultDispatcher.ExecuteResults(
+            actorContext: Context,
+            results: goalTemplate.m_completeResults,
+            playerRef: SessionActor.ActorRef,
+            playerObj: playerObj,
+            questName: selected.QuestName,
+            goalName: selected.GoalName,
+            zoneActor: SessionActor.GetZoneActor()
+        );
+        if (selected.QuestName == TUTORIAL_INTRO_QUEST_NAME) EquipStarterWandAndDeck(wizard);
+        return !StopUncertainTutorialSession(wizard);
     }
 
     private bool HandleCommandPostEvent(string eventName) {
@@ -463,35 +391,18 @@ internal sealed partial class TutorialService(SessionActor sessionActor) : Messa
         // CLASSIC: a separately failed saved-deck fill must be recoverable after intro retirement.
         // Never re-add a completed intro or replay its already completed goal results.
         if (wizard.HasCompletedQuest(TUTORIAL_INTRO_QUEST_NAME)) return true;
-        // Skippers never run the client's end-of-tutorial flow, so complete Tutorial_Intro here:
-        // OnlyGoal's results are the school spell (ResLearnSpell, school-gated) plus the refills.
-        if (!wizard.QuestBehavior.CurrentQuestInstances.Any(q => q.QuestName == TUTORIAL_INTRO_QUEST_NAME)) {
-            var introTemplate = QuestTemplateCollection.GetQuestByName(TUTORIAL_INTRO_QUEST_NAME);
-            if (introTemplate is null) {
-                Logger.Error("Tutorial intro quest template not found for '{0}'", Logger.Args(TUTORIAL_INTRO_QUEST_NAME));
-
-                return false;
-            }
-
-            if (!wizard.AddQuest(new QuestInstance(introTemplate, wizard.CharId))) return false;
-        }
-
-        var instance = wizard.QuestBehavior.CurrentQuestInstances
-            .FirstOrDefault(q => q.QuestName == TUTORIAL_INTRO_QUEST_NAME);
-        var goalInstance = instance?.GoalProgress.FirstOrDefault(g => g.GoalName == TUTORIAL_INTRO_GOAL_NAME);
-        if (goalInstance is null) {
-            return false;
-        }
-
-        var status = CompleteAcknowledgedTutorialGoal(wizard, instance, goalInstance);
+        // CLASSIC: validate the shared intro's prospective/held goal and loaded results before either save.
+        var request = new GAME_5_PROTOCOL.MSG_SERVERTUTORIALCOMMAND {
+            QuestToAdd = TUTORIAL_INTRO_QUEST_NAME, GoalToComplete = TUTORIAL_INTRO_GOAL_NAME,
+            QuestToRemove = "", EventToPost = "", Action = "", Value = 0,
+        };
+        if (!TutorialCommandAdmission.TryPreflight(wizard, request, out var admitted)
+            || !HandleCommandAddQuest(wizard, admitted)
+            || !TutorialCommandAdmission.TryResolveAcknowledgedGoal(wizard, admitted.Goal, out var selected)) return false;
+        var status = CompleteAcknowledgedTutorialGoal(wizard, selected.Quest, selected.Goal);
         if (status == QuestMutationStatus.Refused) return false;
         if (status == QuestMutationStatus.Unchanged) return true;
-
-        var questTemplate = QuestTemplateCollection.GetQuestByName(TUTORIAL_INTRO_QUEST_NAME);
-        var goalTemplate = questTemplate?.m_goals.FirstOrDefault(g => g.m_goalName == TUTORIAL_INTRO_GOAL_NAME);
-        if (goalTemplate is null) {
-            return false;
-        }
+        var goalTemplate = selected.GoalTemplate;
 
         ResultDispatcher.ExecuteResults(
             actorContext: Context,
