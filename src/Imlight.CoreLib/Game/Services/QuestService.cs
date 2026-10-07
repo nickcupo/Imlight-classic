@@ -679,6 +679,7 @@ internal partial class QuestService(SessionActor sessionActor) : MessageService(
 
     private void CompleteGoal(QuestInstance questInstance, GoalTemplate goalTemplate) {
         var wizard = GetActiveWizard();
+        if (TryCompleteTerminalClaim(wizard, questInstance, goalTemplate)) return; // CLASSIC: before the old final-goal save.
 
         if (!wizard.CompleteQuestGoal(questInstance.QuestName, goalTemplate.m_goalName)) {
             Logger.Error("Failed to complete goal '{0}' for quest '{1}' for player '{2}'",
@@ -946,7 +947,7 @@ internal partial class QuestService(SessionActor sessionActor) : MessageService(
         return prepDialogList?.m_dialogEntries.FirstOrDefault()?.m_picture ?? "";
     }
 
-    private static bool DetermineNextGoals(QuestTemplate qTemplate,
+    internal static bool DetermineNextGoals(QuestTemplate qTemplate,
                                           QuestInstance qinstance,
                                           out GoalTemplate[] newGoalTemplates) {
         var goalLogic = qTemplate.m_goalLogic;
@@ -1221,6 +1222,7 @@ internal partial class QuestService(SessionActor sessionActor) : MessageService(
     }
 
     private void TryGrantDungeonQuests(Wizard wizard) {
+        if (TryGrantCommittedDungeonQuests(wizard)) return; // CLASSIC: separate fresh acknowledged reconciliation.
         if (wizard is null) {
             return;
         }

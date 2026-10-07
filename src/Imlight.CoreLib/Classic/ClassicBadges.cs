@@ -66,6 +66,9 @@ namespace Imlight.CoreLib.Classic;
 
 internal static class ClassicBadges {
 
+    // CLASSIC: a compound quest claim prepares native messages before its single save.
+    internal sealed record PreparedQuestBadgeAward(Badge Badge, GAME_5_PROTOCOL.MSG_BADGES Message);
+
     /// <summary>
     /// Saves the wizard's quest registry; tests replace it.
     /// </summary>
@@ -105,6 +108,38 @@ internal static class ClassicBadges {
         }
 
         AwardEarned(wizard, rules.ForQuest(questName), send);
+    }
+
+    /// <summary>
+    /// CLASSIC: stages quest badges on an already completion-stamped saved wizard, without saving or publishing.
+    /// The caller commits this registry with the quest claim and mirrors it to the live wizard after acknowledgement.
+    /// </summary>
+    internal static IReadOnlyList<PreparedQuestBadgeAward> StageQuestCompleted(Wizard saved, string canonicalName) {
+        if (Rules() is not { } rules || saved?.QuestBehavior is null || string.IsNullOrEmpty(canonicalName)) {
+            return [];
+        }
+
+        var progress = new WizardBadgeProgress(saved);
+        var awards = new List<PreparedQuestBadgeAward>();
+        foreach (var badge in rules.ForQuest(canonicalName)) {
+            if (TryStageAward(saved, badge, progress) is { } award) {
+                awards.Add(award);
+            }
+        }
+
+        return awards;
+    }
+
+    /// <summary>
+    /// CLASSIC: publishes prepared awards only after the caller acknowledged its save and mirrored the registry.
+    /// This method neither changes the registry nor opens another database write.
+    /// </summary>
+    internal static void PublishQuestCompleted(Wizard live, IReadOnlyList<PreparedQuestBadgeAward> awards,
+                                               Action<IMessage> send) {
+        foreach (var award in awards) {
+            Awarded(live, award.Badge);
+            send(award.Message);
+        }
     }
 
     /// <summary>
@@ -157,19 +192,26 @@ internal static class ClassicBadges {
     private static void AwardEarned(Wizard wizard, IEnumerable<Badge> candidates, Action<IMessage> send) {
         var progress = new WizardBadgeProgress(wizard);
         foreach (var badge in candidates) {
-            if (!badge.IsGranted || Has(wizard, badge) || !BadgeRules.IsEarned(badge, progress)) {
-                continue;
-            }
-
-            // TryAdd: of two actors earning the same badge at once, only one awards it.
-            if (!wizard.QuestBehavior.Registry.TryAdd(BadgeRules.BadgeKey(badge.Id), 1)) {
+            if (TryStageAward(wizard, badge, progress) is not { } award) { // CLASSIC: same staging as a quest claim.
                 continue;
             }
 
             Persist(wizard);
-            Awarded(wizard, badge);
-            send(AddMessage(badge));
+            PublishQuestCompleted(wizard, [award], send);
         }
+    }
+
+    private static PreparedQuestBadgeAward? TryStageAward(Wizard wizard, Badge badge, IBadgeProgress progress) { // CLASSIC
+        if (!badge.IsGranted || Has(wizard, badge) || !BadgeRules.IsEarned(badge, progress)) {
+            return null;
+        }
+
+        // TryAdd: of two actors earning the same badge at once, only one awards it. An existing zero still blocks it.
+        if (!wizard.QuestBehavior.Registry.TryAdd(BadgeRules.BadgeKey(badge.Id), 1)) {
+            return null;
+        }
+
+        return new PreparedQuestBadgeAward(badge, AddMessage(badge));
     }
 
     /// <summary>

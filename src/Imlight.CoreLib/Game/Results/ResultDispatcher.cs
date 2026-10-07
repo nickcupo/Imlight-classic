@@ -75,6 +75,31 @@ public static class ResultDispatcher {
         executor.Tell(new CHARACTER_103_PROTOCOL.MSG_EXECUTERESULTS());
     }
 
+    // CLASSIC: the terminal claim already filtered these transient effects against its two proposed states.
+    // Re-evaluating after rewards would change their meaning; persistent results never enter this path.
+    internal static void ExecuteFilteredResults(IActorContext actorContext, ResultList results, IActorRef playerRef,
+        CoreObject playerObj, IActorRef zoneActor, string questName, string goalName = null) {
+        if (results?.m_results?.Count is not > 0) return;
+        var context = new GenericResultContext(results, playerRef, playerObj, null, zoneActor, questName, goalName);
+        CreateExecutorInstance(actorContext, context).Tell(new CHARACTER_103_PROTOCOL.MSG_EXECUTERESULTS());
+    }
+
+    internal static ResultList FilterResultsForWizard(ResultList results, Wizard wizard,
+        IActorRef playerRef = null, CoreObject playerObj = null, IActorRef zoneActor = null,
+        string questName = null, string goalName = null, string triggerName = null) {
+        var passing = new ResultList { m_results = [] };
+        foreach (var result in results?.m_results ?? []) {
+            if (result is null) continue;
+            if (result.m_requirements is not null) {
+                var context = new GenericRequirementContext(result.m_requirements, playerRef, playerObj,
+                    wizard, zoneActor, questName, goalName, triggerName);
+                if (!RequirementDispatcher.EvaluateRequirements(result.m_requirements, context)) continue;
+            }
+            passing.m_results.Add(result);
+        }
+        return passing;
+    }
+
     private static ResultList FilterResultsByRequirements(ResultList results,
                                                            IActorRef playerRef,
                                                            CoreObject playerObj,
@@ -98,34 +123,7 @@ public static class ResultDispatcher {
             }
         }
 
-        var passingResults = new ResultList {
-            m_results = []
-        };
-        foreach (var result in results.m_results) {
-            if (result is null) {
-                continue;
-            }
-
-            if (result.m_requirements is not null) {
-                var requirementContext = new GenericRequirementContext(
-                    requirements: result.m_requirements,
-                    playerRef: playerRef,
-                    playerObj: playerObj,
-                    wizard: wizard,
-                    zoneRef: zoneActor,
-                    questName: questName,
-                    goalName: goalName,
-                    triggerName: triggerName
-                );
-                if (!RequirementDispatcher.EvaluateRequirements(result.m_requirements, requirementContext)) {
-                    continue;
-                }
-            }
-
-            passingResults.m_results.Add(result);
-        }
-
-        return passingResults;
+        return FilterResultsForWizard(results, wizard, playerRef, playerObj, zoneActor, questName, goalName, triggerName);
     }
 
     /// <summary>
