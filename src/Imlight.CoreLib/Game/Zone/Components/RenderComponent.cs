@@ -61,7 +61,7 @@ internal sealed class RenderComponent(ZoneEntity entity) : ZoneEntityComponent(e
     private const string SPAWN_STATE_NAME = "On";
     private const string DESPAWN_STATE_NAME = "Off";
 
-    private readonly CoreObjectSerializer _serializer = new(
+    private readonly ObjectSerializer _serializer = Imlight.CoreLib.Classic.ClassicCoreObjectSerializer.Create( // CLASSIC
         versionable: false,
         behaviors: SerializerFlags.None
     );

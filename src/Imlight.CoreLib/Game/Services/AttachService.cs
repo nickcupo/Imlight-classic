@@ -52,6 +52,7 @@ using Imcodec.ObjectProperty;
 using Imcodec.ObjectProperty.TypeCache;
 using Imcodec.Types;
 using Imlight.Common;
+using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.Classic.Housing;
 using Imlight.CoreLib.Shared.Character;
 using Imlight.CoreLib.Shared.Networking;
@@ -158,7 +159,7 @@ internal class AttachService(SessionActor sessionActor) : MessageService(session
         _wizard.GameObject = charGameObject;
 
         // Serialize the GameObject and send it to the client.
-        var coSerializer = new CoreObjectSerializer(
+        var coSerializer = ClassicCoreObjectSerializer.Create( // CLASSIC: native unmapped ladder header.
             versionable: false,
             behaviors: SerializerFlags.Compress
         );
