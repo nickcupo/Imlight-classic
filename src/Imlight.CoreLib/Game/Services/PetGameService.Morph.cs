@@ -123,7 +123,9 @@ internal sealed partial class PetGameService {
         // CLASSIC: a repeated JOIN for this still-valid lobby replays admission without losing the offer/readiness.
         if (_morph is { } current && string.Equals(current.Key, key, StringComparison.Ordinal)) {
             lock (current.Lobby.Gate) {
-                if (current.Lobby.Sides[current.Side] is { } mine && mine.Service == Self && mine.CharId == wizard.CharId) {
+                if (current.Lobby.Sides[current.Side] is { } mine && mine.Service == Self && mine.CharId == wizard.CharId
+                    && (current.Lobby.Sides.All(side => side is not null)
+                        || ReferenceEquals(s_lobbies.GetValueOrDefault(key), current.Lobby))) {
                     SendToSocket(new PET_9_PROTOCOL.MSG_PETGAMEJOINRSP { Game = MorphGame, Success = 1 });
                     SendToSocket(new PET_9_PROTOCOL.MSG_PETGAMEINIT { Game = MorphGame, Data = "", MinLevel = PetHatchRules.MinLevel, Track = (byte) current.Side });
                     SendToSocket(new PET_9_PROTOCOL.MSG_PETGAMESTART { Game = MorphGame, Data = "" });

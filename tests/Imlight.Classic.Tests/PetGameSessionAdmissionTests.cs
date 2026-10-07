@@ -226,6 +226,28 @@ public sealed class PetGameSessionAdmissionTests {
         Assert.IsType<PET_9_PROTOCOL.MSG_PETMORPHSET>(packets[0]); Assert.IsType<PET_9_PROTOCOL.MSG_PETMORPHREADY>(packets[1]);
     }
 
+    [Theory]
+    [InlineData(false)] [InlineData(true)]
+    public async Task AnOrphanedWaitingMorphRejoinsTheDiscoverableLobbyOrKeepsItsOfferOnRefusal(bool fullCandidate) {
+        using var f = await Fixture.Create(); await f.Join(Morph);
+        await f.Send(new PET_9_PROTOCOL.MSG_PETGAMEDATA { Game = Morph, Data = $"set:side=0;id={PetId}" });
+        var old = await f.State(); Assert.Equal(PetId, old.MorphPet); await f.Drain();
+        var discoverable = f.ReplaceRegisteredLobby(f.Store.Live.Zone, fullCandidate);
+        await f.Join(Morph); var after = await f.State();
+        var response = Assert.Single((await f.Drain()).OfType<PET_9_PROTOCOL.MSG_PETGAMEJOINRSP>());
+        if (fullCandidate) {
+            Assert.Equal(0, response.Success); Assert.Same(old.Lobby, after.Lobby); Assert.Equal(PetId, after.MorphPet);
+            Assert.NotNull(Sides(old.Lobby!).GetValue(old.Side));
+        }
+        else {
+            Assert.Equal(1, response.Success); Assert.Same(discoverable, after.Lobby); Assert.Equal(1, after.Side);
+            Assert.Equal(0UL, after.MorphPet); Assert.Null(Sides(old.Lobby!).GetValue(old.Side));
+            Assert.NotNull(Sides(discoverable).GetValue(after.Side));
+            // A full pair is deliberately no longer registered; its valid association can still replay.
+            await f.Join(Morph); Assert.Same(discoverable, (await f.State()).Lobby);
+        }
+    }
+
     private static Array Sides(object lobby) => (Array)lobby.GetType().GetField("Sides")!.GetValue(lobby)!;
     private sealed record Ready;
     private sealed record Inspect;
@@ -310,6 +332,16 @@ public sealed class PetGameSessionAdmissionTests {
             sides.SetValue(Activator.CreateInstance(sideType, nonPublic: true), 1);
             var lobbies = typeof(PetGameService).GetField("s_lobbies", Static)!.GetValue(null)!;
             Assert.True((bool)lobbies.GetType().GetMethod("TryAdd")!.Invoke(lobbies, [key, lobby])!); _fullKeys.Add(key);
+        }
+        internal object ReplaceRegisteredLobby(string key, bool full) {
+            var lobbyType = typeof(PetGameService).GetNestedType("MorphLobby", BindingFlags.NonPublic)!;
+            var sideType = typeof(PetGameService).GetNestedType("MorphSide", BindingFlags.NonPublic)!;
+            var lobby = Activator.CreateInstance(lobbyType, nonPublic: true)!;
+            Sides(lobby).SetValue(Activator.CreateInstance(sideType, nonPublic: true), 0);
+            if (full) Sides(lobby).SetValue(Activator.CreateInstance(sideType, nonPublic: true), 1);
+            var lobbies = typeof(PetGameService).GetField("s_lobbies", Static)!.GetValue(null)!;
+            lobbies.GetType().GetProperty("Item")!.SetValue(lobbies, lobby, [key]);
+            _fullKeys.Add(key); return lobby;
         }
         public void Dispose() {
             _system.Terminate().GetAwaiter().GetResult(); _system.Dispose();
