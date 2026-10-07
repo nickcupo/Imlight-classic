@@ -175,17 +175,23 @@ public static class WizardCollection {
     internal static bool CommitTreasureCardTrade(Wizard first, IReadOnlyList<uint> firstGives,
         Wizard second, IReadOnlyList<uint> secondGives,
         Func<IDocumentSession> openSession = null, Func<IDocumentSession, ulong, Wizard> loadWizard = null) {
-        if (first is null || second is null || first.CharId == second.CharId
+        if (first is null || second is null || first.CharId == second.CharId || firstGives is null || secondGives is null
+            || firstGives.Any(card => card == 0) || secondGives.Any(card => card == 0)
             || Classic.Ambient.AmbientWizards.IsAmbientChar(first.CharId) || Classic.Ambient.AmbientWizards.IsAmbientChar(second.CharId)) {
             return false;
         }
 
         return WithWriteLanes(first.CharId, second.CharId, () => {
+            // CLASSIC: an unacknowledged write cannot be retried from either participant's stale book.
+            if (IsInventorySnapshotUncertain(first) || IsInventorySnapshotUncertain(second)) return false;
             using var session = openSession is null ? s_store.OpenSession() : openSession();
             session.Advanced.OptimisticConcurrencyMode = OptimisticConcurrencyMode.Writes;
             var a = loadWizard is null ? GetCharacterByCharId(session, first.CharId) : loadWizard(session, first.CharId);
             var b = loadWizard is null ? GetCharacterByCharId(session, second.CharId) : loadWizard(session, second.CharId);
-            if (a is null || b is null || !HasCards(a, firstGives) || !HasCards(b, secondGives)) {
+            if (a?.SpellbookBehavior is null || b?.SpellbookBehavior is null
+                || !HasCards(a, firstGives) || !HasCards(b, secondGives)
+                || !FitsTrade(a, firstGives.Count, secondGives.Count)
+                || !FitsTrade(b, secondGives.Count, firstGives.Count)) {
                 return false;
             }
 
@@ -199,15 +205,26 @@ public static class WizardCollection {
                 a.SpellbookBehavior.AddTreasureCard(card);
             }
 
-            session.SaveChanges();
-            PublishTreasureCards(first, a);
-            PublishTreasureCards(second, b);
+            try {
+                session.SaveChanges();
+                PublishTreasureCards(first, a);
+                PublishTreasureCards(second, b);
+            } catch (Exception) {
+                // CLASSIC: both books may already be durable; refuse further writes until authoritative reload.
+                MarkInventorySnapshotUncertain(first);
+                MarkInventorySnapshotUncertain(second);
+                throw;
+            }
 
             return true;
         });
 
         static bool HasCards(Wizard wizard, IReadOnlyList<uint> cards)
             => cards.GroupBy(card => card).All(group => wizard.SpellbookBehavior.TreasureCardCount(group.Key) >= group.Count());
+        // CLASSIC: a valid legacy overfull book may shrink, but may not gain additional free-book copies.
+        static bool FitsTrade(Wizard wizard, int gives, int receives)
+            => receives <= gives || (long)(wizard.SpellbookBehavior.TreasureCardTemplateIds?.Count ?? 0)
+                - gives + receives <= Imlight.Classic.Rules.TreasureShopRules.BookCapacity;
     }
 
     internal static bool TryPurchaseTreasureCards(Wizard liveWizard, uint templateId, int quantity, int unitPrice,
@@ -225,7 +242,7 @@ public static class WizardCollection {
         }, persisted => {
             liveWizard.GameStats.m_currentGold = persisted.GameStats.m_currentGold;
             PublishTreasureCards(liveWizard, persisted);
-        }, openSession, loadWizard);
+        }, openSession, loadWizard, onSaveFailure: _ => MarkInventorySnapshotUncertain(liveWizard));
     }
 
     internal static bool ChangeGold(Wizard liveWizard, long delta, bool capToPouch,
@@ -704,11 +721,34 @@ public static class WizardCollection {
 
     internal static bool ChangeTreasureCard(Wizard wizard, uint spellTemplateId, bool add,
         Func<IDocumentSession> openSession = null, Func<IDocumentSession, ulong, Wizard> loadWizard = null) {
+        // CLASSIC: the void legacy wrappers cannot turn a refused mutation into an acknowledged grant.
+        if (!add) return TryRemoveTreasureCards(wizard, spellTemplateId, 1, out _, openSession, loadWizard);
+        if (wizard is null || spellTemplateId == 0) return false;
         return CommitCharacterMutation(wizard.CharId, (_, persisted) => {
-            if (add) persisted.SpellbookBehavior.AddTreasureCard(spellTemplateId);
-            else persisted.SpellbookBehavior.RemoveTreasureCard(spellTemplateId);
+            if (IsInventorySnapshotUncertain(wizard) || !CanReceiveTreasureCards(persisted, 1)) return false;
+            persisted.SpellbookBehavior.AddTreasureCard(spellTemplateId);
             return true;
-        }, persisted => PublishTreasureCards(wizard, persisted), openSession, loadWizard);
+        }, persisted => PublishTreasureCards(wizard, persisted), openSession, loadWizard,
+            onSaveFailure: _ => MarkInventorySnapshotUncertain(wizard));
+    }
+
+    // CLASSIC: native deletion removes the fitting saved count in one acknowledged write, rather than
+    // trusting the live book or saving each copy. The returned count alone authorizes the native receipt.
+    internal static bool TryRemoveTreasureCards(Wizard liveWizard, uint templateId, int requested, out int removed,
+        Func<IDocumentSession> openSession = null, Func<IDocumentSession, ulong, Wizard> loadWizard = null) {
+        removed = 0;
+        if (liveWizard is null || templateId == 0) return false;
+        var staged = 0;
+        var committed = CommitCharacterMutation(liveWizard.CharId, (_, saved) => {
+            if (IsInventorySnapshotUncertain(liveWizard) || saved.SpellbookBehavior is null) return false;
+            staged = Math.Min(Math.Max(1, requested), saved.SpellbookBehavior.TreasureCardCount(templateId));
+            if (staged == 0) return false;
+            for (var i = 0; i < staged; i++) saved.SpellbookBehavior.RemoveTreasureCard(templateId);
+            return true;
+        }, saved => PublishTreasureCards(liveWizard, saved), openSession, loadWizard,
+            onSaveFailure: _ => MarkInventorySnapshotUncertain(liveWizard));
+        if (committed) removed = staged;
+        return committed;
     }
 
     internal static void PublishTreasureCards(Wizard liveWizard, Wizard persisted) {
@@ -727,10 +767,12 @@ public static class WizardCollection {
         if (liveWizard is null || templateId == 0) return false;
         return CommitCharacterMutation(liveWizard.CharId, (_, persisted) => {
             var book = persisted.SpellbookBehavior;
+            if (IsInventorySnapshotUncertain(liveWizard) || book is null) return false; // CLASSIC: reload after uncertain save.
             if (book.TreasureCardCount(templateId) < 1 || book.DeckTreasureTotal(deckId) >= maxInDeck) return false;
             book.RemoveTreasureCard(templateId);
             return book.ChangeDeckTreasure(deckId, templateId, +1);
-        }, persisted => PublishTreasureCards(liveWizard, persisted), openSession, loadWizard);
+        }, persisted => PublishTreasureCards(liveWizard, persisted), openSession, loadWizard,
+            onSaveFailure: _ => MarkInventorySnapshotUncertain(liveWizard));
     }
 
     /// <summary>
@@ -743,10 +785,14 @@ public static class WizardCollection {
         if (liveWizard is null || templateId == 0) return false;
         return CommitCharacterMutation(liveWizard.CharId, (_, persisted) => {
             var book = persisted.SpellbookBehavior;
+            // CLASSIC: reload after uncertain saves. Returning an already-owned deck card remains valid,
+            // including for an older overfull book; this does not grant a new acquisition.
+            if (IsInventorySnapshotUncertain(liveWizard) || book is null) return false;
             if (!book.ChangeDeckTreasure(deckId, templateId, -1)) return false;
             if (!destroy) book.AddTreasureCard(templateId);
             return true;
-        }, persisted => PublishTreasureCards(liveWizard, persisted), openSession, loadWizard);
+        }, persisted => PublishTreasureCards(liveWizard, persisted), openSession, loadWizard,
+            onSaveFailure: _ => MarkInventorySnapshotUncertain(liveWizard));
     }
 
     /// <summary>

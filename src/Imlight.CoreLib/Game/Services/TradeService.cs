@@ -144,7 +144,20 @@ internal sealed class TradeService(SessionActor sessionActor) : MessageService(s
         }
 
         public bool Commit(Wizard first, IReadOnlyList<uint> firstGives, Wizard second, IReadOnlyList<uint> secondGives)
-            => WizardCollection.CommitTreasureCardTrade(first, firstGives, second, secondGives);
+        {
+            try {
+                return WizardCollection.CommitTreasureCardTrade(first, firstGives, second, secondGives);
+            }
+            finally {
+                // CLASSIC: a trade can be durable despite a lost acknowledgement. Both participants reload
+                // rather than keeping stale books open after the manager reports an ordinary failed trade.
+                foreach (var wizard in new[] { first, second }) {
+                    if (WizardCollection.IsInventorySnapshotUncertain(wizard)
+                        && OnlinePlayerCollection.GetOnlinePlayer(wizard.CharId)?.ActorPath is { Length: > 0 } path)
+                        system.ActorSelection(path).Tell("Close");
+                }
+            }
+        }
 
     }
 
