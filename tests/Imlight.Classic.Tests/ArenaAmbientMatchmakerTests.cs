@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using Imcodec.MessageLayer;
+using Imcodec.IO;
 using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Classic.Pvp;
@@ -24,7 +25,7 @@ public sealed class ArenaAmbientMatchmakerTests {
         ConfigurationManager.Initialize(path);
     }
 
-    private sealed class World : IArenaWorld, IArenaAmbientWorld {
+    private sealed class World : IArenaWorld, IArenaAmbientWorld, IArenaFriendlyWorld {
         internal readonly ArenaConfig Config = ArenaLoader.Load(Path.Combine(ClassicDataFixture.Root, "pvp", "arena-2009.yaml"));
         internal readonly Dictionary<ulong, ArenaPlayer> Players = [];
         internal readonly List<(ulong Who, string Zone, ulong Run)> Trips = [];
@@ -36,6 +37,27 @@ public sealed class ArenaAmbientMatchmakerTests {
         internal ulong FailDeliveryTo;
         private ulong _runs = 0xA000;
         public bool AmbientEnabled { get; set; } = true;
+        public bool FriendlyEnabled { get; set; }
+        internal int MaxActive = 64;
+        public ArenaPlayer? PreviewFriendly(int level, int school, ArenaPvpSkill skill) {
+            var id = ArenaAmbientParticipants.IdentityId(level, school, (int) skill * 2);
+            return new ArenaPlayer(id, id, [0x82, 2, 3, 4], "friendly", level,
+                ((Imlight.Classic.Ambient.AmbientSchool) school).ToString(), 0, true, skill);
+        }
+        public ArenaPlayer? ReserveFriendly(int level, int school, ArenaPvpSkill skill) {
+            Reservations++;
+            if (Players.Values.Count(p => p.Ambient) >= MaxActive || FailAtReservation > 0 && Reservations >= FailAtReservation) return null;
+            for (var offset = 0; offset < 7; offset++)
+                for (var variant = (int) skill * 2; variant < (int) skill * 2 + 2; variant++) {
+                    var actualSchool = (school + offset) % 7;
+                    var id = ArenaAmbientParticipants.IdentityId(level, actualSchool, variant);
+                    if (Players.ContainsKey(id)) continue;
+                    var player = new ArenaPlayer(id, id, [0x82, 2, 3, 4], "friendly", level,
+                        ((Imlight.Classic.Ambient.AmbientSchool) actualSchool).ToString(), 0, true, skill);
+                    Players[id] = player; _npcIds.Add(id); return player;
+                }
+            return null;
+        }
         public IArenaLadderStore Ladder { get; set; } = new ArenaLadderCollection.Memory();
         internal ArenaMatchmaker Arena { get; }
         internal World() {
@@ -339,6 +361,162 @@ public sealed class ArenaAmbientMatchmakerTests {
         Assert.Contains(npc, world.Outcomes.Keys); Assert.Contains(npc, world.Released);
         Assert.Equal(0UL, world.Trips.Last(t => t.Who == Human).Run);
         Assert.Null(world.Arena.Run(run)); Assert.Equal(0UL, world.Arena.MatchOf(Human));
+    }
+
+    private static PvPMatchInfo[] ListedRows(World world, ulong who) {
+        var messages = world.Sent.Where(m => m.Who == who).Select(m => m.Message).ToArray();
+        var initial = ArenaMessages.Read<NewListUpdate>(messages.OfType<GAME_5_PROTOCOL.MSG_PVPUPDATEINFO>().Last().TournamentInfo)!;
+        var rows = initial.m_matches.Cast<PvPMatchInfo>().ToList();
+        foreach (var message in messages.OfType<GAME_5_PROTOCOL.MSG_TOURNAMENTUPDATE>()) {
+            var update = ArenaMessages.Read<TournamentUpdateList>(message.Updates)!;
+            rows.AddRange(update.m_updates.OfType<AddMatchUpdate>().Select(add => (PvPMatchInfo) add.m_matchInfo));
+        }
+        return rows.ToArray();
+    }
+
+    [Theory]
+    [InlineData(ArenaKind.Practice)] [InlineData(ArenaKind.Ranked)]
+    public void EveryLevelHasNamedJoinableSchoolsSkillsAndSizesWithoutSpawningAnyActors(ArenaKind kind) {
+        var world = new World { FriendlyEnabled = true };
+        for (var level = 1; level <= 50; level++) {
+            world.Players[Human] = world.Players[Human] with { Level = level };
+            world.Sent.Clear();
+            world.Arena.List(Human, world.Arena.TournamentId(kind), qualifiedOnly: true, qualifiedLevel: (uint) level);
+            var rows = ListedRows(world, Human);
+            Assert.Equal(84, rows.Length); Assert.Equal(84, rows.Select(row => row.m_matchID.Full).Distinct().Count());
+            Assert.All(rows, row => {
+                Assert.Equal(0, row.m_status); Assert.Empty(row.m_teams[0].m_actors);
+                var opponent = Assert.IsType<PvPActor>(Assert.Single(row.m_teams[1].m_actors));
+                Assert.Equal(level, opponent.m_level); Assert.Equal(4, opponent.m_nameBlob.Length);
+                Assert.Equal(level, row.m_joinQueueRequirements.m_minLevel);
+                Assert.Equal(level, row.m_joinQueueRequirements.m_maxLevel);
+                Assert.True(row.m_teams[0].m_actors.Count < row.m_teamSize);
+            });
+            Assert.Equal(7, rows.Select(row => ((PvPActor) row.m_teams[1].m_actors[0]).m_sSchool).Distinct().Count());
+            Assert.Equal(new uint[] { 1, 2, 3, 4 }, rows.Select(row => row.m_teamSize).Distinct().Order().ToArray());
+            Assert.Equal(new[] { 400, 600, 900 }, rows.Select(row => ((PvPActor) row.m_teams[1].m_actors[0]).m_rating).Distinct().Order().ToArray());
+            Assert.All(world.Sent, sent => {
+                var writer = new BitWriter(); sent.Message.Encode(writer);
+                Assert.InRange(writer.GetData().Length + 4, 1, ushort.MaxValue);
+            });
+        }
+        Assert.Equal(0, world.Reservations); Assert.Empty(world.Arena.Snapshot()); Assert.Empty(world.Trips);
+        Assert.DoesNotContain(world.Players.Values, p => p.Ambient);
+    }
+
+    [Fact]
+    public void NativePaginationUsesStableChallengeIdsAndCanBrowseBeyondTheViewersLevel() {
+        var world = new World { FriendlyEnabled = true };
+        world.Arena.List(Human, world.Arena.TournamentId(ArenaKind.Practice), numberOfElements: 5);
+        var first = ListedRows(world, Human); Assert.Equal(5, first.Length);
+        world.Sent.Clear();
+        world.Arena.List(Human, world.Arena.TournamentId(ArenaKind.Practice), startingIndex: 5, numberOfElements: 5);
+        var next = ListedRows(world, Human); Assert.Equal(5, next.Length);
+        Assert.Empty(first.Select(row => row.m_matchID.Full).Intersect(next.Select(row => row.m_matchID.Full)));
+        world.Sent.Clear();
+        world.Arena.List(Wife, world.Arena.TournamentId(ArenaKind.Practice), startingIndex: 5, numberOfElements: 5);
+        Assert.Equal(next.Select(row => row.m_matchID.Full), ListedRows(world, Wife).Select(row => row.m_matchID.Full));
+        world.Sent.Clear();
+        world.Arena.List(Human, world.Arena.TournamentId(ArenaKind.Practice), startingIndex: 84, numberOfElements: 5);
+        Assert.All(ListedRows(world, Human), row => Assert.Equal(19, ((PvPActor) row.m_teams[1].m_actors[0]).m_level));
+        var initial = ArenaMessages.Read<NewListUpdate>(world.Sent.Select(m => m.Message).OfType<GAME_5_PROTOCOL.MSG_PVPUPDATEINFO>().Single().TournamentInfo)!;
+        Assert.Equal(ArenaFriendlyRoster.ChallengeCountPerKind, initial.m_totalTeams);
+    }
+
+    [Theory]
+    [InlineData(ArenaKind.Practice, 1)] [InlineData(ArenaKind.Practice, 2)] [InlineData(ArenaKind.Practice, 3)] [InlineData(ArenaKind.Practice, 4)]
+    [InlineData(ArenaKind.Ranked, 1)] [InlineData(ArenaKind.Ranked, 2)] [InlineData(ArenaKind.Ranked, 3)] [InlineData(ArenaKind.Ranked, 4)]
+    public void JoiningDormantChallengeImmediatelyReservesLegalSeatsAndWaitsForHumanConfirmation(ArenaKind kind, int size) {
+        var world = new World { FriendlyEnabled = true };
+        var challenge = new ArenaFriendlyChallenge(kind, 20, 4, ArenaPvpSkill.Beginner, size);
+        world.Arena.Join(Human, challenge.Id, challenge.TeamIds[0]);
+        var match = Assert.Single(world.Arena.Snapshot());
+        Assert.Equal((size, size), (match.Side0, match.Side1)); Assert.Equal("Confirming", match.Phase);
+        Assert.Equal(size * 2 - 1, world.Reservations); Assert.Empty(world.Trips);
+        Assert.All(world.Players.Values.Where(p => p.Ambient), p => {
+            Assert.Equal(20, p.Level); Assert.Equal(ArenaPvpSkill.Beginner, p.FriendlySkill);
+            Assert.Equal(400, world.Arena.Standing(p.CharId).Rating);
+        });
+        world.Arena.Confirm(Human, true); Assert.Equal(size * 2, world.Trips.Count);
+        var run = world.Arena.RunOf(match.Id); world.Arena.Started(run); world.Arena.Finish(run, 0, []);
+        Assert.Equal(size * 2 - 1, world.Released.Count); Assert.Empty(world.Arena.Snapshot());
+        Assert.DoesNotContain(world.Players.Values, p => p.Ambient);
+    }
+
+    [Fact]
+    public void HumanCreatedMatchHasImmediateFriendlySeatsWhileFriendsOnlyStillReservesNone() {
+        var world = new World { FriendlyEnabled = true };
+        world.Queue(ArenaKind.Practice, 4);
+        Assert.Equal(7, world.Reservations); Assert.Equal("Confirming", Assert.Single(world.Arena.Snapshot()).Phase);
+        world.Arena.Leave(Human); world.Reservations = 0;
+        world.Queue(ArenaKind.Practice, 4, friends: true);
+        Assert.Equal(0, world.Reservations); Assert.Equal("Open", Assert.Single(world.Arena.Snapshot()).Phase);
+    }
+
+    [Fact]
+    public void HumanReplacementInFriendlyMatchDoesNotTakeATicketOrAutoconfirmEitherHuman() {
+        var world = new World { FriendlyEnabled = true };
+        var challenge = new ArenaFriendlyChallenge(ArenaKind.Ranked, 20, 1, ArenaPvpSkill.Advanced, 1);
+        world.Arena.Join(Human, challenge.Id, challenge.TeamIds[0]);
+        var match = Assert.Single(world.Arena.Snapshot());
+        world.Arena.Join(Wife, match.Id, world.Arena.TeamIdsOf(match.Id)[1]);
+        Assert.Single(world.Released); Assert.Empty(world.Outcomes); Assert.Empty(world.Trips);
+        world.Arena.Confirm(Human, true); Assert.Empty(world.Trips);
+        world.Arena.Confirm(Wife, true); Assert.Equal(2, world.Trips.Count);
+    }
+
+    [Fact]
+    public void BusyFriendlyPoolRetainsHumanQueueAndRollsBackPartialReservationsAtTheExistingCap() {
+        var world = new World { FriendlyEnabled = true, MaxActive = 3 };
+        var challenge = new ArenaFriendlyChallenge(ArenaKind.Practice, 20, 1, ArenaPvpSkill.Intermediate, 4);
+        world.Arena.Join(Human, challenge.Id, challenge.TeamIds[0]);
+        Assert.Equal("Open", Assert.Single(world.Arena.Snapshot()).Phase);
+        Assert.Equal(3, world.Released.Count); Assert.DoesNotContain(world.Players.Values, p => p.Ambient);
+        Assert.Empty(world.Trips); Assert.Empty(world.Outcomes);
+    }
+
+    [Fact]
+    public void FriendlyChallengeCannotMoveAnAlreadyFightingHumanOrAcceptTheWrongLevel() {
+        var world = new World { FriendlyEnabled = true };
+        var wrongLevel = new ArenaFriendlyChallenge(ArenaKind.Practice, 21, 1, ArenaPvpSkill.Beginner, 1);
+        world.Arena.Join(Human, wrongLevel.Id, wrongLevel.TeamIds[0]);
+        Assert.Equal(0, world.Reservations); Assert.Empty(world.Arena.Snapshot());
+        var challenge = wrongLevel with { Level = 20 };
+        world.Arena.Join(Human, challenge.Id, challenge.TeamIds[0]); world.Arena.Confirm(Human, true);
+        var match = world.Arena.MatchOf(Human); var reservations = world.Reservations;
+        world.Arena.Join(Human, (challenge with { School = 2 }).Id, 0);
+        Assert.Equal(match, world.Arena.MatchOf(Human)); Assert.Equal(reservations, world.Reservations);
+        Assert.Equal(2, world.Trips.Count);
+    }
+
+    [Fact]
+    public void AllDormantIdsRoundTripAndInvalidOrDisabledRosterNeverCreatesParticipants() {
+        var challenges = Enum.GetValues<ArenaKind>().SelectMany(kind => ArenaFriendlyRoster.Challenges(kind, 20)).ToArray();
+        Assert.Equal(8400, challenges.Length); Assert.Equal(8400, challenges.Select(c => c.Id).Distinct().Count());
+        Assert.All(challenges, c => {
+            Assert.Equal(c, ArenaFriendlyRoster.Read(c.Id)); Assert.Equal(c, ArenaFriendlyRoster.Read(c.TeamIds[0]));
+            Assert.Equal(c, ArenaFriendlyRoster.Read(c.TeamIds[1])); Assert.Null(ArenaFriendlyRoster.Read(c.Id + 3));
+        });
+        Assert.Null(ArenaFriendlyRoster.Read(ArenaFriendlyRoster.FirstId - 1));
+        Assert.Null(ArenaFriendlyRoster.Read(ArenaFriendlyRoster.FirstId + 8400 * 4));
+        var world = new World { FriendlyEnabled = true, AmbientEnabled = false };
+        world.Arena.List(Human, world.Arena.TournamentId(ArenaKind.Practice));
+        Assert.Empty(ListedRows(world, Human));
+        world.Arena.Join(Human, challenges.First(c => c.Level == 20).Id, 0);
+        Assert.Equal(0, world.Reservations); Assert.Empty(world.Arena.Snapshot());
+    }
+
+    [Fact]
+    public void RealHumanRowsComeBeforeTheDormantRosterAndQuiesceReleasesOnlyReservedParticipants() {
+        var world = new World { FriendlyEnabled = true };
+        var match = world.Queue(ArenaKind.Practice, 1, friends: true);
+        world.Arena.List(Wife, world.Arena.TournamentId(ArenaKind.Practice), numberOfElements: 1);
+        Assert.Equal(match, Assert.Single(ListedRows(world, Wife)).m_matchID.Full);
+        world.Arena.Leave(Human); world.Queue(ArenaKind.Ranked, 4);
+        world.Arena.QuiesceAsync().GetAwaiter().GetResult();
+        Assert.Equal(7, world.Released.Count); Assert.Empty(world.Arena.Snapshot()); Assert.Empty(world.Outcomes);
+        var sent = world.Sent.Count; world.Arena.List(Human, world.Arena.TournamentId(ArenaKind.Practice));
+        Assert.Equal(sent, world.Sent.Count);
     }
 
 }

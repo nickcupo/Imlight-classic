@@ -175,4 +175,28 @@ public sealed class ArenaPvpBrainTests {
         Assert.Equal(Enumerable.Range(0, 20).Select(_ => ArenaPvpBrain.Choose(tied, a)).ToArray(),
                      Enumerable.Range(0, 20).Select(_ => ArenaPvpBrain.Choose(tied, b)).ToArray());
     }
+    [Fact]
+    public void BeginnerAndIntermediateAreActualSkillDifferencesWithoutChangingCardsOrRolls() {
+        var shield = new ArenaModifier(1, ArenaModifierKind.IncomingDamage, "Fire", -80);
+        var view = View([Hit(0, 100, 1), Hit(1, 300, 2)], Wizard(0, true),
+            Wizard(4, false, modifiers: [shield]), Wizard(5, false));
+        var beginner = ArenaPvpBrain.Choose(view, new Random(42), ArenaPvpSkill.Beginner);
+        var advanced = ArenaPvpBrain.Choose(view, new Random(42), ArenaPvpSkill.Advanced);
+        Assert.Equal((0, 4), (beginner.HandIndex, beginner.TargetSlot));
+        Assert.Equal(5, advanced.TargetSlot);
+        var focused = View([Hit(0, 300)], Wizard(0, true), Wizard(4, false), Wizard(5, false) with { TeamFocus = 2 });
+        Assert.Equal(5, ArenaPvpBrain.Choose(focused, new Random(42), ArenaPvpSkill.Advanced).TargetSlot);
+        Assert.Equal(4, ArenaPvpBrain.Choose(focused, new Random(1), ArenaPvpSkill.Intermediate).TargetSlot);
+        Assert.Equal(100, view.Hand[0].Damage[0].Amount); Assert.Single(view.Combatants[1].Modifiers);
+    }
+
+    [Theory]
+    [InlineData(ArenaPvpSkill.Beginner)] [InlineData(ArenaPvpSkill.Intermediate)] [InlineData(ArenaPvpSkill.Advanced)]
+    public void EverySkillTierRefusesIllegalCastsStunsAndLethalSelfDamage(ArenaPvpSkill skill) {
+        var view = View([Hit(0, 900, castable: false), Hit(1, 800) with { SelfDamage = 200 }, Hit(2, 50)],
+            Wizard(0, true, 200), Wizard(4, false));
+        Assert.Equal(2, ArenaPvpBrain.Choose(view, new Random(42), skill).HandIndex);
+        Assert.Equal(AllyMoveKind.Pass, ArenaPvpBrain.Choose(view with { Stunned = true }, new Random(42), skill).Kind);
+    }
+
 }

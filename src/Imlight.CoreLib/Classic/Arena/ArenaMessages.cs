@@ -71,7 +71,7 @@ namespace Imlight.CoreLib.Classic.Arena;
 /// <param name="School">School name as the client's art uses it ("Fire", "Ice", ...).</param>
 /// <param name="Gender">0 male, 1 female.</param>
 internal sealed record ArenaPlayer(ulong CharId, ulong ActorId, byte[] NameBlob, string Name, int Level, string School, short Gender,
-    bool Ambient = false); // CLASSIC: retained through actor cleanup, so an NPC is never treated as an offline saved player.
+    bool Ambient = false, ArenaPvpSkill? FriendlySkill = null); // CLASSIC: retained through actor cleanup, so an NPC is never treated as an offline saved player.
 
 /// <summary>Builds the arena's client messages.</summary>
 internal static class ArenaMessages {

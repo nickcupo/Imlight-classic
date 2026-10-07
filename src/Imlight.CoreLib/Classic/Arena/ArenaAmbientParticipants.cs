@@ -14,6 +14,7 @@ using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Classic.Ambient;
+using Imlight.Classic.Pvp;
 using Imlight.Common;
 using Imlight.CoreLib.Classic.Ambient;
 using Imlight.CoreLib.Classic.Pvp;
@@ -36,7 +37,8 @@ internal static class ArenaAmbientParticipants {
     private static IActorRef? s_server;
     private static int s_serial;
 
-    internal sealed class Entry(AmbientWizard wizard) {
+    internal sealed class Entry(AmbientWizard wizard, ArenaPvpSkill skill = ArenaPvpSkill.Advanced) {
+        internal ArenaPvpSkill Skill { get; } = skill;
         internal AmbientWizard Wizard { get; } = wizard;
         internal IActorRef? Actor;
         internal int Retiring;
@@ -53,7 +55,26 @@ internal static class ArenaAmbientParticipants {
     internal static bool IsIdentity(ulong id) => id >= FirstId && id < FirstId + IdentityCount;
     internal static bool IsReserved(ulong id) => s_entries.ContainsKey(id);
     internal static AmbientWizard? Wizard(ulong id) => s_entries.TryGetValue(id, out var entry) && Volatile.Read(ref entry.Retiring) == 0 ? entry.Wizard : null;
-    internal static ArenaPlayer? Reserve(ActorSystem system, int level, int preferredSchool) {
+    internal static ArenaPvpSkill SkillOf(ulong id) => s_entries.TryGetValue(id, out var entry) ? entry.Skill : ArenaPvpSkill.Advanced;
+    private static AmbientIdentity Identity(int level, int school, int variant) {
+        var sizes = WizardNameBank.ClassicCreationNameCounts();
+        var tables = new NameTableSizes(sizes.FirstBoy, sizes.FirstGirl, sizes.Middle, sizes.Last);
+        var seed = unchecked((int) (IdentityId(level, school, variant) - FirstId) + 0x617200);
+        return AmbientIdentity.Generate(seed, ClassicArena.Config!.HallZone, tables, ((byte) level, (byte) level))
+            with { School = (AmbientSchool) school, Temper = AmbientTemper.Friendly };
+    }
+    internal static ArenaPlayer? Preview(int level, int school, ArenaPvpSkill skill) {
+        if (!Enabled) return null;
+        var variant = (int) skill * 2;
+        var identity = Identity(level, school, variant);
+        var id = IdentityId(level, school, variant);
+        var gender = identity.Look.Female ? eGender.Female : eGender.Male;
+        var name = new byte[] { (byte) (identity.Look.Female ? 0x80 : 0x82),
+            (byte) (identity.NameKeys >> 16), (byte) (identity.NameKeys >> 8), (byte) identity.NameKeys };
+        return new ArenaPlayer(id, id, name, WizardNameBank.GetEnglishName(identity.NameKeys, gender),
+            level, ((AmbientSchool) school).ToString(), (short) (identity.Look.Female ? 1 : 0), true, skill);
+    }
+    internal static ArenaPlayer? Reserve(ActorSystem system, int level, int preferredSchool, ArenaPvpSkill? friendlySkill = null) {
         if (!Enabled || s_server is null) return null;
         level = Math.Clamp(level, 1, 50);
         preferredSchool = (preferredSchool % 7 + 7) % 7;
@@ -61,24 +82,22 @@ internal static class ArenaAmbientParticipants {
             if (s_entries.Count >= MaxParticipants) return null;
             for (var schoolOffset = 0; schoolOffset < 7; schoolOffset++) {
                 var school = (preferredSchool + schoolOffset) % 7;
-                for (var variant = 0; variant < VariantsPerSchool; variant++) {
+                var firstVariant = friendlySkill is { } skill ? (int) skill * 2 : 0;
+                var endVariant = friendlySkill is not null ? firstVariant + 2 : VariantsPerSchool;
+                for (var variant = firstVariant; variant < endVariant; variant++) {
                     var id = IdentityId(level, school, variant);
                     if (s_entries.ContainsKey(id) || ActiveWizardDirectory.TryGetByCharId(id, out _)) continue;
-                    var sizes = WizardNameBank.ClassicCreationNameCounts();
-                    var tables = new NameTableSizes(sizes.FirstBoy, sizes.FirstGirl, sizes.Middle, sizes.Last);
-                    var seed = unchecked((int) (id - FirstId) + 0x617200);
-                    var identity = AmbientIdentity.Generate(seed, ClassicArena.Config!.HallZone, tables, ((byte) level, (byte) level))
-                        with { School = (AmbientSchool) school, Temper = AmbientTemper.Friendly };
+                    var identity = Identity(level, school, variant);
                     var record = AmbientWizardRecord.From(identity, id);
                     var character = AmbientWizards.BuildWizard(record);
                     if (!ArenaPvpLoadout.Prepare(character)) return null; // fail closed when no legal profile deck resolves
                     var wizard = new AmbientWizard(record, character) { Zone = ClassicArena.Config.HallZone, Activity = AmbientActivity.Sparring };
-                    var entry = new Entry(wizard);
+                    var entry = new Entry(wizard, friendlySkill ?? ArenaPvpSkill.Advanced);
                     if (!s_entries.TryAdd(id, entry)) continue;
                     try {
                         entry.Actor = system.ActorOf(ArenaAmbientParticipant.Props(entry, s_server), $"arena-ambient-{id:x}-{Interlocked.Increment(ref s_serial):x}");
                         Logger.Debug("Arena: reserved ambient participant {0} at {1}.", Logger.Args(id, entry.Actor.Path));
-                        return ServerArenaWorld.PlayerOf(character) with { Ambient = true };
+                        return ServerArenaWorld.PlayerOf(character) with { Ambient = true, FriendlySkill = friendlySkill };
                     } catch {
                         s_entries.TryRemove(id, out _); throw;
                     }
