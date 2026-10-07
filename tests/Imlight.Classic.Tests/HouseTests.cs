@@ -348,6 +348,60 @@ public sealed class HouseTests : IDisposable {
         Assert.Equal(100000, store.Wizard.GameStats.m_currentGold); Assert.Empty(store.Documents.Values.OfType<HouseRecord>());
     }
 
+    [Fact]
+    public void AuthoredOctoberCatalogEnablesDatedHousesAtFifteenWithoutResale() {
+        var path = Path.Combine(ClassicDataFixture.Root, "housing", "houses-october-2010.yaml");
+        var catalog = HouseCatalog.Load(path, "october-2010-arc1");
+        Assert.Equal(17, catalog.Count);
+        Assert.All(catalog.Values, house => {
+            Assert.True(house.Complete, house.Name);
+            Assert.Equal(15, house.MinimumLevel);
+            Assert.False(house.ResaleAllowed);
+        });
+        Assert.Equal(8000, catalog[160431].Gold); // dated Wooded Cottage price
+        Assert.Equal(0, catalog[160431].Crowns);
+    }
+
+    [Theory]
+    [InlineData("late-2009")]
+    [InlineData("arc1-2009h1")]
+    [InlineData("dev-unrestricted")]
+    public void OctoberHouseActivationDoesNotChangeOtherProfiles(string profile) {
+        Assert.Empty(HouseCatalog.Load(Path.Combine(ClassicDataFixture.Root,
+            "housing", "houses-october-2010.yaml"), profile));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void PurchaseUsesSavedFifteenLevelBoundaryAndCannotDebitAYoungerWizard(bool useCrowns) {
+        var currency = useCrowns ? HouseCurrency.Crowns : HouseCurrency.Gold;
+        var catalog = HouseCatalog.Load(Path.Combine(ClassicDataFixture.Root,
+            "housing", "houses-october-2010.yaml"), "october-2010-arc1");
+        HouseCatalog.TestDefinitions.Value = new Dictionary<uint, HouseDefinition> {
+            [Template] = Definition with { MinimumLevel = catalog[160431].MinimumLevel },
+        };
+        var store = new Store(); using var scope = store.Scope();
+        var live = store.Login(); // stale level-50 client; saved wizard is below eligibility
+        store.Wizard.MagicSchoolBehavior.Level = 14;
+        var refused = HouseCollection.Purchase(live, Deed(9101), currency, store.LoadAccount);
+        Assert.False(refused.Saved);
+        Assert.Equal(100000, store.Wizard.GameStats.m_currentGold);
+        Assert.Equal(30000, store.Account.Crowns);
+        Assert.Empty(store.Documents.Values.OfType<HouseRecord>());
+        Assert.Empty(live.InventoryBehavior.Items);
+
+        store.Wizard.MagicSchoolBehavior.Level = 15;
+        live.MagicSchoolBehavior.Level = 14; // saved state also allows a newly earned level
+        var bought = HouseCollection.Purchase(live, Deed(9102), currency, store.LoadAccount);
+        Assert.True(bought.Saved, bought.Error);
+        Assert.Single(store.Documents.Values.OfType<HouseRecord>());
+        Assert.Single(live.InventoryBehavior.Items);
+        Assert.Equal(currency == HouseCurrency.Gold ? 92000 : 100000,
+            store.Wizard.GameStats.m_currentGold);
+        Assert.Equal(currency == HouseCurrency.Crowns ? 20000 : 30000, store.Account.Crowns);
+    }
+
     private static HousePurchaseResult Buy(Wizard live, ulong id) => HouseCollection.Purchase(live, Deed(id), HouseCurrency.Gold);
     private static WizClientObjectItem Deed(ulong id) => new() { m_globalID = id, m_templateID = Template,
         m_debugName = "Fixture deed", m_inactiveBehaviors = [new DeedBehavior()] };
