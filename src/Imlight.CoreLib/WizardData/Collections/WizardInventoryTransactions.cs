@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
@@ -16,6 +17,7 @@ using Raven.Client.Documents.Session;
 namespace Imlight.CoreLib.WizardData.Collections;
 
 internal static class WizardInventoryTransactions {
+    private static readonly ConditionalWeakTable<IDocumentSession, HashSet<WizClientObjectItem>> s_readRows = new();
     // CLASSIC: fixtures replace row loading/template initialization; production always uses tracked Raven rows.
     internal static readonly AsyncLocal<Func<IDocumentSession, List<WizClientObjectItem>>> TestRowsScope = new();
     internal static readonly AsyncLocal<Action<WizClientObjectItem>> TestInitializeScope = new();
@@ -26,8 +28,26 @@ internal static class WizardInventoryTransactions {
                 ConfigurationManager.Settings["Database.DatabaseWaitForNonStaleResultsTimeout"].AsByte(5))))
             .Take(int.MaxValue);
 
-    private static List<WizClientObjectItem> ReadRows(IDocumentSession session)
-        => TestRowsScope.Value is { } read ? read(session) : ItemQuery(session).ToList();
+    private static List<WizClientObjectItem> ReadRows(IDocumentSession session) {
+        var rows = TestRowsScope.Value is { } read ? read(session) : ItemQuery(session).ToList();
+        return CaptureReadRows(session, rows);
+    }
+
+    // CLASSIC: callers with their own WizardItems query use the same exact tracked-row protection.
+    internal static List<WizClientObjectItem> CaptureReadRows(IDocumentSession session, List<WizClientObjectItem> rows) {
+        var captured = s_readRows.GetValue(session, _ => new(ReferenceEqualityComparer.Instance));
+        foreach (var row in rows ?? []) if (row is not null) captured.Add(row);
+        return rows;
+    }
+
+    // CLASSIC: native JSON may normalize an untouched loaded pet. Finalize the complete write/delete
+    // set once, before SaveChanges, so validation reads cannot rewrite unrelated originals. Never query
+    // here: another query after a staged deletion could reattach its original document.
+    internal static void ProtectUnmodifiedRows(IDocumentSession session, params WizClientObjectItem[] changed) {
+        if (session is null || !s_readRows.TryGetValue(session, out var rows)) return;
+        var intended = new HashSet<WizClientObjectItem>(changed ?? [], ReferenceEqualityComparer.Instance);
+        foreach (var row in rows) if (!intended.Contains(row)) session.Advanced.IgnoreChangesFor(row);
+    }
 
     internal static bool TryReadOwnedBackpack(IDocumentSession session, Wizard saved,
         out List<WizClientObjectItem> owned) {
@@ -214,8 +234,12 @@ internal static class WizardInventoryTransactions {
         if (prepared is null) return false;
         List<WizClientObjectItem> backpack = [];
         return WizardCollection.CommitCharacterMutation(live.CharId,
-            (session, saved) => !WizardCollection.IsInventorySnapshotUncertain(live)
-                && TryStageGrants(session, saved, [prepared], out var admitted, out _, out backpack) && admitted.Count == 1,
+            (session, saved) => {
+                if (WizardCollection.IsInventorySnapshotUncertain(live)
+                    || !TryStageGrants(session, saved, [prepared], out var admitted, out _, out backpack) || admitted.Count != 1) return false;
+                ProtectUnmodifiedRows(session);
+                return true;
+            },
             saved => {
                 candidate.m_characterId = prepared.m_characterId;
                 candidate.m_inactiveBehaviors = prepared.m_inactiveBehaviors;
@@ -227,8 +251,12 @@ internal static class WizardInventoryTransactions {
         if (live is null || WizardCollection.IsInventorySnapshotUncertain(live)) return false;
         List<WizClientObjectItem> backpack = [];
         return WizardCollection.CommitCharacterMutation(live.CharId,
-            (session, saved) => !WizardCollection.IsInventorySnapshotUncertain(live)
-                && TryStageRemove(session, saved, id, destroy, out _, out backpack),
+            (session, saved) => {
+                if (WizardCollection.IsInventorySnapshotUncertain(live)
+                    || !TryStageRemove(session, saved, id, destroy, out var removed, out backpack)) return false;
+                ProtectUnmodifiedRows(session, destroy ? [removed] : []);
+                return true;
+            },
             saved => PublishCommittedBackpack(live, saved, backpack),
             onSaveFailure: _ => WizardCollection.MarkInventorySnapshotUncertain(live));
     }

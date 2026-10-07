@@ -134,6 +134,7 @@ internal static class ClassicBazaarTransactions {
                     else SetQuotes(d, stock, templateId, stock.m_numForSale);
                     committed = new((int)cost, quantity, saved.GameStats.m_currentGold, saved.GameStats.m_baseGoldPouch,
                         nativeKind, templateId, AuctionHouseCollection.Snapshot(stock), prepared, [], updated, false, reagentData);
+                    WizardInventoryTransactions.ProtectUnmodifiedRows(session);
                     staged = true;
                     return true;
                 }, saved => {
@@ -219,6 +220,7 @@ internal static class ClassicBazaarTransactions {
                     saved.GameStats.m_currentGold += (int)cost;
                     committed = new((int)cost, quantity, saved.GameStats.m_currentGold, saved.GameStats.m_baseGoldPouch, nativeKind,
                         actualTemplate, AuctionHouseCollection.Snapshot(stock), [], owned is null ? [] : new[] { ownedGlobalId }, updated, true, reagentData);
+                    WizardInventoryTransactions.ProtectUnmodifiedRows(session, owned is null ? [] : [owned]);
                     staged = true;
                     return true;
                 }, saved => {
@@ -366,8 +368,9 @@ internal static class ClassicBazaarTransactions {
     private static List<AuctionHouseEntry> LoadStock(BazaarTransactionDependencies d, IDocumentSession session, ulong template)
         => d.LoadStock?.Invoke(session, template) ?? AuctionHouseCollection.QueryStock(session).ToList().Where(s => s.m_templateID.Full == template).ToList();
     private static List<WizClientObjectItem> LoadItems(BazaarTransactionDependencies d, IDocumentSession session, ulong owner)
-        => d.LoadItems?.Invoke(session, owner) ?? session.Query<WizClientObjectItem>(collectionName: WizardItemCollection.CollectionName)
-            .Customize(q => q.WaitForNonStaleResults(TimeSpan.FromSeconds(5))).Where(i => i.m_characterId == owner).Take(int.MaxValue).ToList();
+        => WizardInventoryTransactions.CaptureReadRows(session, d.LoadItems?.Invoke(session, owner)
+            ?? session.Query<WizClientObjectItem>(collectionName: WizardItemCollection.CollectionName)
+                .Customize(q => q.WaitForNonStaleResults(TimeSpan.FromSeconds(5))).Where(i => i.m_characterId == owner).Take(int.MaxValue).ToList());
     private static bool GlobalExists(BazaarTransactionDependencies d, IDocumentSession session, ulong id)
         => d.ItemGlobalExists?.Invoke(session, id) ?? session.Query<WizClientObjectItem>(collectionName: WizardItemCollection.CollectionName)
             .Customize(q => q.WaitForNonStaleResults(TimeSpan.FromSeconds(5))).Any(i => i.m_globalID == id);

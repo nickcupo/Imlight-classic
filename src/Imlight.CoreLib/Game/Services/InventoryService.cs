@@ -126,7 +126,10 @@ internal class InventoryService(SessionActor sessionActor) : MessageService(sess
                 || !WizardInventoryTransactions.TryReadOwnedBackpack(session, saved, out var owned)) return false;
             var item = owned.SingleOrDefault(row => row.m_globalID.Full == id);
             if (item is null || !(canDiscard is null ? !IsNoDrop(item) : canDiscard(item))) return false;
-            return WizardInventoryTransactions.TryStageRemove(session, saved, id, destroy: true, out _, out backpack, trackedRows: owned);
+            if (!WizardInventoryTransactions.TryStageRemove(session, saved, id, destroy: true,
+                out var removed, out backpack, trackedRows: owned)) return false;
+            WizardInventoryTransactions.ProtectUnmodifiedRows(session, removed);
+            return true;
         }, saved => WizardInventoryTransactions.PublishCommittedBackpack(wizard, saved, backpack),
             onSaveFailure: _ => WizardCollection.MarkInventorySnapshotUncertain(wizard));
     }
@@ -145,6 +148,7 @@ internal class InventoryService(SessionActor sessionActor) : MessageService(sess
             if (WizardCollection.IsInventorySnapshotUncertain(wizard) || saved.GameStats is null
                 || !WizardInventoryTransactions.TryReadOwnedBackpack(session, saved, out var owned)) return false;
             var seen = new HashSet<ulong>();
+            var removedOriginals = new List<WizClientObjectItem>();
             foreach (var request in requested) {
                 if ((singleQuantity ? request.Quantity != 1 : request.Quantity <= 0) || !seen.Add(request.Id)) continue;
                 var item = owned.SingleOrDefault(row => row.m_globalID.Full == request.Id);
@@ -155,11 +159,13 @@ internal class InventoryService(SessionActor sessionActor) : MessageService(sess
                 if (!double.IsFinite(total) || total > int.MaxValue) continue;
                 if (!WizardInventoryTransactions.TryStageRemove(session, saved, request.Id, destroy: true,
                     out var removed, out backpack, trackedRows: owned)) continue;
+                removedOriginals.Add(removed);
                 accepted.Add(new(removed.m_globalID.Full, (int)total));
             }
             if (accepted.Count == 0) return false;
             saved.GameStats.m_currentGold += BackpackQuickSell.GoldToApply(accepted,
                 saved.GameStats.m_currentGold, saved.GameStats.m_baseGoldPouch);
+            WizardInventoryTransactions.ProtectUnmodifiedRows(session, removedOriginals.ToArray());
             return true;
         }, saved => {
             WizardInventoryTransactions.PublishCommittedBackpack(wizard, saved, backpack);

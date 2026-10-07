@@ -235,6 +235,40 @@ public sealed class PetProgressPersistenceTests {
         Assert.Equal(1, f.Saves); Assert.Equal(ServerWizInventoryBehavior.MaxItemsAllowed, live.InventoryBehavior.Items.Count);
     }
 
+    [Theory]
+    [InlineData("initialize")]
+    [InlineData("finish")]
+    [InlineData("feed")]
+    public void OnlySelectedPetRemainsWritableAndUnrelatedEggAndForeignOriginalAreProtected(string operation) {
+        var f = new Fixture();
+        const ulong eggId = 792399, foreignId = (1UL << 52) | 792400;
+        var egg = Clone(f.Items["original/pet"]) with { m_globalID = eggId, m_primaryColor = 8 };
+        var eggBehavior = PetProgress.Behavior(egg); eggBehavior.m_level = 0;
+        eggBehavior.m_currentStats = null; eggBehavior.m_maxStats = null; eggBehavior.m_hatchedTimeSecs = 1800000000;
+        f.Items["original/unrelated-egg"] = egg; f.Saved.InventoryBehavior.InventoryItemIds.Add(eggId);
+        f.Items["original/foreign"] = Clone(egg) with { m_globalID = foreignId, m_characterId = Fixture.Owner + 1 };
+        if (operation == "initialize") PetProgress.Behavior(f.Items["original/pet"]).m_requiredXP = 0;
+        using var scope = f.Scope(); var live = f.Live();
+        f.BeforeRowSave = session => {
+            Assert.Equal(2, session.Ignored.Count);
+            Assert.Contains(session.Items["original/unrelated-egg"], session.Ignored);
+            Assert.Contains(session.Items["original/foreign"], session.Ignored);
+            Assert.DoesNotContain(session.Items["original/pet"], session.Ignored);
+            Assert.Equal(1, f.ItemReads); // protection reuses captured originals, with no finalizer query
+        };
+        Assert.True(operation switch {
+            "initialize" => ClassicPetProgressTransactions.TryInitialize(live, Fixture.PetId, out _, out _),
+            "finish" => f.Finish(live, out _),
+            _ => ClassicPetProgressTransactions.TryFeed(live, Fixture.PetId, Fixture.SnackId, out _),
+        });
+        Assert.Equal(1, f.Saves); Assert.Equal(8, f.Items["original/unrelated-egg"].m_primaryColor);
+        var afterEgg = PetProgress.Behavior(f.Items["original/unrelated-egg"]);
+        Assert.Equal(0, afterEgg.m_level); Assert.Null(afterEgg.m_currentStats); Assert.Null(afterEgg.m_maxStats);
+        Assert.Equal(1800000000u, afterEgg.m_hatchedTimeSecs);
+        Assert.Equal(Fixture.Owner + 1, f.Items["original/foreign"].m_characterId.Full);
+        Assert.Equal(foreignId, f.Items["original/foreign"].m_globalID.Full);
+    }
+
     private sealed class Fixture {
         internal const ulong Owner = 792301, PetId = 792302, SnackId = 792303;
         internal const uint PetTemplate = 792304, SnackTemplate = 792305;
@@ -244,7 +278,8 @@ public sealed class PetProgressPersistenceTests {
             PetSnackBehavior = new() { SnackItemIds = [SnackId], Snacks = [] } };
         internal Dictionary<string, WizClientObjectItem> Items = [];
         internal Dictionary<string, ClientPetSnackItem> Snacks = [];
-        internal int Saves, SerializedEnds; internal bool Fail, Durable; internal System.Action? BeforeSave;
+        internal int Saves, SerializedEnds, ItemReads; internal bool Fail, Durable; internal System.Action? BeforeSave;
+        internal Action<ProgressSession>? BeforeRowSave;
         internal PetGameEndData? End;
         internal readonly PetProgressDependencies Dependencies = new();
         internal Fixture(int count = 30, bool equipped = false) {
@@ -283,7 +318,7 @@ public sealed class PetProgressPersistenceTests {
             cache[SnackTemplate] = new PetSnackItemTemplate { m_templateID = SnackTemplate, m_school = "Storm", m_adjectiveList = ["Cereal"],
                 m_statModifierSet = new() { m_modifications = [new() { m_name = "Strength", m_change = 3 }, new() { m_name = "Agility", m_change = 2 }] } };
             WizardCollection.TestStoreScope.Value = new(Open, (session, _) => Session(session).Wizard);
-            WizardInventoryTransactions.TestRowsScope.Value = session => Session(session).Items.Values.ToList();
+            WizardInventoryTransactions.TestRowsScope.Value = session => { ItemReads++; return Session(session).Items.Values.ToList(); };
             WizardPetSnackTransactions.TestRowsScope.Value = session => Session(session).Snacks.Values.ToList();
             ClassicPetProgressTransactions.TestScope.Value = Dependencies;
             return new Restore(() => { WizardCollection.TestStoreScope.Value = oldStore; WizardInventoryTransactions.TestRowsScope.Value = oldItems;
@@ -297,7 +332,7 @@ public sealed class PetProgressPersistenceTests {
             proxy.Wizard = CloneWizard(Saved); proxy.Items = Items.ToDictionary(pair => pair.Key, pair => Clone(pair.Value));
             proxy.Snacks = Snacks.ToDictionary(pair => pair.Key, pair => Clone(pair.Value));
             proxy.Save = () => {
-                Assert.True(WizardCollection.HoldsWriteLane); Saves++; BeforeSave?.Invoke();
+                Assert.True(WizardCollection.HoldsWriteLane); Saves++; BeforeSave?.Invoke(); BeforeRowSave?.Invoke(proxy);
                 if (Fail && !Durable) throw new InvalidOperationException("fixture failed save");
                 Saved = CloneWizard(proxy.Wizard); Items = proxy.Items.ToDictionary(pair => pair.Key, pair => Clone(pair.Value));
                 Snacks = proxy.Snacks.ToDictionary(pair => pair.Key, pair => Clone(pair.Value));
@@ -332,12 +367,26 @@ public sealed class PetProgressPersistenceTests {
     public class ProgressSession : DispatchProxy {
         internal Wizard Wizard = null!; internal Dictionary<string, WizClientObjectItem> Items = [];
         internal Dictionary<string, ClientPetSnackItem> Snacks = []; internal System.Action Save = null!;
-        private readonly IAdvancedSessionOperations _advanced = DispatchProxy.Create<IAdvancedSessionOperations, ItemInventoryPersistenceTests.ItemAdvanced>();
+        internal readonly HashSet<object> Ignored = new(ReferenceEqualityComparer.Instance);
+        private readonly IAdvancedSessionOperations _advanced;
+        public ProgressSession() {
+            _advanced = DispatchProxy.Create<IAdvancedSessionOperations, ProgressAdvanced>();
+            ((ProgressAdvanced)(object)_advanced).Owner = this;
+        }
         protected override object? Invoke(MethodInfo? method, object?[]? args) => method!.Name switch {
             "get_Advanced" => _advanced, "SaveChanges" => SaveNow(), "Delete" => Delete((ClientPetSnackItem)args![0]), "Dispose" => null,
             _ => throw new NotSupportedException(method.Name),
         };
         private object? SaveNow() { Save(); return null; }
         private object? Delete(ClientPetSnackItem snack) { Snacks.Remove(Snacks.Single(pair => ReferenceEquals(pair.Value, snack)).Key); return null; }
+    }
+    public class ProgressAdvanced : DispatchProxy {
+        internal ProgressSession Owner = null!;
+        protected override object? Invoke(MethodInfo? method, object?[]? args) => method!.Name switch {
+            "set_OptimisticConcurrencyMode" => null,
+            "IgnoreChangesFor" => Ignore(args![0]!),
+            _ => throw new NotSupportedException(method.Name),
+        };
+        private object? Ignore(object row) { Assert.True(Owner.Ignored.Add(row)); return null; }
     }
 }

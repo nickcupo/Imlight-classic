@@ -129,6 +129,7 @@ internal static class ClassicStackRewards {
             }
             catch { return false; } // disposing this unsaved session discards the entire staged group
             validatedReward = true;
+            WizardInventoryTransactions.ProtectUnmodifiedRows(session);
             return stagedItems.Count > 0 || stagedCards.Count > 0 || stagedReagents.Count > 0;
         }, saved => {
             if (stagedItems.Count > 0) WizardInventoryTransactions.PublishCommittedBackpack(live, saved, backpack);

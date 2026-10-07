@@ -966,8 +966,8 @@ public static class WizardCollection {
         return wizard;
     }
 
-    // CLASSIC: the 150-item backpack and unconstrained number of snack types exceed Raven's default
-    // result page. Loading every owned original retains the existing saved-reference filters below.
+    // CLASSIC: explicitly load every owned original for large backpacks/snack bags; the existing
+    // saved-reference filters remain. Raven 7.2.4 also returned all rows in the unbounded control query.
     internal static List<WizClientObjectItem> ReadLoadedItemRows(IDocumentSession session, ulong charId)
         => session.Query<WizClientObjectItem>(collectionName: WizardItemCollection.CollectionName)
             .Where(item => item.m_characterId == charId).Take(int.MaxValue).ToList();

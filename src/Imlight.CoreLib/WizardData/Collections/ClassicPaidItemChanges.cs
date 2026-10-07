@@ -56,6 +56,7 @@ internal static class ClassicPaidItemChanges {
                 catch (Exception) { return false; } // CLASSIC: no save was attempted, so preparation can safely refuse.
             }
             saved.GameStats.m_currentGold -= cost;
+            WizardInventoryTransactions.ProtectUnmodifiedRows(session, stored);
             return true;
         }, saved => {
             var item = WizardInventoryTransactions.PublishCommittedOwnedItem(live, saved, stored);
@@ -82,6 +83,7 @@ internal static class ClassicPaidItemChanges {
             cost = price is null ? PriceModifiersConfig.GetPetRenameCost() : price();
             if (cost < 0 || saved.GameStats.m_currentGold < cost || !PetFactory.TrySetPetName(stored, nameKeys)) return false;
             saved.GameStats.m_currentGold -= cost;
+            WizardInventoryTransactions.ProtectUnmodifiedRows(session, stored);
             return true;
         }, saved => {
             var item = WizardInventoryTransactions.PublishCommittedOwnedItem(live, saved, stored);

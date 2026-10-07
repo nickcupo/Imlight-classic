@@ -139,6 +139,43 @@ public sealed class AtomicShopInventoryTests {
         Assert.Equal(10, f.Saved.GameStats.m_currentGold);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void InventoryDeletionProtectsReadonlyPetAndForeignOriginalsAfterTheEntireDeletionSet(bool quickSell) {
+        var f = new Fixture(); f.Add(11); if (quickSell) f.Add(12);
+        f.Add(13); f.Rows["original/13"].m_inactiveBehaviors = [new ClientPetItemBehavior { m_level = 0, m_hatchedTimeSecs = 321 }];
+        var foreign = Fixture.Item(14); foreign.m_characterId = Fixture.Owner + 1;
+        foreign.m_inactiveBehaviors = [new ClientPetItemBehavior { m_level = 4 }]; f.Rows["foreign/14"] = foreign;
+        using var scope = f.Scope(); var live = f.Live();
+        f.BeforeSave = () => {
+            var working = f.Working!;
+            Assert.Equal(2, working.Advanced.Ignored.Count);
+            Assert.Contains(working.Rows["original/13"], working.Advanced.Ignored);
+            Assert.Contains(working.Rows["foreign/14"], working.Advanced.Ignored);
+            Assert.Equal(quickSell ? 2 : 1, working.Deleted.Count);
+            Assert.All(working.Deleted, original => Assert.DoesNotContain(original, working.Advanced.Ignored));
+            Assert.All(working.IgnoreCountsAtDelete, count => Assert.Equal(0, count));
+            Assert.Equal(1, working.RowReads);
+            Assert.Equal(1, working.Advanced.ProtectionCallsByRow[working.Rows["original/13"]]);
+            Assert.Equal(1, working.Advanced.ProtectionCallsByRow[working.Rows["foreign/14"]]);
+            Assert.Equal(quickSell ? 3 : 2, live.InventoryBehavior.Items.Count);
+        };
+        if (quickSell) {
+            Assert.True(InventoryService.TrySellBackpackItems(live, [new(11, 1), new(12, 1), new(13, 2)], _ => 7, out var sales));
+            Assert.Equal(new ulong[] { 11, 12 }, sales.Select(sale => sale.Id)); Assert.Equal(24, f.Saved.GameStats.m_currentGold);
+        }
+        else {
+            Assert.True(InventoryService.TryDiscardBackpackItem(live, 11, _ => true)); Assert.Equal(10, f.Saved.GameStats.m_currentGold);
+        }
+        Assert.Equal(1, f.Saves); Assert.Empty(f.RowWrites);
+        Assert.Equal(new[] { "original/13", "foreign/14" }, f.Rows.Keys);
+        Assert.Equal(13ul, Assert.Single(f.Saved.InventoryBehavior.InventoryItemIds));
+        Assert.Equal(13ul, Assert.Single(live.InventoryBehavior.Items).m_globalID.Full);
+        Assert.Equal(321u, f.Rows["original/13"].m_inactiveBehaviors.OfType<ClientPetItemBehavior>().Single().m_hatchedTimeSecs);
+        Assert.Equal(Fixture.Owner + 1, f.Rows["foreign/14"].m_characterId.Full);
+    }
+
     private sealed class Fixture {
         internal const ulong Owner = 823411; internal const uint Template = 77881;
         internal Wizard Saved = new() { CharId = Owner, GameStats = new(default, 1) { m_currentGold = 10, m_baseGoldPouch = 100,
@@ -147,6 +184,8 @@ public sealed class AtomicShopInventoryTests {
             StorageBehavior = new() { BankItemIds = [] }, SpellbookBehavior = new() { DeckTreasureCards = [] } };
         internal ArenaLadderEntry Standing = new() { CharId = Owner, Rating = 500 };
         internal Dictionary<string, WizClientObjectItem> Rows = [];
+        internal readonly Dictionary<string, int> RowWrites = [];
+        internal ItemSession? Working;
         internal bool Fail, Durable; internal int Saves; internal System.Action? BeforeSave;
         internal static WizClientObjectItem Item(ulong id) => new() { m_globalID = id, m_templateID = Template, m_characterId = Owner, m_inactiveBehaviors = [] };
         internal void Add(ulong id) { Saved.InventoryBehavior.InventoryItemIds.Add(id); Rows["original/" + id] = Item(id); }
@@ -166,20 +205,23 @@ public sealed class AtomicShopInventoryTests {
                 cache[id] = new WizItemTemplate { m_templateID = (uint)id, m_adjectiveList = [] };
             }
             WizardCollection.TestStoreScope.Value = new(Open, (session, _) => Session(session).Wizard);
-            WizardInventoryTransactions.TestRowsScope.Value = session => Session(session).Rows.Values.ToList();
+            WizardInventoryTransactions.TestRowsScope.Value = session => { var proxy = Session(session); proxy.RowReads++; return proxy.Rows.Values.ToList(); };
             return new Restore(() => {
                 WizardCollection.TestStoreScope.Value = oldStore; WizardInventoryTransactions.TestRowsScope.Value = oldRows;
                 foreach (var (id, previous) in previousTemplates) { if (previous is null) cache.Remove(id); else cache[id] = previous; }
             });
         }
         private IDocumentSession Open() {
-            var session = DispatchProxy.Create<IDocumentSession, ItemSession>(); var proxy = Session(session);
+            var session = DispatchProxy.Create<IDocumentSession, ItemSession>(); var proxy = Session(session); Working = proxy;
             proxy.Wizard = Clone(Saved); proxy.Rows = Rows.ToDictionary(pair => pair.Key, pair => pair.Value with { });
             proxy.Standing = new() { CharId = Standing.CharId, Rating = Standing.Rating };
             proxy.Save = () => {
                 Assert.True(WizardCollection.HoldsWriteLane); Saves++; BeforeSave?.Invoke();
                 if (Fail && !Durable) throw new InvalidOperationException("fixture refused write");
-                Saved = Clone(proxy.Wizard); Rows = proxy.Rows.ToDictionary(pair => pair.Key, pair => pair.Value with { });
+                foreach (var (document, item) in proxy.Rows.Where(pair => !proxy.Advanced.Ignored.Contains(pair.Value)))
+                    RowWrites[document] = RowWrites.GetValueOrDefault(document) + 1;
+                Saved = Clone(proxy.Wizard); Rows = proxy.Rows.ToDictionary(pair => pair.Key,
+                    pair => (proxy.Advanced.Ignored.Contains(pair.Value) ? Rows[pair.Key] : pair.Value) with { });
                 if (Fail) throw new InvalidOperationException("fixture lost acknowledgement");
             };
             return session;
@@ -197,15 +239,38 @@ public sealed class AtomicShopInventoryTests {
     public class ItemSession : DispatchProxy {
         internal Wizard Wizard = null!; internal ArenaLadderEntry Standing = null!;
         internal Dictionary<string, WizClientObjectItem> Rows = [];
+        internal readonly List<WizClientObjectItem> Deleted = [];
+        internal readonly List<int> IgnoreCountsAtDelete = [];
+        internal int RowReads;
         internal System.Action Save = null!;
-        private readonly IAdvancedSessionOperations _advanced = DispatchProxy.Create<IAdvancedSessionOperations, ItemInventoryPersistenceTests.ItemAdvanced>();
+        private readonly IAdvancedSessionOperations _advanced = DispatchProxy.Create<IAdvancedSessionOperations, ItemAdvanced>();
+        internal ItemAdvanced Advanced => (ItemAdvanced)(object)_advanced;
         protected override object? Invoke(MethodInfo? method, object?[]? args) => method!.Name switch {
             "get_Advanced" => _advanced, "Store" => Store((WizClientObjectItem)args![0]!),
             "Delete" => Delete((WizClientObjectItem)args![0]!), "SaveChanges" => SaveNow(), "Dispose" => null,
             _ => throw new NotSupportedException(method.Name),
         };
         private object? Store(WizClientObjectItem item) { Rows.Add("new/" + item.m_globalID.Full, item); return null; }
-        private object? Delete(WizClientObjectItem item) { var original = Rows.Single(pair => ReferenceEquals(pair.Value, item)); Assert.True(Rows.Remove(original.Key)); return null; }
+        private object? Delete(WizClientObjectItem item) {
+            var original = Rows.Single(pair => ReferenceEquals(pair.Value, item));
+            IgnoreCountsAtDelete.Add(Advanced.Ignored.Count); Deleted.Add(item); Assert.True(Rows.Remove(original.Key)); return null;
+        }
         private object? SaveNow() { Save(); return null; }
+    }
+
+    public class ItemAdvanced : DispatchProxy {
+        internal readonly HashSet<WizClientObjectItem> Ignored = new(ReferenceEqualityComparer.Instance);
+        internal readonly Dictionary<WizClientObjectItem, int> ProtectionCallsByRow = new(ReferenceEqualityComparer.Instance);
+        private readonly IMetadataDictionary _metadata = DispatchProxy.Create<IMetadataDictionary, ItemInventoryPersistenceTests.ItemMetadata>();
+        protected override object? Invoke(MethodInfo? method, object?[]? args) {
+            if (method!.Name == "set_OptimisticConcurrencyMode") return null;
+            if (method.Name == "GetMetadataFor") return _metadata;
+            if (method.Name == "IgnoreChangesFor") {
+                var original = Assert.IsType<WizClientObjectItem>(args![0]);
+                Ignored.Add(original); ProtectionCallsByRow[original] = ProtectionCallsByRow.GetValueOrDefault(original) + 1;
+                return null;
+            }
+            throw new NotSupportedException(method.Name);
+        }
     }
 }

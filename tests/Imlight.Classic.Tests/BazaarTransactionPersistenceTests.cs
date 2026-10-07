@@ -479,7 +479,8 @@ public sealed class BazaarTransactionPersistenceTests {
         internal int MaxRequests = 30;
         protected override object? Invoke(MethodInfo? method, object?[]? args) {
             switch (method!.Name) {
-                case "set_OptimisticConcurrencyMode": return null;
+                case "set_OptimisticConcurrencyMode":
+                case "IgnoreChangesFor": return null;
                 case "set_MaxNumberOfRequestsPerSession": MaxRequests = (int)args![0]!; return null;
                 case "GetMetadataFor": return _metadata;
                 default: throw new NotSupportedException(method.Name);
