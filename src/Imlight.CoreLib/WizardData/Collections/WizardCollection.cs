@@ -227,6 +227,38 @@ public static class WizardCollection {
         return ChangeGold(liveWizard, -(long) amount, capToPouch: false, openSession, loadWizard);
     }
 
+    // CLASSIC: tickets are a saved wallet, never a balance copied back from an old health/mana snapshot.
+    internal static bool ChangeArenaTickets(Wizard liveWizard, long delta, bool clampToZero = false,
+        Func<IDocumentSession> openSession = null, Func<IDocumentSession, ulong, Wizard> loadWizard = null) {
+        if (liveWizard is null) return false;
+        return ChangeArenaTickets(liveWizard.CharId, delta, liveWizard, clampToZero, openSession, loadWizard);
+    }
+
+    internal static bool ChangeArenaTickets(ulong charId, long delta, Wizard liveWizard = null, bool clampToZero = false,
+        Func<IDocumentSession> openSession = null, Func<IDocumentSession, ulong, Wizard> loadWizard = null) {
+        if (liveWizard is not null && liveWizard.CharId != charId) return false;
+        return CommitCharacterMutation(charId, (_, persisted) => {
+            long points;
+            try { points = checked((long) persisted.GameStats.m_currentArenaPoints + delta); }
+            catch (OverflowException) { return false; }
+            if (clampToZero && points < 0) points = 0; // CLASSIC: the existing QA addtickets negative clamp only.
+            if (points < 0 || points > int.MaxValue) return false;
+            persisted.GameStats.m_currentArenaPoints = (int) points;
+            persisted.GameStats.m_currentPvPCurrency = (int) points; // CLASSIC: explicit ticket mutations retain the original alias.
+            return true;
+        }, persisted => {
+            if (liveWizard is null) return;
+            liveWizard.GameStats.m_currentArenaPoints = persisted.GameStats.m_currentArenaPoints;
+            liveWizard.GameStats.m_currentPvPCurrency = persisted.GameStats.m_currentPvPCurrency;
+        }, openSession, loadWizard);
+    }
+
+    internal static bool TrySpendArenaTickets(Wizard liveWizard, int amount,
+        Func<IDocumentSession> openSession = null, Func<IDocumentSession, ulong, Wizard> loadWizard = null) {
+        if (liveWizard is null || amount < 0) return false;
+        return ChangeArenaTickets(liveWizard, -(long) amount, false, openSession, loadWizard);
+    }
+
     /// <summary>
     /// CLASSIC: adds <paramref name="delta"/> training points to the saved count (a negative delta spends them and
     /// fails, changing nothing, if the count cannot cover it), then publishes the count to the live wizard. Loot,
@@ -550,10 +582,18 @@ public static class WizardCollection {
     internal static bool UpdateCharacterGameStats(Wizard wizard, Func<IDocumentSession> openSession,
         Func<IDocumentSession, ulong, Wizard> loadWizard) {
         return CommitCharacterMutation(wizard.CharId, (_, persisted) => {
-            persisted.GameStats = wizard.GameStats.CloneSnapshotWithGold(persisted.GameStats.m_currentGold);
+            var savedStats = persisted.GameStats;
+            var snapshot = wizard.GameStats.CloneSnapshotWithGold(savedStats.m_currentGold);
+            // CLASSIC: preserve each stored field independently; ordinary stats saves never normalize a wallet.
+            snapshot.m_currentArenaPoints = savedStats.m_currentArenaPoints;
+            snapshot.m_currentPvPCurrency = savedStats.m_currentPvPCurrency;
+            persisted.GameStats = snapshot;
             return true;
-        }, persisted => wizard.GameStats.m_currentGold = persisted.GameStats.m_currentGold,
-            openSession, loadWizard);
+        }, persisted => {
+            wizard.GameStats.m_currentGold = persisted.GameStats.m_currentGold;
+            wizard.GameStats.m_currentArenaPoints = persisted.GameStats.m_currentArenaPoints;
+            wizard.GameStats.m_currentPvPCurrency = persisted.GameStats.m_currentPvPCurrency;
+        }, openSession, loadWizard);
     }
 
     /// <summary>

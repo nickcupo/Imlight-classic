@@ -45,6 +45,8 @@ using Imlight.Classic;
 using Imlight.Classic.Pvp;
 using Imlight.Common;
 using Imlight.CoreLib.Classic.Admin;
+using Imlight.CoreLib.Game;
+using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;
 using Imlight.CoreLib.Shared.Utilities;
 using Imlight.CoreLib.WizardData.Collections;
@@ -303,6 +305,38 @@ internal sealed class ArenaOutcomeReceipt(ArenaOutcomeReceipts owner, ulong char
             throw;
         }
     }
+
+    internal bool FailUnstarted(Exception error) {
+        if (Interlocked.CompareExchange(ref _claimed, 1, 0) != 0) return false;
+        owner.Complete(this, error);
+        _completion.TrySetException(error);
+        return true;
+    }
+}
+
+/// <summary>CLASSIC: watch the same incarnation that receives the award; recover only work it never claimed.</summary>
+internal static class ArenaOutcomeDelivery {
+    internal static async Task DeliverAsync(IActorRef target, ArenaOutcomeReceipt receipt, ArenaOutcome outcome,
+        Func<bool> recover) {
+        using var watchCancellation = new CancellationTokenSource();
+        try {
+            var terminated = target.WatchAsync(watchCancellation.Token);
+            target.Tell(new CLASSIC_FEATURES_PROTOCOL.MSG_ARENAOUTCOME { Outcome = outcome, Receipt = receipt }, ActorRefs.Nobody);
+            var finished = await Task.WhenAny(receipt.Completion, terminated).ConfigureAwait(false);
+            if (finished == terminated) {
+                if (!await terminated.ConfigureAwait(false))
+                    throw new InvalidOperationException("The arena outcome target termination was not confirmed.");
+                // CLASSIC: Terminated follows all child handlers. A claimed/uncertain save must never be retried.
+                receipt.ApplyAward(recover);
+            }
+            await receipt.Completion.ConfigureAwait(false);
+        }
+        catch (Exception ex) {
+            receipt.FailUnstarted(ex); // CLASSIC: a failed watch/dispatch cannot silently leave an unclaimed receipt.
+            throw;
+        }
+        finally { watchCancellation.Cancel(); }
+    }
 }
 
 /// <summary>The live server behind the matchmaker.</summary>
@@ -361,23 +395,37 @@ internal sealed class ServerArenaWorld(ActorSystem system) : IArenaWorld, IArena
 
     public void Deliver(ulong charId, ArenaOutcome outcome) {
         if (IsAmbient(charId)) return; // CLASSIC: their ladder was saved; never write NPC tickets into player documents.
-        if (OnlinePlayerCollection.GetOnlinePlayer(charId)?.ActorPath is { Length: > 0 } path) {
+        if (OutcomeTarget(OnlinePlayerCollection.GetOnlinePlayer(charId), charId) is { } target) {
             var receipt = s_outcomes.Begin(charId);
-            system.ActorSelection(path).Tell(new CLASSIC_FEATURES_PROTOCOL.MSG_ARENAOUTCOME {
-                Outcome = outcome, Receipt = receipt,
-            }, ActorRefs.Nobody);
-
+            _ = ObserveDeliveryAsync(ArenaOutcomeDelivery.DeliverAsync(target, receipt, outcome,
+                () => SaveOfflineOutcome(charId, outcome.Tickets)), charId);
             return;
         }
 
-        // Offline (dropped out of the fight): the tickets go straight into the saved game stats.
-        if (outcome.Tickets != 0) {
-            if (!WizardCollection.CommitCharacterMutation(charId, (_, persisted) => {
-                persisted.GameStats.m_currentArenaPoints += outcome.Tickets;
-                persisted.GameStats.m_currentPvPCurrency = persisted.GameStats.m_currentArenaPoints;
+        // CLASSIC: an offline or stale session snapshot cannot authorize delivery to a different incarnation.
+        if (!SaveOfflineOutcome(charId, outcome.Tickets))
+            throw new InvalidOperationException("The offline arena ticket outcome was not persisted.");
+    }
 
-                return true;
-            }, null)) throw new InvalidOperationException("The offline arena ticket outcome was not persisted.");
+    internal static IActorRef? OutcomeTarget(Imlight.CoreLib.WizardData.Models.Misc.OnlinePlayer? online, ulong charId) {
+        if (online is null || online.CharacterId != charId || string.IsNullOrEmpty(online.ActorPath)
+            || AccountSessions.HolderOf(online.AccountId) is not SessionActor session) return null;
+        var target = session.ActorRef;
+        if (target is null || target.IsNobody() || target is IInternalActorRef { IsTerminated: true }
+            || !string.Equals(target.Path.ToString(), online.ActorPath, StringComparison.Ordinal)) return null;
+        if (!ActiveWizardDirectory.TryGet(target, out var wizard, out _) || wizard.CharId != charId
+            || wizard.Account?.AccountId != online.AccountId) return null;
+        return target;
+    }
+
+    internal static bool SaveOfflineOutcome(ulong charId, int tickets)
+        => tickets >= 0 && (tickets == 0 || WizardCollection.ChangeArenaTickets(charId, tickets));
+
+    private static async Task ObserveDeliveryAsync(Task delivery, ulong charId) {
+        try { await delivery.ConfigureAwait(false); }
+        catch (Exception ex) {
+            Logger.Error("Arena: outcome delivery/recovery for {0} failed; no uncertain award was retried: {1}",
+                Logger.Args(charId, ex));
         }
     }
 
