@@ -171,23 +171,26 @@ public sealed class RealSpellsTests {
 
     [Theory]
     [InlineData("Cloak", "sun", "Spells/Cloak.xml", 0)]
-    public void ApprovedDiegoCardsAreOctoberOnly(string name, string school, string template, int level) {
+    public void ResearchedDiegoCardIsPreservedButDeferredFromLiveProfiles(string name, string school, string template, int level) {
         var book = LoadBook();
-        var spell = book.FindByTemplate(template)!;
+        Assert.Null(book.FindByTemplate(template));
+        var researched = ClassicSpellLoader.Load(Path.Combine(ClassicDataFixture.Root, "research-pending", "spells"));
+        var spell = researched.FindByTemplate(template)!;
         Assert.Equal(name, spell.Name);
         Assert.Equal(school, spell.School);
         Assert.Equal("Diego the Duelmaster", spell.Values.Trainer);
         Assert.Equal(SpellPips.Of(0), spell.Values.Pips);
         Assert.Equal(level, spell.Values.LevelLearned);
         Assert.Equal(1, spell.Values.TrainingPoints);
-        Assert.True(new ClassicSpellOverrides(book, ClassicDataFixture.LoadProfile("october-2010-arc1")).IsTrainable(template));
+        Assert.False(new ClassicSpellOverrides(book, ClassicDataFixture.LoadProfile("october-2010-arc1")).IsTrainable(template));
         Assert.False(new ClassicSpellOverrides(book, ClassicDataFixture.LoadProfile("late-2009")).IsTrainable(template));
         Assert.False(new ClassicSpellOverrides(book, ClassicDataFixture.LoadProfile("arc1-2009h1")).IsTrainable(template));
     }
 
     [Fact]
-    public void CloakPlanPreservesTheClientCardTargetAndEffect() {
-        var overrides = new ClassicSpellOverrides(LoadBook(), ClassicDataFixture.LoadProfile("october-2010-arc1"));
+    public void ResearchedCloakPlanPreservesTheClientCardTargetAndEffect() {
+        var researched = ClassicSpellLoader.Load(Path.Combine(ClassicDataFixture.Root, "research-pending", "spells"));
+        var overrides = new ClassicSpellOverrides(researched, ClassicDataFixture.LoadProfile("october-2010-arc1"));
         var shape = new SpellTemplateShape {
             Path = "Spells/Cloak.xml", Name = "Cloak", Rank = 0, Accuracy = 100,
             Effects = [new TemplateEffectNode {

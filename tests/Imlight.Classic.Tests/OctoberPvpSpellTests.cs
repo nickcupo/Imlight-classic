@@ -1,4 +1,4 @@
-// CLASSIC: October Cloak stock, availability and the temporary owner-approved Private-rank requirement.
+// CLASSIC: defer live Cloak stock while retaining its researched temporary requirement for later use.
 
 using System;
 using System.Collections.Concurrent;
@@ -48,10 +48,10 @@ public sealed class OctoberPvpSpellTests : IDisposable {
     }
 
     [Fact]
-    public void EveryInventoryReloadRestoresCloakWithoutChangingSabrinaOrDuplicatingStock() {
+    public void ExplicitResearchedRecordRestoresCloakWithoutChangingSabrinaOrDuplicatingStock() {
         var field = typeof(SpiralDB).GetField("s_npcSpellInventories", BindingFlags.Static | BindingFlags.NonPublic)!;
         var previous = field.GetValue(null);
-        var records = ClassicSpellLoader.Load(Path.Combine(ClassicDataFixture.Root, "spells")).Records;
+        var records = ClassicSpellLoader.Load(Path.Combine(ClassicDataFixture.Root, "research-pending", "spells")).Records;
         try {
             for (var reload = 0; reload < 3; reload++) {
                 field.SetValue(null, new ConcurrentDictionary<ulong, NPCSpellInventory>());
@@ -96,13 +96,34 @@ public sealed class OctoberPvpSpellTests : IDisposable {
     }
 
     [Fact]
-    public void OctoberTrainerOffersCloakAndWithholdsConvictionUsingRealProfileAvailability() {
+    public void OctoberTrainerWithholdsCloakAndConvictionUsingRealProfileAvailability() {
         const uint conviction = 2102149986;
         var book = ClassicSpellLoader.Load(Path.Combine(ClassicDataFixture.Root, "spells"));
         var overrides = new ClassicSpellOverrides(book, ClassicDataFixture.LoadProfile("october-2010-arc1"));
         var offered = InteractTrainerComponent.OfferedSpells(
             [new NPCSpellEntry { TemplateID = ClassicOctoberTraining.Cloak }, new NPCSpellEntry { TemplateID = conviction }],
             _ => true, id => overrides.IsTrainable(id == ClassicOctoberTraining.Cloak ? "Spells/Cloak.xml" : "Spells/Conviction.xml"));
-        Assert.Equal((ulong) ClassicOctoberTraining.Cloak, Assert.Single(offered).TemplateID);
+        Assert.Empty(offered);
+    }
+
+    [Fact]
+    public void EveryCurrentOctoberReloadRemovesNativeCloakWithoutChangingOtherStock() {
+        var field = typeof(SpiralDB).GetField("s_npcSpellInventories", BindingFlags.Static | BindingFlags.NonPublic)!;
+        var previous = field.GetValue(null);
+        var records = ClassicSpellLoader.Load(Path.Combine(ClassicDataFixture.Root, "spells")).Records;
+        Assert.DoesNotContain(records, record => record.Id == "spell.sun.cloak");
+        var other = new NPCSpellEntry { TemplateID = 1 };
+        var native = new NPCSpellInventory { TemplateID = ClassicOctoberTraining.Diego,
+            Spells = [new NPCSpellEntry { TemplateID = ClassicOctoberTraining.Cloak }, other] };
+        try {
+            field.SetValue(null, new ConcurrentDictionary<ulong, NPCSpellInventory>());
+            SpiralDB.RegisterNpcSpellInventory(native);
+            for (var reload = 0; reload < 3; reload++) {
+                ClassicTrainerInventories.RefreshOctoberTraining(records, _ => ClassicOctoberTraining.Cloak);
+                Assert.True(SpiralDB.TryGetNpcSpellInventory(ClassicOctoberTraining.Diego, out var current));
+                Assert.Same(other, Assert.Single(current.Spells));
+            }
+            Assert.Equal(2, native.Spells.Count);
+        } finally { field.SetValue(null, previous); }
     }
 }
