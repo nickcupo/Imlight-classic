@@ -568,7 +568,7 @@ public sealed class TerminalClaimFixture : IDisposable {
         proxy.DisposeSession = () => OnDispose?.Invoke(); return session;
     }
     internal Wizard Load(IDocumentSession session, ulong id) {
-        Assert.True(WizardCollection.HoldsWriteLane); Assert.Equal(Saved.CharId, id); OnLoad?.Invoke();
+        Assert.True(WizardCollection.HoldsWriteLane); Assert.Equal(Live.CharId, id); OnLoad?.Invoke();
         return MissingWizard ? null! : ((ClaimSession)(object)session).Wizard;
     }
     internal static Wizard CloneWizard(Wizard source) {

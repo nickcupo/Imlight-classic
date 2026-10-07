@@ -11,7 +11,6 @@ using Imlight.Classic;
 using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.Shared.Behaviors;
 using Imlight.CoreLib.WizardData.Models.Player;
-using Raven.Client.Documents.Linq;
 using Raven.Client.Documents.Session;
 
 namespace Imlight.CoreLib.WizardData.Collections;
