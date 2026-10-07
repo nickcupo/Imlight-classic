@@ -49,6 +49,7 @@ using Imlight.CoreLib.Classic.Elixirs;
 using Imlight.CoreLib.Shared.Behaviors;
 using Imlight.CoreLib.Shared.Items;
 using Imlight.CoreLib.WizardData.Models.Player;
+using Imlight.CoreLib.WizardData.Collections;
 
 namespace Imlight.CoreLib.Shared.Character;
 
@@ -61,6 +62,15 @@ internal static class CharacterHelper {
     /// </summary>
     /// <param name="wizard">The wizard whose game stats need to be recalculated.</param>
     internal static void RecalculateGameStats(Wizard wizard) {
+        WizardCollection.WithCharacterLock(wizard.CharId, () => {
+            wizard.HasInitializedRuntimeStats = false;
+            RecalculateGameStatsLocked(wizard);
+            wizard.HasInitializedRuntimeStats = true;
+            return true;
+        });
+    }
+
+    private static void RecalculateGameStatsLocked(Wizard wizard) {
         Logger.Debug("Recalculation of game stats for {0}.", Logger.Args(wizard.PlayerNameBehavior.GetWizardName()));
 
         // Reset the base stats to the default values.

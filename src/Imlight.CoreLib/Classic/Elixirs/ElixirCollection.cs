@@ -3,10 +3,12 @@ using System.Collections.Generic;
 using System.Linq;
 using Imcodec.CoreObject;
 using Imcodec.IO;
+using Imcodec.MessageLayer;
 using Imcodec.ObjectProperty;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
 using Imlight.CoreLib.Shared.Resources;
+using Imlight.CoreLib.Game.Services;
 using Imlight.CoreLib.WizardData.Collections;
 using Imlight.CoreLib.WizardData.Models.Player;
 using Raven.Client.Documents;
@@ -15,7 +17,8 @@ using Raven.Client.Documents.Session;
 namespace Imlight.CoreLib.Classic.Elixirs;
 
 internal readonly record struct ElixirResult(string Error, ElixirLedger Ledger = null,
-    WizClientObjectItem Item = null, ElixirEntry[] Removed = null, WizClientObjectItem[] ActiveItems = null) {
+    WizClientObjectItem Item = null, ElixirEntry[] Removed = null, WizClientObjectItem[] ActiveItems = null,
+    IReadOnlyList<IMessage> RuntimeMessages = null) {
     internal bool Saved => Error is null && Ledger is not null;
     internal bool HasActive => Ledger?.Active.Count > 0;
     internal bool NoWork => Error is null && Ledger is null;
@@ -35,7 +38,8 @@ internal static class ElixirCollection {
         WizItemTemplate template, bool equipNow, Func<uint, ElixirDefinition> definitions = null,
         Func<IDocumentSession, ulong, Account> loadAccount = null,
         Func<WizClientObjectItem, ByteString> serialize = null) {
-        if (!equipNow || live is null || live.Account is null || freshItem is null || freshItem.m_globalID == 0
+        if (!equipNow || live is null || WizardCollection.IsInventorySnapshotUncertain(live)
+            || live.Account is null || freshItem is null || freshItem.m_globalID == 0
             || freshItem.m_templateID.Full >= (1UL << 28) || !ElixirRules.IsElixir(freshItem, template)
             || freshItem.m_characterId != 0 && freshItem.m_characterId != live.CharId)
             return new("That elixir cannot be purchased now.");
@@ -47,7 +51,8 @@ internal static class ElixirCollection {
         try {
             var saved = AccountCollection.WithAccountWriteLane(live.Account.AccountId,
                 () => WizardCollection.CommitCharacterMutation(live.CharId, (session, wizard) => {
-                    if (!ElixirRules.CanActivate(live, definition) || wizard.AccountId != live.Account.AccountId
+                    if (WizardCollection.IsInventorySnapshotUncertain(live)
+                        || !ElixirRules.CanActivate(live, definition) || wizard.AccountId != live.Account.AccountId
                         || wizard.InventoryBehavior?.InventoryItemIds is null
                         || wizard.EquipmentBehavior?.EquippedItemIds is null || wizard.EquipmentBehavior.SlotList is null
                         || wizard.InventoryBehavior.InventoryItemIds.Contains(freshItem.m_globalID)
@@ -95,7 +100,11 @@ internal static class ElixirCollection {
                     live.Account.Crowns = savedBalance;
                     live.EquipmentBehavior.PublishElixirItems(result.Activation.ActiveItems);
                     ElixirRuntime.PublishValidated(live, result.Activation.Ledger);
-                }));
+                    // CLASSIC: publish canonical effects before releasing the ACK lane; callers emit this receipt after EquipItem.
+                    result = result with { Activation = result.Activation with {
+                        RuntimeMessages = ElixirService.PublishCommittedRuntime(live, result.Activation, sendTimers: true),
+                    } };
+                }, onSaveFailure: _ => WizardCollection.MarkInventorySnapshotUncertain(live)));
             return saved ? result : new("That elixir cannot be activated: check your balance and active boosts.");
         }
         catch (Exception ex) { Failed(live, ex); return new("Your elixir could not be saved. Please try again."); }
@@ -104,11 +113,12 @@ internal static class ElixirCollection {
     // CLASSIC: trusted attach validates original stored ownership and both equipment views before
     // any timer/effect can run. Orphan force-equipped objects are never approval evidence.
     internal static bool LoadValidated(Wizard live, Func<uint, ElixirDefinition> definitions = null) {
-        if (live is null) return false;
-        ElixirRuntime.Invalidate(live);
+        if (live is null || WizardCollection.IsInventorySnapshotUncertain(live)) return false;
         ElixirLedger validated = null;
         try {
             return WizardCollection.CommitCharacterMutation(live.CharId, (session, wizard) => {
+                if (WizardCollection.IsInventorySnapshotUncertain(live)) return false;
+                ElixirRuntime.Invalidate(live);
                 var ledger = session.Load<ElixirLedger>(ElixirLedger.DocumentId(live.CharId))
                     ?? new ElixirLedger { OwnerId = live.CharId };
                 if (ledger.OwnerId != live.CharId || !EquipmentMatches(wizard, ledger)
@@ -120,7 +130,8 @@ internal static class ElixirCollection {
                 // Capture immutable validated state only after the read session completes successfully.
                 validated = ledger.Copy();
                 return true;
-            }, _ => ElixirRuntime.PublishValidated(live, validated));
+            }, _ => ElixirRuntime.PublishValidated(live, validated),
+                onSaveFailure: _ => WizardCollection.MarkInventorySnapshotUncertain(live));
         }
         catch (Exception ex) { Failed(live, ex); return false; }
     }
@@ -129,7 +140,7 @@ internal static class ElixirCollection {
         Func<uint, ElixirDefinition> definitions = null,
         Func<IDocumentSession, ulong, ulong, WizClientObjectItem> findItem = null) {
         var item = live?.InventoryBehavior?.GetItem(itemId);
-        if (live is null || item is null || item.m_characterId != live.CharId
+        if (live is null || WizardCollection.IsInventorySnapshotUncertain(live) || item is null || item.m_characterId != live.CharId
             || item.m_templateID.Full >= (1UL << 28) || !ElixirRules.IsElixir(item)) return Refused();
         var definition = (definitions ?? ElixirRules.Approved)((uint)item.m_templateID.Full);
         if (definition?.Valid != true || definition.TemplateId != item.m_templateID.Full
@@ -137,7 +148,8 @@ internal static class ElixirCollection {
         ElixirResult result = Refused();
         try {
             var saved = WizardCollection.CommitCharacterMutation(live.CharId, (session, wizard) => {
-                if (!ElixirRules.CanActivate(live, definition) || !InBackpack(wizard, itemId)) return false;
+                if (WizardCollection.IsInventorySnapshotUncertain(live)
+                    || !ElixirRules.CanActivate(live, definition) || !InBackpack(wizard, itemId)) return false;
                 if (definitions is null && !ElixirRules.MatchesNative(definition,
                     CoreObjectFactory.GetCoreTemplate((uint)item.m_templateID.Full) as WizItemTemplate)) return false;
                 var stored = Find(session, live.CharId, itemId, findItem);
@@ -173,7 +185,8 @@ internal static class ElixirCollection {
                 live.InventoryBehavior.RemoveItem(itemId, out var removedItem);
                 live.EquipmentBehavior.PublishElixirItems(result.ActiveItems);
                 ElixirRuntime.PublishValidated(live, result.Ledger);
-            });
+                result = result with { RuntimeMessages = ElixirService.PublishCommittedRuntime(live, result, sendTimers: true) };
+            }, onSaveFailure: _ => WizardCollection.MarkInventorySnapshotUncertain(live));
             return saved ? result : Refused();
         }
         catch (Exception ex) { return Failed(live, ex); }
@@ -189,11 +202,13 @@ internal static class ElixirCollection {
     // commit once under the character lane before effects or client cleanup are published.
     internal static ElixirResult Cancel(Wizard live, ulong itemId, ulong requestTemplateId = 0,
         Func<uint, ElixirDefinition> definitions = null) {
-        if (live?.Account is null || live.Account.AccountId != live.AccountId || itemId == 0
+        if (live?.Account is null || WizardCollection.IsInventorySnapshotUncertain(live)
+            || live.Account.AccountId != live.AccountId || itemId == 0
             || requestTemplateId != 0) return Refused();
         ElixirResult result = Refused();
         try {
             var saved = WizardCollection.CommitCharacterMutation(live.CharId, (session, wizard) => {
+                if (WizardCollection.IsInventorySnapshotUncertain(live)) return false;
                 var ledger = session.Load<ElixirLedger>(ElixirLedger.DocumentId(live.CharId));
                 var selected = ledger?.Active.SingleOrDefault(e => e.ItemId == itemId);
                 var liveItem = live.EquipmentBehavior?.GetItem(itemId);
@@ -223,7 +238,8 @@ internal static class ElixirCollection {
             }, _ => {
                 live.EquipmentBehavior.PublishElixirItems(result.ActiveItems);
                 ElixirRuntime.PublishValidated(live, result.Ledger);
-            });
+                result = result with { RuntimeMessages = ElixirService.PublishCommittedRuntime(live, result) };
+            }, onSaveFailure: _ => WizardCollection.MarkInventorySnapshotUncertain(live));
             return saved ? result : Refused();
         }
         catch (Exception ex) { return Failed(live, ex); }
@@ -235,11 +251,12 @@ internal static class ElixirCollection {
 
     private static ElixirResult Advance(Wizard live, uint? wholeSeconds,
         IReadOnlyDictionary<ulong, uint> elapsedByItem, Func<uint, ElixirDefinition> definitions) {
-        if (live is null) return Refused();
+        if (live is null || WizardCollection.IsInventorySnapshotUncertain(live)) return Refused();
         if (wholeSeconds == 0 || wholeSeconds is null && (elapsedByItem is null || elapsedByItem.Count == 0)) return new(null);
         ElixirResult result = Refused();
         try {
             var saved = WizardCollection.CommitCharacterMutation(live.CharId, (session, wizard) => {
+                if (WizardCollection.IsInventorySnapshotUncertain(live)) return false;
                 var ledger = session.Load<ElixirLedger>(ElixirLedger.DocumentId(live.CharId));
                 if (ledger is null || ledger.OwnerId != live.CharId || ledger.Active.Count == 0
                     || ledger.Version == uint.MaxValue || !EquipmentMatches(wizard, ledger)) return false;
@@ -268,7 +285,8 @@ internal static class ElixirCollection {
             }, _ => {
                 live.EquipmentBehavior.PublishElixirItems(result.ActiveItems);
                 ElixirRuntime.PublishValidated(live, result.Ledger);
-            });
+                result = result with { RuntimeMessages = ElixirService.PublishCommittedRuntime(live, result) };
+            }, onSaveFailure: _ => WizardCollection.MarkInventorySnapshotUncertain(live));
             return saved || result.NoWork ? result : Refused();
         }
         catch (Exception ex) { return Failed(live, ex); }

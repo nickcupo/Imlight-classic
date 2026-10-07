@@ -152,6 +152,7 @@ public sealed class ElixirServiceTests {
         private readonly FieldInfo _canonicalTable = typeof(CanonicalStatEffects).GetField("s_effectTable",
             BindingFlags.Static | BindingFlags.NonPublic)!;
         private readonly object? _previousCanonicalTable;
+        private readonly ElixirRuntimePublicationDependencies? _previousPublication;
         internal readonly ElixirTests.Store Store = new();
         internal readonly Wizard Wizard;
         internal readonly WizStatisticEffect ExpiredEffect;
@@ -174,6 +175,8 @@ public sealed class ElixirServiceTests {
             Wizard.GameEffects.Add(ExpiredEffect);
             Wizard.GameEffects.Add(_otherElixir);
             Wizard.GameEffects.Add(_gear);
+            _previousPublication = ElixirService.TestRuntimeScope.Value;
+            ElixirService.TestRuntimeScope.Value = new() { Template = TemplateFor };
         }
 
         internal ElixirResult Expire() => ElixirCollection.AdvanceOnline(Wizard, 1800, Store.Resolve);
@@ -197,6 +200,7 @@ public sealed class ElixirServiceTests {
         };
         public void Dispose() {
             _canonicalTable.SetValue(null, _previousCanonicalTable);
+            ElixirService.TestRuntimeScope.Value = _previousPublication;
             _storeScope.Dispose();
         }
     }

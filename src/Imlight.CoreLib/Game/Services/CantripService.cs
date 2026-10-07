@@ -278,28 +278,31 @@ internal class CantripService(SessionActor sessionActor) : MessageService(sessio
     }
 
     private bool UseEnergy(Wizard wizard, int energyCost) {
-        var newEnergy = wizard.PetOwnerBehavior.Energy - energyCost;
-        if (newEnergy < 0) {
-            return false;
-        }
-        wizard.UpdateEnergy(newEnergy);
+        return WizardData.Collections.WizardCollection.WithCharacterLock(wizard.CharId, () => {
+            if (WizardData.Collections.WizardCollection.IsInventorySnapshotUncertain(wizard)) return false;
+            var newEnergy = wizard.PetOwnerBehavior.Energy - energyCost;
+            if (newEnergy < 0) {
+                return false;
+            }
+            wizard.UpdateEnergy(newEnergy);
 
-        // The client has a max energy increase effect applied, so sending it here would double the energy client side.
-        var magicSchool = wizard.MagicSchoolBehavior.MagicSchool;
-        var level = wizard.MagicSchoolBehavior.Level;
-        var baseStats = MagicLevelsConfig.GetPlayerLevelInfo(magicSchool, level);
-        var normMaxEnergy = baseStats.m_petEnergy;
+            // The client has a max energy increase effect applied, so sending it here would double the energy client side.
+            var magicSchool = wizard.MagicSchoolBehavior.MagicSchool;
+            var level = wizard.MagicSchoolBehavior.Level;
+            var baseStats = MagicLevelsConfig.GetPlayerLevelInfo(magicSchool, level);
+            var normMaxEnergy = baseStats.m_petEnergy;
 
-        var networkMessage = new PET_9_PROTOCOL.MSG_PETENERGYTICK() {
-            GlobalID = wizard.GameObject.m_globalID,
-            Energy = newEnergy,
-            MaxEnergy = normMaxEnergy,
-            TickTime = (int) wizard.PetOwnerBehavior.LastEnergyTickEpoch
-        };
+            var networkMessage = new PET_9_PROTOCOL.MSG_PETENERGYTICK() {
+                GlobalID = wizard.GameObject.m_globalID,
+                Energy = newEnergy,
+                MaxEnergy = normMaxEnergy,
+                TickTime = (int) wizard.PetOwnerBehavior.LastEnergyTickEpoch
+            };
 
-        SendToSocket(networkMessage);
+            SendToSocket(networkMessage);
 
-        return true;
+            return true;
+        });
     }
 
     private void CastEmoteCantrip(CantripsSpellTemplate cantrip, ref CANTRIPSMESSAGES_57_PROTOCOL.MSG_CASTEFFECT castEffect) {

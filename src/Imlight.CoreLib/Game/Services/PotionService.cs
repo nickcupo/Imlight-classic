@@ -41,6 +41,8 @@ using Imlight.Common;
 using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.WizardData.Models.Player;
+using Imlight.CoreLib.WizardData.Collections;
+using Imcodec.MessageLayer;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -56,82 +58,19 @@ internal class PotionService(SessionActor sessionActor) : MessageService(session
         => Akka.Actor.Props.Create(() => new PotionService(parentActor));
 
     [MessageHandler(typeof(WIZARD_12_PROTOCOL.MSG_USEPOTION))]
-    private void UsePotion(WIZARD_12_PROTOCOL.MSG_USEPOTION message) {
-        var wizard = GetActiveWizard();
-        if (wizard is null) {
-            return;
+    private void UsePotion(WIZARD_12_PROTOCOL.MSG_USEPOTION message)
+        => ApplyDrink(GetActiveWizard(), DateTime.UtcNow, SendToSocket, CloseSession);
+
+    internal static bool ApplyDrink(Wizard wizard, DateTime nowUtc, Action<IMessage> send, Action close) {
+        try {
+            if (!WizardPotionTransactions.TryDrink(wizard, nowUtc, out var receipt)) return false;
+            foreach (var packet in receipt.Messages) send(packet);
+            return true;
         }
-
-        // CLASSIC: no potions in a duel. In 2009 a flask was drunk outside combat ("Next to your health and mana globes,
-        // you will find little flasks"; nothing about duels: Fandom Health and Mana, oldid 4804 of 2009-01-23 to oldid
-        // 41879 of 2009-09-13); players fled a fight to drink one and came back (chasingdings.com, 2008-10-21). A
-        // duel's health and mana are the live game stats, so a crafted MSG_USEPOTION healed mid-fight without a turn.
-        // A seat held for a dropped wizard counts as in the duel.
-        if (!MayDrinkNow(wizard, DateTime.UtcNow)) {
-            Logger.Information("Potion use by {0} refused: in a duel.", Logger.Args(wizard.CharId));
-
-            return;
+        catch {
+            if (WizardCollection.IsInventorySnapshotUncertain(wizard)) close();
+            throw;
         }
-
-        // Inform the player's game client they're using a potion.
-        var usePotionMsg = new WIZARD_12_PROTOCOL.MSG_USEPOTION() { };
-        SendToSocket(usePotionMsg);
-
-        var potionCharge = wizard.GameStats.m_potionCharge;
-        var potionMax = wizard.GameStats.m_potionMax;
-
-        if (potionCharge < 1.0) { // If the player has no potion charge, they cannot heal.
-            return;
-        }
-
-        // Values with gear and effects.
-        var baseHealth = wizard.GameStats.m_baseHitpoints;
-        var currentHealth = wizard.GameStats.m_currentHitpoints;
-
-        var baseMana = wizard.GameStats.m_baseMana;
-        var currentMana = wizard.GameStats.m_currentMana;
-
-        if (currentHealth >= baseHealth && currentMana >= baseMana) { // If health and mana are full, no need to heal.
-            return;
-        }
-
-        // Values before effects are applied.
-        var clientGameStats = wizard.GameStats.GetClientTypeAlternative();
-        var msgBaseHealth = clientGameStats.m_baseHitpoints;
-        var msgBaseMana = clientGameStats.m_baseMana;
-
-        if (currentHealth < baseHealth) { // If health is full, no need to heal.
-            // Inform the player's game client that their health has been updated.
-            var healthUpdateMsg = new WIZARD_12_PROTOCOL.MSG_UPDATEHEALTH() {
-                CharacterID = wizard.GameObjectID,
-                NewHealth = baseHealth,
-                NewHealthMax = msgBaseHealth,
-                DisplayDiff = 1
-            };
-            SendToSocket(healthUpdateMsg);
-            wizard.UpdateHealth(baseHealth);
-        }
-
-        if (currentMana < baseMana) { // If mana is full, no need to heal.
-            // Inform the player's game client that their mana has been updated.
-            var manaUpdateMsg = new WIZARD_12_PROTOCOL.MSG_UPDATEMANA() {
-                Mana = baseMana,
-                MaxMana = msgBaseMana,
-                DisplayDiff = 1
-            };
-            SendToSocket(manaUpdateMsg);
-            wizard.UpdateMana(baseMana);
-        }
-
-        var newPotionCharge = potionCharge - 1.0f;
-
-        // Inform the player's game client that their potion charge has been updated.
-        var potionChargeUpdateMsg = new WIZARD_12_PROTOCOL.MSG_UPDATEPOTIONS {
-            PotionMax = potionMax,
-            PotionCharge = newPotionCharge
-        };
-        SendToSocket(potionChargeUpdateMsg);
-        wizard.UpdatePotions(newPotionCharge, potionMax);
     }
 
     /// <summary>CLASSIC: false while the wizard is in a duel or a seat is held for them in one.</summary>
@@ -153,62 +92,24 @@ internal class PotionService(SessionActor sessionActor) : MessageService(session
             return;
         }
 
-        var stats = wizard.GameStats;
-        var charge = stats.m_potionCharge;
-        var max = stats.m_potionMax;
-
-        // Whole potions still missing. Nothing to fill, so confirm success as a benign no-op.
-        var missing = (int) Math.Ceiling(max - charge);
-        if (missing <= 0) {
-            SendToSocket(new WIZARD_12_PROTOCOL.MSG_POTIONBUYCONFIRM { Failure = 0 });
-
-            return;
-        }
-
-        // todo: in-game verify the AmountEnum mapping (assumed 0 = Fill One, else Fill All).
-        var fillAll = message.AmountEnum != 0;
-        var potionsToFill = fillAll ? missing : 1;
-
-        var level = Math.Max(1, stats.Level);
-        var perPotion = PotionCostPerBottle(level);
-        var cost = perPotion * potionsToFill;
-
-        // CLASSIC: checked and spent in one save (never below zero); can't afford otherwise.
-        if (!wizard.RemoveGold(cost)) {
-            Logger.Information("Wizard {0} can't afford {1} potion(s): {2} gold needed, {3} held (level {4}).",
-                Logger.Args(wizard.CharId, potionsToFill, cost, stats.m_currentGold, level));
-            SendToSocket(new WIZARD_12_PROTOCOL.MSG_POTIONBUYCONFIRM { Failure = 1 });
-
-            return;
-        }
-
-        // Echo the gold already spent.
-        SendToSocket(new WIZARD_12_PROTOCOL.MSG_UPDATEGOLD {
-            Gold = stats.m_currentGold,
-            MaxGold = stats.m_baseGoldPouch,
-        });
-
-        // Refill the potion charge (capped at max) and echo it.
-        var newCharge = Math.Min(max, charge + potionsToFill);
-        wizard.UpdatePotions(newCharge, max);
-        SendToSocket(new WIZARD_12_PROTOCOL.MSG_UPDATEPOTIONS {
-            PotionMax = max,
-            PotionCharge = newCharge,
-        });
-
-        SendToSocket(new WIZARD_12_PROTOCOL.MSG_POTIONBUYCONFIRM { Failure = 0 });
-        Logger.Information("Wizard {0} filled {1} potion(s) for {2} gold (level {3}, {4} each); charge {5} to {6} of {7}.",
-            Logger.Args(wizard.CharId, potionsToFill, cost, level, perPotion, charge, newCharge, max));
+        // CLASSIC: retain the existing AmountEnum interpretation until the native mapping is verified.
+        ApplyBuy(wizard, message.AmountEnum != 0, SendToSocket, CloseSession);
     }
 
-    // CLASSIC: under a profile with potion rules, Hilda Brewer charges the 2009 price (rules/potions-2009.yaml: ten
-    // gold a level, 100 to 500); otherwise the stock level bands.
-    private static int PotionCostPerBottle(int level)
-        => Imlight.CoreLib.Classic.ClassicProgression.Potions is { } potions ? potions.ShopPrice(level)
-         : level < 11 ? 100
-         : level < 21 ? level * 10
-         : level < 31 ? level * 15
-         : level < 41 ? level * 20
-         : level * 30;
+    internal static bool ApplyBuy(Wizard wizard, bool fillAll, Action<IMessage> send, Action close,
+        Func<int, int> price = null) {
+        try {
+            if (!WizardPotionTransactions.TryBuy(wizard, fillAll, out var receipt, price)) {
+                send(new WIZARD_12_PROTOCOL.MSG_POTIONBUYCONFIRM { Failure = 1 });
+                return false;
+            }
+            foreach (var packet in receipt.Messages) send(packet);
+            return true;
+        }
+        catch {
+            if (WizardCollection.IsInventorySnapshotUncertain(wizard)) close();
+            throw;
+        }
+    }
 
 }

@@ -109,134 +109,49 @@ internal class WizardService(SessionActor sessionActor) : MessageService(session
         });
 
     [MessageHandler(typeof(CHARACTER_103_PROTOCOL.MSG_LEVELUP))]
-    private void ReceiveSetLevel(CHARACTER_103_PROTOCOL.MSG_LEVELUP message) {
-        // This is the internal level up message. It most likely happened due to a developer command.
-        var levelUpSuccess = _activeWizard.SetLevel(message.NewLevel);
-        if (!levelUpSuccess) {
-            return;
-        }
-
-        // CLASSIC: the GM level commands (.mod level, .mod lvlup) also set the XP to the start of the new level when
-        // the wizard's XP lies outside it, so the level holds: the next login warned of an XP/level mismatch and the
-        // next XP gain put the level back.
-        var school = _activeWizard.MagicSchoolBehavior;
-        if (MagicLevelsConfig.GetPlayerLevelAtExperience(school.ExperiencePoints) != school.Level) {
-            school.ExperiencePoints = MagicLevelsConfig.GetExperiencePointsAtLevel(school.Level);
-            WizardCollection.UpdateCharacterLevel(_activeWizard);
-        }
-
-        var levelUpMessage = new WIZARD_12_PROTOCOL.MSG_LEVELUP {
-            GlobalID = _activeWizard.GameObjectID,
-            NewLevel = _activeWizard.MagicSchoolBehavior.Level,
-            Data = "0000000000"
-        };
-        ZoneBroadcast(levelUpMessage, false);
-
-        // Leveling up the player will set their new stats and heal them.
-        // We need to do the code below to echo those changes to the client.
-        var magicSchool = _activeWizard.MagicSchoolBehavior.MagicSchool;
-        // CLASSIC: SetLevel may clamp to the level cap, so echo the stats of the level actually set.
-        var baseStats = MagicLevelsConfig.GetPlayerLevelInfo(magicSchool, _activeWizard.MagicSchoolBehavior.Level);
-
-        // Update health — heal to full and sync server state with what the client was told.
-        _activeWizard.UpdateHealth(_activeWizard.GameStats.m_baseHitpoints);
-        var healthMessage = new WIZARD_12_PROTOCOL.MSG_UPDATEHEALTH() {
-            CharacterID = _activeWizardGameObject.m_globalID,
-            NewHealth = baseStats.m_hitpoints,
-            NewHealthMax = baseStats.m_hitpoints,
-            DisplayDiff = 1,
-        };
-        SendToSocket(healthMessage);
-
-        // Update mana.
-        _activeWizard.UpdateMana(_activeWizard.GameStats.m_baseMana);
-        var manaMessage = new WIZARD_12_PROTOCOL.MSG_UPDATEMANA() {
-            Mana = baseStats.m_mana,
-            MaxMana = baseStats.m_mana,
-            DisplayDiff = 1,
-        };
-        SendToSocket(manaMessage);
-
-        // Update power pips
-        var powerPipsMessage = new WIZARD_12_PROTOCOL.MSG_UPDATEPOWERPIP() { PowerPip = baseStats.m_pipChance };
-        SendToSocket(powerPipsMessage);
-
-        // Update energy.
-        _activeWizard.UpdateEnergy(baseStats.m_petEnergy);
-        var petEnergyMessage = new PET_9_PROTOCOL.MSG_PETENERGYMAX() {
-            MaxEnergy = baseStats.m_petEnergy
-        };
-        SendToSocket(petEnergyMessage);
-    }
+    private void ReceiveSetLevel(CHARACTER_103_PROTOCOL.MSG_LEVELUP message)
+        => ApplyLevel(_activeWizard, message.NewLevel, SendToSocket, packet => ZoneBroadcast(packet, false), CloseSession);
 
     [MessageHandler(typeof(CHARACTER_103_PROTOCOL.MSG_GAINXP))]
-    private void ReceiveGainXP(CHARACTER_103_PROTOCOL.MSG_GAINXP message) {
-        var beforeLevel = _activeWizard.MagicSchoolBehavior.Level;
-        var beforeXP = _activeWizard.MagicSchoolBehavior.ExperiencePoints;
-        // CLASSIC: the client is told the XP actually applied, and nothing when the level cap stops it all.
-        var xpGained = _activeWizard.AddExperiencePoints(message.XP);
-        if (xpGained == 0 && message.XP != 0) {
-            return;
+    private void ReceiveGainXP(CHARACTER_103_PROTOCOL.MSG_GAINXP message)
+        => ApplyExperience(_activeWizard, message.XP, SendToSocket, packet => ZoneBroadcast(packet, false), CloseSession);
+
+    // CLASSIC: the production wrapper emits only an acknowledged receipt, in the existing native order.
+    internal static bool ApplyLevel(Wizard live, byte level, Action<Imcodec.MessageLayer.IMessage> send,
+        Action<Imcodec.MessageLayer.IMessage> broadcast, System.Action close) {
+        try {
+            if (!WizardProgressionTransactions.TrySetLevel(live, level, resetMismatchedXp: true, out var receipt)) return false;
+            SendLevelReceipt(receipt, send, broadcast);
+            return true;
         }
-
-        var afterLevel = _activeWizard.MagicSchoolBehavior.Level;
-
-        if (beforeLevel != afterLevel) {
-            // The player leveled up. AddExperiencePoints already called SetLevel internally,
-            // so we just need to broadcast the level-up and send stat updates to the client.
-            var levelUpMessage = new WIZARD_12_PROTOCOL.MSG_LEVELUP {
-                GlobalID = _activeWizard.GameObjectID,
-                NewLevel = afterLevel,
-                Data = "0000000000"
-            };
-            ZoneBroadcast(levelUpMessage, false);
-
-            // Send stat updates to client (health, mana, power pips, energy).
-            var magicSchool = _activeWizard.MagicSchoolBehavior.MagicSchool;
-            var baseStats = MagicLevelsConfig.GetPlayerLevelInfo(magicSchool, afterLevel);
-
-            // Heal to full and sync server state with what the client was told.
-            _activeWizard.UpdateHealth(_activeWizard.GameStats.m_baseHitpoints);
-            var healthMessage = new WIZARD_12_PROTOCOL.MSG_UPDATEHEALTH() {
-                CharacterID = _activeWizardGameObject.m_globalID,
-                NewHealth = baseStats.m_hitpoints,
-                NewHealthMax = baseStats.m_hitpoints,
-                DisplayDiff = 1,
-            };
-            SendToSocket(healthMessage);
-
-            _activeWizard.UpdateMana(_activeWizard.GameStats.m_baseMana);
-            var manaMessage = new WIZARD_12_PROTOCOL.MSG_UPDATEMANA() {
-                Mana = baseStats.m_mana,
-                MaxMana = baseStats.m_mana,
-                DisplayDiff = 1,
-            };
-            SendToSocket(manaMessage);
-
-            var powerPipsMessage = new WIZARD_12_PROTOCOL.MSG_UPDATEPOWERPIP() {
-                PowerPip = baseStats.m_pipChance
-            };
-            SendToSocket(powerPipsMessage);
-
-            _activeWizard.UpdateEnergy(baseStats.m_petEnergy);
-            var petEnergyMessage = new PET_9_PROTOCOL.MSG_PETENERGYMAX() {
-                MaxEnergy = baseStats.m_petEnergy
-            };
-            SendToSocket(petEnergyMessage);
+        catch {
+            if (WizardCollection.IsInventorySnapshotUncertain(live)) close();
+            throw;
         }
+    }
 
-        // CLASSIC: audit the gain that lands a wizard on the capped max level.
-        if (beforeLevel != afterLevel && afterLevel == MagicLevelsConfig.MaxLevel && MagicLevelsConfig.MaxLevelXp is not null) {
-            ClassicGate.LevelCapReached(_activeWizard.CharId, afterLevel);
+    internal static bool ApplyExperience(Wizard live, int xp, Action<Imcodec.MessageLayer.IMessage> send,
+        Action<Imcodec.MessageLayer.IMessage> broadcast, System.Action close) {
+        try {
+            if (!WizardProgressionTransactions.TryGainExperience(live, xp, out var receipt)) return false;
+            SendLevelReceipt(receipt, send, broadcast);
+            if (receipt.OldLevel != receipt.Level && receipt.Level == MagicLevelsConfig.MaxLevel
+                && MagicLevelsConfig.MaxLevelXp is not null) ClassicGate.LevelCapReached(live.CharId, receipt.Level);
+            if (receipt.XpMessage is not null) send(receipt.XpMessage);
+            return true;
         }
+        catch {
+            if (WizardCollection.IsInventorySnapshotUncertain(live)) close();
+            throw;
+        }
+    }
 
-        // Inform the client of the XP change.
-        var addXpMsg = new WIZARD_12_PROTOCOL.MSG_UPDATEXP {
-            GlobalID = _activeWizard.GameObjectID,
-            XP = xpGained,
-            OldXP = beforeXP,
-        };
-        SendToSocket(addXpMsg);
+    private static void SendLevelReceipt(ProgressionReceipt receipt, Action<Imcodec.MessageLayer.IMessage> send,
+        Action<Imcodec.MessageLayer.IMessage> broadcast) {
+        foreach (var packet in receipt.LevelMessages) {
+            if (packet is WIZARD_12_PROTOCOL.MSG_LEVELUP) broadcast(packet);
+            else send(packet);
+        }
     }
 
     #endregion

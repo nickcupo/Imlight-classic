@@ -105,26 +105,30 @@ internal class PetService(SessionActor sessionActor) : MessageService(sessionAct
     [MessageHandler(typeof(CHARACTER_103_PROTOCOL.MSG_DOENERGYTICK))]
     private void ReceiveDoEnergyTick(CHARACTER_103_PROTOCOL.MSG_DOENERGYTICK message) {
         var wizard = GetActiveWizard();
-        var petOwnerBehavior = wizard.PetOwnerBehavior;
+        WizardData.Collections.WizardCollection.WithCharacterLock(wizard.CharId, () => {
+            if (WizardData.Collections.WizardCollection.IsInventorySnapshotUncertain(wizard)) return false;
+            var petOwnerBehavior = wizard.PetOwnerBehavior;
 
-        var magicSchool = wizard.MagicSchoolBehavior.MagicSchool;
-        var level = wizard.MagicSchoolBehavior.Level;
-        var baseStats = MagicLevelsConfig.GetPlayerLevelInfo(magicSchool, level);
-        var normMaxEnergy = baseStats.m_petEnergy;
+            var magicSchool = wizard.MagicSchoolBehavior.MagicSchool;
+            var level = wizard.MagicSchoolBehavior.Level;
+            var baseStats = MagicLevelsConfig.GetPlayerLevelInfo(magicSchool, level);
+            var normMaxEnergy = baseStats.m_petEnergy;
 
-        var tickTime = (int) (DateTimeOffset.UtcNow.ToUnixTimeSeconds() + s_petEnergyTickIntervalInSeconds);
+            var tickTime = (int) (DateTimeOffset.UtcNow.ToUnixTimeSeconds() + s_petEnergyTickIntervalInSeconds);
 
-        if (petOwnerBehavior.Energy < normMaxEnergy) {
-            wizard.UpdateEnergy(petOwnerBehavior.Energy + 1);
-            var tickMsg = new PET_9_PROTOCOL.MSG_PETENERGYTICK() {
-                GlobalID = wizard.GameObjectID,
-                Energy = petOwnerBehavior.Energy,
-                MaxEnergy = normMaxEnergy,
-                TickTime = tickTime
-            };
+            if (petOwnerBehavior.Energy < normMaxEnergy) {
+                wizard.UpdateEnergy(petOwnerBehavior.Energy + 1);
+                var tickMsg = new PET_9_PROTOCOL.MSG_PETENERGYTICK() {
+                    GlobalID = wizard.GameObjectID,
+                    Energy = petOwnerBehavior.Energy,
+                    MaxEnergy = normMaxEnergy,
+                    TickTime = tickTime
+                };
 
-            SendToSocket(tickMsg);
-        }
+                SendToSocket(tickMsg);
+            }
+            return true;
+        });
     }
 
     [MessageHandler(typeof(CHARACTER_103_PROTOCOL.MSG_DOEGGHATCH))]

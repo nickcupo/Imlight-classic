@@ -150,7 +150,7 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
             RemoveNoAggroEffect(); // CLASSIC: in a duel again (a PvP circle, a scripted fight): no fade at the table.
         }
 
-        wizard.IsInDuel = true;
+        if (!PublishCombatState(wizard, true, message.Duel?.Duel?.m_bPVP ?? true)) return;
         wizard.SetPersistentLocation(message.SlotPosition);
 
         // Orientation is given in radians. It must be converted to degrees and then to a byte.
@@ -163,7 +163,7 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
     [MessageHandler(typeof(COMBAT_106_PROTOCOL.MSG_COMBATDEFEAT))]
     private void ReceiveCombatDefeat(COMBAT_106_PROTOCOL.MSG_COMBATDEFEAT message) {
         _currentDuelActor = null; // CLASSIC: the duel is over for us; a later logout must not flee it again.
-        GetActiveWizard().IsInDuel = false;
+        if (!PublishCombatState(GetActiveWizard(), false, false)) return;
         PushHelperIdle();
         EquipMountSubtle();
 
@@ -190,7 +190,7 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
             return;
         }
 
-        wizard.IsInDuel = false;
+        if (!PublishCombatState(wizard, false, false)) return;
         EquipMount(); // CLASSIC: the mount taken off for the fight goes back on, as after any duel.
         if (wizard.GameStats.m_currentHitpoints <= 0) {
             wizard.UpdateHealth(1);
@@ -226,7 +226,7 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
         // CLASSIC: the duel is over; a logout after it used to reach the ended duel, which ran flee and defeat on it
         // (a second "Duel ended" and a MSG_SENDTOHUB).
         _currentDuelActor = null;
-        GetActiveWizard().IsInDuel = false;
+        if (!PublishCombatState(GetActiveWizard(), false, false)) return;
         PushHelperIdle();
         EquipMount();
         SetNoAggroGrace();
@@ -648,7 +648,7 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
     [MessageHandler(typeof(GAME_5_PROTOCOL.MSG_CLIENT_DISCONNECT))]
     private void ReceiveClientDisconnect(GAME_5_PROTOCOL.MSG_CLIENT_DISCONNECT message) {
         if (_currentDuelActor != null) {
-            GetActiveWizard().IsInDuel = false;
+            DetachCombatSession(GetActiveWizard());
         }
         _currentDuelActor?.Tell(message, SessionActor.ActorRef);
     }
@@ -656,9 +656,34 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
     [MessageHandler(typeof(GAME_5_PROTOCOL.MSG_QUERY_LOGOUT))]
     private void ReceiveQueryLogout(GAME_5_PROTOCOL.MSG_QUERY_LOGOUT message) {
         if (_currentDuelActor != null) {
-            GetActiveWizard().IsInDuel = false;
+            DetachCombatSession(GetActiveWizard());
         }
         _currentDuelActor?.Tell(message, SessionActor.ActorRef);
+    }
+
+    // CLASSIC: the trusted duel message and its canonical elixir effects become visible together.
+    // A partial runtime failure closes the quarantined session before rewards can use stale offsets.
+    private bool PublishCombatState(Wizard wizard, bool inCombat, bool pvp) {
+        if (wizard is null) return false;
+        if (WizardCollection.IsInventorySnapshotUncertain(wizard)) { CloseSession(); return false; }
+        try {
+            var messages = ElixirService.PublishCombatTransition(wizard, inCombat, pvp);
+            foreach (var message in messages) SendToSocket(message);
+            return true;
+        }
+        catch {
+            if (WizardCollection.IsInventorySnapshotUncertain(wizard)) { CloseSession(); return false; }
+            throw;
+        }
+    }
+
+    private void DetachCombatSession(Wizard wizard) {
+        if (wizard is null) return;
+        try { ElixirService.DetachCombatSession(wizard); }
+        catch {
+            if (WizardCollection.IsInventorySnapshotUncertain(wizard)) { CloseSession(); return; }
+            throw;
+        }
     }
 
     [MessageHandler(typeof(TUTORIAL_108_PROTOCOL.MSG_TUTORIALREBUILDDUELHAND))]

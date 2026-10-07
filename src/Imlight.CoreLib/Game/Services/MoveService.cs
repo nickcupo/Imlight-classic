@@ -48,6 +48,7 @@ using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;
 using Imlight.CoreLib.Shared.Resources;
 using Imlight.CoreLib.WizardData.Models.Player;
+using Imlight.CoreLib.WizardData.Collections;
 
 namespace Imlight.CoreLib.Game.Services;
 
@@ -155,7 +156,16 @@ internal class MoveService : MessageService {
     [MessageHandler(typeof(GAME_5_PROTOCOL.MSG_MARK_LOCATION))]
     private void ReceiveMarkLocation(GAME_5_PROTOCOL.MSG_MARK_LOCATION message) {
         var wizard = GetActiveWizard();
+        if (wizard is null) return;
+        // CLASSIC: eligibility, the existing mana cost and its runtime debit share the refill lane.
+        WizardCollection.WithCharacterLock(wizard.CharId, () => {
+            if (WizardCollection.IsInventorySnapshotUncertain(wizard)) return false;
+            ReceiveMarkLocationLocked(wizard, message);
+            return true;
+        });
+    }
 
+    private void ReceiveMarkLocationLocked(Wizard wizard, GAME_5_PROTOCOL.MSG_MARK_LOCATION message) {
         // CLASSIC: not in a duel, and not inside a private instance (a dungeon run, a dorm, a minigame), whose copy a
         // later recall could not return to (security audit 2026-10-04).
         var inInstance = (TryGetOnlinePlayer(wizard.CharId, out var self) && self.InstanceOwnerId != 0)

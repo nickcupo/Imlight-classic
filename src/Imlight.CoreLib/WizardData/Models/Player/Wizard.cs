@@ -155,13 +155,20 @@ public class Wizard {
     // Set when attachment replaces the offline data object; does not imply zone entry.
     [JsonIgnore] public bool HasInitializedGameObject { get; private set; }
     [JsonIgnore] public WizardEffectCollection GameEffects { get; } = new();
+    // CLASSIC: set only after the complete lane-protected base/gear/effect recalculation; never persisted.
+    [JsonIgnore] internal bool HasInitializedRuntimeStats { get; set; }
     [JsonIgnore] public string GameServerIp;
     [JsonIgnore] public ushort GameServerPort;
     [JsonIgnore] public string QueuedZoneName;
     [JsonIgnore] public string QueuedZoneLocation;
     [JsonIgnore] internal DynamodSet DynamodSet { get; set; }
     [JsonIgnore] internal bool IsInCombatGrace { get; set; }
-    [JsonIgnore] internal bool IsInDuel { get; set; }
+    // CLASSIC: potion eligibility and runtime stat changes share the character lane.
+    [JsonIgnore] private bool _isInDuel;
+    [JsonIgnore] internal bool IsInDuel {
+        get => _isInDuel;
+        set => WizardCollection.WithCharacterLock(CharId, () => { _isInDuel = value; return true; });
+    }
 
     /// <summary>
     /// Tracks hatched pets for MSG_PETTOMEPETADDED. Key: pet global ID, Value: pet template ID.
@@ -268,98 +275,15 @@ public class Wizard {
         WizardCollection.UpdateCharacterZone(this, zone, zoneDisplayName);
     }
 
-    // CLASSIC: XP and level are saved whole from the live wizard (UpdateCharacterLevel); combat loot, quest rewards and
-    // commands change them on different actors. Each change holds the character's write lane, so no change is made
-    // from a read another actor has already moved past (a lost XP gain), and each save sees the change before it.
-    public bool SetLevel(byte level) => WizardCollection.WithCharacterLock(CharId, () => SetLevelLocked(level));
+    // CLASSIC: fresh numeric balances, runtime level deltas and refill effects commit before publication.
+    public bool SetLevel(byte level)
+        => WizardProgressionTransactions.TrySetLevel(this, level, resetMismatchedXp: false, out _, refill: false);
 
-    public int AddExperiencePoints(int xp) => WizardCollection.WithCharacterLock(CharId, () => AddExperiencePointsLocked(xp));
+    public int AddExperiencePoints(int xp)
+        => WizardProgressionTransactions.TryGainExperience(this, xp, out var receipt, refill: false) ? receipt.AppliedXp : 0;
 
-    public void RemoveExperiencePoints(int xp) => WizardCollection.WithCharacterLock(CharId, () => {
-        RemoveExperiencePointsLocked(xp);
-        return true;
-    });
-
-    private bool SetLevelLocked(byte level) {
-        // CLASSIC: the one level choke point; never above the profile's cap or below 1.
-        level = (byte) ClassicRuntime.Rules.ClampLevel(level, MagicLevelsConfig.MaxLevel);
-        var school = MagicSchoolBehavior.MagicSchool;
-        var currentLevel = MagicSchoolBehavior.Level;
-        var oldBaseStats = MagicLevelsConfig.GetPlayerLevelInfo(school, currentLevel);
-
-        MagicSchoolBehavior.Level = level;
-        GameStats.Level = level;
-
-        var newBaseStats = MagicLevelsConfig.GetPlayerLevelInfo(school, level);
-        var healthDifference = newBaseStats.m_hitpoints - oldBaseStats.m_hitpoints;
-        var manaDifference = newBaseStats.m_mana - oldBaseStats.m_mana;
-        var powerPipDifference = newBaseStats.m_pipChance - oldBaseStats.m_pipChance;
-
-        GameStats.m_baseHitpoints += healthDifference;
-        GameStats.m_baseMana += manaDifference;
-        GameStats.m_powerPipBase += powerPipDifference;
-
-        // Don't reset XP - preserve overflow XP when leveling up.
-        // XP is managed by AddExperiencePoints/RemoveExperiencePoints.
-
-        // Persistent save.
-        WizardCollection.UpdateCharacterLevel(this);
-
-        return true;
-    }
-
-    private int AddExperiencePointsLocked(int xp) {
-        // CLASSIC: the one XP choke point; XP stops at the level cap's ceiling. Returns the XP applied.
-        var applied = ClassicRuntime.Rules.XpToApply(MagicSchoolBehavior.ExperiencePoints, xp, MagicLevelsConfig.MaxLevelXp);
-        if (applied == 0 && xp != 0) {
-            return 0;
-        }
-
-        xp = applied;
-        MagicSchoolBehavior.ExperiencePoints += xp;
-
-        // If the level at XP is greater than the current level, we need to level up.
-        var levelAtXp = MagicLevelsConfig.GetPlayerLevelAtExperience(MagicSchoolBehavior.ExperiencePoints);
-        if (levelAtXp > MagicSchoolBehavior.Level) {
-            var levelUpSuccess = SetLevel(levelAtXp);
-            if (!levelUpSuccess) {
-                Logger.Warning("Could not level up player {0} to level {1}.",
-                    Logger.Args(PlayerNameBehavior.GetWizardName(), levelAtXp));
-
-                return xp;
-            }
-
-            // SetLevel already saved to database, so we're done.
-            return xp;
-        }
-
-        // Only save to database if we didn't level up (SetLevel already saved).
-        WizardCollection.UpdateCharacterLevel(this);
-
-        return xp;
-    }
-
-    private void RemoveExperiencePointsLocked(int xp) {
-        MagicSchoolBehavior.ExperiencePoints -= xp;
-
-        // If the level at XP is less than the current level, we need to level down.
-        var levelAtXp = MagicLevelsConfig.GetPlayerLevelAtExperience(MagicSchoolBehavior.ExperiencePoints);
-        if (levelAtXp < MagicSchoolBehavior.Level) {
-            var levelDownSuccess = SetLevel(levelAtXp);
-            if (!levelDownSuccess) {
-                Logger.Warning("Could not level down player {0} to level {1}.",
-                    Logger.Args(PlayerNameBehavior.GetWizardName(), levelAtXp));
-
-                return;
-            }
-
-            // SetLevel already saved to database, so we're done.
-            return;
-        }
-
-        // Only save to database if we didn't level down (SetLevel already saved).
-        WizardCollection.UpdateCharacterLevel(this);
-    }
+    public void RemoveExperiencePoints(int xp)
+        => WizardProgressionTransactions.TryRemoveExperience(this, xp, out _);
 
     public void SetMarkedLocation(Vector3 loc, Vector3 orientation, string zone, string zoneDisplayName) {
         MarkedLocation = loc;
@@ -400,49 +324,74 @@ public class Wizard {
         => WizardCollection.TrySpendGold(this, gold);
 
     public void UpdateHealth(int newHealth) {
-        GameStats.m_currentHitpoints = newHealth;
+        WizardCollection.WithCharacterLock(CharId, () => {
+            if (WizardCollection.IsInventorySnapshotUncertain(this)) return false;
+            GameStats.m_currentHitpoints = newHealth;
 
-        // Persistent save. CLASSIC: best effort here - this runs inside duel resolution, and a database timeout thrown out of it
-        // ended the planning-phase handler and left the duel waiting forever. The new value is in memory and is saved with the next write.
-        try {
-            WizardCollection.UpdateCharacterGameStats(this);
-        }
-        catch (Exception ex) {
-            Logger.Error("Saving health {0} of a wizard failed ({1}); it is kept in memory.", Logger.Args(newHealth, ex.GetType().Name));
-        }
+            // Persistent save. CLASSIC: best effort here - this runs inside duel resolution, and a database timeout thrown out of it
+            // ended the planning-phase handler and left the duel waiting forever. The new value is in memory and is saved with the next write.
+            try {
+                WizardCollection.UpdateCharacterGameStats(this);
+            }
+            catch (Exception ex) {
+                Logger.Error("Saving health {0} of a wizard failed ({1}); it is kept in memory.", Logger.Args(newHealth, ex.GetType().Name));
+            }
+
+            return true;
+        });
     }
 
     public void UpdateMaxHealth(int newMaxHealth) {
-        GameStats.m_baseHitpoints = newMaxHealth;
+        WizardCollection.WithCharacterLock(CharId, () => {
+            if (WizardCollection.IsInventorySnapshotUncertain(this)) return false;
+            GameStats.m_baseHitpoints = newMaxHealth;
 
-        // Persistent save.
-        WizardCollection.UpdateCharacterGameStats(this);
+            // Persistent save.
+            WizardCollection.UpdateCharacterGameStats(this);
+
+            return true;
+        });
     }
 
     public void UpdateMana(int newMana) {
-        GameStats.m_currentMana = newMana;
+        WizardCollection.WithCharacterLock(CharId, () => {
+            if (WizardCollection.IsInventorySnapshotUncertain(this)) return false;
+            GameStats.m_currentMana = newMana;
 
-        // Persistent save (best effort, as UpdateHealth: it runs inside duel resolution).
-        try {
-            WizardCollection.UpdateCharacterGameStats(this);
-        }
-        catch (Exception ex) {
-            Logger.Error("Saving mana {0} of a wizard failed ({1}); it is kept in memory.", Logger.Args(newMana, ex.GetType().Name));
-        }
+            // Persistent save (best effort, as UpdateHealth: it runs inside duel resolution).
+            try {
+                WizardCollection.UpdateCharacterGameStats(this);
+            }
+            catch (Exception ex) {
+                Logger.Error("Saving mana {0} of a wizard failed ({1}); it is kept in memory.", Logger.Args(newMana, ex.GetType().Name));
+            }
+
+            return true;
+        });
     }
 
     public void UpdateEnergy(int newEnergy) {
-        PetOwnerBehavior.SetEnergy(newEnergy);
+        WizardCollection.WithCharacterLock(CharId, () => {
+            if (WizardCollection.IsInventorySnapshotUncertain(this)) return false;
+            PetOwnerBehavior.SetEnergy(newEnergy);
 
-        // Persistent save.
-        WizardCollection.UpdateCharacterPetOwnerBehavior(this);
+            // Persistent save.
+            WizardCollection.UpdateCharacterPetOwnerBehavior(this);
+
+            return true;
+        });
     }
 
     public void UpdateMaxMana(int newMaxMana) {
-        GameStats.m_baseMana = newMaxMana;
+        WizardCollection.WithCharacterLock(CharId, () => {
+            if (WizardCollection.IsInventorySnapshotUncertain(this)) return false;
+            GameStats.m_baseMana = newMaxMana;
 
-        // Persistent save.
-        WizardCollection.UpdateCharacterGameStats(this);
+            // Persistent save.
+            WizardCollection.UpdateCharacterGameStats(this);
+
+            return true;
+        });
     }
 
     public void UpdateCantripLevel(byte newCantripLevel) {
@@ -505,7 +454,19 @@ public class Wizard {
     public bool DestroyInventoryItem(ulong itemId)
         => WizardInventoryTransactions.Remove(this, itemId, destroy: true);
 
+    // CLASSIC: the reference save and application/removal of runtime gear offsets share the progression lane.
     public bool InventoryToEquipmentTransfer(ulong itemId, out List<GameEffectBase> equipEffects, out List<GameEffectBase> unequipEffects) {
+        var result = WizardCollection.WithCharacterLock(CharId, () => {
+            if (WizardCollection.IsInventorySnapshotUncertain(this))
+                return (Success: false, Equip: (List<GameEffectBase>)null, Unequip: (List<GameEffectBase>)null);
+            var success = InventoryToEquipmentTransferLocked(itemId, out var added, out var removed);
+            return (Success: success, Equip: added, Unequip: removed);
+        });
+        equipEffects = result.Equip; unequipEffects = result.Unequip;
+        return result.Success;
+    }
+
+    private bool InventoryToEquipmentTransferLocked(ulong itemId, out List<GameEffectBase> equipEffects, out List<GameEffectBase> unequipEffects) {
         equipEffects = null;
         unequipEffects = null;
 
@@ -576,6 +537,16 @@ public class Wizard {
     }
 
     public bool EquipmentToInventoryTransfer(ulong itemId, out List<GameEffectBase> unequipEffects) {
+        var result = WizardCollection.WithCharacterLock(CharId, () => {
+            if (WizardCollection.IsInventorySnapshotUncertain(this)) return (Success: false, Effects: (List<GameEffectBase>)null);
+            var success = EquipmentToInventoryTransferLocked(itemId, out var removed);
+            return (Success: success, Effects: removed);
+        });
+        unequipEffects = result.Effects;
+        return result.Success;
+    }
+
+    private bool EquipmentToInventoryTransferLocked(ulong itemId, out List<GameEffectBase> unequipEffects) {
         unequipEffects = null;
 
         // Get the actual item. We'll also grab the template to remove the effects from the wizard.
@@ -1385,13 +1356,8 @@ public class Wizard {
         return true;
     }
 
-    public void UpdatePotions(Single newPotionCharge, Single newPotionMax) {
-        GameStats.m_potionCharge = newPotionCharge;
-        GameStats.m_potionMax = newPotionMax;
-
-        // Persistent save.
-        WizardCollection.UpdateCharacterGameStats(this);
-    }
+    public void UpdatePotions(Single newPotionCharge, Single newPotionMax)
+        => WizardPotionTransactions.TrySetPotions(this, newPotionCharge, newPotionMax, out _);
 
     internal void AfterDatabaseLoad() {
         AfterDatabaseLoadWizardGameStats();

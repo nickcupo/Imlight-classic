@@ -87,9 +87,11 @@
     <ServerIntegrationTest Include="OpsPersistenceTests.cs" />
     <ServerIntegrationTest Include="EconomyFixesTests.cs" />
     <ServerIntegrationTest Include="NumericRewardAcknowledgementTests.cs" />
+    <ServerIntegrationTest Include="ProgressionPotionPersistenceTests.cs" />
     <ServerIntegrationTest Include="RobustnessFixesTests.cs" />
     <ServerIntegrationTest Include="PostCombatEffectsTests.cs" />
     <ServerIntegrationTest Include="ArenaMatchmakerTests.cs" />
+    <ServerIntegrationTest Include="ArenaNativeMatchStatusTests.cs" />
     <ServerIntegrationTest Include="ArenaInventoryReloadTests.cs" />
     <ServerIntegrationTest Include="ArenaShopSnapshotTests.cs" />
     <ServerIntegrationTest Include="FriendPortalTests.cs" />
@@ -108,6 +110,7 @@
     <ServerIntegrationTest Include="ElixirServiceTests.cs" />
     <ServerIntegrationTest Include="ElixirCancellationTests.cs" />
     <ServerIntegrationTest Include="ElixirCancellationTests.Native.cs" />
+    <ServerIntegrationTest Include="ElixirTransitionConcurrencyTests.cs" />
     <ServerIntegrationTest Include="ArenaPvpMinionTests.cs" />
     <ServerIntegrationTest Include="OctoberShopRuntimeTests.cs" />
     <ServerIntegrationTest Include="HouseTests.cs" />
