@@ -72,9 +72,13 @@ public sealed class ArenaNativeShopLayoutTests {
             if (npc == 164327) Assert.Equal(10, offering.m_shopList.Count);
             foreach (var id in inventory) Assert.Equal(expected.Contains(id.Full), component.HasItem(id));
             Assert.False(component.HasItem(new GID(730999u)));
-            if (npc == 38226) foreach (var id in new uint[] { 100510, 100540, 164172 }) {
-                Assert.DoesNotContain(offering.m_shopList, offered => offered.MParts.TemplateId == id);
-                Assert.False(component.HasItem(new GID(id)));
+            if (npc == 38226) {
+                Assert.DoesNotContain(offering.m_shopList, offered => offered.MParts.TemplateId == 100510);
+                Assert.False(component.HasItem(new GID(100510u)));
+                foreach (var id in new uint[] { 100540, 164172 }) {
+                    Assert.Contains(offering.m_shopList, offered => offered.MParts.TemplateId == id);
+                    Assert.True(component.HasItem(new GID(id)));
+                }
             }
         }
         finally {

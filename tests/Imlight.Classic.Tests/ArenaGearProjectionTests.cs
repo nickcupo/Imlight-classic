@@ -105,7 +105,8 @@ public sealed class ArenaGearProjectionTests : IDisposable {
         });
         ClassicArenaGearTemplates.Initialize(root, "october-2010-arc1");
         Assert.False(ClassicArenaGearTemplates.IsWithheld(100510));
-        Assert.True(ClassicArenaGearTemplates.IsWithheld(100540));
+        Assert.False(ClassicArenaGearTemplates.IsWithheld(100540));
+        Assert.False(ClassicArenaGearTemplates.IsWithheld(164172));
         var item = new WizItemTemplate { m_templateID = 100510u, m_equipEffects = [] };
         ClassicArenaGearTemplates.Apply(item, "ObjectData/PVP/Tier2/Robes/PvP-T2-Robe-006.xml");
         Assert.Equal(2, item.m_equipEffects.Count);
