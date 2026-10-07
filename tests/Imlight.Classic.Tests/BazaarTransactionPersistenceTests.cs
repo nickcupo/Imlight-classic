@@ -138,6 +138,24 @@ public sealed class BazaarTransactionPersistenceTests {
         Assert.Equal(6, Assert.Single(f.Stocks.Values).m_numForSale); Assert.Equal(1, f.Deletes);
     }
 
+    [Fact]
+    public void LegacyOverfullTreasureBookCanSellOwnedCardsButCannotAcquireMore() {
+        var f = new Fixture(2); using var scope = f.Scope();
+        f.Saved.SpellbookBehavior.TreasureCardTemplateIds = Enumerable.Repeat((uint)Fixture.Tid, 1001).ToList();
+        f.Saved.SpellbookBehavior.DeckTreasureCards = new() { [77] = new() { [(uint)Fixture.Tid] = 3 } };
+        var live = f.Live();
+        Assert.True(ClassicBazaarTransactions.Quote(live, true, 2, Fixture.Tid, 0, 1, out var quote));
+        Assert.Equal(50, quote.Cost); Assert.Equal(0, f.Saves);
+        Assert.False(ClassicBazaarTransactions.Buy(live, 2, Fixture.Tid, 1, 0, 0, out _));
+        Assert.Equal(0, f.Saves);
+        Assert.True(ClassicBazaarTransactions.Sell(live, 2, Fixture.Tid, 0, 1, out _));
+        Assert.Equal(1000, f.Saved.SpellbookBehavior.TreasureCardTemplateIds.Count);
+        Assert.Equal(3, f.Saved.SpellbookBehavior.DeckTreasureCount(77, (uint)Fixture.Tid));
+        Assert.Equal(950, f.Saved.GameStats.m_currentGold);
+        Assert.False(ClassicBazaarTransactions.Buy(live, 2, Fixture.Tid, 1, 0, 0, out _));
+        Assert.Equal(1, f.Saves);
+    }
+
     [Theory]
     [InlineData(0)] [InlineData(1)] [InlineData(2)] [InlineData(3)]
     public void EveryConfirmedSaleProtectsStockOnlyAfterAcknowledgementUnderTheStockLock(int kind) {
