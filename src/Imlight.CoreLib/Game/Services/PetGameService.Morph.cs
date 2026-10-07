@@ -580,8 +580,20 @@ internal sealed partial class PetGameService {
     }
 
     protected override void OnPreDispose() {
-        LeaveMorph();
+        RetireGamesForClose();
         base.OnPreDispose();
+    }
+
+    // CLASSIC: also retire when disposal reaches this service without a completed pre-dispose.
+    protected override void OnDispose() {
+        RetireGamesForClose();
+        base.OnDispose();
+    }
+
+    private void RetireGamesForClose() {
+        _closing = true;
+        RetireTraining();
+        LeaveMorph();
     }
 
     [MessageHandler(typeof(MorphEggTimer))]
