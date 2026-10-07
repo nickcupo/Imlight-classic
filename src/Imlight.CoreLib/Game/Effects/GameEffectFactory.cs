@@ -118,6 +118,9 @@ internal static class GameEffectFactory {
         // Broad category effects are property specific.
         var effectName = info.m_effectName.ToString();
         switch (effectName) {
+            // CLASSIC: this native binding is a fraction of maximum mana, not a flat bonus.
+            // Keep its existing name/id/index and raw native field; the server aggregation interprets it.
+            case "CanonicalMaxManaPercentReduce": effect.m_manaBonus = val; break;
             case var _ when effectName.Contains("MaxMana"): effect.m_manaBonus = val; break;
             case var _ when effectName.Contains("MaxHealth"): effect.m_hitPointBonus = val; break;
             case var _ when effectName.Contains("MaxEnergy"): effect.m_energyBonus = val; break;

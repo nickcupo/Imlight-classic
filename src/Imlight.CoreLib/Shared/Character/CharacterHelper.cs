@@ -75,6 +75,8 @@ internal static class CharacterHelper {
 
         // Reset the base stats to the default values.
         wizard.GameStats.SetBaseStats();
+        CharacterEffectHelper.ResetRebuiltEquipmentEffects(wizard.GameStats); // CLASSIC: discard only rebuilt bonuses and the mana ledger.
+        CharacterEffectHelper.RetireProvidedSpellCards(wizard); // CLASSIC: retire exact prior equipment grants before rebuilding.
         wizard.GameEffects.Clear();
 
         // Iterate through the equipped items and apply their effects.
