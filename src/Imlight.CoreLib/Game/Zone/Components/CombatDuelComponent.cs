@@ -176,8 +176,9 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
 
     public WizardClientDuelBehavior GetClientBehaviorInstance() => new() {
         m_pDuel = Duel,
-        // todo: this is the sigil template itself, not for the game object
-        m_sigilTemplateID = 1901671683,
+        // CLASSIC: the native cinematic resolves this ID independently of our seating template.
+        // Advertise the same selected sigil, preserving the street default before sigil details arrive.
+        m_sigilTemplateID = StringHash.Compute(_sigilTemplate?.m_sigilName ?? "CombatSigil8Actor"),
     };
 
     public override void OnPlayerJoin(CoreObject playerObj, IActorRef playerActor, Wizard playerWizard) {

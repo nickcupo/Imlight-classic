@@ -38,8 +38,10 @@
  * Last Updated: 08/14/2026
  */
 
+using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Text.RegularExpressions;
 using Imcodec.Cryptography;
 using Imcodec.ObjectProperty.TypeCache;
@@ -63,6 +65,87 @@ namespace Imlight.CoreLib.Game.Effects;
 /// </remarks>
 internal static class CharacterEffectHelper {
 
+    // CLASSIC: local derived state only. Multiple arena pieces each reduce mana by100%;
+    // they must keep the unreduced maximum for removing the final piece, rather than subtract/add1.
+    private const string ManaPercentReduction = "CanonicalMaxManaPercentReduce";
+    private static readonly ConditionalWeakTable<ServerWizGameStats, ManaAdjustment> s_manaAdjustments = new();
+    private static readonly ConditionalWeakTable<ProvideSpellEffect, GrantedCards> s_grantedCards = new();
+    private sealed class GrantedCards(Spell[] cards) { internal readonly Spell[] Cards = cards; }
+    private sealed class ManaAdjustment(int maximum) {
+        internal int UnreducedMaximum = Math.Max(0, maximum);
+        internal readonly Dictionary<uint, float> Reductions = [];
+    }
+
+    // CLASSIC: only fields rebuilt by the equipment-effect loop are reset. Persistent resources,
+    // wallets, ladders, preferences, level/base school stats and unrelated runtime fields stay intact.
+    internal static void ResetRebuiltEquipmentEffects(ServerWizGameStats stats) {
+        s_manaAdjustments.Remove(stats);
+        stats.m_dmgBonusPercent = null; stats.m_dmgBonusFlat = null; stats.m_accBonusPercent = null;
+        stats.m_dmgReducePercent = null; stats.m_dmgReduceFlat = null;
+        stats.m_dmgBonusPercentAll = 0; stats.m_dmgBonusFlatAll = 0; stats.m_accBonusPercentAll = 0;
+        stats.m_dmgReducePercentAll = 0; stats.m_dmgReduceFlatAll = 0;
+        stats.m_healBonusPercentAll = 0; stats.m_healIncBonusPercentAll = 0; stats.m_powerPipBonusPercentAll = 0;
+        stats.m_criticalHitRatingBySchool = null; stats.m_blockRatingBySchool = null;
+        stats.m_criticalHitRatingAll = 0; stats.m_blockRatingAll = 0;
+        stats.m_balanceMastery = 0; stats.m_deathMastery = 0; stats.m_fireMastery = 0; stats.m_iceMastery = 0;
+        stats.m_lifeMastery = 0; stats.m_mythMastery = 0; stats.m_stormMastery = 0;
+        stats.m_startingPips = 0; stats.m_startingPowerPips = 0;
+    }
+
+    // CLASSIC: the temporary book has no source-slot field. Retire exact owned references,
+    // never the first same-name card from another item or an unrelated temporary grant.
+    internal static void RetireProvidedSpellCards(Wizard wizard) {
+        foreach (var effect in wizard.GameEffects.Snapshot().OfType<ProvideSpellEffect>())
+            RemoveProvidedSpellCards(wizard, effect);
+    }
+
+    private static void RemoveProvidedSpellCards(Wizard wizard, ProvideSpellEffect effect) {
+        if (!s_grantedCards.TryGetValue(effect, out var grant)) return;
+        var book = wizard.SpellbookBehavior?.TemporarySpells;
+        if (book is not null) {
+            foreach (var card in grant.Cards) {
+                var index = book.FindIndex(candidate => ReferenceEquals(candidate, card));
+                if (index >= 0) book.RemoveAt(index);
+            }
+        }
+        s_grantedCards.Remove(effect);
+    }
+
+    private static void ChangeMana(ServerWizGameStats stats, string effectName, WizStatisticEffect statistic, bool add) {
+        if (effectName != ManaPercentReduction) {
+            var delta = (int) statistic.m_manaBonus * (add ? 1 : -1);
+            if (delta == 0) return;
+            if (s_manaAdjustments.TryGetValue(stats, out var active)) {
+                active.UnreducedMaximum = (int)Math.Clamp((long) active.UnreducedMaximum + delta, 0, int.MaxValue);
+                ApplyManaMaximum(stats, active);
+            }
+            else stats.m_baseMana += delta; // Existing flat mana behavior remains unchanged.
+            return;
+        }
+        var reduction = statistic.m_manaBonus;
+        if (!float.IsFinite(reduction) || reduction < 0 || reduction > 1)
+            throw new InvalidOperationException("Invalid canonical mana percentage reduction.");
+        ManaAdjustment adjustment;
+        if (add) {
+            adjustment = s_manaAdjustments.GetValue(stats, value => new ManaAdjustment(value.m_baseMana));
+            if (!adjustment.Reductions.TryAdd(statistic.m_itemSlotID, reduction)
+                && adjustment.Reductions[statistic.m_itemSlotID] != reduction)
+                throw new InvalidOperationException("Conflicting canonical mana reduction in an occupied equipment slot.");
+        }
+        else {
+            if (!s_manaAdjustments.TryGetValue(stats, out adjustment)
+                || !adjustment.Reductions.Remove(statistic.m_itemSlotID)) return;
+        }
+        ApplyManaMaximum(stats, adjustment);
+        if (adjustment.Reductions.Count == 0) s_manaAdjustments.Remove(stats);
+    }
+
+    private static void ApplyManaMaximum(ServerWizGameStats stats, ManaAdjustment adjustment) {
+        var reduction = Math.Clamp(adjustment.Reductions.Values.Sum(value => (double) value), 0, 1);
+        stats.m_baseMana = (int)Math.Floor(adjustment.UnreducedMaximum * (1 - reduction));
+        stats.m_currentMana = Math.Clamp(stats.m_currentMana, 0, stats.m_baseMana);
+    }
+
     /// <summary>
     /// Adds effects to a wizard based on a given template.
     /// </summary>
@@ -75,6 +158,11 @@ internal static class CharacterEffectHelper {
 
         // Apply the effects from the template.
         foreach (var effectInfo in template.m_equipEffects) {
+            // CLASSIC: a duplicate application cannot publish another percentage-reduction effect
+            // or give its slot another ledger entry. A full rebuild first clears GameEffects.
+            if (effectInfo.m_effectName == ManaPercentReduction
+                && wizard.GameEffects.Find(effect => effect.m_itemSlotID == slotHash
+                    && effect.m_effectNameID == StringHash.Compute(ManaPercentReduction)) is not null) continue;
             var gameEffect = GameEffectFactory.CreateEffectFromInfo(effectInfo, slotHash);
             if (gameEffect is null) {
                 Logger.Warning("Could not create effect {0} from effect info.", Logger.Args(effectInfo.m_effectName));
@@ -84,7 +172,7 @@ internal static class CharacterEffectHelper {
             // CLASSIC: removing one effect must not let a later item reuse a still-live id.
             gameEffect.m_internalID = ClassicRuntime.IsActive
                 ? ElixirRuntime.NextEffectId(wizard) : wizard.GameEffects.Count;
-            var effect = AddGameEffectToStats(wizard.GameStats, effectInfo);
+            var effect = AddGameEffectToStats(wizard.GameStats, effectInfo, slotHash);
 
             if (gameEffect is ProvideSpellEffect provideSpellEffect) {
                 var spells = SpellFactory.CreateSpellsFromEffect(provideSpellEffect);
@@ -96,6 +184,7 @@ internal static class CharacterEffectHelper {
                 foreach (var spell in spells) {
                     wizard.AddTemporarySpell(spell);
                 }
+                s_grantedCards.Add(provideSpellEffect, new GrantedCards(spells)); // CLASSIC: local ownership, no protocol fields.
             }
 
             wizard.GameEffects.Add(gameEffect);
@@ -112,7 +201,8 @@ internal static class CharacterEffectHelper {
     /// <param name="template">The WizItemTemplate containing the effects.</param>
     internal static void AddEffectsToGameStats(ServerWizGameStats stats, WizItemTemplate template) {
         foreach (var effectInfo in template.m_equipEffects) {
-            AddGameEffectToStats(stats, effectInfo);
+            AddGameEffectToStats(stats, effectInfo, effectInfo.m_effectName == ManaPercentReduction
+                ? ItemHelper.GetItemSlotHash(template) : 0);
         }
     }
 
@@ -123,7 +213,8 @@ internal static class CharacterEffectHelper {
     /// <param name="template">The template containing the effects to be removed.</param>
     internal static void RemoveEffectsFromGameStats(ServerWizGameStats stats, WizItemTemplate template) {
         foreach (var effectInfo in template.m_equipEffects) {
-            RemoveGameEffectFromStats(stats, effectInfo);
+            RemoveGameEffectFromStats(stats, effectInfo, effectInfo.m_effectName == ManaPercentReduction
+                ? ItemHelper.GetItemSlotHash(template) : 0);
         }
     }
 
@@ -149,13 +240,10 @@ internal static class CharacterEffectHelper {
 
             removedEffects.Add(gameEffect);
             wizard.GameEffects.Remove(gameEffect);
-            RemoveGameEffectFromStats(wizard.GameStats, effectInfo);
+            RemoveGameEffectFromStats(wizard.GameStats, effectInfo, slotHash);
 
             if (gameEffect is ProvideSpellEffect provideSpellEffect) {
-                for (var i = 0; i < provideSpellEffect.m_numSpells; i++) {
-                    var hash = StringHash.Compute(provideSpellEffect.m_spellName);
-                    wizard.RemoveTemporarySpell(hash);
-                }
+                RemoveProvidedSpellCards(wizard, provideSpellEffect); // CLASSIC: only this effect's admitted copies.
             }
         }
 
@@ -168,8 +256,8 @@ internal static class CharacterEffectHelper {
     /// <param name="stats">The game statistics to modify.</param>
     /// <param name="effectInfo">The effect information to apply.</param>
     /// <returns>The created game effect.</returns>
-    internal static GameEffectBase AddGameEffectToStats(ServerWizGameStats stats, GameEffectInfo effectInfo) {
-        var gameEffect = GameEffectFactory.CreateEffectFromInfo(effectInfo, 0);
+    internal static GameEffectBase AddGameEffectToStats(ServerWizGameStats stats, GameEffectInfo effectInfo, uint slot = 0) {
+        var gameEffect = GameEffectFactory.CreateEffectFromInfo(effectInfo, slot);
         if (gameEffect is null) {
             Logger.Warning("Could not create effect {0} from effect info.", Logger.Args(effectInfo.m_effectName));
             return null;
@@ -193,8 +281,8 @@ internal static class CharacterEffectHelper {
     /// <param name="stats">The game statistics to modify.</param>
     /// <param name="effectInfo">The effect information to apply.</param>
     /// <returns>The created game effect.</returns>
-    internal static GameEffectBase RemoveGameEffectFromStats(ServerWizGameStats stats, GameEffectInfo effectInfo) {
-        var gameEffect = GameEffectFactory.CreateEffectFromInfo(effectInfo, 0);
+    internal static GameEffectBase RemoveGameEffectFromStats(ServerWizGameStats stats, GameEffectInfo effectInfo, uint slot = 0) {
+        var gameEffect = GameEffectFactory.CreateEffectFromInfo(effectInfo, slot);
         if (gameEffect is null) {
             Logger.Warning("Could not create effect {0} from effect info.", Logger.Args(effectInfo.m_effectName));
             return null;
@@ -221,7 +309,7 @@ internal static class CharacterEffectHelper {
     internal static void AddStatisticEffectToStats(ServerWizGameStats stats, string effectName, WizStatisticEffect statistic) {
         // Apply effects that don't require a school.
         stats.m_baseHitpoints += (int) statistic.m_hitPointBonus;
-        stats.m_baseMana += (int) statistic.m_manaBonus;
+        ChangeMana(stats, effectName, statistic, add: true); // CLASSIC: percent reduction is not a flat gain.
         stats.m_powerPipBonusPercentAll += statistic.m_powerPipBonusPercent;
         stats.m_healBonusPercentAll += statistic.m_healBonusPercent;
         stats.m_healIncBonusPercentAll += statistic.m_healIncBonusPercent;
@@ -269,7 +357,7 @@ internal static class CharacterEffectHelper {
     internal static void RemoveStatisticEffectFromStats(ServerWizGameStats stats, string effectName, WizStatisticEffect statistic) {
         // Remove effects that don't require a school.
         stats.m_baseHitpoints -= (int) statistic.m_hitPointBonus;
-        stats.m_baseMana -= (int) statistic.m_manaBonus;
+        ChangeMana(stats, effectName, statistic, add: false); // CLASSIC: restore the remaining derived maximum.
         stats.m_powerPipBonusPercentAll -= statistic.m_powerPipBonusPercent;
         stats.m_healBonusPercentAll -= statistic.m_healBonusPercent;
         stats.m_healIncBonusPercentAll -= statistic.m_healIncBonusPercent;

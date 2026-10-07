@@ -98,6 +98,9 @@
     <ServerIntegrationTest Include="ArenaNativeVacancyTests.cs" />
     <ServerIntegrationTest Include="ArenaNativeBrowserTests.cs" />
     <ServerIntegrationTest Include="ArenaInventoryReloadTests.cs" />
+    <ServerIntegrationTest Include="ArenaGearProjectionTests.cs" />
+    <ServerIntegrationTest Include="ArenaGearEffectApplicationTests.cs" />
+    <ServerIntegrationTest Include="ArenaNativeShopLayoutTests.cs" />
     <ServerIntegrationTest Include="ArenaShopSnapshotTests.cs" />
     <ServerIntegrationTest Include="ClassicCoreObjectSerializationTests.cs" />
     <ServerIntegrationTest Include="FriendPortalTests.cs" />
@@ -134,6 +137,7 @@
     <ServerIntegrationTest Include="ResourceResultExecutionTests.cs" />
     <ServerIntegrationTest Include="DungeonQuestReconciliationTests.cs" />
     <ServerIntegrationTest Include="ArenaPvpMinionTests.cs" />
+    <ServerIntegrationTest Include="ArenaNativeSigilIdentityTests.cs" />
     <ServerIntegrationTest Include="OctoberShopRuntimeTests.cs" />
     <ServerIntegrationTest Include="HouseTests.cs" />
     <ServerIntegrationTest Include="HouseTransportTests.cs" />

@@ -140,8 +140,9 @@ internal sealed class InteractVendorComponent(ZoneEntity entity) : ZoneEntityCom
 
     // CLASSIC: unverified deeds remain closed in the visible stock and purchase validation.
     private List<GID> OfferedInventory() => !ClassicRuntime.IsInitialized || !ClassicRuntime.IsActive ? _inventory : _inventory.Where(id =>
-        CoreObjectFactory.GetCoreTemplate(id) is not WizItemTemplate t || !HouseCatalog.IsDeed(t)
-        || HouseCatalog.TryGet(id.MParts.TemplateId, out _)).ToList();
+        !Classic.Arena.ClassicArenaGearTemplates.IsWithheld(id.MParts.TemplateId)
+        && (CoreObjectFactory.GetCoreTemplate(id) is not WizItemTemplate t || !HouseCatalog.IsDeed(t)
+            || HouseCatalog.TryGet(id.MParts.TemplateId, out _))).ToList();
 
     private void SendShopOfferings(IActorRef playerActor) {
         var shopOffering = new WizShopOffering() {
@@ -154,6 +155,10 @@ internal sealed class InteractVendorComponent(ZoneEntity entity) : ZoneEntityCom
             // 1 - PvP tickets
             // CLASSIC: an Arena Ticket vendor's window prices in tickets.
             m_shopType = TicketVendor is null ? 0 : 1,
+
+            // CLASSIC: Roland's native combined layout includes housing categories. The default gear layout
+            // silently filters all ten furniture items. Currency is the independent m_shopType field above.
+            m_furnitureShop = TicketVendor?.Npc == 164327 ? 6 : 0,
 
             // todo: figure this out for QA
             m_CSRTestShop = false,
