@@ -47,9 +47,11 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Threading;
+using System.Threading.Tasks;
 using Akka.Actor;
 using Imcodec.MessageLayer.Generated;
 using Imlight.Classic.Admin;
@@ -57,6 +59,32 @@ using Imlight.Common;
 using Imlight.CoreLib.WizardData.Collections;
 
 namespace Imlight.CoreLib.Classic.Admin;
+
+/// <summary>CLASSIC: one deadline; a failed stage never advances to disposal beneath unfinished work.</summary>
+internal static class ServerShutdownDrain {
+    internal static async Task CompleteAsync(TimeSpan budget, Func<TimeSpan, Task> stopAdmissions,
+        Func<TimeSpan, Task> drainArena, Func<TimeSpan, Task> closeSessions,
+        Func<TimeSpan, Task> stopActors, Func<TimeSpan, Task> stopDatabase) {
+        var elapsed = Stopwatch.StartNew();
+        await Stage("stopping admissions and the administration clock", stopAdmissions).ConfigureAwait(false);
+        await Stage("draining accepted arena results and saved ticket awards", drainArena).ConfigureAwait(false);
+        await Stage("closing player sessions", closeSessions).ConfigureAwait(false);
+        await Stage("terminating actors", stopActors).ConfigureAwait(false);
+        await Stage("disposing the database", stopDatabase).ConfigureAwait(false);
+
+        async Task Stage(string name, Func<TimeSpan, Task> action) {
+            var remaining = budget - elapsed.Elapsed;
+            if (remaining <= TimeSpan.Zero) throw new TimeoutException($"Shutdown deadline expired before {name}.");
+            try {
+                // CLASSIC: include synchronous work before a stage returns its Task in the deadline as well.
+                await Task.Run(() => action(remaining)).WaitAsync(remaining).ConfigureAwait(false);
+            }
+            catch (TimeoutException ex) {
+                throw new TimeoutException($"Shutdown deadline expired while {name}; completion was not confirmed.", ex);
+            }
+        }
+    }
+}
 
 /// <summary>An online wizard, as the dashboard lists them.</summary>
 public sealed record OnlineWizard(string Account, string Wizard, ulong CharacterId, string Zone, string ZoneName, bool InDuel);
@@ -78,12 +106,17 @@ public static class ServerAdmin {
 
     private static readonly object s_lock = new();
     private static readonly ConcurrentDictionary<ulong, (string Account, string Wizard)> s_names = new();
+    private static readonly ConcurrentDictionary<IActorRef, byte> s_listeners = new();
     private static ActorSystem? s_system;
     private static Timer? s_timer;
     private static RestartPlan? s_plan;
     private static string s_requestedBy = "";
     private static string s_state = "";
     private static DateTime s_nextSchedulePoll;
+    private static bool s_stopping;
+
+    // CLASSIC: systemd allows 60 seconds; reserve time to report a failed drain before its forced stop.
+    private static readonly TimeSpan ShutdownBudget = TimeSpan.FromSeconds(50);
 
     /// <summary>The file the nightly backup writes to ask for a safe backup.</summary>
     public const string ScheduleRequestFile = "backup-schedule";
@@ -112,6 +145,17 @@ public static class ServerAdmin {
         s_timer ??= new Timer(_ => Tick(), null, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1));
     }
 
+    // CLASSIC: track only actual listeners, so admissions stop without terminating player services first.
+    internal static bool RegisterListener(IActorRef listener) {
+        lock (s_lock) {
+            if (s_stopping) return false;
+            return s_listeners.TryAdd(listener, 0);
+        }
+    }
+
+    internal static void UnregisterListener(IActorRef listener) => s_listeners.TryRemove(listener, out _);
+    internal static bool IsListenerRegistered(IActorRef listener) => s_listeners.ContainsKey(listener);
+
     /// <summary>Sends <paramref name="text"/> to every wizard in the world. Returns how many it went to.</summary>
     public static int Broadcast(string text, bool modal = false) {
         if (s_system is null || string.IsNullOrWhiteSpace(text)) {
@@ -136,6 +180,7 @@ public static class ServerAdmin {
     /// <summary>Schedules a safe restart or backup. Replaces one already scheduled.</summary>
     public static RestartStatus Schedule(RestartKind kind, TimeSpan warning, string? reason, string requestedBy) {
         lock (s_lock) {
+            if (s_stopping) throw new InvalidOperationException("The server is already stopping.");
             var maxWait = TimeSpan.FromMinutes(ClassicSettings.RestartMaxWaitMinutes);
             s_plan = new RestartPlan(DateTime.UtcNow, warning, maxWait, kind, reason);
             s_requestedBy = requestedBy;
@@ -272,6 +317,7 @@ public static class ServerAdmin {
         => state is "counting down" or "waiting for fights to end";
 
     internal static void Tick() {
+        lock (s_lock) { if (s_stopping) return; }
         try {
             PollScheduleRequest();
         }
@@ -281,6 +327,7 @@ public static class ServerAdmin {
 
         RestartPlan? plan;
         lock (s_lock) {
+            if (s_stopping) return;
             plan = s_plan;
 
             // CLASSIC: a backup leaves its plan in place (the dashboard shows "backup requested" or the failure); without
@@ -327,7 +374,9 @@ public static class ServerAdmin {
                 s_state = "restarting";
             }
 
-            Execute(plan);
+            // CLASSIC: a restart must await disposal of this timer, so never run its drain on its own callback.
+            if (plan.Kind == RestartKind.Restart) _ = Task.Run(() => Execute(plan));
+            else Execute(plan);
         }
         catch (Exception ex) {
             Logger.Error("[ADMIN] Restart tick failed: {Error}", Logger.Args(ex));
@@ -336,10 +385,9 @@ public static class ServerAdmin {
 
     /// <summary>
     /// CLASSIC: the process is told to stop (SIGTERM from systemctl stop/restart, as every deploy does; SIGINT): tell
-    /// every wizard, close the sessions (which saves their places and leaves trades and duels the way a logout does)
-    /// and shut the database down, as a safe restart's last step. Without it the process just died: wizards were
-    /// dropped mid-sentence, logged back in where they last changed zones, and RavenDB was not shut down. Returns
-    /// false when a safe restart is already carrying itself out.
+    /// every wizard, stop admissions and clocks, drain accepted results and saved awards, then close sessions and
+    /// actors before disposing Raven. Returns false when another shutdown owns the process; a failed drain exits
+    /// with a failure code rather than claiming the database stopped cleanly.
     /// </summary>
     public static bool StopForSignal(string signal) {
         lock (s_lock) {
@@ -348,25 +396,12 @@ public static class ServerAdmin {
             }
 
             s_state = "restarting";
+            s_stopping = true;
         }
 
         BlockNewDuels = true;
-        Logger.Information("[ADMIN] {Signal}: closing every session before the process exits.", Logger.Args(signal));
-        var told = Broadcast("The server is restarting now. Please log back in in a minute.", modal: true);
-        if (told > 0) {
-            Thread.Sleep(TimeSpan.FromSeconds(1));
-        }
-
-        var closed = CloseSessions();
-        Logger.Information("[ADMIN] Closed {Count} session(s) for {Signal}.", Logger.Args(closed, signal));
-        if (closed > 0) {
-            Thread.Sleep(TimeSpan.FromSeconds(5));
-        }
-
-        WizardData.Implementations.EmbeddedDatabaseManager.Shutdown(TimeSpan.FromSeconds(30));
-        Serilog.Log.CloseAndFlush();
-
-        return true;
+        Broadcast("The server is restarting now. Please log back in in a minute.", modal: true);
+        return FinishShutdown(signal, null);
     }
 
     private static void Execute(RestartPlan plan) {
@@ -374,12 +409,8 @@ public static class ServerAdmin {
         Broadcast(plan.Kind == RestartKind.Backup
             ? "The server is going down for a backup now. Please log back in in a minute or two."
             : "The server is restarting now. Please log back in in a minute.", modal: true);
-        Thread.Sleep(TimeSpan.FromSeconds(2));
-        var closed = CloseSessions();
-        Logger.Information("[ADMIN] Closed {Count} session(s) for the {Kind}.", Logger.Args(closed, plan.Kind));
-        Thread.Sleep(TimeSpan.FromSeconds(5));
-
         if (plan.Kind == RestartKind.Backup) {
+            // CLASSIC: the host's subsequent SIGTERM owns the actual drain. A failed request may resume play.
             if (!RequestBackup(out var error)) {
                 Logger.Error("[ADMIN] The backup request could not be written: {Error}", Logger.Args(error));
                 lock (s_lock) {
@@ -397,10 +428,56 @@ public static class ServerAdmin {
             return;
         }
 
-        WizardData.Implementations.EmbeddedDatabaseManager.Shutdown(TimeSpan.FromSeconds(30));
-        Logger.Information("[ADMIN] Exiting with code {Code} for a safe restart.", Logger.Args(RestartExitCode));
-        Serilog.Log.CloseAndFlush();
-        Exit(RestartExitCode);
+        lock (s_lock) { s_stopping = true; }
+        BlockNewDuels = true;
+        FinishShutdown("scheduled restart", RestartExitCode);
+    }
+
+    private static bool FinishShutdown(string reason, int? successExitCode) {
+        try {
+            ServerShutdownDrain.CompleteAsync(ShutdownBudget,
+                StopAdmissionsAsync,
+                _ => Imlight.CoreLib.Classic.Arena.ClassicArena.QuiesceAsync(),
+                CloseSessionsAsync,
+                _ => s_system?.Terminate() ?? Task.CompletedTask,
+                remaining => Task.Run(() => {
+                    if (!WizardData.Implementations.EmbeddedDatabaseManager.Shutdown(remaining))
+                        throw new InvalidOperationException("The embedded database did not confirm a clean stop.");
+                })).GetAwaiter().GetResult();
+            Logger.Information("[ADMIN] {Reason}: accepted arena results, sessions, actors and database stopped cleanly.",
+                Logger.Args(reason));
+            Serilog.Log.CloseAndFlush();
+            if (successExitCode is { } code) Exit(code);
+            return true;
+        }
+        catch (Exception ex) {
+            Logger.Error("[ADMIN] {Reason}: shutdown failed; a clean drain was not confirmed: {Error}", Logger.Args(reason, ex));
+            Serilog.Log.CloseAndFlush();
+            Exit(1);
+            return false; // CLASSIC: reachable only when tests override Exit.
+        }
+    }
+
+    private static async Task StopAdmissionsAsync(TimeSpan remaining) {
+        if (s_timer is { } timer) await timer.DisposeAsync().ConfigureAwait(false);
+        await Task.WhenAll(s_listeners.Keys.Select(async listener => {
+            if (!await listener.GracefulStop(remaining).ConfigureAwait(false))
+                throw new InvalidOperationException($"Listener {listener.Path} did not stop.");
+        })).ConfigureAwait(false);
+    }
+
+    private static async Task CloseSessionsAsync(TimeSpan remaining) {
+        if (s_system is null) return;
+        var paths = OnlinePlayerCollection.GetOnlinePlayers()
+            .Where(player => !Ambient.AmbientWizards.IsAmbientChar(player.CharacterId)
+                && !Arena.ArenaAmbientParticipants.IsIdentity(player.CharacterId)).Select(player => player.ActorPath)
+            .Where(path => !string.IsNullOrEmpty(path)).Distinct().ToArray();
+        await Task.WhenAll(paths.Select(async path => {
+            var actor = await s_system.ActorSelection(path).ResolveOne(remaining).ConfigureAwait(false);
+            if (!await actor.GracefulStop(remaining, "Close").ConfigureAwait(false))
+                throw new InvalidOperationException($"Session {path} did not complete closure.");
+        })).ConfigureAwait(false);
+        Logger.Information("[ADMIN] Confirmed closure of {Count} session actor(s).", Logger.Args(paths.Length));
     }
 
     /// <summary>Writes the backup request the w101c-backup.path unit watches for.</summary>
@@ -419,24 +496,6 @@ public static class ServerAdmin {
 
             return false;
         }
-    }
-
-    private static int CloseSessions() {
-        if (s_system is null) {
-            return 0;
-        }
-
-        var closed = 0;
-        foreach (var player in OnlinePlayerCollection.GetOnlinePlayers()) {
-            if (string.IsNullOrEmpty(player.ActorPath)) {
-                continue;
-            }
-
-            s_system.ActorSelection(player.ActorPath).Tell("Close");
-            closed++;
-        }
-
-        return closed;
     }
 
     private static (string Account, string Wizard) LookUpNames(ulong characterId, ulong accountId) {

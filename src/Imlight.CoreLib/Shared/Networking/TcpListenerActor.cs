@@ -43,6 +43,7 @@ using System.Net.Sockets;
 using System.Threading;
 using Akka.Actor;
 using Imlight.Common;
+using Imlight.CoreLib.Classic.Admin;
 using Imlight.CoreLib.Shared.Packets;
 
 namespace Imlight.CoreLib.Shared.Networking;
@@ -56,6 +57,7 @@ public class TcpListenerActor : ReceiveActor {
 
     private readonly CancellationTokenSource _tokenSource;
     private readonly IActorRef _serverRef;
+    private readonly object _allocationGate = new(); // CLASSIC: no acceptance Tell can outlive Stop.
 
     public TcpListenerActor(string name, int port, IActorRef serverRef) {
         this.Name = name;
@@ -64,7 +66,12 @@ public class TcpListenerActor : ReceiveActor {
         this._tokenSource = new CancellationTokenSource();
         this._serverRef = serverRef;
 
-        Start();
+        if (!ServerAdmin.RegisterListener(Self)) {
+            _tokenSource.Dispose();
+            throw new InvalidOperationException("The server is stopping; no listener may start.");
+        }
+        try { Start(); }
+        catch { ServerAdmin.UnregisterListener(Self); throw; }
     }
 
     public static Props Props(string name, int port, IActorRef serverRef) 
@@ -97,18 +104,21 @@ public class TcpListenerActor : ReceiveActor {
     }
 
     public void Stop() {
-        if (_tokenSource.IsCancellationRequested) {
-            return;
-        }
+        lock (_allocationGate) {
+            if (_tokenSource.IsCancellationRequested) {
+                return;
+            }
 
-        Listening = false;
-        _tokenSource.Cancel();
-        Listener.Stop();
+            Listening = false;
+            _tokenSource.Cancel();
+            Listener.Stop();
+        }
         Logger.Debug("TcpListener for {Name} on port {Port} stopped.", Logger.Args(Name, Port));
     }
 
     protected override void PostStop() {
         Stop();
+        ServerAdmin.UnregisterListener(Self);
         _tokenSource.Dispose();
         base.PostStop();
     }
@@ -142,11 +152,14 @@ public class TcpListenerActor : ReceiveActor {
     }
 
     private void AllocateNewSocket(Socket socket) {
-        Logger.Debug("TcpListener for {Name} accepted connection from {RemoteEndPoint}.",
-            Logger.Args(Name, socket.RemoteEndPoint?.ToString()));
+        lock (_allocationGate) {
+            if (_tokenSource.IsCancellationRequested) { socket.Dispose(); return; }
+            Logger.Debug("TcpListener for {Name} accepted connection from {RemoteEndPoint}.",
+                Logger.Args(Name, socket.RemoteEndPoint?.ToString()));
 
-        var msg = new SERVER_100_PROTOCOL.MSG_ALLOCATESOCKET() { Socket = socket };
-        _serverRef.Tell(msg);
+            var msg = new SERVER_100_PROTOCOL.MSG_ALLOCATESOCKET() { Socket = socket };
+            _serverRef.Tell(msg);
+        }
     }
 
 }

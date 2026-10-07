@@ -231,6 +231,9 @@ internal sealed class CLASSIC_FEATURES_PROTOCOL : IServerProtocol {
 
         public Imlight.CoreLib.Classic.Arena.ArenaOutcome Outcome;
 
+        // CLASSIC: actor-only persistence receipt, never serialized into a client packet.
+        internal Imlight.CoreLib.Classic.Arena.ArenaOutcomeReceipt Receipt;
+
     }
 
     /// <summary>CLASSIC: an ArenaService timer: back to the arena hall after a match.</summary>

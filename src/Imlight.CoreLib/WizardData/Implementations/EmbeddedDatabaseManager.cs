@@ -17,6 +17,7 @@
 */
 
 using System;
+using System.Threading.Tasks;
 using Raven.Client.Documents;
 using Raven.Client.ServerWide;
 using Raven.Embedded;
@@ -40,24 +41,34 @@ public static class EmbeddedDatabaseManager {
         = ConfigurationManager.Settings["Database.EmbeddedDatabaseTimeoutTime"].AsLong();
 
     private static volatile bool s_shuttingDown;
+    private static readonly object s_shutdownGate = new();
+    private static Task s_shutdownTask;
 
     /// <summary>
     /// CLASSIC: stops the embedded database cleanly before the server exits (safe restarts), and keeps it stopped.
     /// </summary>
-    public static void Shutdown(TimeSpan timeout) {
-        s_shuttingDown = true;
-        if (!IsRunning) {
-            return;
+    public static bool Shutdown(TimeSpan timeout) {
+        Task dispose;
+        lock (s_shutdownGate) {
+            s_shuttingDown = true;
+            if (!IsRunning) return true;
+            // CLASSIC: concurrent signal/schema-gate callers share the same disposal, never start it twice.
+            dispose = s_shutdownTask ??= Task.Run(() => {
+                EmbeddedServer.Instance.Dispose();
+                IsRunning = false;
+            });
         }
 
         try {
-            var dispose = System.Threading.Tasks.Task.Run(() => EmbeddedServer.Instance.Dispose());
             if (!dispose.Wait(timeout)) {
-                Logger.Warning("The embedded database did not stop within {0}.", Logger.Args(timeout));
+                Logger.Error("The embedded database did not confirm a stop within {0}.", Logger.Args(timeout));
+                return false;
             }
+            return true;
         }
         catch (Exception ex) {
-            Logger.Warning("Stopping the embedded database failed: {0}", Logger.Args(ex.Message));
+            Logger.Error("Stopping the embedded database failed: {0}", Logger.Args(ex.GetBaseException().Message));
+            return false;
         }
     }
 

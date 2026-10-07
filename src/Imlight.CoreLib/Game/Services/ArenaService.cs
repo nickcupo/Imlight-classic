@@ -208,19 +208,20 @@ internal sealed class ArenaService(SessionActor sessionActor) : MessageService(s
     private void ReceiveOutcome(CLASSIC_FEATURES_PROTOCOL.MSG_ARENAOUTCOME message) {
         var outcome = message.Outcome;
         var wizard = GetActiveWizard();
+        if (message.Receipt is { } receipt) {
+            if (!receipt.ApplyAward(() => outcome is not null && wizard is not null
+                    && wizard.CharId == receipt.CharacterId && SaveOutcomeTickets(wizard, outcome.Tickets))) {
+                return; // CLASSIC: the same receipt was already applied; never award twice.
+            }
+        }
         if (outcome is null || wizard is null) {
             return;
         }
 
         _charId = wizard.CharId;
 
-        if (outcome.Tickets != 0) {
-            wizard.GameStats.m_currentArenaPoints += outcome.Tickets;
-
-            // The character page's row reads the PvP currency (control PvPCurrency); 2009 had one ticket kind.
-            wizard.GameStats.m_currentPvPCurrency = wizard.GameStats.m_currentArenaPoints;
-            WizardCollection.UpdateCharacterGameStats(wizard);
-        }
+        if (message.Receipt is null && !SaveOutcomeTickets(wizard, outcome.Tickets))
+            throw new InvalidOperationException("The arena ticket outcome was not persisted.");
 
         SendToSocket(ArenaMessages.ArenaPoints(wizard.GameStats.m_currentArenaPoints));
         SendToSocket(ArenaMessages.PvpCurrency(wizard.GameStats.m_currentPvPCurrency));
@@ -233,6 +234,19 @@ internal sealed class ArenaService(SessionActor sessionActor) : MessageService(s
         Timers.StartSingleTimer(RETURN_TIMER, new CLASSIC_FEATURES_PROTOCOL.MSG_ARENARETURN {
             Zone = outcome.HallZone, Location = outcome.HallLocation,
         }, TimeSpan.FromSeconds(Math.Max(0, outcome.ReturnSeconds)));
+    }
+
+    private static bool SaveOutcomeTickets(Imlight.CoreLib.WizardData.Models.Player.Wizard wizard, int tickets) {
+        if (tickets == 0) return true;
+        var previous = wizard.GameStats.m_currentArenaPoints;
+        var previousCurrency = wizard.GameStats.m_currentPvPCurrency;
+        wizard.GameStats.m_currentArenaPoints += tickets;
+        // CLASSIC: the original currency fields, with a receipt only after the real save succeeds.
+        wizard.GameStats.m_currentPvPCurrency = wizard.GameStats.m_currentArenaPoints;
+        if (WizardCollection.UpdateCharacterGameStats(wizard, null, null)) return true;
+        wizard.GameStats.m_currentArenaPoints = previous;
+        wizard.GameStats.m_currentPvPCurrency = previousCurrency;
+        return false;
     }
 
     [MessageHandler(typeof(CLASSIC_FEATURES_PROTOCOL.MSG_ARENARETURN))]
