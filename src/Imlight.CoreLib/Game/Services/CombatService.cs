@@ -255,6 +255,7 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
         SetNoAggroGrace();
 
         ClassicBadges.MobsDefeated(GetActiveWizard(), message.MobTemplateIds, SendToSocket); // CLASSIC: kill badges.
+        if (WizardCollection.IsInventorySnapshotUncertain(GetActiveWizard())) { CloseSession(); return; }
         RecordSecondChanceWin(message.MobTemplateIds); // CLASSIC: opens a beaten boss's Second Chance chest.
 
         // CLASSIC: under the profile's mob reward rules, XP per pip, gold and drops come from classic-data

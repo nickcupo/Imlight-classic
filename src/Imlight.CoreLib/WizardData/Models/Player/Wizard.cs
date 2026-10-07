@@ -1186,6 +1186,9 @@ public class Wizard {
     }
 
     public bool AddQuest(QuestInstance quest) {
+        // CLASSIC: originals and journal publish together only after one acknowledged fresh write.
+        if (ClassicQuestEngine.IsActive)
+            return WizardQuestTransactions.TryAdd(this, quest, out _) != QuestMutationStatus.Refused;
         var addSuccess = QuestBehavior.AddQuest(quest);
         if (!addSuccess) {
             Logger.Warning("Could not add quest {0} for player {1}.",
@@ -1202,6 +1205,9 @@ public class Wizard {
     }
 
     public bool RemoveQuest(string questName) {
+        // CLASSIC: use the caller's held full identity rather than deleting an arbitrary name match.
+        if (ClassicQuestEngine.IsActive)
+            return WizardQuestTransactions.TryRemove(this, WizardQuestTransactions.Held(this, questName), out _) != QuestMutationStatus.Refused;
         var removeSuccess = QuestBehavior.RemoveQuest(questName);
         if (!removeSuccess) {
             Logger.Warning("Could not remove quest {0} for player {1}.",
@@ -1224,6 +1230,9 @@ public class Wizard {
         => QuestBehavior.HasCompletedQuest(questName);
 
     public bool CompleteQuest(string questName) {
+        // CLASSIC: exact original deletion and selected completion marker share one acknowledged write.
+        if (ClassicQuestEngine.IsActive)
+            return WizardQuestTransactions.TryComplete(this, WizardQuestTransactions.Held(this, questName), out _) != QuestMutationStatus.Refused;
         var questStatus = QuestBehavior.CompleteQuest(questName);
         if (!questStatus) {
             Logger.Warning("Could not mark quest {0} as completed for player {1}.",
@@ -1240,6 +1249,10 @@ public class Wizard {
     }
 
     public bool StartQuestGoal(string questName, string goalName) {
+        if (ClassicQuestEngine.IsActive) { // CLASSIC: preserve held goal aliases after the saved original ACK.
+            var held = WizardQuestTransactions.Held(this, questName);
+            return WizardQuestTransactions.TryStartGoal(this, held, WizardQuestTransactions.HeldGoal(held, goalName), out _) != QuestMutationStatus.Refused;
+        }
         var startSuccess = QuestBehavior.StartQuestGoal(questName, goalName);
         if (!startSuccess) {
             Logger.Warning("Could not start quest goal {0} for quest {1} for player {2}.",
@@ -1265,6 +1278,10 @@ public class Wizard {
     }
 
     public bool IncrementQuestGoal(string questName, string goalName) {
+        if (ClassicQuestEngine.IsActive) { // CLASSIC
+            var held = WizardQuestTransactions.Held(this, questName);
+            return WizardQuestTransactions.TryIncrementGoal(this, held, WizardQuestTransactions.HeldGoal(held, goalName), out _) != QuestMutationStatus.Refused;
+        }
         var incrementSuccess = QuestBehavior.IncrementQuestGoal(questName, goalName);
         if (!incrementSuccess) {
             Logger.Warning("Could not increment quest goal {0} for quest {1} for player {2}.",
@@ -1290,6 +1307,10 @@ public class Wizard {
     }
 
     public bool CompleteQuestGoal(string questName, string goalName) {
+        if (ClassicQuestEngine.IsActive) { // CLASSIC
+            var held = WizardQuestTransactions.Held(this, questName);
+            return WizardQuestTransactions.TryCompleteGoal(this, held, WizardQuestTransactions.HeldGoal(held, goalName), out _) != QuestMutationStatus.Refused;
+        }
         var completeSuccess = QuestBehavior.CompleteQuestGoal(questName, goalName);
         if (!completeSuccess) {
             Logger.Warning("Could not complete quest goal {0} for quest {1} for player {2}.",
@@ -1327,6 +1348,8 @@ public class Wizard {
         => QuestBehavior.GetQuestRegistryValue(questName, key);
 
     public bool SetRegistryValue(string key, ulong value) {
+        if (ClassicQuestEngine.IsActive) // CLASSIC: change only the selected fresh registry entry.
+            return WizardQuestTransactions.TrySetRegistry(this, key, value, out _) != QuestMutationStatus.Refused;
         var setSuccess = QuestBehavior.SetRegistryValue(key, value);
         if (!setSuccess) {
             Logger.Warning("Could not set registry value {0} for player {1}.",
@@ -1342,6 +1365,8 @@ public class Wizard {
     }
 
     public bool SetQuestRegistryValue(string questName, string key, ulong value) {
+        if (ClassicQuestEngine.IsActive) // CLASSIC
+            return WizardQuestTransactions.TrySetQuestRegistry(this, questName, key, value, out _) != QuestMutationStatus.Refused;
         var setSuccess = QuestBehavior.SetQuestRegistryValue(questName, key, value);
         if (!setSuccess) {
             Logger.Warning("Could not set quest registry value {0} for quest {1} for player {2}.",
@@ -1693,6 +1718,14 @@ public class Wizard {
         };
 
     private void AfterDatabaseLoadQuestBehavior() {
+        if (ClassicQuestEngine.IsActive) { // CLASSIC: durable references decide survivors, exact originals decide deletions.
+            if (WizardQuestTransactions.ReconcileLoadedJournal(this, out _) == QuestMutationStatus.Refused) {
+                WizardCollection.MarkInventorySnapshotUncertain(this);
+                Logger.Error("Classic quest journal for {0} could not be safely loaded; refusing the session.", Logger.Args(CharId));
+                throw new InvalidOperationException("The Classic quest journal needs an authoritative reload.");
+            }
+            return;
+        }
         QuestBehavior ??= new ServerQuestBehavior();
 
         // Ensure that we have no duplicate quest instances active and remove completed quests.

@@ -106,6 +106,13 @@ internal sealed partial class TutorialService(SessionActor sessionActor) : Messa
     [MessageHandler(typeof(SERVICE_101_PROTOCOL.MSG_ATTACHCOMPLETE))]
     private void ReceiveAttachComplete(SERVICE_101_PROTOCOL.MSG_ATTACHCOMPLETE message) {
         var wizard = GetActiveWizard();
+        if (StopUncertainTutorialSession(wizard)) return; // CLASSIC
+        try { ReceiveAttachCompleteCore(message); }
+        catch { if (!StopUncertainTutorialSession(wizard)) throw; }
+    }
+
+    private void ReceiveAttachCompleteCore(SERVICE_101_PROTOCOL.MSG_ATTACHCOMPLETE message) {
+        var wizard = GetActiveWizard();
         if (wizard is null) {
             return;
         }
@@ -115,11 +122,17 @@ internal sealed partial class TutorialService(SessionActor sessionActor) : Messa
         // registers the wizard while handling it), so the grant cannot run there.
         if (IsTutorialZone(wizard.Zone) || ConfigurationManager.Settings["Character.TutorialDisabled"].AsBool()) {
             GrantStarterKitIfNeeded(wizard);
+            if (StopUncertainTutorialSession(wizard)) return; // CLASSIC: never send tutorial success after a refused marker save.
         }
 
         if (!IsTutorialZone(wizard.Zone)) {
-            GrantClassicEnrollment(wizard); // CLASSIC: also opens the office doors for characters made before the classic start.
-
+            // CLASSIC: retry a pending saved deck after an earlier intro retirement or partial starter write.
+            if (ClassicStart.IsActive && wizard.HasRegistryValue(ClassicStart.StarterKitGivenEntry)
+                && !wizard.HasRegistryValue(ClassicStart.CompletedEntry) && !CompleteClassicStart(wizard)) {
+                StopUncertainTutorialSession(wizard);
+                return;
+            }
+            if (!GrantClassicEnrollment(wizard)) StopUncertainTutorialSession(wizard);
             return;
         }
 
@@ -142,6 +155,13 @@ internal sealed partial class TutorialService(SessionActor sessionActor) : Messa
 
     [MessageHandler(typeof(GAME_5_PROTOCOL.MSG_SERVERTUTORIALCOMMAND))]
     private void ReceiveServerTutorialCommand(GAME_5_PROTOCOL.MSG_SERVERTUTORIALCOMMAND msg) {
+        var wizard = GetActiveWizard();
+        if (StopUncertainTutorialSession(wizard)) return; // CLASSIC
+        try { ReceiveServerTutorialCommandCore(msg); }
+        catch { if (!StopUncertainTutorialSession(wizard)) throw; }
+    }
+
+    private void ReceiveServerTutorialCommandCore(GAME_5_PROTOCOL.MSG_SERVERTUTORIALCOMMAND msg) {
         // The tutorial is a client-side lua script (Root.wad Scripts/Tutorials) that drives every beat through
         // commands: add/remove quest, complete goal, post event, advance stage. The server executes, never directs.
 
@@ -167,30 +187,31 @@ internal sealed partial class TutorialService(SessionActor sessionActor) : Messa
         var commandSuccess = true;
 
         if (msg.QuestToAdd != string.Empty) {
-            commandSuccess &= HandleCommandAddQuest(wizard, msg.QuestToAdd);
+            commandSuccess = commandSuccess && HandleCommandAddQuest(wizard, msg.QuestToAdd);
 
             // The C09-014/016 levers are ADD->REMOVE with no goal ever completed, so the health/mana refill
             // happens here on ADD.
-            if (msg.QuestToAdd == TUTORIAL_HEALTH_REFILL_QUEST) {
+            if (commandSuccess && msg.QuestToAdd == TUTORIAL_HEALTH_REFILL_QUEST) {
                 RefillHealth(wizard);
             }
-            else if (msg.QuestToAdd == TUTORIAL_MANA_REFILL_QUEST) {
+            else if (commandSuccess && msg.QuestToAdd == TUTORIAL_MANA_REFILL_QUEST) {
                 RefillMana(wizard);
             }
         }
         if (msg.GoalToComplete != string.Empty) {
-            commandSuccess &= HandleCommandCompleteGoal(wizard, playerObj, msg.GoalToComplete);
+            commandSuccess = commandSuccess && HandleCommandCompleteGoal(wizard, playerObj, msg.GoalToComplete);
         }
         if (msg.QuestToRemove != string.Empty) {
-            commandSuccess &= HandleCommandRemoveQuest(wizard, msg.QuestToRemove);
+            commandSuccess = commandSuccess && HandleCommandRemoveQuest(wizard, msg.QuestToRemove);
         }
         if (msg.EventToPost != string.Empty) {
-            commandSuccess &= HandleCommandPostEvent(msg.EventToPost);
+            commandSuccess = commandSuccess && HandleCommandPostEvent(msg.EventToPost);
         }
         if (msg.Action != string.Empty) {
-            commandSuccess &= HandleCommandAction(msg.Action, msg.Value);
+            commandSuccess = commandSuccess && HandleCommandAction(msg.Action, msg.Value);
         }
 
+        StopUncertainTutorialSession(wizard); // CLASSIC: no following native command fields after refusal.
         if (!commandSuccess) {
             Logger.Error("Failed to process tutorial command:"
                 + "QuestToAdd='{0}' "
@@ -258,27 +279,23 @@ internal sealed partial class TutorialService(SessionActor sessionActor) : Messa
         return wizard.AddQuest(qInstance);
     }
 
-    private bool HandleCommandRemoveQuest(Wizard wizard, string questName) {
-        RemoveQuestAndClearFromJournal(wizard, questName);
+    private bool HandleCommandRemoveQuest(Wizard wizard, string questName)
+        => RemoveQuestAndClearFromJournal(wizard, questName);
 
-        // Removing an absent quest is a harmless no-op.
-        return true;
-    }
-
-    private void RemoveQuestAndClearFromJournal(Wizard wizard, string questName) {
+    private bool RemoveQuestAndClearFromJournal(Wizard wizard, string questName) {
+        if (StopUncertainTutorialSession(wizard)) return false;
         var instance = wizard.QuestBehavior.CurrentQuestInstances.FirstOrDefault(q => q.QuestName == questName);
-        var questId = instance?.ID ?? 0;
-        if (instance is null) {
-            return; // CLASSIC: the tutorial skip removes every tutorial quest; one the wizard never had is not an error.
+        if (instance is null) return true; // Existing skip commands remove absent control quests harmlessly.
+        var packet = new QUEST_MESSAGES_52_PROTOCOL.MSG_REMOVEQUEST { QuestID = instance.ID };
+        if (ClassicQuestEngine.IsActive) {
+            var status = WizardQuestTransactions.TryRemove(wizard, instance, out _,
+                preparePublication: _ => WizardProgressionTransactions.Prepare(packet),
+                afterCommit: _ => SendToSocket(packet));
+            return status != QuestMutationStatus.Refused && !StopUncertainTutorialSession(wizard);
         }
-
-        wizard.RemoveQuest(questName);
-
-        if (questId != 0) {
-            SendToSocket(new QUEST_MESSAGES_52_PROTOCOL.MSG_REMOVEQUEST {
-                QuestID = questId,
-            });
-        }
+        if (!wizard.RemoveQuest(questName)) return false;
+        SendToSocket(packet);
+        return true;
     }
 
     private bool HandleCommandCompleteGoal(Wizard wizard,
@@ -288,8 +305,7 @@ internal sealed partial class TutorialService(SessionActor sessionActor) : Messa
         // the control quests so none leak into the normal world, and move the player to the headmaster's office.
         if (goalName == "SkipTutorialGoal") {
             _tutorialInfo.m_tutorialStage = 99;
-            RemoveControlQuests(wizard);
-            CompleteTutorialIntro(wizard, playerObj);
+            if (!RemoveControlQuests(wizard) || !CompleteTutorialIntro(wizard, playerObj)) return false;
             EquipStarterWandAndDeck(wizard);
             return CompleteStarterExit(() => FinishClassicStart(wizard), () => Teleport(TutorialExitZone())); // CLASSIC
         }
@@ -297,7 +313,7 @@ internal sealed partial class TutorialService(SessionActor sessionActor) : Messa
         // Teleport: the finale (stage 8) fires this then blocks on OnTeleported; the server must move the
         // player out of the tutorial interior.
         if (goalName == "Teleport") {
-            RemoveControlQuests(wizard);
+            if (!RemoveControlQuests(wizard)) return false;
             return CompleteStarterExit(() => CompleteClassicStart(wizard), () => Teleport(TutorialExitZone())); // CLASSIC
         }
 
@@ -348,7 +364,9 @@ internal sealed partial class TutorialService(SessionActor sessionActor) : Messa
 
         if (goalInstance != null) {
             // We can remove it from the Wizard, but we need to post the completion events as well.
-            var removeSuccess = wizard.CompleteQuestGoal(goalInstance.quest.QuestName, goalName);
+            var status = CompleteAcknowledgedTutorialGoal(wizard, goalInstance.quest, goalInstance.goal);
+            if (status == QuestMutationStatus.Refused) return false;
+            if (status == QuestMutationStatus.Unchanged) return true; // CLASSIC: do not repeat pip/result/equipment effects.
 
             // We need the actual goal instance template to get the completion results.
             var questTemplate = QuestTemplateCollection.GetQuestByName(goalInstance.quest.QuestName);
@@ -393,7 +411,7 @@ internal sealed partial class TutorialService(SessionActor sessionActor) : Messa
                 EquipStarterWandAndDeck(wizard);
             }
 
-            return removeSuccess;
+            return !StopUncertainTutorialSession(wizard);
         }
 
         // Client-only cinematic beats (e.g. "StopRain") have no template goal; acknowledge them as no-op successes.
@@ -433,13 +451,18 @@ internal sealed partial class TutorialService(SessionActor sessionActor) : Messa
         });
     }
 
-    private void RemoveControlQuests(Wizard wizard) {
+    private bool RemoveControlQuests(Wizard wizard) {
         foreach (var questName in s_controlQuests) {
-            RemoveQuestAndClearFromJournal(wizard, questName);
+            if (!RemoveQuestAndClearFromJournal(wizard, questName)) return false;
         }
+        return true;
     }
 
     private bool CompleteTutorialIntro(Wizard wizard, CoreObject playerObj) {
+        if (StopUncertainTutorialSession(wizard)) return false;
+        // CLASSIC: a separately failed saved-deck fill must be recoverable after intro retirement.
+        // Never re-add a completed intro or replay its already completed goal results.
+        if (wizard.HasCompletedQuest(TUTORIAL_INTRO_QUEST_NAME)) return true;
         // Skippers never run the client's end-of-tutorial flow, so complete Tutorial_Intro here:
         // OnlyGoal's results are the school spell (ResLearnSpell, school-gated) plus the refills.
         if (!wizard.QuestBehavior.CurrentQuestInstances.Any(q => q.QuestName == TUTORIAL_INTRO_QUEST_NAME)) {
@@ -450,7 +473,7 @@ internal sealed partial class TutorialService(SessionActor sessionActor) : Messa
                 return false;
             }
 
-            wizard.AddQuest(new QuestInstance(introTemplate, wizard.CharId));
+            if (!wizard.AddQuest(new QuestInstance(introTemplate, wizard.CharId))) return false;
         }
 
         var instance = wizard.QuestBehavior.CurrentQuestInstances
@@ -460,7 +483,9 @@ internal sealed partial class TutorialService(SessionActor sessionActor) : Messa
             return false;
         }
 
-        var removeSuccess = wizard.CompleteQuestGoal(TUTORIAL_INTRO_QUEST_NAME, TUTORIAL_INTRO_GOAL_NAME);
+        var status = CompleteAcknowledgedTutorialGoal(wizard, instance, goalInstance);
+        if (status == QuestMutationStatus.Refused) return false;
+        if (status == QuestMutationStatus.Unchanged) return true;
 
         var questTemplate = QuestTemplateCollection.GetQuestByName(TUTORIAL_INTRO_QUEST_NAME);
         var goalTemplate = questTemplate?.m_goals.FirstOrDefault(g => g.m_goalName == TUTORIAL_INTRO_GOAL_NAME);
@@ -478,7 +503,22 @@ internal sealed partial class TutorialService(SessionActor sessionActor) : Messa
             zoneActor: SessionActor.GetZoneActor()
         );
 
-        return removeSuccess;
+        return !StopUncertainTutorialSession(wizard);
+    }
+
+    // CLASSIC: script beats retain their identities; only saving/no-replay/unknown-outcome handling changes.
+    private bool StopUncertainTutorialSession(Wizard wizard) {
+        if (!WizardCollection.IsInventorySnapshotUncertain(wizard)) return false;
+        CloseSession();
+        return true;
+    }
+
+    private QuestMutationStatus CompleteAcknowledgedTutorialGoal(Wizard wizard, QuestInstance quest, GoalInstance goal) {
+        if (StopUncertainTutorialSession(wizard)) return QuestMutationStatus.Refused;
+        if (ClassicQuestEngine.IsActive)
+            return WizardQuestTransactions.TryCompleteGoal(wizard, quest, goal, out _);
+        return wizard.CompleteQuestGoal(quest.QuestName, goal.GoalName)
+            ? QuestMutationStatus.Committed : QuestMutationStatus.Refused;
     }
 
     private void EquipStarterWandAndDeck(Wizard wizard) {
@@ -616,9 +656,8 @@ internal sealed partial class TutorialService(SessionActor sessionActor) : Messa
         }
 
         var grantedItems = wizard.GrantStarterItems(templateIds);
-        if (ClassicStart.IsActive) {
-            wizard.SetRegistryValue(ClassicStart.StarterKitGivenEntry, 1); // CLASSIC
-        }
+        if (StopUncertainTutorialSession(wizard)) return;
+        if (ClassicStart.IsActive && !wizard.SetRegistryValue(ClassicStart.StarterKitGivenEntry, 1)) return; // CLASSIC
         Logger.Information("Granted starter kit ({0} items: {1}) to {2} ({3}).",
             Logger.Args(grantedItems.Count, string.Join(",", templateIds), wizard.PlayerNameBehavior.GetWizardName(),
                 wizard.MagicSchoolBehavior.MagicSchool));

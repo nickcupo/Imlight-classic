@@ -21,17 +21,16 @@ using Imlight.CoreLib.WizardData.Databases;
 using System.Collections.Generic;
 using Imlight.CoreLib.WizardData.Models.Player;
 using System.Linq;
+using System;
+using Imlight.CoreLib.Classic;
 
 namespace Imlight.CoreLib.WizardData.Collections;
 
 public static class QuestInstanceCollection {
 
     public const string CollectionName = "QuestInstances";
-    private static readonly IDocumentStore s_store;
-
-    static QuestInstanceCollection() {
-        s_store = PlayerDatabase.Instance.Store;
-    }
+    // CLASSIC: active quest transactions own the lane and fresh owner checks; legacy storage is opened only on use.
+    private static readonly Lazy<IDocumentStore> s_store = new(() => PlayerDatabase.Instance.Store);
 
     /// <summary>
     /// Adds a new quest instance to the database.
@@ -39,11 +38,12 @@ public static class QuestInstanceCollection {
     /// <param name="questInstance">The quest instance to add.</param>
     /// <returns>True if the quest instance was added successfully, false otherwise.</returns>
     public static bool AddQuestInstance(QuestInstance questInstance) {
+        if (ClassicQuestEngine.IsActive) return false; // CLASSIC: refuse ownerless standalone writes.
         if (questInstance == null) {
             return false;
         }
 
-        using var session = s_store.OpenSession();
+        using var session = s_store.Value.OpenSession();
 
         session.Store(questInstance);
         var metadata = session.Advanced.GetMetadataFor(questInstance);
@@ -61,7 +61,8 @@ public static class QuestInstanceCollection {
     /// <param name="questName">The name of the quest instance to remove.</param>
     /// <returns>True if the quest instance was removed successfully, false otherwise.</returns>
     public static bool RemoveQuestInstance(ulong charId, string questName) {
-        using var session = s_store.OpenSession();
+        if (ClassicQuestEngine.IsActive) return false; // CLASSIC
+        using var session = s_store.Value.OpenSession();
 
         var questInstance = session.Query<QuestInstance>(collectionName: CollectionName)
             .FirstOrDefault(q => q.OwnerCharId == charId && q.QuestName == questName);
@@ -81,7 +82,8 @@ public static class QuestInstanceCollection {
     /// <param name="questInstanceID">The ID of the quest instance to remove.</param>
     /// <returns>True if the quest instance was removed successfully, false otherwise.</returns
     public static bool RemoveQuestInstance(ulong questInstanceID) {
-        using var session = s_store.OpenSession();
+        if (ClassicQuestEngine.IsActive) return false; // CLASSIC
+        using var session = s_store.Value.OpenSession();
 
         var questInstance = session.Query<QuestInstance>(collectionName: CollectionName)
             .FirstOrDefault(q => q.ID == questInstanceID);
@@ -102,7 +104,8 @@ public static class QuestInstanceCollection {
     /// <param name="goalName">The name of the goal to start.</param>
     /// <returns>True if the goal was started successfully, false otherwise.</returns>
     public static bool StartQuestGoal(ulong questInstanceID, string goalName) {
-        using var session = s_store.OpenSession();
+        if (ClassicQuestEngine.IsActive) return false; // CLASSIC
+        using var session = s_store.Value.OpenSession();
 
         var questInstance = session.Query<QuestInstance>(collectionName: CollectionName)
             .FirstOrDefault(q => q.ID == questInstanceID);
@@ -128,7 +131,8 @@ public static class QuestInstanceCollection {
     /// <param name="goalName">The name of the goal to increment.</param>
     /// <returns>True if the goal was incremented successfully, false otherwise.</returns>
     public static bool IncrementQuestGoal(ulong questInstanceID, string goalName) {
-        using var session = s_store.OpenSession();
+        if (ClassicQuestEngine.IsActive) return false; // CLASSIC
+        using var session = s_store.Value.OpenSession();
 
         var questInstance = session.Query<QuestInstance>(collectionName: CollectionName)
             .FirstOrDefault(q => q.ID == questInstanceID);
@@ -154,7 +158,8 @@ public static class QuestInstanceCollection {
     /// <param name="goalName">The name of the goal to complete.</param> 
     /// <returns>True if the goal was completed successfully, false otherwise.</returns>
     public static bool CompleteQuestGoal(ulong questInstanceID, string goalName) {
-        using var session = s_store.OpenSession();
+        if (ClassicQuestEngine.IsActive) return false; // CLASSIC
+        using var session = s_store.Value.OpenSession();
 
         var questInstance = session.Query<QuestInstance>(collectionName: CollectionName)
             .FirstOrDefault(q => q.ID == questInstanceID);

@@ -74,12 +74,11 @@ internal sealed partial class TutorialService {
 
     private bool CompleteClassicStart(Wizard wizard) {
         if (!ClassicStart.IsActive || wizard.HasRegistryValue(ClassicStart.CompletedEntry)) {
-            GrantClassicEnrollment(wizard);
-
-            return true;
+            return GrantClassicEnrollment(wizard);
         }
 
         var introCompleted = CompleteTutorialIntro(wizard, GetActiveGameObject());
+        if (!introCompleted || StopUncertainTutorialSession(wizard)) return false; // CLASSIC
         EquipStarterWandAndDeck(wizard);
         if (!FinishClassicStart(wizard)) return false;
         Logger.Information("Classic start for {Wizard}: Tutorial_Intro (school spell) {IntroResult}; starter wand and deck equipped.",
@@ -93,13 +92,12 @@ internal sealed partial class TutorialService {
         }
         // CLASSIC: completion is permanent; never refill a deck the player has since edited.
         if (wizard.HasRegistryValue(ClassicStart.CompletedEntry)) {
-            GrantClassicEnrollment(wizard);
-            return true;
+            return GrantClassicEnrollment(wizard);
         }
 
         // Tutorial_Intro exists only to carry the school spell; left held, it would come back in the quest log.
         if (wizard.HasQuest(TUTORIAL_INTRO_QUEST_NAME)) {
-            wizard.CompleteQuest(TUTORIAL_INTRO_QUEST_NAME);
+            if (!wizard.CompleteQuest(TUTORIAL_INTRO_QUEST_NAME)) return false;
         }
 
         return DeckSchoolSpell(wizard);
@@ -183,19 +181,19 @@ internal sealed partial class TutorialService {
         return learn is null ? null : SpellFactory.GetSpell(learn.m_templateID);
     }
 
-    private static void GrantClassicEnrollment(Wizard wizard) {
-        if (!ClassicStart.IsActive || wizard.HasRegistryValue(ClassicStart.EnrollmentEntry)) {
-            return;
-        }
+    private bool GrantClassicEnrollment(Wizard wizard) {
+        if (StopUncertainTutorialSession(wizard)) return false;
+        if (!ClassicStart.IsActive || wizard.HasRegistryValue(ClassicStart.EnrollmentEntry)) return true;
 
         // CLASSIC: legacy wizards retain the old enrollment repair; a newly granted kit must finish its saved deck.
         if (wizard.HasRegistryValue(ClassicStart.StarterKitGivenEntry) && !wizard.HasRegistryValue(ClassicStart.CompletedEntry)) {
-            return;
+            return true;
         }
 
-        wizard.SetRegistryValue(ClassicStart.EnrollmentEntry, 1);
+        if (!wizard.SetRegistryValue(ClassicStart.EnrollmentEntry, 1)) return false;
         Logger.Information("Classic start: {Wizard} may now leave Ambrose's office ({Entry} set).",
             Logger.Args(wizard.PlayerNameBehavior.GetWizardName(), ClassicStart.EnrollmentEntry));
+        return true;
     }
 
 }

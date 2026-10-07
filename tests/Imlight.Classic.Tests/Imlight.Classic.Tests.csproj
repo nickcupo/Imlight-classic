@@ -118,6 +118,10 @@
     <ServerIntegrationTest Include="TerminalQuestStackStagingTests.cs" />
     <ServerIntegrationTest Include="TerminalQuestClaimPersistenceTests.cs" />
     <ServerIntegrationTest Include="TerminalQuestClaimSessionTests.cs" />
+    <ServerIntegrationTest Include="QuestProgressionSessionTests.cs" />
+    <ServerIntegrationTest Include="QuestRegistryBadgeAcknowledgementTests.cs" />
+    <ServerIntegrationTest Include="QuestProgressionAcknowledgementTests.cs" />
+    <ServerIntegrationTest Include="TutorialProgressionAcknowledgementTests.cs" />
     <ServerIntegrationTest Include="DungeonQuestReconciliationTests.cs" />
     <ServerIntegrationTest Include="ArenaPvpMinionTests.cs" />
     <ServerIntegrationTest Include="OctoberShopRuntimeTests.cs" />

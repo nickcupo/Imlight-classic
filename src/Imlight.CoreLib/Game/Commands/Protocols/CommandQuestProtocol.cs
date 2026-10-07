@@ -28,6 +28,7 @@ using Imlight.CoreLib.Shared.Packets;
 using Imlight.CoreLib.WizardData.Collections;
 using Imlight.CoreLib.WizardData.Models.Player;
 using Imlight.CoreLib.Classic;
+using Imlight.Classic.Quests;
 using System.Collections.Generic;
 using System;
 
@@ -52,14 +53,28 @@ internal class CommandQuest : CommandProtocol {
                 continue;
             }
 
-            if (!wizard.HasQuest(name) || !wizard.QuestBehavior.CompleteQuest(name)) {
-                wizard.QuestBehavior.AddToQuestRegistry(name, "Complete", 1);
+            bool completed;
+            try {
+                completed = wizard.HasQuest(name) ? wizard.CompleteQuest(name)
+                    : ClassicQuestEngine.IsActive
+                        ? WizardQuestTransactions.TryAddRegistry(wizard,
+                            QuestNameAliases.Current.CanonicalEntry($"{name}_Complete"), 1, out _) != QuestMutationStatus.Refused
+                        : wizard.QuestBehavior.AddToQuestRegistry(name, "Complete", 1);
             }
-
+            catch {
+                if (!WizardCollection.IsInventorySnapshotUncertain(wizard)) throw;
+                Context.SessionActor.Tell("Close", null);
+                return;
+            }
+            if (!completed || WizardCollection.IsInventorySnapshotUncertain(wizard)) {
+                if (WizardCollection.IsInventorySnapshotUncertain(wizard)) Context.SessionActor.Tell("Close", null);
+                InformSenderClient($"Could not mark quest '{name}' complete.");
+                return;
+            }
             done.Add(name);
         }
 
-        WizardCollection.UpdateCharacterQuestBehavior(wizard);
+        if (!ClassicQuestEngine.IsActive) WizardCollection.UpdateCharacterQuestBehavior(wizard);
         InformSenderClient($"Marked complete: {string.Join(", ", done)}.");
     }
 
@@ -70,12 +85,12 @@ internal class CommandQuest : CommandProtocol {
     private void QuestEntryCommand(string entryName) {
         var wizard = Context.Character;
         if (!wizard.SetRegistryValue(entryName, 1)) {
+            if (WizardCollection.IsInventorySnapshotUncertain(wizard)) { Context.SessionActor.Tell("Close", null); return; }
             InformSenderClient($"Could not set registry entry '{entryName}'.");
 
             return;
         }
 
-        WizardCollection.UpdateCharacterQuestBehavior(wizard);
         InformSenderClient($"Registry entry set: {entryName}.");
     }
 

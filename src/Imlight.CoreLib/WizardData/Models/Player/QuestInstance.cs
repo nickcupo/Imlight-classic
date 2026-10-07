@@ -187,6 +187,14 @@ public class GoalInstance {
         return CurrentProgress == int.MaxValue;
     }
 
+    // CLASSIC: publish a matching fresh saved goal into its existing runtime alias after the ACK.
+    internal void ApplyCommittedProgress(GoalInstance snapshot) {
+        if (snapshot is null || ID == 0 || ID != snapshot.ID || OwnerCharId != snapshot.OwnerCharId
+            || GoalName != snapshot.GoalName || GoalType != snapshot.GoalType || snapshot.CurrentProgress < -1)
+            throw new System.InvalidOperationException("Cannot publish an unmatched quest goal snapshot.");
+        CurrentProgress = snapshot.CurrentProgress;
+    }
+
     public void BeginGoal() {
         if (CurrentProgress == -1) {
             CurrentProgress = 0;

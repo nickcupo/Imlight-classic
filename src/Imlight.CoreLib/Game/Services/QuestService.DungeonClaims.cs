@@ -57,7 +57,12 @@ internal partial class QuestService {
         }
     }
 
-    private IReadOnlyList<IMessage> PrepareDungeonQuestMessages(Wizard saved, QuestTemplate template, QuestInstance quest) {
+    private IReadOnlyList<IMessage> PrepareDungeonQuestMessages(Wizard saved, QuestTemplate template, QuestInstance quest)
+        => PrepareDungeonQuestMessages(saved, template, quest, null);
+
+    // CLASSIC: ordinary acceptance retains the existing per-school starting-goal requirements.
+    private IReadOnlyList<IMessage> PrepareDungeonQuestMessages(Wizard saved, QuestTemplate template, QuestInstance quest,
+        Func<GoalTemplate, bool> includeGoal) {
         var madlibs = QuestMadlibs.GetMadLibForQuest(template);
         if (!_goalSerializer.Serialize(madlibs, 1, out var madlibData)
             || !_goalSerializer.Serialize(GetQuestRewardsFromTemplate(template, null, SessionActor.ActorRef, saved), 1, out var rewards)
@@ -76,6 +81,7 @@ internal partial class QuestService {
         var patronIcon = (template.m_dialogList as ActorDialogList)?.m_dialogs
             .FirstOrDefault(dialog => dialog.m_dialogTag == "Prep")?.m_dialogEntries.FirstOrDefault()?.m_picture ?? "";
         foreach (var goal in template.m_goals.Where(goal => template.m_startGoals.Contains(goal.m_goalName))) {
+            if (includeGoal is not null && !includeGoal(goal)) continue;
             var instance = quest.GoalProgress.Single(entry => entry.GoalName == goal.m_goalName);
             if (!_goalSerializer.Serialize(QuestMadlibs.GetAppropriateMadlibBlockForGoal(goal, instance), 1, out var goalMadlibs)) return null;
             var tags = GetClientTagList(goal.m_clientTags?.ToArray() ?? []);
