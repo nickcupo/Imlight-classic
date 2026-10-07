@@ -252,6 +252,7 @@ public class ServerWizSpellbookBehavior : ServerSpellbookBehavior {
             spellIdList.Add(new SpellIDTracker {
                 m_isRetired = false,
                 m_spellID = templateId,
+                m_tieredSpellGroupIndex = -1, // CLASSIC: native AddSpell's ordinary-spell sentinel, also on a fresh attach.
             });
         }
 

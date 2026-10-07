@@ -782,6 +782,11 @@ public class Wizard {
     }
 
     public bool LearnSpell(Spell spell) {
+        // CLASSIC: ordinary rewards and training must never publish learned state before the saved acknowledgement.
+        if (WizardSpellbookTransactions.IsActive)
+            return spell is not null && WizardSpellbookTransactions.TryLearn(this, spell.m_templateID, out _)
+                == SpellbookMutationStatus.Committed;
+
         if (SpellbookBehavior.LearnedSpellTemplateIds.Contains(spell.m_templateID)) {
             Logger.Debug("{0} Tried to learn spell with template ID {1} that is already known.", // CLASSIC: harmless
                 Logger.Args(PlayerNameBehavior.GetWizardName(), spell.m_templateID));

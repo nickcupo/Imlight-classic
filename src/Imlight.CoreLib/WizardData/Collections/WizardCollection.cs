@@ -619,13 +619,17 @@ public static class WizardCollection {
 
     internal static bool UpdateCharacterSpellbookBehavior(Wizard wizard, Func<IDocumentSession> openSession,
         Func<IDocumentSession, ulong, Wizard> loadWizard) {
+        // CLASSIC: this legacy exclusion snapshot cannot grant or erase learned spells, or write a quarantined alias.
+        if (wizard?.SpellbookBehavior is null || IsInventorySnapshotUncertain(wizard)) return false;
         return CommitCharacterMutation(wizard.CharId, (_, persisted) => {
+            if (IsInventorySnapshotUncertain(wizard) || persisted.CharId != wizard.CharId
+                || persisted.AccountId != wizard.AccountId || persisted.SpellbookBehavior is null) return false;
             // Treasure-card quantities belong to the persisted add/remove operations.
-            persisted.SpellbookBehavior.LearnedSpellTemplateIds = wizard.SpellbookBehavior.LearnedSpellTemplateIds?.ToList() ?? [];
             persisted.SpellbookBehavior.ExcludedItemSpellIds = wizard.SpellbookBehavior.ExcludedItemSpellIds?
                 .ToDictionary(pair => pair.Key, pair => new HashSet<uint>(pair.Value)) ?? [];
             return true;
-        }, persisted => PublishTreasureCards(wizard, persisted), openSession, loadWizard);
+        }, persisted => PublishTreasureCards(wizard, persisted), openSession, loadWizard,
+            onSaveFailure: _ => MarkInventorySnapshotUncertain(wizard));
     }
 
     /// <summary>
@@ -715,8 +719,11 @@ public static class WizardCollection {
     /// </summary>
     /// <param name="wizard">The wizard to add the spell to.</param>
     /// <param name="spellTemplateId">The ID of the spell template to add.</param>
-    public static void LearnSpell(Wizard wizard, uint spellTemplateId) {
-        UpdateCharacter(wizard.CharId, existingCharacter =>
+    public static bool LearnSpell(Wizard wizard, uint spellTemplateId) {
+        // CLASSIC: expose refusal rather than discarding it; active callers use the typed transaction receipt.
+        if (WizardSpellbookTransactions.IsActive)
+            return WizardSpellbookTransactions.TryLearn(wizard, spellTemplateId, out _) == SpellbookMutationStatus.Committed;
+        return UpdateCharacter(wizard.CharId, existingCharacter =>
             existingCharacter.SpellbookBehavior.LearnedSpellTemplateIds.Add(spellTemplateId));
     }
 

@@ -113,7 +113,16 @@ internal sealed partial class TutorialService {
         }
 
         // The deck never holds a spell the book lacks; Tutorial_Intro's own ResLearnSpell may not have run yet.
-        if (!wizard.SpellbookBehavior.LearnedSpellTemplateIds.Contains(spell.m_templateID) && wizard.LearnSpell(spell)) {
+        if (WizardSpellbookTransactions.IsActive) {
+            var account = SessionActor.GetAssociatedAccount();
+            if (account is null) { CloseSession(); return false; }
+            var status = WizardSpellbookTransactions.TryLearn(wizard, spell.m_templateID, out _,
+                afterCommit: receipt => {
+                    foreach (var message in receipt.Messages) SendToSocket(message);
+                }, expectedAccountId: account.AccountId);
+            if (StopUncertainTutorialSession(wizard) || status == SpellbookMutationStatus.Refused) return false;
+        }
+        else if (!wizard.SpellbookBehavior.LearnedSpellTemplateIds.Contains(spell.m_templateID) && wizard.LearnSpell(spell)) {
             SendToSocket(new WIZARD_12_PROTOCOL.MSG_ADDSPELLTOBOOK {
                 SpellID = (int) spell.m_templateID,
             });

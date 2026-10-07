@@ -37,6 +37,8 @@
  */
 
 using Akka.Actor;
+using System;
+using Imcodec.MessageLayer;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;
 using Imlight.Common;
@@ -47,6 +49,9 @@ using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Classic.Rules;
 using Imlight.CoreLib.Classic;
+using Imlight.CoreLib.WizardData.Collections;
+using Imlight.CoreLib.WizardData.Models.Player;
+using Imlight.CoreLib.WizardData.Models.World;
 
 namespace Imlight.CoreLib.Game.Services;
 
@@ -100,6 +105,18 @@ internal class TrainService(SessionActor sessionActor) : MessageService(sessionA
         }
 
         var spellEntry = trainerComponent.SpellInventory[message.TrainingIndex];
+        // CLASSIC: the queried stock/proximity is trusted, while eligibility, debit and learning use fresh saved authority.
+        if (WizardSpellbookTransactions.IsActive) {
+            var account = SessionActor.GetAssociatedAccount();
+            if (account is null) { CloseSession(); return; }
+            var status = TrainAcknowledged(wizard, spellEntry, trainerComponent.TrainerTemplateId,
+                SendToSocket, CloseSession, account.AccountId);
+            if (status == SpellbookMutationStatus.Refused)
+                Logger.Warning("Wizard {0} training of spell {1} was refused or could not be acknowledged.",
+                    Logger.Args(wizard.CharId, spellEntry.TemplateID));
+            return;
+        }
+
         if (CoreObjectFactory.GetCoreTemplate(spellEntry.TemplateID) is not SpellTemplate spellTemplate) {
             return;
         }
@@ -168,6 +185,18 @@ internal class TrainService(SessionActor sessionActor) : MessageService(sessionA
             Success = 1
         };
         SendToSocket(trainCompleteMsg);
+    }
+
+    // CLASSIC: success messages share the selected transaction's original ACK lane; no debit/refund split remains.
+    internal static SpellbookMutationStatus TrainAcknowledged(Wizard wizard, NPCSpellEntry entry, ulong trainer,
+        Action<IMessage> send, System.Action close, ulong? expectedAccountId = null) {
+        if (WizardCollection.IsInventorySnapshotUncertain(wizard)) { close(); return SpellbookMutationStatus.Refused; }
+        var status = WizardSpellbookTransactions.TryTrain(wizard, entry, trainer, out _,
+            afterCommit: receipt => {
+                foreach (var message in receipt.Messages) send(message);
+            }, expectedAccountId: expectedAccountId);
+        if (WizardCollection.IsInventorySnapshotUncertain(wizard)) { close(); return SpellbookMutationStatus.Refused; }
+        return status;
     }
 
 
