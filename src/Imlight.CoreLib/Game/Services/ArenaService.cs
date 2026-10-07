@@ -63,6 +63,7 @@ internal sealed class ArenaService(SessionActor sessionActor) : MessageService(s
         => Akka.Actor.Props.Create(() => new ArenaService(parentActor));
 
     private ulong _charId;
+    private ArenaMatchmaker _kioskArena; // CLASSIC: retire only this service's pending kiosk during actual disposal.
     private ArenaKind _lastKind = ArenaKind.Practice;
 
     private ArenaMatchmaker Matchmaker {
@@ -86,13 +87,16 @@ internal sealed class ArenaService(SessionActor sessionActor) : MessageService(s
         }
 
         _lastKind = message.Ranked ? ArenaKind.Ranked : ArenaKind.Practice;
-        arena.OpenKiosk(_charId, _lastKind, message.KioskGid);
+        _kioskArena = arena;
+        arena.OpenKiosk(_charId, _lastKind, message.KioskGid, this);
     }
 
     // The client echoes MSG_PREPVPKIOSK back once it has checked its tournament files (PvPClientManager::MSG_PrePvPKiosk).
     [MessageHandler(typeof(WIZARD_12_PROTOCOL.MSG_PREPVPKIOSK))]
-    private void ReceivePreKioskEcho(WIZARD_12_PROTOCOL.MSG_PREPVPKIOSK message)
-        => Logger.Debug("Arena: kiosk echo, tournament {0}, patching {1}.", Logger.Args(message.TournamentNameID, message.Patching));
+    private void ReceivePreKioskEcho(WIZARD_12_PROTOCOL.MSG_PREPVPKIOSK message) {
+        Logger.Debug("Arena: kiosk echo, tournament {0}, patching {1}.", Logger.Args(message.TournamentNameID, message.Patching));
+        Matchmaker?.CompleteKiosk(_charId, message, this); // CLASSIC: seed the native tournament before its first request can be sent.
+    }
 
     [MessageHandler(typeof(WIZARD3_56_PROTOCOL.MSG_PVP5THAGECANJOINMATCH))]
     private void ReceiveCanJoin(WIZARD3_56_PROTOCOL.MSG_PVP5THAGECANJOINMATCH message) => Matchmaker?.CanJoin(_charId);
@@ -277,6 +281,17 @@ internal sealed class ArenaService(SessionActor sessionActor) : MessageService(s
             IsPrivate = false,
             OwnerCharId = 0,
         });
+    }
+
+    // CLASSIC: cover graceful session disposal and an actor stopped before that handshake completes.
+    protected override void OnPreDispose() {
+        _kioskArena?.RetireKiosk(_charId, this);
+        base.OnPreDispose();
+    }
+
+    protected override void PostStop() {
+        _kioskArena?.RetireKiosk(_charId, this);
+        base.PostStop();
     }
 
 }

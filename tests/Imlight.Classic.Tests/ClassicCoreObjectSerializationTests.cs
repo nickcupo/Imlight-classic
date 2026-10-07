@@ -53,6 +53,7 @@ public sealed class ClassicCoreObjectSerializationTests {
             m_permID = Character + 2, m_gameStats = new WizGameStats {
                 m_currentHitpoints = 115, m_baseHitpoints = 115, m_currentMana = 30,
                 m_currentArenaPoints = 44, m_currentPvPCurrency = 33,
+                m_highestCharacterLevelOnAccount = 50, // CLASSIC: native Watch checks this field, including after a ladder body.
                 m_pArenaLadder = new Ladder { m_characterID = Character, m_gameNameID = 782091, m_score = 701,
                     m_gamesWon = 12, m_gamesLost = 4, m_gamesPlayed = 16 },
                 m_dmgReducePercent = [.125f, .25f], m_accBonusPercent = [.75f], m_dmgReduceFlat = [3f],
@@ -68,6 +69,7 @@ public sealed class ClassicCoreObjectSerializationTests {
             Assert.True(codec.Deserialize<WizGameStats>((byte[])statsBytes, mask, out loadedStats));
         }
         Assert.Equal(115, loadedStats!.m_currentHitpoints); Assert.Equal(44, loadedStats.m_currentArenaPoints);
+        Assert.Equal(50, loadedStats.m_highestCharacterLevelOnAccount);
         Assert.Equal(Character, loadedStats.m_pArenaLadder.m_characterID.Full);
         Assert.Equal(701, loadedStats.m_pArenaLadder.m_score); Assert.Equal(16, loadedStats.m_pArenaLadder.m_gamesPlayed);
         Assert.Null(loadedStats.m_pDerbyLadder); Assert.Null(loadedStats.m_bracketLader);
