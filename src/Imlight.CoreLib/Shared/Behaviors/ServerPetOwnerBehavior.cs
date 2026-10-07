@@ -102,6 +102,14 @@ public class ServerPetOwnerBehavior : IClientBehaviorProvider<ClientPetOwnerBeha
         LastEnergyTickEpoch = (uint) (DateTimeOffset.UtcNow.ToUnixTimeSeconds() + EnergyTickIntervalInSeconds);
     }
 
+    // CLASSIC: publishing an acknowledged training cost preserves this behavior's runtime alias and
+    // the exact saved tick; calling SetEnergy again would schedule a different tick after the save.
+    internal void PublishCommittedEnergy(ServerPetOwnerBehavior snapshot) {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        Energy = snapshot.Energy;
+        LastEnergyTickEpoch = snapshot.LastEnergyTickEpoch;
+    }
+
     /// <summary>
     /// Creates a pet egg and adds it to both the persisted Eggs list and runtime MorphingSlots.
     /// </summary>

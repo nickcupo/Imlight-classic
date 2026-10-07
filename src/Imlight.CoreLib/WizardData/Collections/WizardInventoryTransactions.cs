@@ -144,6 +144,56 @@ internal static class WizardInventoryTransactions {
         live.InventoryBehavior.Items = [..published];
     }
 
+    // CLASSIC: modifying an already owned backpack/equipped item must retain its runtime alias and
+    // location. No template reconstruction, re-equipping, or unrelated inventory publication is needed.
+    internal static WizClientObjectItem PublishCommittedOwnedItem(Wizard live, Wizard saved, WizClientObjectItem snapshot) {
+        if (!CanPublishOwnedItem(live, saved, snapshot))
+            throw new InvalidOperationException("The owned item requires an authoritative reload.");
+        if (live is null || saved is null || snapshot is null || live.CharId != saved.CharId
+            || snapshot.m_characterId.Full != saved.CharId || snapshot.m_globalID.Full == 0
+            || snapshot.m_templateID.Full == 0) throw new InvalidOperationException("Cannot publish an invalid owned item.");
+        var id = snapshot.m_globalID.Full;
+        var inBag = saved.InventoryBehavior?.InventoryItemIds?.Contains(id) == true;
+        var equipped = saved.EquipmentBehavior?.EquippedItemIds?.Contains(id) == true;
+        if (inBag == equipped || saved.StorageBehavior?.BankItemIds?.Contains(id) == true)
+            throw new InvalidOperationException("Cannot publish an ambiguous owned item location.");
+        var aliases = (inBag ? live.InventoryBehavior?.Items?.ToArray() : live.EquipmentBehavior?.EquippedItems?.ToArray())
+            ?.Where(item => item is not null && item.m_globalID.Full == id).ToArray() ?? [];
+        if (aliases.Length != 1 || aliases[0].GetType() != snapshot.GetType()
+            || aliases[0].m_templateID.Full != snapshot.m_templateID.Full
+            || aliases[0].m_characterId.Full != saved.CharId)
+            throw new InvalidOperationException("The owned item requires an authoritative reload.");
+        if (!ReferenceEquals(aliases[0], snapshot)) {
+            // CLASSIC: these modifications touch dye and pet state only. Keep every other runtime
+            // behavior (especially a worn deck's spellbook alias), and update existing pet aliases.
+            CopyNativeSnapshot(snapshot, aliases[0], "m_inactiveBehaviors");
+            foreach (var state in snapshot.m_inactiveBehaviors ?? []) {
+                if (state is not ClientPetNameBehavior && state is not ClientPetItemBehavior) continue;
+                var matching = aliases[0].m_inactiveBehaviors?.Where(existing => existing?.GetType() == state.GetType()).ToArray() ?? [];
+                if (matching.Length != 1) throw new InvalidOperationException("The pet behavior requires an authoritative reload.");
+                CopyNativeSnapshot(state, matching[0]);
+            }
+        }
+        return aliases[0];
+    }
+
+    internal static bool CanPublishOwnedItem(Wizard live, Wizard saved, WizClientObjectItem snapshot) {
+        if (live is null || saved is null || snapshot is null || live.CharId != saved.CharId
+            || snapshot.m_characterId.Full != saved.CharId || snapshot.m_globalID.Full == 0
+            || snapshot.m_templateID.Full == 0) return false;
+        var id = snapshot.m_globalID.Full;
+        var inBag = saved.InventoryBehavior?.InventoryItemIds?.Contains(id) == true;
+        var equipped = saved.EquipmentBehavior?.EquippedItemIds?.Contains(id) == true;
+        if (inBag == equipped || saved.StorageBehavior?.BankItemIds?.Contains(id) == true) return false;
+        var aliases = (inBag ? live.InventoryBehavior?.Items?.ToArray() : live.EquipmentBehavior?.EquippedItems?.ToArray())
+            ?.Where(item => item is not null && item.m_globalID.Full == id).ToArray() ?? [];
+        if (aliases.Length != 1 || aliases[0].GetType() != snapshot.GetType()
+            || aliases[0].m_templateID.Full != snapshot.m_templateID.Full || aliases[0].m_characterId.Full != saved.CharId) return false;
+        var petStates = (snapshot.m_inactiveBehaviors ?? []).Where(state => state is ClientPetNameBehavior or ClientPetItemBehavior).ToArray();
+        return petStates.Select(state => state.GetType()).Distinct().Count() == petStates.Length
+            && petStates.All(state => aliases[0].m_inactiveBehaviors?.Count(existing => existing?.GetType() == state.GetType()) == 1);
+    }
+
     // CLASSIC: detached preparation leaves the caller's object untouched on refusal or a lost ACK. Pets skip
     // template initialization so their names, egg timers, talents and growth remain exactly as prepared.
     internal static WizClientObjectItem Prepare(Wizard live, WizClientObjectItem candidate, bool initializeBehaviors) {
@@ -186,11 +236,14 @@ internal static class WizardInventoryTransactions {
     private static bool ValidIds(IReadOnlyList<ulong> ids)
         => ids is not null && ids.All(id => id != 0) && ids.Distinct().Count() == ids.Count;
 
-    private static void CopySnapshot(WizClientObjectItem snapshot, WizClientObjectItem alias) {
+    private static void CopySnapshot(WizClientObjectItem snapshot, WizClientObjectItem alias)
+        => CopyNativeSnapshot(snapshot, alias);
+
+    private static void CopyNativeSnapshot(object snapshot, object alias, string excludedMember = null) {
         foreach (var field in snapshot.GetType().GetFields(BindingFlags.Public | BindingFlags.Instance))
-            if (!field.IsInitOnly) field.SetValue(alias, field.GetValue(snapshot));
+            if (!field.IsInitOnly && field.Name != excludedMember) field.SetValue(alias, field.GetValue(snapshot));
         foreach (var property in snapshot.GetType().GetProperties(BindingFlags.Public | BindingFlags.Instance))
-            if (property.GetMethod is not null && property.SetMethod?.IsPublic == true && property.GetIndexParameters().Length == 0)
+            if (property.Name != excludedMember && property.GetMethod is not null && property.SetMethod?.IsPublic == true && property.GetIndexParameters().Length == 0)
                 property.SetValue(alias, property.GetValue(snapshot));
     }
 }

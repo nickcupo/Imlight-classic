@@ -97,9 +97,6 @@ internal sealed partial class PetGameService(SessionActor sessionActor) : Messag
     protected static Props Props(SessionActor parentActor)
         => Akka.Actor.Props.Create(() => new PetGameService(parentActor));
 
-    private static readonly ObjectSerializer s_serializer = new(Behaviors: SerializerFlags.None);
-    private static readonly CoreObjectSerializer s_itemSerializer = new(behaviors: SerializerFlags.None);
-
     private static bool Enabled => ClassicRuntime.Rules.IsFeatureEnabled(ClassicFeatures.PetsLeveling);
 
     [MessageHandler(typeof(PET_9_PROTOCOL.MSG_PETGAMEJOIN))]
@@ -119,7 +116,22 @@ internal sealed partial class PetGameService(SessionActor sessionActor) : Messag
             return;
         }
 
-        var pet = EquippedPet(wizard);
+        var selectedPet = EquippedPet(wizard);
+        WizClientObjectItem pet;
+        int energy;
+        // CLASSIC: initialize the fresh owned pet, and publish only an acknowledged change.
+        try {
+            if (!ClassicPetProgressTransactions.TryInitialize(wizard, selectedPet?.m_globalID.Full ?? 0, out pet, out energy)) {
+                if (WizardCollection.IsInventorySnapshotUncertain(wizard)) { CloseSession(); return; }
+                InformGameClient("Equip a pet to play the pet games.");
+                SendToSocket(new PET_9_PROTOCOL.MSG_PETGAMEJOINRSP { Game = game, Success = 0 });
+                return;
+            }
+        }
+        catch {
+            if (WizardCollection.IsInventorySnapshotUncertain(wizard)) CloseSession();
+            throw;
+        }
         var b = PetProgress.Behavior(pet);
         _ = int.TryParse(message.Track.ToString(), out var track);
         track = Math.Clamp(track, 0, Math.Max(0, (info.m_trackChoices?.Count ?? 1) - 1));
@@ -131,13 +143,9 @@ internal sealed partial class PetGameService(SessionActor sessionActor) : Messag
             return;
         }
 
-        if (PetProgress.EnsureInitialized(pet)) {
-            WizardItemCollection.SavePetGrowth(pet);
-        }
-
         var cost = PetRules.EnergyCost(b.m_level);
-        if (wizard.PetOwnerBehavior.Energy < cost) {
-            Logger.Information("Pet game {0}: refused, energy {1} < {2}.", Logger.Args(game, wizard.PetOwnerBehavior.Energy, cost));
+        if (energy < cost) {
+            Logger.Information("Pet game {0}: refused, energy {1} < {2}.", Logger.Args(game, energy, cost));
             InformGameClient("Your pet is too tired to play.");
             SendToSocket(new PET_9_PROTOCOL.MSG_PETGAMEJOINRSP { Game = game, Success = 0 });
 
@@ -151,7 +159,7 @@ internal sealed partial class PetGameService(SessionActor sessionActor) : Messag
             Dance = game == "PetGameDance" ? new DanceGame(Random.Shared) : null,
         };
         Logger.Information("Pet game {0} track {1}: {2} joins with pet {3} (level {4}, energy {5}).",
-            Logger.Args(game, track, wizard.CharId, pet.m_globalID.Full, b.m_level, wizard.PetOwnerBehavior.Energy));
+            Logger.Args(game, track, wizard.CharId, pet.m_globalID.Full, b.m_level, energy));
         SendToSocket(new PET_9_PROTOCOL.MSG_PETGAMEJOINRSP { Game = game, Success = 1 });
         SendToSocket(new PET_9_PROTOCOL.MSG_PETGAMEINIT { Game = game, Data = "", MinLevel = 0, Track = (byte) track });
     }
@@ -248,155 +256,67 @@ internal sealed partial class PetGameService(SessionActor sessionActor) : Messag
     }
 
     private void Finish(int points, int wins) {
+        if (_session is null || _session.Ended) return;
         var wizard = GetActiveWizard();
-        var pet = wizard is null ? null : FindPet(wizard, _session.PetId);
-        var b = PetProgress.Behavior(pet);
-        if (b is null || !PetGameConfigs.TryGet(_session.Game, out var info)) {
-            return;
-        }
-
-        _session.Ended = true;
-        var cost = PetRules.EnergyCost(b.m_level);
-        wizard.UpdateEnergy(Math.Max(0, wizard.PetOwnerBehavior.Energy - cost));
-        SendEnergy(wizard);
-
+        if (wizard is null || !PetGameConfigs.TryGet(_session.Game, out var info)) return;
         var track = info.m_trackChoices?.ElementAtOrDefault(_session.Track);
-        var trackChanges = (track?.m_modifications ?? []).Where(m => m is not null)
+        var changes = (track?.m_modifications ?? []).Where(m => m is not null)
             .Select(m => new PetStatChange(m.m_name.ToString(), m.m_change)).ToList();
-        var applied = PetProgress.ApplyStats(pet, PetRules.DistributePoints(points, trackChanges));
-        var growth = PetProgress.AddXp(pet, PetRules.GameXp(points, b.m_level), Random.Shared);
-        WizardItemCollection.SavePetGrowth(pet);
-
-        Logger.Information("Pet game {0} ended: {1} point(s), {2}; +{3} XP (total {4}), level {5} -> {6}; energy -{7} (now {8}).",
-            Logger.Args(_session.Game, points, string.Join(", ", applied.Select(a => $"{a.Stat} +{a.Change}")), growth.Xp, b.m_XP,
-                growth.OldLevel, growth.NewLevel, cost, wizard.PetOwnerBehavior.Energy));
-        SendToSocket(new PET_9_PROTOCOL.MSG_PETGAMEEND {
-            Game = _session.Game,
-            Data = Serialize(EndData(wins, track?.m_name.ToString() ?? "", trackChanges, applied, growth.Xp, wins)),
-        });
-        AfterGrowth(wizard, pet, growth);
+        try {
+            // CLASSIC: the fresh pet and energy cost become visible together after one save acknowledgement.
+            if (!ClassicPetProgressTransactions.TryFinish(wizard, _session.PetId, _session.Game,
+                track?.m_name.ToString() ?? "", changes, points, wins, out var receipt)) {
+                if (WizardCollection.IsInventorySnapshotUncertain(wizard)) CloseSession();
+                return;
+            }
+            _session.Ended = true;
+            Logger.Information("Pet game {0} ended: {1} point(s), {2}; +{3} XP (total {4}), level {5} -> {6}; energy -{7} (now {8}).",
+                Logger.Args(_session.Game, points, string.Join(", ", receipt.Applied.Select(a => $"{a.Stat} +{a.Change}")),
+                    receipt.Growth.Xp, PetProgress.Behavior(receipt.Pet).m_XP, receipt.Growth.OldLevel,
+                    receipt.Growth.NewLevel, receipt.Cost, wizard.PetOwnerBehavior.Energy));
+            PublishProgress(receipt);
+        }
+        catch {
+            if (WizardCollection.IsInventorySnapshotUncertain(wizard)) CloseSession();
+            throw;
+        }
     }
 
     private void FeedSnack(ulong snackId) {
         var wizard = GetActiveWizard();
-        var pet = wizard is null ? null : FindPet(wizard, _session.PetId);
-        var snack = wizard?.PetSnackBehavior.Snacks?.FirstOrDefault(s => s.m_globalID == snackId);
-        if (pet is null || snack is null || !_session.Ended || _session.Fed
-            || CoreObjectFactory.GetCoreTemplate(snack.m_templateID) is not PetSnackItemTemplate template) {
-            Logger.Information("Pet snack {0}: refused (pet {1}, snack {2}, game ended {3}, fed {4}; bag: {5}).",
-                Logger.Args(snackId, pet is not null, snack is not null, _session.Ended, _session.Fed,
-                    string.Join(",", wizard?.PetSnackBehavior.Snacks?.Select(s => $"{s.m_globalID.Full}:{s.m_templateID.Full}x{s.m_quantity}") ?? [])));
+        if (_session is null || wizard is null || !_session.Ended || _session.Fed) {
             SendToSocket(new PET_9_PROTOCOL.MSG_PETGAMESNACKFEEDFAILED());
-
             return;
         }
-
-        _session.Fed = true;
-        wizard.RemoveSnack(snackId, out var updated);
-        if (updated is not null && updated.m_quantity > 0) {
-            SendToSocket(new PET_9_PROTOCOL.MSG_PETSNACKUPDATE { GlobalID = wizard.GameObjectID, ItemID = updated.m_globalID, Quantity = updated.m_quantity });
+        try {
+            // CLASSIC: consume the fresh saved stack and grow the fresh owned pet in the same transaction.
+            if (!ClassicPetProgressTransactions.TryFeed(wizard, _session.PetId, snackId, out var receipt)) {
+                if (WizardCollection.IsInventorySnapshotUncertain(wizard)) { CloseSession(); return; }
+                Logger.Information("Pet snack {0}: refused; no snack or progress was committed.", Logger.Args(snackId));
+                SendToSocket(new PET_9_PROTOCOL.MSG_PETGAMESNACKFEEDFAILED());
+                return;
+            }
+            _session.Fed = true;
+            Logger.Information("Pet fed snack {0} ({1}): {2}; +{3} XP (total {4}), level {5} -> {6}.",
+                Logger.Args(snackId, receipt.Taste, string.Join(", ", receipt.Applied.Select(a => $"{a.Stat} +{a.Change}")),
+                    receipt.Growth.Xp, PetProgress.Behavior(receipt.Pet).m_XP, receipt.Growth.OldLevel, receipt.Growth.NewLevel));
+            PublishProgress(receipt);
         }
-        else {
-            SendToSocket(new PET_9_PROTOCOL.MSG_PETSNACKREMOVE { GlobalID = wizard.GameObjectID, ItemID = snackId });
-        }
-
-        var snackChanges = (template.m_statModifierSet?.m_modifications ?? []).Where(m => m is not null)
-            .Select(m => new PetStatChange(m.m_name.ToString(), m.m_change)).ToList();
-        var taste = PetRules.Taste(PetProgress.FavouriteSnackKinds((uint) pet.m_templateID), PetProgress.School((uint) pet.m_templateID),
-            template.m_adjectiveList?.Select(a => a.ToString()) ?? [], template.m_school.ToString());
-        var fed = PetRules.Feed(snackChanges, taste);
-        var applied = PetProgress.ApplyStats(pet, fed.Changes);
-        var growth = PetProgress.AddXp(pet, fed.Xp, Random.Shared);
-        WizardItemCollection.SavePetGrowth(pet);
-
-        Logger.Information("Pet fed snack {0} ({1}): {2}; +{3} XP (total {4}), level {5} -> {6}.",
-            Logger.Args(snack.m_templateID.Full, taste, string.Join(", ", applied.Select(a => $"{a.Stat} +{a.Change}")), growth.Xp,
-                PetProgress.Behavior(pet).m_XP, growth.OldLevel, growth.NewLevel));
-        SendToSocket(new PET_9_PROTOCOL.MSG_PETGAMESNACKFEEDSUCCESS {
-            Data = Serialize(EndData((int) taste, "", fed.Changes, applied, growth.Xp, 0)),
-        });
-        AfterGrowth(wizard, pet, growth);
-    }
-
-    private void AfterGrowth(Wizard wizard, WizClientObjectItem pet, PetGrowth growth) {
-        var b = PetProgress.Behavior(pet);
-        SendToSocket(new WIZARD2_53_PROTOCOL.MSG_GAINPETXP { PetGID = pet.m_globalID, XP = (uint) Math.Max(0, growth.Xp) });
-        if (growth.LeveledUp) {
-            SendToSocket(new PET_9_PROTOCOL.MSG_PETLEVELUP {
-                GlobalID = pet.m_globalID,
-                OverallRating = (byte) Math.Min(255u, b.m_overallRating),
-                ActiveRating = (byte) Math.Min(255u, b.m_activeRating),
-                PetLevel = b.m_level,
-                NewTalent = growth.NewTalents.LastOrDefault(),
-                NewDerbyPower = 0,
-                NewJewel = 0,
-                Display = 1,
-            });
-            Logger.Information("Pet {0} grew to {1}; learned {2}.", Logger.Args(pet.m_globalID.Full, PetRules.LevelName(growth.NewLevel),
-                string.Join(", ", growth.NewTalents.Select(t => PetProgress.TalentName(t) ?? t.ToString()))));
-        }
-
-        RefreshEquippedPet(wizard, pet);
-        if (growth.LeveledUp) {
-            // The summoned pet carries its level and ratings in its name plate; summon it again with the new ones.
-            TellOtherServices(new CHARACTER_103_PROTOCOL.MSG_RESUMMONPET { PetItemId = pet.m_globalID });
+        catch {
+            if (WizardCollection.IsInventorySnapshotUncertain(wizard)) CloseSession();
+            throw;
         }
     }
 
-    private static PetGameEndData EndData(int score, string setName, IEnumerable<PetStatChange> asked, IReadOnlyList<PetStatChange> applied,
-            int xp, int wins) {
-        var actual = applied.ToDictionary(a => a.Stat, a => a.Change, StringComparer.OrdinalIgnoreCase);
-        var mods = asked.Where(c => c.Change != 0).Select(c => new PetStatModification {
-            m_name = c.Stat,
-            m_change = c.Change,
-            m_actualChange = (uint) Math.Max(0, actual.GetValueOrDefault(c.Stat)),
-        }).ToList();
-
-        return new PetGameEndData {
-            m_Score = score,
-            m_statMods = new PetStatModificationSet { m_name = setName, m_modifications = mods, m_scene = "", m_gameScoreFactor = [] },
-            m_xpGain = (uint) Math.Max(0, xp),
-            m_wins = (uint) Math.Max(0, wins),
-        };
-    }
-
-    private static ByteString Serialize(PropertyClass value) {
-        if (!s_serializer.Serialize(value, (PropertyFlags) 5, out var blob)) {
-            Logger.Error("Failed to serialize {0} for a pet game message.", Logger.Args(value.GetType().Name));
-
-            return string.Empty;
+    private void PublishProgress(PetProgressReceipt receipt) {
+        // CLASSIC: every native payload was prepared before the acknowledged write; retain its original order.
+        foreach (var message in receipt.Messages) SendToSocket(message);
+        if (receipt.Growth.LeveledUp) {
+            Logger.Information("Pet {0} grew to {1}; learned {2}.", Logger.Args(receipt.Pet.m_globalID.Full,
+                PetRules.LevelName(receipt.Growth.NewLevel),
+                string.Join(", ", receipt.Growth.NewTalents.Select(t => PetProgress.TalentName(t) ?? t.ToString()))));
+            TellOtherServices(new CHARACTER_103_PROTOCOL.MSG_RESUMMONPET { PetItemId = receipt.Pet.m_globalID });
         }
-
-        return blob;
-    }
-
-    private void SendEnergy(Wizard wizard) {
-        var max = Shared.Character.MagicLevelsConfig.GetPlayerLevelInfo(wizard.MagicSchoolBehavior.MagicSchool, wizard.MagicSchoolBehavior.Level).m_petEnergy;
-        SendToSocket(new PET_9_PROTOCOL.MSG_PETENERGYTICK {
-            GlobalID = wizard.GameObjectID,
-            Energy = wizard.PetOwnerBehavior.Energy,
-            MaxEnergy = max,
-            TickTime = (int) wizard.PetOwnerBehavior.LastEnergyTickEpoch,
-        });
-    }
-
-    private void RefreshEquippedPet(Wizard wizard, WizClientObjectItem pet) {
-        if (CoreObjectFactory.GetCoreTemplate(pet.m_templateID) is not WizItemTemplate template || ItemHelper.GetItemSlot(template) is not { } slot) {
-            return;
-        }
-
-        if (!s_itemSerializer.Serialize(pet, PropertyFlags.Prop_Transmit | PropertyFlags.Prop_AuthorityTransmit, out var data)) {
-            Logger.Error("Failed to serialize pet {0} for its refresh.", Logger.Args(pet.m_globalID));
-
-            return;
-        }
-
-        SendToSocket(new GAME_5_PROTOCOL.MSG_EQUIPMENTBEHAVIOR_EQUIPITEM {
-            GlobalID = wizard.GameObjectID,
-            SlotName = slot.SlotType.ToString(),
-            IsValid = 1,
-            SerializedItem = data,
-        });
     }
 
     internal static WizClientObjectItem EquippedPet(Wizard wizard)

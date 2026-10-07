@@ -14,6 +14,7 @@ using Imlight.CoreLib.Game.DropTables;
 using Imlight.CoreLib.Game.Commands;
 using Imlight.CoreLib.Game.Commands.Protocols;
 using Imlight.CoreLib.Game.Services;
+using Imlight.CoreLib.Game.Pet;
 using Imlight.CoreLib.Shared.Behaviors;
 using Imlight.CoreLib.Shared.Character;
 using Imlight.CoreLib.Shared.Resources;
@@ -260,6 +261,49 @@ public sealed class LootRewardPersistenceTests {
         var packet = Assert.Single(f.Packets.OfType<GAME_5_PROTOCOL.MSG_INVENTORYBEHAVIOR_ADDITEM>());
         Assert.Equal(Fixture.GearId, BitConverter.ToUInt64((byte[])packet.SerializedItem));
         Assert.Equal(3, DropTableConverter.ToLootInfoList(results).m_loot.Count);
+    }
+
+    [Theory]
+    [InlineData("success")]
+    [InlineData("full")]
+    [InlineData("lost")]
+    [InlineData("durable-lost")]
+    public void ProductionPetRewardFactoryPreparesItsTemplateEggBeforeTheGrant(string outcome) {
+        // Authored cache entry exercises the real PetFactory; no game archives or private values are used.
+        var pets = (IDictionary<uint, GameObjectTemplate>)typeof(PetFactory)
+            .GetField("s_petTemplates", BindingFlags.Static | BindingFlags.NonPublic)!.GetValue(null)!;
+        var id = checked((uint)Fixture.Gear);
+        var previous = pets.TryGetValue(id, out var old) ? old : null;
+        pets[id] = new GameObjectTemplate { m_templateID = id,
+            m_behaviors = [new PetItemBehaviorTemplate { m_behaviorName = "PetItemBehavior", m_sHatchRate = "60s" }] };
+        try {
+            var f = new Fixture(0) { FailSave = outcome is "lost" or "durable-lost", CommitBeforeFailure = outcome == "durable-lost" };
+            f.Dependencies.Create = null!;
+            if (outcome == "full") for (ulong itemId = 1; itemId <= 150; itemId++) f.AddGear(itemId);
+            using var scope = f.Scope(); var live = f.Live();
+            var before = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            StackRewardReceipt receipt = null!;
+            bool Grant() => ClassicStackRewards.TryGrant(live, [Drop(Fixture.Gear, 1)], [], [], out receipt);
+            if (f.FailSave) Assert.Throws<InvalidOperationException>(() => Grant());
+            else Assert.Equal(outcome == "success", Grant());
+            if (outcome == "full") { Assert.Equal(0, f.SaveAttempts); Assert.True(receipt.BackpackCapacityExceeded); return; }
+            Assert.Equal(1, f.SaveAttempts);
+            if (outcome is "success" or "durable-lost") {
+                var saved = Assert.Single(f.Items);
+                Assert.Equal(Fixture.Char, saved.m_characterId.Full); Assert.Equal(Fixture.Gear, saved.m_templateID.Full);
+                Assert.Equal(saved.m_globalID.Full, Assert.Single(f.Saved.InventoryBehavior.InventoryItemIds));
+                var egg = Assert.Single(saved.m_inactiveBehaviors.OfType<ClientPetItemBehavior>());
+                Assert.Equal(0, egg.m_level);
+                Assert.InRange((long)egg.m_hatchedTimeSecs, before + 60, DateTimeOffset.UtcNow.ToUnixTimeSeconds() + 60);
+                Assert.Single(saved.m_inactiveBehaviors.OfType<ClientPetNameBehavior>());
+            }
+            if (outcome == "success") Assert.Same(Assert.Single(live.InventoryBehavior.Items), Assert.Single(receipt.Items).Item);
+            else {
+                Assert.Empty(live.InventoryBehavior.Items); Assert.True(WizardCollection.IsInventorySnapshotUncertain(live));
+                Assert.False(Grant()); Assert.Equal(1, f.SaveAttempts);
+            }
+        }
+        finally { if (previous is null) pets.Remove(id); else pets[id] = previous; }
     }
 
     [Fact]
