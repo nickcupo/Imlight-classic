@@ -268,7 +268,7 @@ public sealed class ArenaGearSavedReloadTests(ITestOutputHelper output) {
             output.WriteLine($"Retained authored arena reload database and logs: {root}");
             // Raven 7.2 has an internal constructor. Never use or dispose the production singleton.
             var constructor = typeof(EmbeddedServer).GetConstructor(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
-                binder: null, Type.EmptyTypes, modifiers: null);
+                binder: null, System.Type.EmptyTypes, modifiers: null);
             Assert.NotNull(constructor);
             _server = (EmbeddedServer)constructor.Invoke(null);
             Assert.NotSame(EmbeddedServer.Instance, _server);
@@ -384,7 +384,7 @@ public sealed class ArenaGearSavedReloadTests(ITestOutputHelper output) {
                 new TemplateLocation { m_id = 850099u, m_filename = "Spells/AuthoredSavedInfection.xml" },
             ] };
         }
-        private static FieldInfo Field(Type type, string name) => type.GetField(name, BindingFlags.Static | BindingFlags.NonPublic)!;
+        private static FieldInfo Field(System.Type type, string name) => type.GetField(name, BindingFlags.Static | BindingFlags.NonPublic)!;
         public void Dispose() {
             _canonical.SetValue(null, _oldCanonical); _tables.SetValue(null, _oldTables); _levels.SetValue(null, _oldLevels);
             typeof(MagicLevelsConfig).GetProperty(nameof(MagicLevelsConfig.MaxLevel))!.SetValue(null, _oldMaxLevel);
