@@ -28,10 +28,11 @@
  * if (PetGameConfigs.TryGet("PetGameDance", out var info)) { ... info.m_trackChoices[track] ... }
  *
  * NOTE:
- * CLASSIC: only the four 2010 games are offered (Pet Mini Games, oldid
- * 122046): PetGameDance, PetGameDrop (Gobbler Drop), PetGameCannon (Mortar
- * Mayhem) and PetGameMaze. Siege, the obstacle course, Grub Guardian and the
- * derby came later.
+ * CLASSIC: the May 26, 2010 Advanced Pets launch lists four training games:
+ * PetGameDance, PetGameDrop (Gobbler Drop), PetGameCannon and PetGameMaze.
+ * Pet Derby launched in that same update but is a separate multiplayer race,
+ * not a training kiosk; it remains deferred in this existing-world release.
+ * Source: https://www.prnewswire.com/news-releases/kingsisle-entertainment-launches-advanced-pets-system-for-wizard101-94917089.html
  *
  * Created by: Nick with Claude Code (claude-opus-5-5)
  * Version: KALI 1.0
