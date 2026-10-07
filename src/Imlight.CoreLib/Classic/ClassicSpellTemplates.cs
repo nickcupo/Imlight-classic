@@ -65,6 +65,14 @@ namespace Imlight.CoreLib.Classic;
 /// </summary>
 public static class ClassicSpellTemplates {
 
+    // CLASSIC: July 6 2009 oldid 29529 records base 175; March 15 2010 oldid 65280 records the
+    // library's 350 gold. Project only this exact treasure template, never its trained/item variants.
+    internal const string GlacialTreasurePath = "Spells/TreasureCards/Glacial Shield TC.xml";
+    internal const string GlacialTreasureName = "Glacial Shield TC";
+    internal const ulong GlacialTreasureId = 1698635320;
+    internal const int GlacialNativeBase = 350;
+    internal const int GlacialHistoricalBase = 175;
+
     private static volatile ClassicSpellOverrides? s_overrides;
     private static SpellOverrideCensus? s_census = new();
 
@@ -110,7 +118,17 @@ public static class ClassicSpellTemplates {
     /// <param name="path">The template's Root.wad path.</param>
     /// <param name="census">True to count the template in the startup census.</param>
     public static void Apply(CoreTemplate? template, string? path, bool census = false) {
-        if (s_overrides is not { } overrides || template is not SpellTemplate spell || path is null) {
+        if (template is not SpellTemplate spell || path is null) {
+            return;
+        }
+
+        // CLASSIC: price projection also applies when combat values already match or have no override.
+        // Progression loads the canonical library table before either resource factory deserializes cards.
+        if (ClassicRuntime.IsInitialized && ClassicRuntime.IsActive) {
+            ApplyTreasureBaseCost(spell, path, ClassicRuntime.Rules.Profile.Id, ClassicProgression.TreasurePrices);
+        }
+
+        if (s_overrides is not { } overrides) {
             return;
         }
 
@@ -134,6 +152,28 @@ public static class ClassicSpellTemplates {
                 Logger.Args(plan.Record.Id, shape.Rank, plan.Rank ?? shape.Rank, shape.Accuracy, plan.Accuracy ?? shape.Accuracy,
                     plan.EffectChanges.Length));
         }
+    }
+
+    internal static bool HasHistoricalTreasureBase(string profileId, TreasurePrices? prices)
+        => profileId is "late-2009" or "arc1-2009h1" or "october-2010-arc1"
+            && prices is { Id: "treasure-prices-2009" }
+            && prices.Profiles.Contains(profileId, StringComparer.Ordinal)
+            && prices.Find(GlacialTreasureName) == 350;
+
+    internal static bool ApplyTreasureBaseCost(SpellTemplate spell, string path, string profileId, TreasurePrices? prices) {
+        if (!HasHistoricalTreasureBase(profileId, prices) || path != GlacialTreasurePath
+                || spell.GetType() != typeof(SpellTemplate) || spell.m_name != GlacialTreasureName) {
+            return false;
+        }
+
+        if (spell.m_baseCost is not (GlacialNativeBase or GlacialHistoricalBase)) {
+            Logger.Warning("Classic treasure base: {Path} has unexpected base {Base}; left unchanged.",
+                Logger.Args(path, spell.m_baseCost));
+            return false;
+        }
+
+        spell.m_baseCost = GlacialHistoricalBase;
+        return true;
     }
 
     /// <summary>

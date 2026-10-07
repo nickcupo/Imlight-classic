@@ -17,6 +17,7 @@
 */
 
 using System.Linq;
+using System;
 using System.Collections.Generic;
 using Raven.Client.Documents;
 using Imlight.CoreLib.WizardData.Databases;
@@ -233,4 +234,58 @@ internal class AuctionHouseCollection {
         session.SaveChanges();
     }
 
+    /// <summary>
+    /// CLASSIC: update only quote fields of one existing template; retain every document's copies and identity.
+    /// An acknowledged database save precedes the cache update. Failure propagates without changing the cache.
+    /// </summary>
+    internal static bool ApplyPriceChanges(ulong templateId, int expectedCopies, int buy, int sell) {
+        lock (Lock) {
+            GetAllAuctionHouseEntriesUnlocked();
+            using var session = s_store.OpenSession();
+            var stored = session.Query<AuctionHouseEntry>(collectionName: CollectionName)
+                .Take(int.MaxValue).ToList().Where(entry => entry.m_templateID.Full == templateId).ToList();
+            return AuctionHouseQuoteCorrection.Apply(stored, s_entries, templateId, expectedCopies, buy, sell,
+                session.SaveChanges);
+        }
+    }
+
+}
+
+// CLASSIC: separate the bounded field update from Raven's session for acknowledged-save/failure checks.
+// This changes no document identity, copy count or server-stock ledger, even when duplicate documents exist.
+internal static class AuctionHouseQuoteCorrection {
+    internal static bool Apply(IReadOnlyList<AuctionHouseEntry> stored, IReadOnlyList<AuctionHouseEntry> cached,
+            ulong templateId, int expectedCopies, int buy, int sell, System.Action save) {
+        if (stored.Count == 0 || stored.Any(entry => entry.m_templateID.Full != templateId)
+                || stored.Sum(entry => entry.m_numForSale) != expectedCopies || expectedCopies <= 0 || buy < 1 || sell < 0) {
+            throw new InvalidOperationException("Bazaar quote correction found unexpected persisted stock; prices retained.");
+        }
+
+        var before = stored.Select(entry => (Entry: entry, Buy: entry.m_buyPrice, Sell: entry.m_sellPrice)).ToList();
+        var changed = before.Any(entry => entry.Buy != buy || entry.Sell != sell);
+        if (changed) {
+            foreach (var entry in stored) {
+                entry.m_buyPrice = buy;
+                entry.m_sellPrice = sell;
+            }
+
+            try { save(); }
+            catch {
+                // A save may have committed remotely before losing its acknowledgement. Do not update the cache
+                // or claim success; initialization aborts and the next attempt rereads the actual database state.
+                foreach (var entry in before) {
+                    entry.Entry.m_buyPrice = entry.Buy;
+                    entry.Entry.m_sellPrice = entry.Sell;
+                }
+                throw;
+            }
+        }
+
+        foreach (var entry in cached.Where(entry => entry.m_templateID.Full == templateId)) {
+            entry.m_buyPrice = buy;
+            entry.m_sellPrice = sell;
+        }
+
+        return changed;
+    }
 }
