@@ -144,13 +144,13 @@ public sealed class ArenaMatchmakerTests {
         Assert.Equal(3, w.Status(A));   // looking for teammates
 
         // The watcher's list gets the new match, with the creator's packed name in the actor.
-        var update = ArenaMessages.Read<TournamentUpdateList>(w.Of<GAME_5_PROTOCOL.MSG_TOURNAMENTUPDATE>(E).Last().Updates)!;
-        var info = (PvPMatchInfo) update.m_updates.OfType<AddMatchUpdate>().Single().m_matchInfo;
+        var update = w.Of<GAME_5_PROTOCOL.MSG_PVPUPDATEINFO>(E).Last();
+        var info = (PvPMatchInfo) ArenaMessages.Read<NewListUpdate>(update.TournamentInfo)!.m_matches.Single();
         Assert.Equal((2u, ArenaRules.Hash("PvPPractice2v2Match")), (info.m_teamSize, info.m_matchNameID));
         Assert.Equal(50, info.m_joinQueueRequirements.m_maxLevel);
-        var actor = (PvPActor) info.m_teams[0].m_actors.Single();
+        var actor = info.m_teams[0].m_actors.OfType<PvPActor>().Single();
         Assert.Equal((A + 7, 10, "Fire"), (actor.m_nActorID.Full, actor.m_level, actor.m_sSchool));
-        byte[] blob = w.Of<GAME_5_PROTOCOL.MSG_TOURNAMENTUPDATE>(E).Last().Updates;
+        byte[] blob = update.TournamentInfo;
         Assert.True(Contains(blob, [0x82, 0x01, 0x02, 0x01]));   // the 4 name bytes reach the client as they are
 
         var teams = w.Arena.TeamIdsOf(match);

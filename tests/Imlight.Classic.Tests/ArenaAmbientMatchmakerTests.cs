@@ -143,7 +143,8 @@ public sealed class ArenaAmbientMatchmakerTests {
         var message = world.Sent.Where(x => x.Who == Wife).Select(x => x.Message).OfType<GAME_5_PROTOCOL.MSG_PVPUPDATEINFO>().Last();
         var list = ArenaMessages.Read<NewListUpdate>(message.TournamentInfo)!;
         var row = Assert.IsType<PvPMatchInfo>(Assert.Single(list.m_matches));
-        Assert.Empty(row.m_teams[1].m_actors); Assert.Equal(0, row.m_status);
+        var vacancy = Assert.IsType<MatchActor>(Assert.Single(row.m_teams[1].m_actors));
+        Assert.Equal(0UL, vacancy.m_nActorID.Full); Assert.Equal(0, vacancy.m_status); Assert.Equal(0, row.m_status);
         world.Arena.QuickJoin(Wife, ArenaKind.Practice, world.Size(ArenaKind.Practice, 1));
         Assert.Equal(match, world.Arena.MatchOf(Wife)); Assert.Single(world.Released); Assert.Empty(world.Trips);
     }
@@ -383,14 +384,18 @@ public sealed class ArenaAmbientMatchmakerTests {
             world.Sent.Clear();
             world.Arena.List(Human, world.Arena.TournamentId(kind), qualifiedOnly: true, qualifiedLevel: (uint) level);
             var rows = ListedRows(world, Human);
-            Assert.Equal(84, rows.Length); Assert.Equal(84, rows.Select(row => row.m_matchID.Full).Distinct().Count());
+            var parentCount = kind == ArenaKind.Ranked ? 42 : 84;
+            Assert.Equal(parentCount, rows.Length); Assert.Equal(parentCount, rows.Select(row => row.m_matchID.Full).Distinct().Count());
             Assert.All(rows, row => {
-                Assert.Equal(0, row.m_status); Assert.Empty(row.m_teams[0].m_actors);
-                var opponent = Assert.IsType<PvPActor>(Assert.Single(row.m_teams[1].m_actors));
+                Assert.Equal(0, row.m_status);
+                Assert.Equal((int) row.m_teamSize, row.m_teams[0].m_actors.Count);
+                Assert.All(row.m_teams[0].m_actors, actor => { Assert.IsType<MatchActor>(actor); Assert.Equal(0, actor.m_status); Assert.Equal(0UL, actor.m_nActorID.Full); });
+                var opponent = Assert.Single(row.m_teams[1].m_actors.OfType<PvPActor>());
                 Assert.Equal(level, opponent.m_level); Assert.Equal(4, opponent.m_nameBlob.Length);
                 Assert.Equal(level, row.m_joinQueueRequirements.m_minLevel);
                 Assert.Equal(level, row.m_joinQueueRequirements.m_maxLevel);
-                Assert.True(row.m_teams[0].m_actors.Count < row.m_teamSize);
+                Assert.Equal((int) row.m_teamSize, row.m_teams[1].m_actors.Count);
+                Assert.Equal((int) row.m_teamSize - 1, row.m_teams[1].m_actors.Count(actor => actor.m_status == 0));
             });
             Assert.Equal(7, rows.Select(row => ((PvPActor) row.m_teams[1].m_actors[0]).m_sSchool).Distinct().Count());
             Assert.Equal(new uint[] { 1, 2, 3, 4 }, rows.Select(row => row.m_teamSize).Distinct().Order().ToArray());
@@ -408,20 +413,21 @@ public sealed class ArenaAmbientMatchmakerTests {
     [InlineData(ArenaKind.Practice)] [InlineData(ArenaKind.Ranked)]
     public void NativePaginationUsesStableChallengeIdsAndCanBrowseBeyondTheViewersLevel(ArenaKind kind) {
         var world = new World { FriendlyEnabled = true };
-        world.Arena.List(Human, world.Arena.TournamentId(kind), numberOfElements: 5);
+        var pageSize = kind == ArenaKind.Ranked ? 10 : 5;
+        world.Arena.List(Human, world.Arena.TournamentId(kind), numberOfElements: pageSize);
         var first = ListedRows(world, Human); Assert.Equal(5, first.Length);
         world.Sent.Clear();
-        world.Arena.List(Human, world.Arena.TournamentId(kind), startingIndex: 5, numberOfElements: 5);
+        world.Arena.List(Human, world.Arena.TournamentId(kind), startingIndex: pageSize, numberOfElements: pageSize);
         var next = ListedRows(world, Human); Assert.Equal(5, next.Length);
         Assert.Empty(first.Select(row => row.m_matchID.Full).Intersect(next.Select(row => row.m_matchID.Full)));
         world.Sent.Clear();
-        world.Arena.List(Wife, world.Arena.TournamentId(kind), startingIndex: 5, numberOfElements: 5);
+        world.Arena.List(Wife, world.Arena.TournamentId(kind), startingIndex: pageSize, numberOfElements: pageSize);
         Assert.Equal(next.Select(row => row.m_matchID.Full), ListedRows(world, Wife).Select(row => row.m_matchID.Full));
         world.Sent.Clear();
-        world.Arena.List(Human, world.Arena.TournamentId(kind), startingIndex: 84, numberOfElements: 5);
+        world.Arena.List(Human, world.Arena.TournamentId(kind), startingIndex: kind == ArenaKind.Ranked ? 168 : 84, numberOfElements: pageSize);
         Assert.All(ListedRows(world, Human), row => Assert.Equal(19, ((PvPActor) row.m_teams[1].m_actors[0]).m_level));
         var initial = ArenaMessages.Read<NewListUpdate>(world.Sent.Select(m => m.Message).OfType<GAME_5_PROTOCOL.MSG_PVPUPDATEINFO>().Single().TournamentInfo)!;
-        Assert.Equal(ArenaFriendlyRoster.ChallengeCountPerKind, initial.m_totalTeams);
+        Assert.Equal(ArenaFriendlyRoster.ChallengeCountPerKind * (kind == ArenaKind.Ranked ? 2 : 1), initial.m_totalTeams);
     }
 
     [Theory]
@@ -527,7 +533,7 @@ public sealed class ArenaAmbientMatchmakerTests {
             world.Sent.Clear();
             world.Arena.List(Human, world.Arena.TournamentId(ArenaKind.Ranked), qualifiedOnly: true,
                 qualifiedLevel: 20, qualifiedRank: rank);
-            Assert.Equal(84, ListedRows(world, Human).Length);
+            Assert.Equal(42, ListedRows(world, Human).Length);
         }
         var challenge = new ArenaFriendlyChallenge(ArenaKind.Ranked, 20, 4, ArenaPvpSkill.Advanced, 1);
         world.Arena.Join(Human, challenge.Id, challenge.TeamIds[0]);

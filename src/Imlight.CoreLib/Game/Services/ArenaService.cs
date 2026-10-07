@@ -110,7 +110,8 @@ internal sealed class ArenaService(SessionActor sessionActor) : MessageService(s
         }
 
         arena.List(_charId, tournament, request?.m_startingIndex ?? 0, request?.m_numberOfElements ?? 0,
-            request?.m_qualifiedOnly ?? false, request?.m_qualifiedLevel ?? 0, request?.m_qualifiedRank ?? -1);
+            request?.m_qualifiedOnly ?? false, request?.m_qualifiedLevel ?? 0, request?.m_qualifiedRank ?? -1,
+            request?.m_tournamentRequestType ?? 0);
     }
 
     [MessageHandler(typeof(WIZARD_12_PROTOCOL.MSG_PVPINTENT))]

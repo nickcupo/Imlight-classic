@@ -235,10 +235,11 @@ public sealed class ArenaShutdownMatchmakerTests {
             var second = world.Arena.Snapshot().Single(m => m.Kind == ArenaKind.Ranked);
             var secondRunId = world.Arena.RunOf(second.Id);
             var secondRun = world.Arena.Run(secondRunId)!;
-            world.Arena.List(Watcher, world.Arena.TournamentId(ArenaKind.Ranked));
+            world.Arena.List(Watcher, world.Arena.TournamentId(ArenaKind.Ranked), requestType: 5);
             var secondClaimed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             world.OnSend = message => {
-                if (message is GAME_5_PROTOCOL.MSG_TOURNAMENTUPDATE) secondClaimed.TrySetResult();
+                if (message is GAME_5_PROTOCOL.MSG_TOURNAMENTUPDATE or GAME_5_PROTOCOL.MSG_PVPUPDATEINFO)
+                    secondClaimed.TrySetResult();
             };
             secondFinish = Task.Run(() => world.Arena.Finish(secondRunId, 0, []));
             await secondClaimed.Task.WaitAsync(Timeout); // removal broadcast occurs after the claim, before _resultsGate
@@ -280,13 +281,13 @@ public sealed class ArenaShutdownMatchmakerTests {
         var run = world.Arena.Run(runId)!;
         var npc = run.Side1.Single();
         world.Arena.Watch(Watcher, matchId);
-        world.Arena.List(Watcher, world.Arena.TournamentId(ArenaKind.Ranked));
+        world.Arena.List(Watcher, world.Arena.TournamentId(ArenaKind.Ranked), requestType: 5);
         using var ladder = new BlockingLadder(0);
         world.Ladder = ladder;
         var cleanupEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         using var releaseCleanup = new ManualResetEventSlim();
         world.OnSend = message => {
-            if (message is GAME_5_PROTOCOL.MSG_TOURNAMENTUPDATE)
+            if (message is GAME_5_PROTOCOL.MSG_TOURNAMENTUPDATE or GAME_5_PROTOCOL.MSG_PVPUPDATEINFO)
                 throw new InvalidOperationException("injected accepted removal failure");
         };
         world.OnRelease = id => {

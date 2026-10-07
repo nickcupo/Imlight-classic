@@ -86,9 +86,9 @@ public sealed class ArenaNativeMatchStatusTests {
     private static bool NativeJoinAdmits(PvPMatchInfo row) => row.m_status == 0;
     private static bool NativeWatchAdmits(PvPMatchInfo row) => row.m_status == 4;
 
-    private static PvPMatchInfo[] ReadList(World world, ArenaKind kind) {
+    private static PvPMatchInfo[] ReadList(World world, ArenaKind kind, bool watch = false) {
         world.Sent.Clear();
-        world.Arena.List(Watcher, world.Arena.TournamentId(kind));
+        world.Arena.List(Watcher, world.Arena.TournamentId(kind), requestType: watch ? 5u : 0u);
         var initial = ArenaMessages.Read<NewListUpdate>(world.Messages<GAME_5_PROTOCOL.MSG_PVPUPDATEINFO>(Watcher).Single().TournamentInfo)!;
         var rows = initial.m_matches.Cast<PvPMatchInfo>().ToList();
         foreach (var message in world.Messages<GAME_5_PROTOCOL.MSG_TOURNAMENTUPDATE>(Watcher))
@@ -115,7 +115,7 @@ public sealed class ArenaNativeMatchStatusTests {
         var run = world.Arena.RunOf(match.Id);
         if (fighting) world.Arena.Started(run);
         Assert.Equal(fighting ? "Fighting" : "Travelling", world.Arena.Snapshot().Single(m => m.Id == match.Id).Phase);
-        var row = Assert.Single(ReadList(world, kind));
+        var row = Assert.Single(ReadList(world, kind, watch: true));
         Assert.Equal(match.Id, row.m_matchID.Full);
         Assert.True(NativeWatchAdmits(row));
         Assert.False(NativeJoinAdmits(row));
@@ -133,28 +133,24 @@ public sealed class ArenaNativeMatchStatusTests {
 
     [Theory]
     [InlineData(ArenaKind.Practice)] [InlineData(ArenaKind.Ranked)]
-    public void IncrementalRowsAdmitWatchOnlyAfterTheServerCanAcceptSpectators(ArenaKind kind) {
+    public void BrowserUpdatesAdmitWatchOnlyAfterTheServerCanAcceptSpectators(ArenaKind kind) {
         var world = new World();
-        Assert.Empty(ReadList(world, kind));
-        var nonwatchablePhases = new List<string>();
+        Assert.Empty(ReadList(world, kind, watch: true));
+        var advertisedRows = new List<PvPMatchInfo>();
         world.Observe = (who, message) => {
-            if (who != Watcher || message is not GAME_5_PROTOCOL.MSG_TOURNAMENTUPDATE update) return;
-            foreach (var add in ArenaMessages.Read<TournamentUpdateList>(update.Updates)!.m_updates.OfType<AddMatchUpdate>()) {
-                var row = (PvPMatchInfo) add.m_matchInfo;
-                if (NativeWatchAdmits(row)) continue;
-                Assert.Equal(1, row.m_status);
-                Assert.False(NativeJoinAdmits(row));
-                nonwatchablePhases.Add(world.Arena.Snapshot().Single(m => m.Id == row.m_matchID.Full).Phase);
-                RefusesWatch(world, row.m_matchID.Full);
-            }
+            if (who != Watcher) return;
+            IEnumerable<PvPMatchInfo> rows = message switch {
+                GAME_5_PROTOCOL.MSG_PVPUPDATEINFO initial => ArenaMessages.Read<NewListUpdate>(initial.TournamentInfo)!.m_matches.Cast<PvPMatchInfo>(),
+                GAME_5_PROTOCOL.MSG_TOURNAMENTUPDATE update => ArenaMessages.Read<TournamentUpdateList>(update.Updates)!.m_updates
+                    .OfType<AddMatchUpdate>().Select(add => (PvPMatchInfo) add.m_matchInfo),
+                _ => [],
+            };
+            foreach (var row in rows) { Assert.True(NativeWatchAdmits(row)); advertisedRows.Add(row); }
         };
         world.Arena.Tick(DateTime.UtcNow);
         world.Observe = null;
-        Assert.Contains("Open", nonwatchablePhases);
-        Assert.Contains("Confirming", nonwatchablePhases);
         var match = world.Arena.Snapshot().Single(m => m.Kind == kind);
-        var last = ArenaMessages.Read<TournamentUpdateList>(world.Messages<GAME_5_PROTOCOL.MSG_TOURNAMENTUPDATE>(Watcher).Last().Updates)!;
-        var advertised = Assert.IsType<PvPMatchInfo>(Assert.Single(last.m_updates.OfType<AddMatchUpdate>()).m_matchInfo);
+        var advertised = Assert.Single(advertisedRows);
         Assert.Equal(match.Id, advertised.m_matchID.Full);
         Assert.True(NativeWatchAdmits(advertised));
         world.Arena.Watch(Watcher, match.Id);
@@ -174,7 +170,8 @@ public sealed class ArenaNativeMatchStatusTests {
         Assert.Equal("Confirming", Assert.Single(world.Arena.Snapshot()).Phase);
         var replaceable = Assert.Single(ReadList(world, kind));
         Assert.True(NativeJoinAdmits(replaceable)); Assert.False(NativeWatchAdmits(replaceable));
-        Assert.Empty(replaceable.m_teams[1].m_actors);
+        var vacancy = Assert.IsType<MatchActor>(Assert.Single(replaceable.m_teams[1].m_actors));
+        Assert.Equal(0UL, vacancy.m_nActorID.Full); Assert.Equal(0, vacancy.m_status);
         RefusesWatch(world, match);
         world.Arena.Join(Opponent, match, world.Arena.TeamIdsOf(match)[1]);
         Assert.Equal(match, world.Arena.MatchOf(Opponent));
@@ -184,6 +181,7 @@ public sealed class ArenaNativeMatchStatusTests {
         world.Arena.Confirm(Human, true); world.Arena.Confirm(Opponent, true);
         Assert.Equal("Travelling", Assert.Single(world.Arena.Snapshot()).Phase);
         Assert.Empty(ReadList(world, kind));
+        Assert.Equal(match, Assert.Single(ReadList(world, kind, watch: true)).m_matchID.Full);
         world.Arena.Watch(Watcher, match);
         Assert.True(world.Arena.IsSpectator(Watcher, match));
     }
@@ -206,7 +204,7 @@ public sealed class ArenaNativeMatchStatusTests {
     public void WatchableRowDoesNotBypassParticipantOrOnlinePlayerChecks(ArenaKind kind) {
         var world = new World();
         world.Arena.Tick(DateTime.UtcNow);
-        var row = Assert.Single(ReadList(world, kind));
+        var row = Assert.Single(ReadList(world, kind, watch: true));
         Assert.True(NativeWatchAdmits(row));
         var run = world.Arena.Run(world.Arena.RunOf(row.m_matchID.Full))!;
         var participant = run.Side0[0];
@@ -221,7 +219,7 @@ public sealed class ArenaNativeMatchStatusTests {
     public void CompletedWatchableMatchIsRemovedAndCannotAcceptAnotherSpectator(ArenaKind kind) {
         var world = new World();
         world.Arena.Tick(DateTime.UtcNow);
-        var row = Assert.Single(ReadList(world, kind));
+        var row = Assert.Single(ReadList(world, kind, watch: true));
         Assert.True(NativeWatchAdmits(row));
         var run = world.Arena.RunOf(row.m_matchID.Full);
         world.Arena.Watch(Watcher, row.m_matchID.Full);
@@ -229,10 +227,9 @@ public sealed class ArenaNativeMatchStatusTests {
         world.Arena.Finish(run, 0, []);
         Assert.False(world.Arena.IsSpectator(Watcher));
         Assert.Null(world.Arena.Run(run));
-        var removed = ArenaMessages.Read<TournamentUpdateList>(world.Messages<GAME_5_PROTOCOL.MSG_TOURNAMENTUPDATE>(Watcher).Last().Updates)!;
-        Assert.Equal(row.m_matchID.Full, Assert.Single(removed.m_updates.OfType<RemoveMatchUpdate>()).m_matchID.Full);
-        Assert.Empty(removed.m_updates.OfType<AddMatchUpdate>());
-        Assert.Empty(ReadList(world, kind));
+        var cleared = ArenaMessages.Read<NewListUpdate>(world.Messages<GAME_5_PROTOCOL.MSG_PVPUPDATEINFO>(Watcher).Last().TournamentInfo)!;
+        Assert.True(cleared.m_clearData); Assert.Empty(cleared.m_matches); Assert.Equal(0, cleared.m_totalTeams);
+        Assert.Empty(ReadList(world, kind, watch: true));
         RefusesWatch(world, row.m_matchID.Full);
     }
 }

@@ -119,6 +119,21 @@ internal sealed class ArenaMatchmaker {
 
     private enum Phase { Open, Confirming, Travelling, Fighting }
 
+    // CLASSIC: the native window changes both its row domain and its size gate with this request.
+    private sealed class BrowserWatch(uint requestType, int startingIndex, int count, int? level) {
+        internal readonly bool Watch = requestType >= 5;
+        internal readonly int Size = (int) (requestType >= 5 ? requestType - 5 : requestType);
+        internal int StartingIndex = startingIndex;
+        internal readonly int Count = count;
+        internal readonly int? Level = level;
+        internal readonly Dictionary<ulong, PvPMatchInfo> Matches = [];
+        internal readonly Dictionary<ulong, MatchTeam> Teams = [];
+        internal int Total;
+    }
+
+    private sealed record BrowserPage(List<PvPMatchInfo> Matches, List<MatchTeam> Teams, int Total,
+        bool TeamRows, Dictionary<ulong, byte[]> Names);
+
     private sealed class Match {
 
         public ulong Id;
@@ -180,7 +195,9 @@ internal sealed class ArenaMatchmaker {
     private readonly Dictionary<ulong, Match> _matches = [];
     private readonly Dictionary<ulong, ulong> _matchOf = [];           // charId -> match id
     private readonly Dictionary<ulong, ArenaPlayer> _players = [];      // the wizards in matches (as they joined)
-    private readonly Dictionary<ArenaKind, HashSet<ulong>> _watchers = new() { [ArenaKind.Practice] = [], [ArenaKind.Ranked] = [] };
+    private readonly Dictionary<ArenaKind, Dictionary<ulong, BrowserWatch>> _watchers = new() {
+        [ArenaKind.Practice] = [], [ArenaKind.Ranked] = [],
+    };
     private readonly ConcurrentDictionary<ulong, ArenaRun> _runs = new();
     private readonly Random _random = new();
     private ulong _nextId = (ulong) DateTime.UtcNow.Ticks & 0x0000_FFFF_FFFF_FFFF;
@@ -285,6 +302,8 @@ internal sealed class ArenaMatchmaker {
     public void OpenKiosk(ulong charId, ArenaKind kind, ulong kioskGid) {
         lock (_gate) {
             if (_stopping) return;
+            // CLASSIC: TournamentUpdateList has no tournament id; the native manager has only one active guard.
+            foreach (var watchers in _watchers.Values) watchers.Remove(charId);
             _world.Send(charId, ArenaMessages.Kiosk(TournamentId(kind), kioskGid));
             Logger.Information("Arena: {0} opened the {1} guard.", Logger.Args(charId, kind));
         }
@@ -297,7 +316,7 @@ internal sealed class ArenaMatchmaker {
 
     /// <summary>The window asks for the matches of a tournament.</summary>
     public void List(ulong charId, uint tournamentId, int startingIndex = 0, int numberOfElements = 0,
-        bool qualifiedOnly = false, uint qualifiedLevel = 0, int qualifiedRank = -1) {
+        bool qualifiedOnly = false, uint qualifiedLevel = 0, int qualifiedRank = -1, uint requestType = 0) {
         if (KindOf(tournamentId) is not { } kind) {
             Logger.Debug("Arena: {0} asked for tournament {1}, not a guard's.", Logger.Args(charId, tournamentId));
 
@@ -305,56 +324,95 @@ internal sealed class ArenaMatchmaker {
         }
 
         lock (_gate) {
-            if (_stopping) return;
-            _watchers[kind].Add(charId);
-            var viewer = _world.Player(charId);
-            var open = _matches.Values.Where(m => m.Kind == kind && Listed(m))
-                .OrderBy(m => m.Autonomous).ThenBy(m => m.CreatedUtc).ToList();
-            List<ArenaFriendlyChallenge> friendly = Friendly is null || viewer is null ? [] : ArenaFriendlyRoster.Challenges(kind,
-                Math.Clamp(viewer.Level, 1, 50), qualifiedOnly && qualifiedLevel is >= 1 and <= 50 ? (int) qualifiedLevel : null).ToList();
+            if (_stopping || requestType > 9) return;
             // The request's qualifiedRank is the viewer's qualification. Classic has no lobby rank restriction;
             // it must not become an invented exact-opponent-rank filter that leaves some ranks with no choices.
-            var total = open.Count + friendly.Count;
-            var start = Math.Clamp(startingIndex, 0, total);
             var count = Math.Clamp(numberOfElements > 0 ? numberOfElements : ArenaFriendlyRoster.DefaultPageSize,
                 1, ArenaFriendlyRoster.DefaultPageSize);
-            var names = new Dictionary<ulong, byte[]>();
-            var standings = new Dictionary<ulong, ArenaStanding>();
-            var rows = open.Cast<object>().Concat(friendly).Skip(start).Take(count)
-                .Select(row => row is Match match ? (ArenaMatchInfo) Info(match, names)
-                    : FriendlyInfo((ArenaFriendlyChallenge) row, names, standings)).ToList();
-            // CLASSIC: native pagination is honored; each update's body stays safely below the protocol's ushort length.
-            // The initial list clears the previous page. Existing incremental AddMatchUpdate is the native continuation.
-            var chunks = rows.Chunk(ArenaFriendlyRoster.RowsPerMessage).ToList();
-            var list = new NewListUpdate {
-                m_tournamentID = 0,
-                m_tournamentName = Tournament(kind),
-                m_tournamentNameID = TournamentId(kind),
-                m_clearData = true,
-                m_matches = chunks.Count > 0 ? [.. chunks[0]] : [],
-                m_teams = [],
-                m_brackets = [],
-                m_totalTeams = total,
-            };
-            _world.Send(charId, new GAME_5_PROTOCOL.MSG_PVPUPDATEINFO {
-                TournamentInfo = ArenaMessages.Blob(list, names),
-                CharacterID = viewer?.ActorId ?? 0,
-                PromptMsg = 0,
-                DiffType = 0,
-                IsPvPQueue = 0,
-                IsPlayerAccountAlreadyHosting = 0,
-            });
-            foreach (var chunk in chunks.Skip(1)) {
-                var updates = new TournamentUpdateList {
-                    m_updates = [.. chunk.Select(row => new AddMatchUpdate { m_matchInfo = row })],
-                    m_matchCount = total, m_teamCount = 0, m_actorCount = 0,
-                };
-                _world.Send(charId, new GAME_5_PROTOCOL.MSG_TOURNAMENTUPDATE {
-                    Updates = ArenaMessages.Blob(updates, names), CharacterID = 0,
-                });
-            }
-
+            var browser = new BrowserWatch(requestType, Math.Max(0, startingIndex), count,
+                qualifiedOnly && qualifiedLevel is >= 1 and <= 50 ? (int) qualifiedLevel : null);
+            foreach (var watchers in _watchers.Values) watchers.Remove(charId);
+            _watchers[kind][charId] = browser;
+            SendBrowserPage(charId, kind, browser, BrowserRows(charId, kind, browser));
         }
+    }
+
+    private BrowserPage BrowserRows(ulong charId, ArenaKind kind, BrowserWatch browser) {
+        var viewer = _world.Player(charId);
+        var matches = _matches.Values.Where(match => match.Kind == kind
+            && (browser.Size == 0 || match.TeamSize == browser.Size)
+            && (browser.Watch ? match.Phase is Phase.Travelling or Phase.Fighting
+                : Listed(match) && View(match).Status == 0))
+            .OrderBy(match => match.Autonomous).ThenBy(match => match.CreatedUtc).Cast<object>().ToList();
+        if (!browser.Watch && Friendly is not null && viewer is not null)
+            matches.AddRange(ArenaFriendlyRoster.Challenges(kind, Math.Clamp(viewer.Level, 1, 50), browser.Level)
+                .Where(challenge => browser.Size == 0 || challenge.TeamSize == browser.Size));
+        var teamRows = kind == ArenaKind.Ranked && !browser.Watch;
+        var total = matches.Count * (teamRows ? 2 : 1);
+        var names = new Dictionary<ulong, byte[]>();
+        var standings = new Dictionary<ulong, ArenaStanding>();
+        // CLASSIC: the native frame clamps its page number after a smaller filtered result and does not request again.
+        if (browser.StartingIndex >= total)
+            browser.StartingIndex = total == 0 ? 0 : (total - 1) / browser.Count * browser.Count;
+        var selected = matches.SelectMany(row => teamRows ? new[] { (Row: row, Side: 0), (Row: row, Side: 1) }
+                : new[] { (Row: row, Side: -1) })
+            .Skip(browser.StartingIndex).Take(browser.Count).ToList();
+        var prepared = new Dictionary<object, PvPMatchInfo>();
+        foreach (var (row, _) in selected)
+            if (!prepared.ContainsKey(row)) prepared[row] = row is Match match ? Info(match, names)
+                : FriendlyInfo((ArenaFriendlyChallenge) row, names, standings);
+        var teams = teamRows ? selected.Select(selection => prepared[selection.Row].m_teams[selection.Side]).ToList() : [];
+        return new BrowserPage([.. prepared.Values], teams, total, teamRows, names);
+    }
+
+    // CLASSIC: m_totalTeams is the complete selected domain; continuation counts describe only the materialized page maps.
+    private void SendBrowserPage(ulong charId, ArenaKind kind, BrowserWatch browser, BrowserPage page) {
+        browser.Matches.Clear(); browser.Teams.Clear(); browser.Total = page.Total;
+        var chunks = BrowserChunks(page).ToList();
+        var first = chunks.Count > 0 ? chunks[0] : (Matches: new List<PvPMatchInfo>(), Teams: new List<MatchTeam>());
+        var list = new NewListUpdate {
+            m_tournamentID = 0, m_tournamentName = Tournament(kind), m_tournamentNameID = TournamentId(kind),
+            m_clearData = true, m_matches = [.. first.Matches], m_teams = first.Teams, m_brackets = [], m_totalTeams = page.Total,
+        };
+        _world.Send(charId, new GAME_5_PROTOCOL.MSG_PVPUPDATEINFO {
+            TournamentInfo = ArenaMessages.Blob(list, page.Names), CharacterID = _world.Player(charId)?.ActorId ?? 0,
+            PromptMsg = 0, DiffType = 0, IsPvPQueue = 0, IsPlayerAccountAlreadyHosting = 0,
+        });
+        RememberBrowserRows(browser, first.Matches, first.Teams);
+        foreach (var chunk in chunks.Skip(1)) {
+            SendBrowserUpdates(charId, browser, [.. chunk.Matches.Select(row => (TournamentUpdate) new AddMatchUpdate { m_matchInfo = row }),
+                .. chunk.Teams.Select(team => (TournamentUpdate) new AddTeamUpdate { m_team = team })], page.Names);
+            RememberBrowserRows(browser, chunk.Matches, chunk.Teams);
+        }
+    }
+
+    private static IEnumerable<(List<PvPMatchInfo> Matches, List<MatchTeam> Teams)> BrowserChunks(BrowserPage page) {
+        if (!page.TeamRows) {
+            foreach (var chunk in page.Matches.Chunk(ArenaFriendlyRoster.RowsPerMessage)) yield return ([.. chunk], []);
+            yield break;
+        }
+        var emitted = new HashSet<ulong>();
+        foreach (var chunk in page.Teams.Chunk(ArenaFriendlyRoster.RowsPerMessage)) {
+            var parents = chunk.Select(team => team.m_matchId.Full).ToHashSet();
+            yield return (page.Matches.Where(match => parents.Contains(match.m_matchID.Full) && emitted.Add(match.m_matchID.Full)).ToList(), [.. chunk]);
+        }
+    }
+
+    private static void RememberBrowserRows(BrowserWatch browser, IEnumerable<PvPMatchInfo> matches, IEnumerable<MatchTeam> teams) {
+        foreach (var match in matches) browser.Matches[match.m_matchID.Full] = match;
+        foreach (var team in teams) browser.Teams[team.m_nTeamID.Full] = team;
+    }
+
+    private void SendBrowserUpdates(ulong charId, BrowserWatch browser, List<TournamentUpdate> updates,
+        IReadOnlyDictionary<ulong, byte[]>? names = null) {
+        // CLASSIC: native GetCounts includes parent-nested teams plus the standalone team map, including both views twice.
+        var teams = browser.Matches.Values.SelectMany(match => match.m_teams).Concat(browser.Teams.Values).ToList();
+        _world.Send(charId, new GAME_5_PROTOCOL.MSG_TOURNAMENTUPDATE {
+            Updates = ArenaMessages.Blob(new TournamentUpdateList {
+                m_updates = updates, m_matchCount = browser.Matches.Count, m_teamCount = teams.Count,
+                m_actorCount = teams.Sum(team => team.m_actors.Count(actor => actor.m_status != 0)),
+            }, names), CharacterID = 0,
+        });
     }
 
     // ---------------------------------------------------------------- joining
@@ -896,7 +954,7 @@ internal sealed class ArenaMatchmaker {
             names[preview.ActorId] = preview.NameBlob;
             actors.Add(ArenaMessages.Actor(preview, view, 1, 4, standing.Rating, RankIndex(standing.Rating)));
         }
-        var row = ArenaMessages.MatchInfo(view, [ArenaMessages.Team(view, 0, []), ArenaMessages.Team(view, 1, actors)]);
+        var row = ArenaMessages.MatchInfo(view, [ArenaMessages.ListingTeam(view, 0, []), ArenaMessages.ListingTeam(view, 1, actors)]);
         row.m_matchTitle = "Friendly: " + challenge.Skill;
         return row;
     }
@@ -1162,35 +1220,36 @@ internal sealed class ArenaMatchmaker {
     }
 
     private void BroadcastMatch(Match match) {
-        var names = new Dictionary<ulong, byte[]>();
-        var update = new TournamentUpdateList {
-            m_updates = [new RemoveMatchUpdate { m_matchID = match.Id }, new AddMatchUpdate { m_matchInfo = Info(match, names) }],
-            m_matchCount = _matches.Values.Count(m => m.Kind == match.Kind && Listed(m)),
-            m_teamCount = 0,
-            m_actorCount = match.Members.Count(),
-        };
-        Broadcast(match.Kind, ArenaMessages.Blob(update, names));
+        BroadcastBrowser(match.Kind);
     }
 
     private void BroadcastRemoved(Match match) {
-        var update = new TournamentUpdateList {
-            m_updates = [new RemoveMatchUpdate { m_matchID = match.Id }],
-            m_matchCount = _matches.Values.Count(m => m.Kind == match.Kind && Listed(m)),
-            m_teamCount = 0,
-            m_actorCount = 0,
-        };
-        Broadcast(match.Kind, ArenaMessages.Blob(update));
+        // CLASSIC: a Join removal can simultaneously become a Watch addition when the match starts travelling.
+        BroadcastBrowser(match.Kind);
     }
 
-    private void Broadcast(ArenaKind kind, Imcodec.IO.ByteString updates) {
-        foreach (var watcher in _watchers[kind].ToList()) {
-            if (_world.Player(watcher) is null) {
-                _watchers[kind].Remove(watcher);
-
+    private void BroadcastBrowser(ArenaKind kind) {
+        foreach (var (charId, browser) in _watchers[kind].ToList()) {
+            if (_world.Player(charId) is null) {
+                _watchers[kind].Remove(charId);
                 continue;
             }
-
-            _world.Send(watcher, new GAME_5_PROTOCOL.MSG_TOURNAMENTUPDATE { Updates = updates, CharacterID = 0 });
+            var page = BrowserRows(charId, kind, browser);
+            if (page.Total != browser.Total) {
+                SendBrowserPage(charId, kind, browser, page);
+                continue;
+            }
+            // Counts are native PRE-update map counts. Remove both maps before publishing the rebuilt bounded page.
+            if (browser.Matches.Count > 0 || browser.Teams.Count > 0) {
+                SendBrowserUpdates(charId, browser, [.. browser.Teams.Keys.Select(id => (TournamentUpdate) new RemoveTeamUpdate { m_teamID = id }),
+                    .. browser.Matches.Keys.Select(id => (TournamentUpdate) new RemoveMatchUpdate { m_matchID = id })]);
+                browser.Teams.Clear(); browser.Matches.Clear();
+            }
+            foreach (var chunk in BrowserChunks(page)) {
+                SendBrowserUpdates(charId, browser, [.. chunk.Matches.Select(row => (TournamentUpdate) new AddMatchUpdate { m_matchInfo = row }),
+                    .. chunk.Teams.Select(team => (TournamentUpdate) new AddTeamUpdate { m_team = team })], page.Names);
+                RememberBrowserRows(browser, chunk.Matches, chunk.Teams);
+            }
         }
     }
 
@@ -1211,7 +1270,7 @@ internal sealed class ArenaMatchmaker {
             actors.Add(ArenaMessages.Actor(p, View(match), side, match.Phase == Phase.Open ? 4 : 8, standing.Rating, RankIndex(standing.Rating)));
         }
 
-        return ArenaMessages.Team(View(match), side, actors);
+        return listing ? ArenaMessages.ListingTeam(View(match), side, actors) : ArenaMessages.Team(View(match), side, actors);
     }
 
     // CLASSIC: r806919 admits match status 0 in Join/Friends and 4 in Watch. Only Watch's live phases advertise 4.

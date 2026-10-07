@@ -147,6 +147,37 @@ internal static class ArenaMessages {
         m_maxActorLevel = match.MaxLevel,
     };
 
+    // CLASSIC: r806919 draws a Join cell only for an explicit zero-ID actor. A vacancy is not a wizard or a reservation.
+    public static MatchActor Vacancy(ArenaMatchView match, int side) => new() {
+        m_nActorID = 0,
+        m_nLadderContainerID = 0,
+        m_nTournamentNameID = match.TournamentId,
+        m_nTournamentID = 0,
+        m_nMatchNameID = match.MatchNameId,
+        m_nMatchID = match.MatchId,
+        m_nTeamID = match.TeamIds[side],
+        m_status = 0,
+        m_costAdj = new MatchCostAdjustment { m_matchAdjustmentType = ADJUSTMENT_TYPE.UNSET_MAX },
+        m_pLadder = null,
+        m_bracketID = 0,
+        m_leagueID = 0,
+        m_seasonID = 0,
+        m_overridingELO = -1,
+        m_matchCrownsCost = -1,
+        m_userID = 0,
+        m_1v1 = match.TeamSize == 1,
+        m_PVPHistoryStr = "",
+        m_optInOut = "0",
+        m_sIgnoreListData = "",
+    };
+
+    /// <summary>A detached browser team with explicit native cells for every available human seat.</summary>
+    public static MatchTeam ListingTeam(ArenaMatchView match, int side, IReadOnlyList<PvPActor> actors) {
+        var team = Team(match, side, actors);
+        while (team.m_actors.Count < match.TeamSize) team.m_actors.Add(Vacancy(match, side));
+        return team;
+    }
+
     /// <summary>The client's PvPMatchInfo for a match (the rows of PvPWindow).</summary>
     public static PvPMatchInfo MatchInfo(ArenaMatchView match, IReadOnlyList<MatchTeam> teams) => new() {
         m_matchID = match.MatchId,
@@ -189,32 +220,43 @@ internal static class ArenaMessages {
     /// <summary>Serializes <paramref name="value"/>, putting each actor's packed name into its m_nameBlob.</summary>
     public static ByteString Blob(PropertyClass value, IReadOnlyDictionary<ulong, byte[]>? names = null) {
         var markers = new List<(byte[] Marker, byte[] Name)>();
-        if (names is { Count: > 0 }) {
-            foreach (var actor in ActorsIn(value)) {
-                if (!names.TryGetValue(actor.m_nActorID, out var name) || name is not { Length: 4 }) {
-                    continue;
+        var originals = new List<(PvPActor Actor, string Name)>();
+        try {
+            if (names is { Count: > 0 }) {
+                // CLASSIC: a Ranked reply can include the same actor in both the match and team views.
+                var seen = new HashSet<PvPActor>(ReferenceEqualityComparer.Instance);
+                foreach (var actor in ActorsIn(value)) {
+                    if (!seen.Add(actor) || !names.TryGetValue(actor.m_nActorID, out var name) || name is not { Length: 4 }) {
+                        continue;
+                    }
+
+                    var i = markers.Count;
+                    var marker = new byte[] { 0x01, 0x02, (byte) ('A' + (i / 26 % 26)), (byte) ('A' + (i % 26)) };
+                    originals.Add((actor, actor.m_nameBlob));
+                    actor.m_nameBlob = System.Text.Encoding.ASCII.GetString(marker);
+                    markers.Add((marker, name));
                 }
-
-                var i = markers.Count;
-                var marker = new byte[] { 0x01, 0x02, (byte) ('A' + (i / 26 % 26)), (byte) ('A' + (i % 26)) };
-                actor.m_nameBlob = System.Text.Encoding.ASCII.GetString(marker);
-                markers.Add((marker, name));
             }
-        }
 
-        if (!NewSerializer().Serialize(value, Mask, out var output)) {
-            throw new InvalidOperationException($"Cannot serialize {value.GetType().Name} for the arena.");
-        }
-
-        byte[] bytes = output;
-        foreach (var (marker, name) in markers) {
-            var at = IndexOf(bytes, marker);
-            if (at >= 0) {
-                Buffer.BlockCopy(name, 0, bytes, at, name.Length);
+            if (!NewSerializer().Serialize(value, Mask, out var output)) {
+                throw new InvalidOperationException($"Cannot serialize {value.GetType().Name} for the arena.");
             }
-        }
 
-        return new ByteString(bytes);
+            byte[] bytes = output;
+            var replacements = new List<(int Offset, byte[] Name)>();
+            foreach (var (marker, name) in markers) {
+                var start = 0;
+                while (IndexOf(bytes, marker, start) is var at && at >= 0) {
+                    replacements.Add((at, name));
+                    start = at + marker.Length;
+                }
+            }
+            foreach (var (at, name) in replacements) Buffer.BlockCopy(name, 0, bytes, at, name.Length);
+            return new ByteString(bytes);
+        }
+        finally {
+            foreach (var (actor, original) in originals) actor.m_nameBlob = original;
+        }
     }
 
     /// <summary>Reads a client blob (PvPMatchRequest, TournamentInfoRequest); null when it does not decode.</summary>
@@ -237,13 +279,14 @@ internal static class ArenaMessages {
         ArenaMatchInfo info => info.m_teams?.SelectMany(t => ActorsIn(t)) ?? [],
         NewListUpdate list => (list.m_matches?.SelectMany(m => ActorsIn(m)) ?? []).Concat(list.m_teams?.SelectMany(t => ActorsIn(t)) ?? []),
         AddMatchUpdate add when add.m_matchInfo is not null => ActorsIn(add.m_matchInfo),
+        AddTeamUpdate add when add.m_team is not null => ActorsIn(add.m_team),
         TournamentUpdateList updates => updates.m_updates?.SelectMany(u => ActorsIn(u)) ?? [],
         ArenaMatchResults results => results.m_actorList?.Select(r => r.m_pActor).OfType<PvPActor>() ?? [],
         _ => [],
     };
 
-    private static int IndexOf(byte[] haystack, byte[] needle) {
-        for (var i = 0; i + needle.Length <= haystack.Length; i++) {
+    private static int IndexOf(byte[] haystack, byte[] needle, int start) {
+        for (var i = start; i + needle.Length <= haystack.Length; i++) {
             var ok = true;
             for (var j = 0; j < needle.Length && ok; j++) {
                 ok = haystack[i + j] == needle[j];
