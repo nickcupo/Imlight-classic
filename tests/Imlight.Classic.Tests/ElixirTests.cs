@@ -437,8 +437,17 @@ public sealed class ElixirTests {
         }
         internal IDisposable Scope() {
             var previous = WizardCollection.TestStoreScope.Value;
+            var previousRows = WizardInventoryTransactions.TestRowsScope.Value;
             WizardCollection.TestStoreScope.Value = new(Open, (session, _) => session.Load<Wizard>("wizard/42"));
-            return new Restore(() => WizardCollection.TestStoreScope.Value = previous);
+            // CLASSIC: ordinary trash now validates the fresh backpack against tracked original rows. Keep this
+            // in the shared scope because the native service probe opens its own scope on its actor thread.
+            WizardInventoryTransactions.TestRowsScope.Value = session => Documents
+                .Where(pair => pair.Value is WizClientObjectItem)
+                .Select(pair => session.Load<WizClientObjectItem>(pair.Key)).ToList();
+            return new Restore(() => {
+                WizardCollection.TestStoreScope.Value = previous;
+                WizardInventoryTransactions.TestRowsScope.Value = previousRows;
+            });
         }
         private IDocumentSession Open() {
             var session = DispatchProxy.Create<IDocumentSession, SessionProxy>();
