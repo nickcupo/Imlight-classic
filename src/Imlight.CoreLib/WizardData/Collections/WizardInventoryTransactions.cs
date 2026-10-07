@@ -74,7 +74,7 @@ internal static class WizardInventoryTransactions {
         out bool validated, out List<WizClientObjectItem> backpack) {
         admitted = []; backpack = []; validated = false;
         if (session is null || saved is null || candidates is null || candidates.Count == 0
-            || candidates.Any(item => item is null || item.m_globalID.Full == 0 || item.m_templateID.Full == 0
+            || candidates.Any(item => item is null || item is ClientReagentItem || item.m_globalID.Full == 0 || item.m_templateID.Full == 0
                 || item.m_characterId.Full != saved.CharId)
             || candidates.Select(item => item.m_globalID.Full).Distinct().Count() != candidates.Count) return false;
         var rows = ReadRows(session);
@@ -147,7 +147,7 @@ internal static class WizardInventoryTransactions {
     // CLASSIC: detached preparation leaves the caller's object untouched on refusal or a lost ACK. Pets skip
     // template initialization so their names, egg timers, talents and growth remain exactly as prepared.
     internal static WizClientObjectItem Prepare(Wizard live, WizClientObjectItem candidate, bool initializeBehaviors) {
-        if (live is null || candidate is null || candidate.m_globalID.Full == 0 || candidate.m_templateID.Full == 0
+        if (live is null || candidate is null || candidate is ClientReagentItem || candidate.m_globalID.Full == 0 || candidate.m_templateID.Full == 0
             || (candidate.m_characterId.Full != 0 && candidate.m_characterId.Full != live.CharId)) return null;
         var prepared = candidate with { m_characterId = live.CharId,
             m_inactiveBehaviors = candidate.m_inactiveBehaviors is null ? [] : [..candidate.m_inactiveBehaviors] };
