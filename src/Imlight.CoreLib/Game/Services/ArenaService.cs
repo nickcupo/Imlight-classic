@@ -236,17 +236,10 @@ internal sealed class ArenaService(SessionActor sessionActor) : MessageService(s
         }, TimeSpan.FromSeconds(Math.Max(0, outcome.ReturnSeconds)));
     }
 
-    private static bool SaveOutcomeTickets(Imlight.CoreLib.WizardData.Models.Player.Wizard wizard, int tickets) {
+    internal static bool SaveOutcomeTickets(Imlight.CoreLib.WizardData.Models.Player.Wizard wizard, int tickets) {
+        if (wizard is null || tickets < 0) return false;
         if (tickets == 0) return true;
-        var previous = wizard.GameStats.m_currentArenaPoints;
-        var previousCurrency = wizard.GameStats.m_currentPvPCurrency;
-        wizard.GameStats.m_currentArenaPoints += tickets;
-        // CLASSIC: the original currency fields, with a receipt only after the real save succeeds.
-        wizard.GameStats.m_currentPvPCurrency = wizard.GameStats.m_currentArenaPoints;
-        if (WizardCollection.UpdateCharacterGameStats(wizard, null, null)) return true;
-        wizard.GameStats.m_currentArenaPoints = previous;
-        wizard.GameStats.m_currentPvPCurrency = previousCurrency;
-        return false;
+        return WizardCollection.ChangeArenaTickets(wizard, tickets);
     }
 
     [MessageHandler(typeof(CLASSIC_FEATURES_PROTOCOL.MSG_ARENARETURN))]

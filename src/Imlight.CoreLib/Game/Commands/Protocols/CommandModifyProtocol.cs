@@ -416,10 +416,15 @@ internal class CommandModifyProtocol : CommandProtocol {
             return;
         }
 
+        // CLASSIC: apply the signed delta to saved tickets, with this QA command's explicit
+        // negative clamp. Reject overflow or a refused save without publishing a new balance.
+        if (!WizardData.Collections.WizardCollection.ChangeArenaTickets(Context.Character, count, clampToZero: true)) {
+            InformSenderClient("Arena Tickets could not be saved.");
+
+            return;
+        }
+
         var stats = Context.Character.GameStats;
-        stats.m_currentArenaPoints = Math.Max(0, stats.m_currentArenaPoints + count);
-        stats.m_currentPvPCurrency = stats.m_currentArenaPoints;
-        WizardData.Collections.WizardCollection.UpdateCharacterGameStats(Context.Character);
         Context.SessionActor.Tell(Classic.Arena.ArenaMessages.ArenaPoints(stats.m_currentArenaPoints), null);
         Context.SessionActor.Tell(Classic.Arena.ArenaMessages.PvpCurrency(stats.m_currentPvPCurrency), null);
         InformSenderClient($"Arena Tickets: {stats.m_currentArenaPoints}.");

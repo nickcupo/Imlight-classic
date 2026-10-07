@@ -60,6 +60,9 @@
     <ServerIntegrationTest Include="ServerAdminTests.cs" />
     <ServerIntegrationTest Include="ArenaShutdownClockTests.cs" />
     <ServerIntegrationTest Include="ArenaShutdownOutcomeTests.cs" />
+    <ServerIntegrationTest Include="TicketBalancePersistenceTests.cs" />
+    <ServerIntegrationTest Include="ArenaOutcomeRecoveryTests.cs" />
+    <ServerIntegrationTest Include="ArenaTicketShopCommandTests.cs" />
     <ServerIntegrationTest Include="ServerShutdownDrainTests.cs" />
     <ServerIntegrationTest Include="ArenaShutdownMatchmakerTests.cs" />
     <ServerIntegrationTest Include="PerfMonitorTests.cs" />

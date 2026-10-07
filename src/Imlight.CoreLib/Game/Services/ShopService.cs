@@ -228,26 +228,24 @@ internal class ShopService(SessionActor sessionActor) : MessageService(sessionAc
         }
 
         var price = entry.Price ?? template.m_arenaPointCost;
-        var rating = Classic.Arena.ArenaMatchmaker.Instance?.Standing(wizard.CharId).Rating
-                     ?? new ArenaLadderCollection.Raven().Load(wizard.CharId)?.Rating ?? config.StartRating;
-        var why = Imlight.Classic.Pvp.ArenaRules.TicketPurchaseError(wizard.GameStats.m_currentArenaPoints, price, rating,
-            Imlight.Classic.Pvp.ArenaRules.MinRatingOf(entry.Rank, config.Ranks));
-        if (why is not null) {
-            InformGameClient(why == "rank"
-                ? $"You need the PvP rank of {entry.Rank} for that."
-                : $"You need {price} Arena Tickets for that.");
+        if (price < 0) {
+            Logger.Error("Rejected negative Arena Ticket price {Price} for item {Item}.", Logger.Args(price, itemTemplateID));
             SendShopDenyMessage();
 
             return;
         }
 
-        wizard.GameStats.m_currentArenaPoints -= price;
-        wizard.GameStats.m_currentPvPCurrency = wizard.GameStats.m_currentArenaPoints;
-        WizardCollection.UpdateCharacterGameStats(wizard);
-        if (!ProcessSuccessfulPurchase(wizard, item, itemTemplateID)) {
-            wizard.GameStats.m_currentArenaPoints += price;
-            wizard.GameStats.m_currentPvPCurrency = wizard.GameStats.m_currentArenaPoints;
-            WizardCollection.UpdateCharacterGameStats(wizard);
+        var rating = Classic.Arena.ArenaMatchmaker.Instance?.Standing(wizard.CharId).Rating
+                     ?? new ArenaLadderCollection.Raven().Load(wizard.CharId)?.Rating ?? config.StartRating;
+        var result = TryPurchaseWithTickets(wizard, price, rating,
+            Imlight.Classic.Pvp.ArenaRules.MinRatingOf(entry.Rank, config.Ranks),
+            () => ProcessSuccessfulPurchase(wizard, item, itemTemplateID));
+        if (result != TicketPurchaseResult.Purchased) {
+            if (result is TicketPurchaseResult.RankRequired or TicketPurchaseResult.TicketsUnavailable) {
+                InformGameClient(result == TicketPurchaseResult.RankRequired
+                    ? $"You need the PvP rank of {entry.Rank} for that."
+                    : $"You need {price} Arena Tickets for that.");
+            }
             SendShopDenyMessage();
 
             return;
@@ -256,6 +254,36 @@ internal class ShopService(SessionActor sessionActor) : MessageService(sessionAc
         SendToSocket(Classic.Arena.ArenaMessages.ArenaPoints(wizard.GameStats.m_currentArenaPoints));
         SendToSocket(Classic.Arena.ArenaMessages.PvpCurrency(wizard.GameStats.m_currentPvPCurrency));
         Logger.Information("{Wizard} bought {Item} for {Tickets} Arena Tickets.", Logger.Args(wizard.CharId, itemTemplateID, price));
+    }
+
+    // CLASSIC: the production spend-then-grant workflow. Affordability comes from the saved balance;
+    // a known inventory refusal refunds that debit, retaining any award saved in between. A thrown
+    // grant may have committed an item, so it is deliberately never retried or refunded here.
+    internal static TicketPurchaseResult TryPurchaseWithTickets(Wizard wizard, int price, int rating,
+        int minimumRating, Func<bool> grant) {
+        if (price < 0) return TicketPurchaseResult.InvalidPrice;
+        if (rating < minimumRating) return TicketPurchaseResult.RankRequired;
+        if (!WizardCollection.TrySpendArenaTickets(wizard, price)) {
+            Logger.Warning("Refused saved Arena Ticket debit of {Tickets} for {Wizard}; no item was granted.",
+                Logger.Args(price, wizard?.CharId));
+            return TicketPurchaseResult.TicketsUnavailable;
+        }
+        if (grant()) return TicketPurchaseResult.Purchased;
+        if (!WizardCollection.ChangeArenaTickets(wizard, price)) {
+            Logger.Error("Failed to refund {Tickets} Arena Tickets to {Wizard} after a refused item purchase.",
+                Logger.Args(price, wizard.CharId));
+            throw new InvalidOperationException("The refused Arena Ticket purchase could not be refunded.");
+        }
+
+        return TicketPurchaseResult.InventoryRefused;
+    }
+
+    internal enum TicketPurchaseResult {
+        Purchased,
+        InvalidPrice,
+        RankRequired,
+        TicketsUnavailable,
+        InventoryRefused,
     }
 
     [MessageHandler(typeof(WIZARD_12_PROTOCOL.MSG_SHOPSELLREQUEST))]
