@@ -41,6 +41,7 @@ using System.Linq;
 using Imlight.CoreLib.Shared.Resources;
 using Akka.Actor;
 using Imcodec.Cryptography;
+using Imcodec.MessageLayer;
 using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
@@ -48,7 +49,7 @@ using Imlight.CoreLib.Game.Spells;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.WizardData.Models.Player;
 using Imlight.CoreLib.Shared.Packets;
-using Imlight.CoreLib.Shared.Resources;
+using Imlight.CoreLib.WizardData.Collections;
 
 namespace Imlight.CoreLib.Game.Services;
 
@@ -212,6 +213,14 @@ internal class SpellbookService(SessionActor sessionActor) : MessageService(sess
     [MessageHandler(typeof(WIZARD2_53_PROTOCOL.MSG_UPDATEITEMSPELLEXCLUSIONLIST))]
     private void ReceiveUpdateItemSpellExclusionList(WIZARD2_53_PROTOCOL.MSG_UPDATEITEMSPELLEXCLUSIONLIST message) {
         var wizard = GetActiveWizard();
+        // CLASSIC: the native sender reads the selected row's +80 field, bound as Spell.m_templateID, without hashing.
+        // Resolve a template first, preserve the exact wire echo, and save only this owned deck's selected exclusion.
+        if (WizardSpellbookTransactions.IsActive) {
+            var account = SessionActor.GetAssociatedAccount();
+            if (account is null) { CloseSession(); return; }
+            UpdateItemSpellExclusionAcknowledged(wizard, message, SendToSocket, CloseSession, account.AccountId);
+            return;
+        }
         var exclude = message.Exclude != 0;
 
         // Resolve the spell hash (SpellID) to a template ID.
@@ -242,6 +251,45 @@ internal class SpellbookService(SessionActor sessionActor) : MessageService(sess
             DeckID = message.DeckID,
             Exclude = message.Exclude,
             Success = 1
+        });
+    }
+
+    // CLASSIC: a duplicate still needs the native Success echo to release the deck window, but makes no new save.
+    // Keep that fresh-read echo in the same lane as committed publication and uncertain-snapshot refusal.
+    internal static SpellbookMutationStatus UpdateItemSpellExclusionAcknowledged(Wizard wizard,
+        WIZARD2_53_PROTOCOL.MSG_UPDATEITEMSPELLEXCLUSIONLIST message, Action<IMessage> send,
+        System.Action close, ulong? expectedAccountId = null, Func<int, uint> resolveTemplate = null) {
+        if (wizard is null || message is null) return SpellbookMutationStatus.Refused;
+        return WizardCollection.WithCharacterLock(wizard.CharId, () => {
+            if (WizardCollection.IsInventorySnapshotUncertain(wizard)) { close(); return SpellbookMutationStatus.Refused; }
+            var status = SpellbookMutationStatus.Refused;
+            try {
+                uint templateId = 0;
+                try { templateId = (resolveTemplate ?? TreasureTemplateOf)(message.SpellID); }
+                catch { /* A resolver refusal precedes any saved mutation. */ }
+                if (templateId != 0 && message.Exclude <= 1) {
+                    status = WizardSpellbookTransactions.TrySetItemSpellExclusion(wizard, message.DeckID,
+                        templateId, message.Exclude == 1, out _, afterCommit: receipt => {
+                            foreach (var response in receipt.Messages) send(response);
+                        }, expectedAccountId: expectedAccountId, wireSpellId: message.SpellID);
+                }
+                if (WizardCollection.IsInventorySnapshotUncertain(wizard)) { close(); return SpellbookMutationStatus.Refused; }
+                if (status != SpellbookMutationStatus.Committed) {
+                    var response = new WIZARD2_53_PROTOCOL.MSG_UPDATEITEMSPELLEXCLUSIONLIST {
+                        SpellID = message.SpellID, DeckID = message.DeckID, Exclude = message.Exclude,
+                        Success = (byte)(status == SpellbookMutationStatus.Unchanged ? 1 : 0),
+                    };
+                    if (!WizardSpellbookTransactions.PrepareNative(response)) return SpellbookMutationStatus.Refused;
+                    send(response);
+                }
+                return status;
+            }
+            catch {
+                // No blind retry after an acknowledged write whose native publication could not be completed.
+                WizardCollection.MarkInventorySnapshotUncertain(wizard);
+                close();
+                return SpellbookMutationStatus.Refused;
+            }
         });
     }
 
@@ -287,7 +335,8 @@ internal class SpellbookService(SessionActor sessionActor) : MessageService(sess
                 }
 
                 SendToSocket(new WIZARD2_53_PROTOCOL.MSG_UPDATEITEMSPELLEXCLUSIONLIST {
-                    SpellID = (int) spell.m_spellID,
+                    // CLASSIC: native item exclusions index the selected card's template, unlike the TC ledger hash.
+                    SpellID = unchecked((int)(WizardSpellbookTransactions.IsActive ? templateId : spell.m_spellID)),
                     DeckID = excludedDeckId,
                     Exclude = 1,
                     Success = 1

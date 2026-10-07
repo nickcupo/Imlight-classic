@@ -35,6 +35,7 @@ public sealed class MonstrologyConcurrencyTests {
     public async Task CreationPublishesBeforeCompetingWalletHealthOrBookSave(string competingWrite, int expectedGold) {
         var f = new Fixture();
         if (competingWrite == "remove-card") { f.Persisted.SpellbookBehavior.AddTreasureCard(777); f.Live.SpellbookBehavior.AddTreasureCard(777); }
+        if (competingWrite == "book") f.Persisted.SpellbookBehavior.LearnedSpellTemplateIds = [88];
         var stale = Fixture.Clone(f.Live);
         stale.GameStats.m_currentHitpoints = 500;
         stale.SpellbookBehavior.LearnedSpellTemplateIds = [77];
@@ -77,7 +78,11 @@ public sealed class MonstrologyConcurrencyTests {
         Assert.Equal(f.Persisted.SpellbookBehavior.TreasureCardTemplateIds, f.Live.SpellbookBehavior.TreasureCardTemplateIds);
         Assert.Equal(2, f.Ledger.Animus[123]); Assert.Single(f.Ledger.Creations);
         if (competingWrite == "health") { Assert.Equal(500, f.Persisted.GameStats.m_currentHitpoints); Assert.Equal(900, stale.GameStats.m_currentGold); }
-        if (competingWrite == "book") { Assert.Contains(77u, f.Persisted.SpellbookBehavior.LearnedSpellTemplateIds); Assert.Contains(321u, stale.SpellbookBehavior.TreasureCardTemplateIds); }
+        if (competingWrite == "book") {
+            Assert.Equal(new uint[] { 88 }, f.Persisted.SpellbookBehavior.LearnedSpellTemplateIds);
+            Assert.DoesNotContain(77u, f.Persisted.SpellbookBehavior.LearnedSpellTemplateIds);
+            Assert.Contains(321u, stale.SpellbookBehavior.TreasureCardTemplateIds);
+        }
         if (competingWrite == "add-card") Assert.Equal(1, f.Live.SpellbookBehavior.TreasureCardTemplateIds.Count(id => id == 777));
         if (competingWrite == "remove-card") Assert.DoesNotContain(777u, f.Live.SpellbookBehavior.TreasureCardTemplateIds);
     }

@@ -23,6 +23,8 @@ using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
 using Imlight.CoreLib.Game.Spells;
 using Imlight.CoreLib.Shared.Packets;
+using Imlight.CoreLib.WizardData.Collections;
+using Imlight.CoreLib.WizardData.Models.Player;
 
 namespace Imlight.CoreLib.Game.Results.Handlers;
 
@@ -43,6 +45,14 @@ internal sealed class ResLearnSpellHandler : BaseResultHandler<ResLearnSpell> {
         }
 
         var wizard = queryResponse.Wizard;
+        if (wizard is null) return false;
+
+        // CLASSIC: the reward's native ADD follows the acknowledged selected write in its original lane.
+        if (WizardSpellbookTransactions.IsActive) {
+            if (wizard.Account is not { AccountId: > 0 }) { context.GetPlayerRef().Tell("Close"); return false; }
+            return LearnAcknowledged(wizard, Result.m_templateID, context.GetPlayerRef(),
+                wizard.Account.AccountId);
+        }
 
         var spell = SpellFactory.GetSpell(Result.m_templateID);
         if (spell is null) {
@@ -63,6 +73,17 @@ internal sealed class ResLearnSpellHandler : BaseResultHandler<ResLearnSpell> {
         });
 
         return true;
+    }
+
+    internal static bool LearnAcknowledged(Wizard wizard, uint templateId, IActorRef player,
+        ulong? expectedAccountId = null) {
+        if (WizardCollection.IsInventorySnapshotUncertain(wizard)) { player.Tell("Close"); return false; }
+        var status = WizardSpellbookTransactions.TryLearn(wizard, templateId, out _,
+            afterCommit: receipt => {
+                foreach (var message in receipt.Messages) player.Tell(message);
+            }, expectedAccountId: expectedAccountId);
+        if (WizardCollection.IsInventorySnapshotUncertain(wizard)) { player.Tell("Close"); return false; }
+        return status != SpellbookMutationStatus.Refused;
     }
 
 }

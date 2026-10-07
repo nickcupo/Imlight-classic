@@ -32,6 +32,28 @@ internal class CommandSpellbookProtocol : CommandProtocol {
 
     internal override string Group { get; set; } = "sb";
 
+    // CLASSIC: QA grants use the same saved authority and never continue with a quarantined character.
+    private SpellbookMutationStatus LearnForCommand(Spell spell) {
+        if (spell is null) return SpellbookMutationStatus.Refused;
+        if (WizardSpellbookTransactions.IsActive) {
+            if (WizardCollection.IsInventorySnapshotUncertain(Context.Character)) {
+                Context.SessionActor.Tell("Close"); return SpellbookMutationStatus.Refused;
+            }
+            var status = WizardSpellbookTransactions.TryLearn(Context.Character, spell.m_templateID, out _,
+                afterCommit: receipt => {
+                    foreach (var message in receipt.Messages) Context.SessionActor.Tell(message);
+                }, expectedAccountId: Context.Account?.AccountId);
+            if (WizardCollection.IsInventorySnapshotUncertain(Context.Character)) {
+                Context.SessionActor.Tell("Close"); return SpellbookMutationStatus.Refused;
+            }
+            return status;
+        }
+        if (Context.Character.SpellbookBehavior.HasSpell(spell.m_templateID)) return SpellbookMutationStatus.Unchanged;
+        if (!Context.Character.LearnSpell(spell)) return SpellbookMutationStatus.Refused;
+        Context.SessionActor.Tell(new WIZARD_12_PROTOCOL.MSG_ADDSPELLTOBOOK { SpellID = (int)spell.m_templateID });
+        return SpellbookMutationStatus.Committed;
+    }
+
     [Command("learn")]
     [AuthRequired(AuthLevel.QualityAssurance)]
     private void LearnSpellCommand(string spellTemplateId) {
@@ -62,17 +84,15 @@ internal class CommandSpellbookProtocol : CommandProtocol {
             return;
         }
 
-        if (!Context.Character.LearnSpell(spell)) {
+        var status = LearnForCommand(spell);
+        if (status != SpellbookMutationStatus.Committed) {
             InformSenderClient("Failed to learn spell. You may already know this spell.");
+            return;
         }
         else {
             InformSenderClient($"You have learned the spell {spellName}.");
         }
 
-        var clientMsg = new WIZARD_12_PROTOCOL.MSG_ADDSPELLTOBOOK {
-            SpellID = (int) spellTemplateIdUint
-        };
-        Context.SessionActor.Tell(clientMsg);
     }
 
     // CLASSIC: QA setup for playthrough tests: learn spells by template name (';' between names), e.g.
@@ -96,8 +116,10 @@ internal class CommandSpellbookProtocol : CommandProtocol {
                 continue;
             }
 
-            if (Context.Character.LearnSpell(spell)) {
-                Context.SessionActor.Tell(new WIZARD_12_PROTOCOL.MSG_ADDSPELLTOBOOK { SpellID = (int) templateId });
+            if (LearnForCommand(spell) == SpellbookMutationStatus.Refused) {
+                InformSenderClient($"Failed to learn the spell {name}.");
+                if (WizardCollection.IsInventorySnapshotUncertain(Context.Character)) return;
+                continue;
             }
 
             // Put copies in the equipped deck too (up to 4, or what the deck's limits allow), as a player would.
@@ -255,18 +277,17 @@ internal class CommandSpellbookProtocol : CommandProtocol {
             1189939434, 717871356, 999765474, 1494670771, 577368445, 1672654002, 1799150966, 1282482033, 1884951148, 467451672,
             1419042141, 220931873, 466468632, 2083836762, 1992492243 ];
 
+        var failed = false;
         foreach (var spell in spellList) {
             var learn_spell = SpellFactory.GetSpell(spell);
-            if (!Context.Character.LearnSpell(learn_spell)) {
+            if (LearnForCommand(learn_spell) == SpellbookMutationStatus.Refused) {
+                failed = true;
+                if (WizardCollection.IsInventorySnapshotUncertain(Context.Character)) return;
                 continue;
             }
-            var clientMsg = new WIZARD_12_PROTOCOL.MSG_ADDSPELLTOBOOK { 
-                SpellID = (int) spell
-            };
-            Context.SessionActor.Tell(clientMsg);
         }
 
-        InformSenderClient($"You have learned all cantrips.");
+        InformSenderClient(failed ? "Some cantrips could not be learned." : "You have learned all cantrips.");
     }
 
 }

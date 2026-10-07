@@ -88,6 +88,8 @@
     <ServerIntegrationTest Include="EconomyFixesTests.cs" />
     <ServerIntegrationTest Include="NumericRewardAcknowledgementTests.cs" />
     <ServerIntegrationTest Include="ProgressionPotionPersistenceTests.cs" />
+    <ServerIntegrationTest Include="SpellbookAcknowledgementTests.cs" />
+    <ServerIntegrationTest Include="SpellbookCallerAcknowledgementTests.cs" />
     <ServerIntegrationTest Include="RobustnessFixesTests.cs" />
     <ServerIntegrationTest Include="PostCombatEffectsTests.cs" />
     <ServerIntegrationTest Include="ArenaMatchmakerTests.cs" />
