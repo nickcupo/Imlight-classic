@@ -92,6 +92,8 @@
     <ServerIntegrationTest Include="PostCombatEffectsTests.cs" />
     <ServerIntegrationTest Include="ArenaMatchmakerTests.cs" />
     <ServerIntegrationTest Include="ArenaNativeMatchStatusTests.cs" />
+    <ServerIntegrationTest Include="ArenaNativeVacancyTests.cs" />
+    <ServerIntegrationTest Include="ArenaNativeBrowserTests.cs" />
     <ServerIntegrationTest Include="ArenaInventoryReloadTests.cs" />
     <ServerIntegrationTest Include="ArenaShopSnapshotTests.cs" />
     <ServerIntegrationTest Include="FriendPortalTests.cs" />
