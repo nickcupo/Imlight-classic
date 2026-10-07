@@ -13,6 +13,7 @@ using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.Game.Services;
 using Imlight.CoreLib.Game.DropTables;
 using Imlight.CoreLib.Shared.Networking;
+using Imlight.CoreLib.Shared.Character;
 using Imlight.CoreLib.Shared.Packets;
 using Imlight.CoreLib.WizardData;
 using Imlight.CoreLib.WizardData.Collections;
@@ -33,10 +34,10 @@ public sealed class TutorialProgressionAcknowledgementTests {
         using var scope = new Scope(); var f = scope.F; var held = f.Expected.GoalProgress[0];
         using var actor = await TutorialFixture.Create(f);
         f.OnSave = () => { Assert.True(WizardCollection.HoldsWriteLane); Assert.Empty(actor.Events); Assert.Empty(actor.Packets); Assert.Equal(-1, held.CurrentProgress); };
-        var reply = await actor.Call("ReceiveServerTutorialCommand", Command(goal: Goal, eventName: LaterEvent, stage: 3));
-        Assert.Equal(3, reply.Stage); await actor.Event(ResultEvent); await actor.Event(LaterEvent);
+        var reply = await actor.Call("ReceiveServerTutorialCommand", Command(add: Intro, goal: Goal, stage: 3));
+        Assert.Equal(3, reply.Stage); await actor.Event(ResultEvent);
         Assert.Equal(1, f.Saves); Assert.Equal(int.MaxValue, held.CurrentProgress); Assert.Same(held, f.Expected.GoalProgress[0]);
-        Assert.Equal(1, actor.Events.Count(name => name == ResultEvent)); Assert.Equal(1, actor.Events.Count(name => name == LaterEvent));
+        Assert.Equal(1, actor.Events.Count(name => name == ResultEvent));
         f.OnSave = null;
         await actor.Call("ReceiveServerTutorialCommand", Command(goal: Goal)); await actor.Drain();
         Assert.Equal(1, f.Saves); Assert.Equal(1, actor.Events.Count(name => name == ResultEvent)); Assert.False(actor.Session.IsDisposed);
@@ -48,7 +49,7 @@ public sealed class TutorialProgressionAcknowledgementTests {
         using var scope = new Scope(); var f = scope.F; Fault(scope, failure);
         using var actor = await TutorialFixture.Create(f);
         f.OnDispose = () => { Assert.True(WizardCollection.HoldsWriteLane); Assert.True(WizardCollection.IsInventorySnapshotUncertain(f.Live)); };
-        var reply = await actor.Call("ReceiveServerTutorialCommand", Command(goal: Goal, eventName: LaterEvent, stage: 8));
+        var reply = await actor.Call("ReceiveServerTutorialCommand", Command(add: Intro, goal: Goal, stage: 8));
         await actor.Closed.Task.WaitAsync(Timeout, TestContext.Current.CancellationToken);
         Assert.Equal(0, reply.Stage); Assert.Empty(actor.Events); Assert.Empty(await actor.Drain());
         Assert.Equal(1, f.Saves); Assert.Equal(-1, f.Expected.GoalProgress[0].CurrentProgress);
@@ -60,7 +61,7 @@ public sealed class TutorialProgressionAcknowledgementTests {
     public async Task KnownMissingQuestRefusesTheRestOfTheNativeCommandWithoutClosing() {
         using var scope = new Scope(); var f = scope.F;
         using var actor = await TutorialFixture.Create(f);
-        var reply = await actor.Call("ReceiveServerTutorialCommand", Command(add: "QA-No-Such-Tutorial-Quest", goal: Goal, eventName: LaterEvent, stage: 8));
+        var reply = await actor.Call("ReceiveServerTutorialCommand", Command(add: "QA-No-Such-Tutorial-Quest", goal: Goal, stage: 8));
         Assert.Equal(0, reply.Stage); Assert.Equal(0, f.Saves); Assert.Empty(actor.Events); Assert.Empty(await actor.Drain());
         Assert.Equal(-1, f.Expected.GoalProgress[0].CurrentProgress); Assert.False(WizardCollection.IsInventorySnapshotUncertain(f.Live)); Assert.False(actor.Session.IsDisposed);
     }
@@ -106,7 +107,7 @@ public sealed class TutorialProgressionAcknowledgementTests {
     public async Task NativeSkipStopsAfterUnknownIntroAddWithoutLaterEventActionEquipmentOrTeleport(string failure) {
         using var scope = new Scope(); var f = scope.F; EmptyJournal(f); Fault(scope, failure);
         using var actor = await TutorialFixture.Create(f);
-        var reply = await actor.Call("ReceiveServerTutorialCommand", Command(goal: "SkipTutorialGoal", eventName: LaterEvent, stage: 8));
+        var reply = await actor.Call("ReceiveServerTutorialCommand", Command(goal: "SkipTutorialGoal", stage: 8));
         await actor.Closed.Task.WaitAsync(Timeout, TestContext.Current.CancellationToken);
         Assert.Equal(99, reply.Stage); // The existing skip stage is set before attempting its saved finale.
         Assert.Empty(actor.Events); Assert.Empty(await actor.Drain()); Assert.Equal(1, f.Saves);
@@ -119,8 +120,8 @@ public sealed class TutorialProgressionAcknowledgementTests {
         using var scope = new Scope(); var f = scope.F;
         using var actor = await TutorialFixture.Create(f);
         f.OnSave = () => { Assert.True(WizardCollection.HoldsWriteLane); Assert.Empty(actor.Packets); Assert.Single(f.Live.QuestBehavior.CurrentQuestIDs); Assert.Empty(actor.Events); };
-        var reply = await actor.Call("ReceiveServerTutorialCommand", Command(remove: Intro, eventName: LaterEvent, stage: 7));
-        Assert.Equal(7, reply.Stage); await actor.Event(LaterEvent);
+        var reply = await actor.Call("ReceiveServerTutorialCommand", Command(remove: Intro, stage: 6));
+        Assert.Equal(6, reply.Stage);
         var removed = Assert.IsType<QUEST_MESSAGES_52_PROTOCOL.MSG_REMOVEQUEST>(Assert.Single(await actor.Drain()));
         Assert.Equal(TerminalClaimFixture.QuestId, removed.QuestID); Assert.Equal(1, f.Saves); Assert.Empty(f.Quests);
         f.OnSave = null; await actor.Call("ReceiveServerTutorialCommand", Command(remove: Intro));
@@ -141,6 +142,121 @@ public sealed class TutorialProgressionAcknowledgementTests {
         Assert.Empty(await actor.Drain()); Assert.False(actor.Session.IsDisposed);
     }
 
+    [Theory]
+    [InlineData("event")] [InlineData("remove")] [InlineData("action")] [InlineData("stage")]
+    [InlineData("unknown-goal")] [InlineData("wrong-pair")] [InlineData("case")]
+    public async Task InvalidPackedFieldRefusesBeforeTheEarlierOwnedGoalCanSave(string field) {
+        using var scope = new Scope(); var f = scope.F;
+        using var actor = await TutorialFixture.Create(f);
+        var command = Command(add: Intro, goal: Goal, stage: 3);
+        switch (field) {
+            case "event": command.EventToPost = LaterEvent; break;
+            case "remove": command.QuestToRemove = "QA-Ordinary-Quest"; break;
+            case "action": command.Action = "QA-Action"; break;
+            case "stage": command.Value = 7; break;
+            case "unknown-goal": command.GoalToComplete = "QA-Ordinary-Goal"; break;
+            case "wrong-pair": command.GoalToComplete = "SkipTutorialGoal"; break;
+            case "case": command.QuestToAdd = "tutorial_intro"; break;
+        }
+        var reply = await actor.Call("ReceiveServerTutorialCommand", command);
+        Assert.Equal(0, reply.Stage); Assert.Equal(0, f.Opened); Assert.Equal(0, f.Saves);
+        Assert.Equal(-1, f.Expected.GoalProgress[0].CurrentProgress);
+        Assert.Empty(actor.Events); Assert.Empty(await actor.Drain()); Assert.False(actor.Session.IsDisposed);
+    }
+
+    [Theory]
+    [InlineData("WizardCity/QA/Tutorial_Interior")] [InlineData("WizardCity/Tutorial_Exterior/Other")]
+    [InlineData("QA/Tutorial_Interior")]
+    public async Task TutorialSubstringOutsideTheTwoNativeZonesCannotAdmitCommands(string zone) {
+        using var scope = new Scope(); var f = scope.F; f.Live.Zone = zone;
+        using var actor = await TutorialFixture.Create(f);
+        var reply = await actor.Call("ReceiveServerTutorialCommand", Command(add: Intro, goal: Goal, stage: 3));
+        Assert.Equal(0, reply.Stage); Assert.Equal(0, f.Opened); Assert.Equal(0, f.Saves);
+        Assert.Empty(actor.Events); Assert.Empty(await actor.Drain()); Assert.False(actor.Session.IsDisposed);
+    }
+
+    [Theory]
+    [InlineData("missing-template")] [InlineData("missing-goal")] [InlineData("ambiguous-template")]
+    public async Task NativeGoalResultsMustResolveUniquelyBeforeCompletionCanSave(string defect) {
+        using var scope = new Scope(); var f = scope.F;
+        using var actor = await TutorialFixture.Create(f);
+        if (defect == "missing-template") actor.SetTemplates();
+        if (defect == "missing-goal") { f.Template.m_goals = []; f.Template.m_startGoals = []; }
+        if (defect == "ambiguous-template") actor.SetTemplates(f.Template, new QuestTemplate {
+            m_questName = Intro, m_goals = [f.Goal], m_startGoals = [Goal],
+        });
+        var reply = await actor.Call("ReceiveServerTutorialCommand", Command(add: Intro, goal: Goal, stage: 3));
+        Assert.Equal(0, reply.Stage); Assert.Equal(0, f.Opened); Assert.Equal(0, f.Saves);
+        Assert.Equal(-1, f.Expected.GoalProgress[0].CurrentProgress);
+        Assert.Empty(actor.Events); Assert.Empty(await actor.Drain()); Assert.False(actor.Session.IsDisposed);
+    }
+
+    [Fact]
+    public async Task NativePackedIntroAddPublishesItsInstanceBeforeCompletingTheSelectedGoal() {
+        using var scope = new Scope(); var f = scope.F; EmptyJournal(f);
+        using var actor = await TutorialFixture.Create(f);
+        GoalInstance? publishedGoal = null;
+        f.OnSave = () => {
+            Assert.True(WizardCollection.HoldsWriteLane); Assert.Empty(actor.Events);
+            if (f.Saves == 1) Assert.Empty(f.Live.QuestBehavior.CurrentQuestInstances);
+            else { publishedGoal = Assert.Single(f.Live.QuestBehavior.CurrentQuestInstances).GoalProgress[0]; Assert.Equal(0, publishedGoal.CurrentProgress); }
+        };
+        var reply = await actor.Call("ReceiveServerTutorialCommand", Command(add: Intro, goal: Goal, stage: 8));
+        await actor.Event(ResultEvent);
+        Assert.Equal(8, reply.Stage); Assert.Equal(2, f.Saves);
+        Assert.Equal(int.MaxValue, Assert.Single(f.Quests).GoalProgress[0].CurrentProgress);
+        Assert.Same(publishedGoal, Assert.Single(f.Live.QuestBehavior.CurrentQuestInstances).GoalProgress[0]);
+        Assert.False(actor.Session.IsDisposed);
+    }
+
+    [Theory]
+    [InlineData("WC-TUT-C09-014")] [InlineData("WC-TUT-C09-016")]
+    public async Task InvalidLaterEventPreventsEarlierNativeRefillAddAndResourceChanges(string quest) {
+        using var scope = new Scope(); var f = scope.F;
+        using var actor = await TutorialFixture.Create(f);
+        actor.SetTemplates(f.Template, new QuestTemplate { m_questName = quest, m_goals = [], m_startGoals = [] });
+        var health = f.Live.GameStats.m_currentHitpoints; var mana = f.Live.GameStats.m_currentMana;
+        var reply = await actor.Call("ReceiveServerTutorialCommand", Command(add: quest, eventName: LaterEvent, stage: 6));
+        Assert.Equal(0, reply.Stage); Assert.Equal(0, f.Opened); Assert.Equal(0, f.Saves);
+        Assert.Equal(health, f.Live.GameStats.m_currentHitpoints); Assert.Equal(mana, f.Live.GameStats.m_currentMana);
+        Assert.Single(f.Live.QuestBehavior.CurrentQuestInstances); Assert.Empty(await actor.Drain());
+    }
+
+    [Theory]
+    [InlineData("WC-TUT-C09-014")] [InlineData("WC-TUT-C09-016")]
+    public async Task NativeRefillAddAndRemoveKeepTheirExistingResourceAndJournalBehavior(string quest) {
+        using var scope = new Scope(); var f = scope.F;
+        using var actor = await TutorialFixture.Create(f);
+        actor.SetTemplates(f.Template, new QuestTemplate { m_questName = quest, m_goals = [], m_startGoals = [] });
+        await actor.Call("ReceiveServerTutorialCommand", Command(add: quest));
+        Assert.Equal(2, f.Saves); Assert.Equal(2, f.Live.QuestBehavior.CurrentQuestInstances.Count); // Quest ACK + existing resource save.
+        var packets = await actor.Drain();
+        if (quest == "WC-TUT-C09-014") {
+            Assert.Equal(f.Live.GameStats.m_baseHitpoints, f.Live.GameStats.m_currentHitpoints);
+            Assert.Single(packets.OfType<WIZARD_12_PROTOCOL.MSG_UPDATEHEALTH>());
+        } else {
+            Assert.Equal(f.Live.GameStats.m_baseMana, f.Live.GameStats.m_currentMana);
+            Assert.Single(packets.OfType<WIZARD_12_PROTOCOL.MSG_UPDATEMANA>());
+        }
+        await actor.Call("ReceiveServerTutorialCommand", Command(remove: quest));
+        Assert.Equal(3, f.Saves); Assert.Single(f.Live.QuestBehavior.CurrentQuestInstances);
+        Assert.Single((await actor.Drain()).OfType<QUEST_MESSAGES_52_PROTOCOL.MSG_REMOVEQUEST>());
+        Assert.False(actor.Session.IsDisposed);
+    }
+
+    [Fact]
+    public async Task ProvenNativeCinematicPairPreservesItsServerEventAndUnknownBeatCannotPostOne() {
+        using var scope = new Scope("WC-TUT-C05-001", "Walk Ambrose"); var f = scope.F;
+        using var actor = await TutorialFixture.Create(f);
+        var reply = await actor.Call("ReceiveServerTutorialCommand", Command(add: "WC-TUT-C05-001", goal: "Trigger Wand Effect", stage: 6));
+        await actor.Event("WandFX"); Assert.Equal(6, reply.Stage); Assert.Equal(0, f.Saves);
+        reply = await actor.Call("ReceiveServerTutorialCommand", Command(add: "WC-TUT-C05-001", goal: "StopRain", stage: 3));
+        Assert.Equal(3, reply.Stage);
+        reply = await actor.Call("ReceiveServerTutorialCommand", Command(add: "WC-TUT-C05-001", goal: "ConfigurePlayer", stage: 8));
+        Assert.Equal(3, reply.Stage);
+        await actor.Drain(); Assert.Single(actor.Events); Assert.Equal(0, f.Saves); Assert.False(actor.Session.IsDisposed);
+    }
+
     private static GAME_5_PROTOCOL.MSG_SERVERTUTORIALCOMMAND Command(string add = "", string goal = "", string remove = "", string eventName = "", int? stage = null)
         => new() { QuestToAdd = add, GoalToComplete = goal, QuestToRemove = remove, EventToPost = eventName, Action = stage is null ? "" : "Stage", Value = stage ?? 0 };
     private static void EmptyJournal(TerminalClaimFixture f) { f.Quests.Clear(); f.Saved.QuestBehavior.CurrentQuestIDs = []; f.Live.QuestBehavior.CurrentQuestIDs = []; f.Live.QuestBehavior.CurrentQuestInstances = []; }
@@ -153,17 +269,22 @@ public sealed class TutorialProgressionAcknowledgementTests {
         internal readonly TerminalClaimFixture F = new();
         internal readonly QuestMutationDependencies Dependencies = new();
         private readonly QuestMutationDependencies? _old = WizardQuestTransactions.TestScope.Value;
-        internal Scope() {
+        private static readonly FieldInfo LevelConfig = typeof(MagicLevelsConfig).GetField("s_playerLevelConfig", BindingFlags.Static | BindingFlags.NonPublic)!;
+        private readonly object? _oldLevelConfig = LevelConfig.GetValue(null);
+        internal Scope(string quest = Intro, string goal = Goal) {
+            LevelConfig.SetValue(null, new Dictionary<string, List<MagicLevelInfo>> {
+                [F.Live.GameStats.MagicSchool.ToString()] = Enumerable.Range(0, 5).Select(TerminalClaimFixture.Table).ToList(),
+            });
             WizardQuestTransactions.TestScope.Value = Dependencies;
-            F.Template.m_questName = Intro; F.Goal.m_goalName = Goal; F.Template.m_startGoals = [Goal];
+            F.Template.m_questName = quest; F.Goal.m_goalName = goal; F.Template.m_startGoals = [goal];
             F.Goal.m_completeResults = new() { m_results = [new ResPostEvent { m_eventName = ResultEvent }] };
-            F.Quests[0].QuestName = Intro; F.Expected.QuestName = Intro;
-            F.Quests[0].GoalProgress[0].GoalName = Goal; F.Expected.GoalProgress[0].GoalName = Goal;
+            F.Quests[0].QuestName = quest; F.Expected.QuestName = quest;
+            F.Quests[0].GoalProgress[0].GoalName = goal; F.Expected.GoalProgress[0].GoalName = goal;
             typeof(GoalInstance).GetProperty(nameof(GoalInstance.CurrentProgress))!.SetValue(F.Quests[0].GoalProgress[0], -1);
             typeof(GoalInstance).GetProperty(nameof(GoalInstance.CurrentProgress))!.SetValue(F.Expected.GoalProgress[0], -1);
-            F.Live.Zone = "QA/Tutorial_Interior";
+            F.Live.Zone = "WizardCity/Tutorial_Interior";
         }
-        public void Dispose() { WizardQuestTransactions.TestScope.Value = _old; F.Dispose(); }
+        public void Dispose() { LevelConfig.SetValue(null, _oldLevelConfig); WizardQuestTransactions.TestScope.Value = _old; F.Dispose(); }
     }
 
     private sealed record Ready;
@@ -182,9 +303,14 @@ public sealed class TutorialProgressionAcknowledgementTests {
         private static readonly FieldInfo QuestMap = typeof(SpiralDB).GetField("s_questTemplatesByName", BindingFlags.Static | BindingFlags.NonPublic)!;
         private TutorialFixture(TerminalClaimFixture f) {
             _questList = QuestList.GetValue(null); _questMap = QuestMap.GetValue(null);
-            QuestList.SetValue(null, new List<QuestTemplate> { f.Template });
-            QuestMap.SetValue(null, new ConcurrentDictionary<string, QuestTemplate>(new[] { new KeyValuePair<string, QuestTemplate>(Intro, f.Template) }, StringComparer.OrdinalIgnoreCase));
+            SetTemplates(f.Template);
             System = ActorSystem.Create("tutorial-progress-" + Guid.NewGuid().ToString("N"), "akka.actor.provider = local");
+        }
+        internal void SetTemplates(params QuestTemplate[] templates) {
+            QuestList.SetValue(null, templates.ToList());
+            QuestMap.SetValue(null, new ConcurrentDictionary<string, QuestTemplate>(templates
+                .GroupBy(template => template.m_questName, StringComparer.OrdinalIgnoreCase)
+                .Select(group => new KeyValuePair<string, QuestTemplate>(group.Key, group.First())), StringComparer.OrdinalIgnoreCase));
         }
         internal static async Task<TutorialFixture> Create(TerminalClaimFixture store) {
             var f = new TutorialFixture(store);
