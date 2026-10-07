@@ -86,11 +86,8 @@ internal sealed partial class PetGameService(SessionActor sessionActor) : Messag
 
     }
 
-    private sealed class SendNextRound {
-
-        public static readonly SendNextRound Instance = new();
-
-    }
+    // CLASSIC: a queued round belongs to one admitted game, never whichever game replaced it.
+    private sealed record SendNextRound(Session Session, int Round);
 
     private Session _session;
 
@@ -159,6 +156,9 @@ internal sealed partial class PetGameService(SessionActor sessionActor) : Messag
             return;
         }
 
+        // CLASSIC: refusal above preserves the current game; retire it only after fresh admission succeeds.
+        LeaveMorph();
+        RetireTraining();
         _session = new Session {
             Game = game,
             Track = track,
@@ -173,20 +173,23 @@ internal sealed partial class PetGameService(SessionActor sessionActor) : Messag
 
     [MessageHandler(typeof(PET_9_PROTOCOL.MSG_PETGAMEREADY))]
     private void ReceiveReady(PET_9_PROTOCOL.MSG_PETGAMEREADY message) {
-        if (_session is null || _session.Started) {
+        if (_session is null || _session.Started || _session.Ended) {
             return;
         }
 
         _session.Started = true;
         SendToSocket(new PET_9_PROTOCOL.MSG_PETGAMESTART { Game = _session.Game, Data = "" });
         if (_session.Dance is not null) {
-            Timers.StartSingleTimer("petDanceRound", SendNextRound.Instance, s_roundDelay);
+            Timers.StartSingleTimer("petDanceRound", new SendNextRound(_session, _session.Dance.Round), s_roundDelay);
         }
     }
 
     [MessageHandler(typeof(SendNextRound))]
     private void ReceiveSendNextRound(SendNextRound message) {
-        var moves = _session?.Dance?.NextRound();
+        // CLASSIC: neither an old mailbox callback nor a duplicate callback may replace an outstanding round.
+        if (!ReferenceEquals(_session, message.Session) || _session is not { Started: true, Ended: false }
+            || _session.Dance is not { Current: null } dance || dance.Round != message.Round) return;
+        var moves = dance.NextRound();
         if (moves is null) {
             return;
         }
@@ -197,7 +200,8 @@ internal sealed partial class PetGameService(SessionActor sessionActor) : Messag
     [MessageHandler(typeof(PET_9_PROTOCOL.MSG_PETGAMEDANCE))]
     private void ReceiveDance(PET_9_PROTOCOL.MSG_PETGAMEDANCE message) {
         var dance = _session?.Dance;
-        if (dance is null || _session.Ended) {
+        // CLASSIC: READY must precede play, and each issued round accepts exactly one answer.
+        if (dance is null || !_session.Started || _session.Ended || dance.Current is null) {
             return;
         }
 
@@ -211,18 +215,20 @@ internal sealed partial class PetGameService(SessionActor sessionActor) : Messag
             return;
         }
 
-        Timers.StartSingleTimer("petDanceRound", SendNextRound.Instance, s_roundDelay);
+        Timers.StartSingleTimer("petDanceRound", new SendNextRound(_session, dance.Round), s_roundDelay);
     }
 
     [MessageHandler(typeof(PET_9_PROTOCOL.MSG_PETGAMEDATA))]
     private void ReceiveData(PET_9_PROTOCOL.MSG_PETGAMEDATA message) {
-        if (_morph is not null && message.Game.ToString() == MorphGame) {
+        var game = message.Game.ToString();
+        if (_morph is not null && string.Equals(game, MorphGame, StringComparison.Ordinal)) {
             ReceiveMorphCommand(message.Data.ToString() ?? "");
 
             return;
         }
 
-        if (_session is null) {
+        // CLASSIC: the native shared reader checks the complete Game string; data cannot cross games.
+        if (_session is null || !string.Equals(game, _session.Game, StringComparison.Ordinal)) {
             return;
         }
 
@@ -237,7 +243,8 @@ internal sealed partial class PetGameService(SessionActor sessionActor) : Messag
                 FeedSnack(BitConverter.ToUInt64(data, 1));
                 break;
             case CommandDebugWin or CommandDebugLose when !_session.Ended:
-                if (GetActiveAccount()?.AuthLevel < AuthLevel.QualityAssurance) {
+                var account = GetActiveAccount();
+                if (account is null || account.AuthLevel < AuthLevel.QualityAssurance) {
                     Logger.Information("Pet game {0}: debug end ignored (not a QA account).", Logger.Args(_session.Game));
                     break;
                 }
@@ -252,14 +259,22 @@ internal sealed partial class PetGameService(SessionActor sessionActor) : Messag
 
     [MessageHandler(typeof(PET_9_PROTOCOL.MSG_PETGAMEENDING))]
     private void ReceiveEnding(PET_9_PROTOCOL.MSG_PETGAMEENDING message) {
-        if (_session is not null) {
-            Logger.Information("Pet game {0}: closed by the client ({1}).",
-                Logger.Args(_session.Game, _session.Ended ? "after the end" : "quit early, no energy taken"));
+        var game = message.Game.ToString();
+        // CLASSIC: GlobalID semantics are not proven here; bind only the native Game identity.
+        if (_morph is not null && string.Equals(game, MorphGame, StringComparison.Ordinal)) {
+            LeaveMorph();
+            return;
         }
+        if (_session is null || !string.Equals(game, _session.Game, StringComparison.Ordinal)) return;
+        Logger.Information("Pet game {0}: closed by the client ({1}).",
+            Logger.Args(_session.Game, _session.Ended ? "after the end" : "quit early, no energy taken"));
+        RetireTraining();
+    }
 
+    // CLASSIC: use the same retirement for client close and successful replacement, with no reward or charge.
+    private void RetireTraining() {
         Timers.Cancel("petDanceRound");
         _session = null;
-        LeaveMorph();
     }
 
     private void Finish(int points, int wins) {
@@ -277,6 +292,7 @@ internal sealed partial class PetGameService(SessionActor sessionActor) : Messag
                 return;
             }
             _session.Ended = true;
+            Timers.Cancel("petDanceRound");
             Logger.Information("Pet game {0} ended: {1} point(s), {2}; +{3} XP (total {4}), level {5} -> {6}; energy -{7} (now {8}).",
                 Logger.Args(_session.Game, points, string.Join(", ", receipt.Applied.Select(a => $"{a.Stat} +{a.Change}")),
                     receipt.Growth.Xp, PetProgress.Behavior(receipt.Pet).m_XP, receipt.Growth.OldLevel,
