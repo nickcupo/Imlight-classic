@@ -69,7 +69,8 @@ namespace Imlight.CoreLib.Classic;
 /// </summary>
 public static class ClassicBazaar {
 
-    private static BazaarRules? s_rules;
+    private static volatile BazaarRules? s_rules;
+    private static readonly object s_initializeGate = new(); // CLASSIC: a later initialization cannot bypass unfinished quote correction.
     private static Timer? s_timer;
     private static IReadOnlyList<BazaarCandidate> s_pool = [];
     private static readonly Dictionary<ulong, double> s_priceFactors = [];
@@ -89,16 +90,23 @@ public static class ClassicBazaar {
 
     /// <summary>Loads the rules and the item pool, and starts the restock timer.</summary>
     public static void Initialize(string? classicDataRoot, string profileId) {
+        lock (s_initializeGate) {
+            InitializeUnlocked(classicDataRoot, profileId);
+        }
+    }
+
+    private static void InitializeUnlocked(string? classicDataRoot, string profileId) {
         if (s_rules is not null || classicDataRoot is null) {
             return;
         }
 
+        BazaarRules? selectedRules = null;
         var directory = Path.Combine(classicDataRoot, "rules");
         foreach (var path in Directory.Exists(directory) ? Directory.EnumerateFiles(directory, "bazaar-*.yaml").Order() : Enumerable.Empty<string>()) {
             try {
                 var rules = BazaarRulesLoader.Load(path);
                 if (rules.Profiles.Contains(profileId, StringComparer.Ordinal)) {
-                    s_rules = rules;
+                    selectedRules = rules;
                     break;
                 }
             }
@@ -110,13 +118,20 @@ public static class ClassicBazaar {
             }
         }
 
-        if (s_rules is null) {
+        if (selectedRules is null) {
             Logger.Information("Classic Bazaar: no Bazaar rules for profile {Profile}.", Logger.Args(profileId));
 
             return;
         }
 
+        // CLASSIC: refresh the one historical base correction before any requests can quote persisted stock.
+        // This does not restock: copies, current price factors and the server/player ownership ledger stay untouched.
+        RepriceGlacialTreasure(profileId, selectedRules);
+
         s_pool = BuildPool();
+        // CLASSIC: only acknowledged correction publishes a ready Bazaar. A later initialization rereads
+        // persisted quotes after failure, rather than seeing rules and skipping the unfinished correction.
+        s_rules = selectedRules;
         Logger.Information("Classic Bazaar: {File}; {Count} 2009 items may be stocked ({Gear} gear, {Cards} treasure cards, "
             + "{Reagents} reagents, {Housing} housing).",
             Logger.Args(s_rules.SourceFile, s_pool.Count, s_pool.Count(c => c.Kind == BazaarKind.Gear),
@@ -158,6 +173,72 @@ public static class ClassicBazaar {
         SpellTemplate spell => (int) Math.Max(0, spell.m_baseCost),
         _ => 0,
     };
+
+    private static void RepriceGlacialTreasure(string profileId, BazaarRules rules) {
+        if (!ClassicRuntime.IsInitialized || !ClassicRuntime.IsActive || ClassicRuntime.Rules.Profile.Id != profileId
+                || !ClassicSpellTemplates.HasHistoricalTreasureBase(profileId, ClassicProgression.TreasurePrices)) {
+            return;
+        }
+
+        var id = ClassicSpellTemplates.GlacialTreasureId;
+        var template = CoreObjectFactory.GetCoreTemplate(id) as SpellTemplate;
+        var path = CoreObjectFactory.GetTemplatePath(id);
+        lock (AuctionHouseCollection.Lock) {
+            var entries = AuctionHouseCollection.GetAllAuctionHouseEntries().Where(entry => entry.m_templateID.Full == id).ToList();
+            var held = entries.Sum(entry => entry.m_numForSale);
+            var (factor, defaulted) = CurrentGlacialTreasureFactor();
+
+            if (entries.Count == 0 || !TryGlacialTreasureQuote(profileId, ClassicProgression.TreasurePrices,
+                    id, template, path, held, rules, factor, out var quote)) {
+                Logger.Information("Classic Bazaar: historical Glacial Shield base correction changed 0 templates.");
+                return;
+            }
+
+            try {
+                var changed = AuctionHouseCollection.ApplyPriceChanges(id, held, quote.Buy, quote.Sell);
+                Logger.Information("Classic Bazaar: historical Glacial Shield base correction changed {Count} templates; {Copies} copies retained; current factor {Factor} ({Policy}).",
+                    Logger.Args(changed ? 1 : 0, held, factor, defaulted ? "existing startup default; prior-process factor was not persisted" : "retained in-memory factor"));
+            }
+            catch (Exception ex) {
+                // Cache prices change only after an acknowledged save. A failed/ambiguous save aborts startup;
+                // the next initialization rereads the persisted quote instead of serving a stale price.
+                Logger.Error("Classic Bazaar: Glacial Shield quote correction failed; startup stopped: {Error}", Logger.Args(ex));
+                throw;
+            }
+        }
+    }
+
+    internal static (double Factor, bool Defaulted) CurrentGlacialTreasureFactor() {
+        lock (s_priceFactors) {
+            // CLASSIC: this existing dictionary is not persisted. Retain its current factor when present;
+            // after restart, use the existing 1.0 policy. Integer quotes cannot recover the prior factor
+            // exactly: inverse reconstruction can change the corrected Math.Round result by one gold.
+            return s_priceFactors.TryGetValue(ClassicSpellTemplates.GlacialTreasureId, out var factor)
+                ? (factor, false) : (1.0, true);
+        }
+    }
+
+    // CLASSIC: dated evidence corrects the card's base only. The accepted 2014 fallback resale tiers and
+    // current in-memory lot factor (or existing startup default) remain policy; this is not new historical
+    // proof for a Bazaar buy/sell multiplier. No prior-process jitter is inferred from rounded saved quotes.
+    internal static bool TryGlacialTreasureQuote(string profileId, Imlight.Classic.Rules.TreasurePrices? prices,
+            ulong templateId, SpellTemplate? template, string? path, int copies, BazaarRules rules, double factor,
+            out (int Buy, int Sell) quote) {
+        quote = default;
+        if (!ClassicSpellTemplates.HasHistoricalTreasureBase(profileId, prices)
+                || !rules.Profiles.Contains(profileId, StringComparer.Ordinal)
+                || templateId != ClassicSpellTemplates.GlacialTreasureId || path != ClassicSpellTemplates.GlacialTreasurePath
+                || template is null || template.GetType() != typeof(SpellTemplate)
+                || template.m_name != ClassicSpellTemplates.GlacialTreasureName
+                || template.m_baseCost != ClassicSpellTemplates.GlacialHistoricalBase || copies <= 0
+                || !double.IsFinite(factor) || factor <= 0) {
+            return false;
+        }
+
+        quote = (rules.BuyPrice(BaseCostOf(template), copies, BazaarKind.TreasureCard, factor),
+            rules.SellPrice(BaseCostOf(template), copies, BazaarKind.TreasureCard));
+        return true;
+    }
 
     /// <summary>
     /// The prices an entry should carry while the Bazaar holds <paramref name="copies"/> of it (a server lot keeps its
