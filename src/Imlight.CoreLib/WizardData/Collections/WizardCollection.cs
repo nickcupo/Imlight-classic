@@ -894,7 +894,11 @@ public static class WizardCollection {
 
     private static Wizard LoadWizard(Wizard wizard) {
         using var session = s_store.OpenSession();
+        return HydrateLoadedWizard(wizard, session);
+    }
 
+    // CLASSIC: retain the production loading path while allowing an isolated real-session regression.
+    internal static Wizard HydrateLoadedWizard(Wizard wizard, IDocumentSession session) {
         // `Wizard` only keeps track of the IDs of the items in the inventory.
         // The actual items are stored in the `WizClientObjectItem` collection.
         // Load the items in the inventory.
