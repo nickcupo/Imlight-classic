@@ -97,7 +97,8 @@ internal sealed partial class PetGameService {
     }
 
     /// <summary>A partner's side changed (sent between the two wizards' pet game services).</summary>
-    private sealed record PartnerChanged(ulong PetId, bool Ready, bool Left);
+    // CLASSIC: an old partner's queued update belongs to its originating lobby and exact side association.
+    private sealed record PartnerChanged(MorphLobby Lobby, MorphSide Side, ulong PetId, bool Ready, bool Left);
 
     private sealed record MorphEggTimer(ulong EggId);
 
@@ -118,8 +119,20 @@ internal sealed partial class PetGameService {
             return;
         }
 
-        LeaveMorph();
         var key = wizard.Zone ?? "";
+        // CLASSIC: a repeated JOIN for this still-valid lobby replays admission without losing the offer/readiness.
+        if (_morph is { } current && string.Equals(current.Key, key, StringComparison.Ordinal)) {
+            lock (current.Lobby.Gate) {
+                if (current.Lobby.Sides[current.Side] is { } mine && mine.Service == Self && mine.CharId == wizard.CharId) {
+                    SendToSocket(new PET_9_PROTOCOL.MSG_PETGAMEJOINRSP { Game = MorphGame, Success = 1 });
+                    SendToSocket(new PET_9_PROTOCOL.MSG_PETGAMEINIT { Game = MorphGame, Data = "", MinLevel = PetHatchRules.MinLevel, Track = (byte) current.Side });
+                    SendToSocket(new PET_9_PROTOCOL.MSG_PETGAMESTART { Game = MorphGame, Data = "" });
+                    return;
+                }
+            }
+        }
+
+        (MorphLobby Lobby, int Side, string Key) admitted;
         while (true) {
             var lobby = s_lobbies.GetOrAdd(key, _ => new MorphLobby());
             lock (lobby.Gate) {
@@ -136,7 +149,7 @@ internal sealed partial class PetGameService {
                 }
 
                 lobby.Sides[free] = new MorphSide { Service = Self, CharId = wizard.CharId };
-                _morph = (lobby, free, key);
+                admitted = (lobby, free, key);
                 if (lobby.Sides.All(s => s is not null)) {
                     // A full lobby moves on; the next pair starts a new one.
                     s_lobbies.TryRemove(new KeyValuePair<string, MorphLobby>(key, lobby));
@@ -146,6 +159,15 @@ internal sealed partial class PetGameService {
             }
         }
 
+        // CLASSIC: keep the old valid game on refusal; release only its association once a new slot is secured.
+        // A stale old handle can name the vacant slot just acquired. Do not release the new association as old.
+        if (_morph is { } old && ReferenceEquals(old.Lobby, admitted.Lobby) && old.Side == admitted.Side) {
+            _morph = null;
+            CancelAmbientTimers();
+        }
+        else LeaveMorph();
+        RetireTraining();
+        _morph = admitted;
         Logger.Information("Pet hatching: {0} joins side {1} in {2}.", Logger.Args(wizard.CharId, _morph.Value.Side, key));
         if (AmbientHatching.Enabled) {
             // CLASSIC (2026-10-04): alone on the spots, an ambient wizard of the zone may come over after a moment.
@@ -166,9 +188,13 @@ internal sealed partial class PetGameService {
         _morph = null;
         CancelAmbientTimers();
         MorphSide partner;
+        MorphSide mine;
         ulong mineId;
         lock (m.Lobby.Gate) {
-            mineId = m.Lobby.Sides[m.Side]?.CharId ?? 0;
+            // CLASSIC: a stale lobby handle cannot remove a slot now owned by somebody else's service.
+            if (m.Lobby.Sides[m.Side]?.Service != Self) return;
+            mine = m.Lobby.Sides[m.Side];
+            mineId = mine.CharId;
             m.Lobby.Sides[m.Side] = null;
             partner = m.Lobby.Sides[1 - m.Side];
             if (partner?.Ambient is not null) {
@@ -185,7 +211,7 @@ internal sealed partial class PetGameService {
             return;
         }
 
-        partner?.Service?.Tell(new PartnerChanged(0, false, true));
+        partner?.Service?.Tell(new PartnerChanged(m.Lobby, mine, 0, false, true));
     }
 
     private void ReceiveMorphCommand(string text) {
@@ -209,7 +235,7 @@ internal sealed partial class PetGameService {
                 }
 
                 Logger.Information("Pet hatching: {0} offers pet {1} (level {2}).", Logger.Args(wizard.CharId, me.PetId, parent?.Level ?? 0));
-                partner?.Service?.Tell(new PartnerChanged(me.PetId, false, false));
+                partner?.Service?.Tell(new PartnerChanged(m.Lobby, me, me.PetId, false, false));
                 SendAffordability(m);
                 if (partner?.Ambient is not null) {
                     AmbientSawPick(m, partner);
@@ -229,7 +255,7 @@ internal sealed partial class PetGameService {
                 }
 
                 // The partner's service makes the partner's egg when it sees both sides confirmed.
-                partner?.Service?.Tell(new PartnerChanged(me.PetId, me.Ready, false));
+                partner?.Service?.Tell(new PartnerChanged(m.Lobby, me, me.PetId, me.Ready, false));
                 if (both) {
                     TryMakeEgg();
                 }
@@ -245,8 +271,15 @@ internal sealed partial class PetGameService {
 
     [MessageHandler(typeof(PartnerChanged))]
     private void ReceivePartnerChanged(PartnerChanged message) {
-        if (_morph is not { } m) {
+        if (_morph is not { } m || !ReferenceEquals(m.Lobby, message.Lobby)) {
             return;
+        }
+
+        // CLASSIC: a replacement peer in the same lobby must not receive the previous peer's queued update.
+        lock (m.Lobby.Gate) {
+            var currentPeer = m.Lobby.Sides[1 - m.Side];
+            if (message.Side is null || (message.Left ? currentPeer is not null && !ReferenceEquals(currentPeer, message.Side)
+                : !ReferenceEquals(currentPeer, message.Side))) return;
         }
 
         if (message.Left) {
