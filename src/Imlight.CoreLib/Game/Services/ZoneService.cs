@@ -91,7 +91,7 @@ internal partial class ZoneService(SessionActor sessionActor) : MessageService(s
     private readonly CoreObjectSerializer _effectSerializer = new(
         behaviors: SerializerFlags.None
     );
-    private readonly CoreObjectSerializer _zoneObjectSerializer = new(
+    private readonly ObjectSerializer _zoneObjectSerializer = ClassicCoreObjectSerializer.Create( // CLASSIC
         versionable: false,
         behaviors: SerializerFlags.None
     );
