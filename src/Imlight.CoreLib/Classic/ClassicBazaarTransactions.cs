@@ -326,7 +326,9 @@ internal static class ClassicBazaarTransactions {
         foreach (var deck in book.DeckTreasureCards) {
             if (deck.Key == 0 || deck.Value is null || deck.Value.Any(p => p.Key == 0 || p.Value <= 0)) return false;
         }
-        return addition == 0 ? book.TreasureCardTemplateIds.Count <= 999 : WizardCollection.CanReceiveTreasureCards(saved, addition);
+        // CLASSIC: legacy overfull holdings remain owned and sellable. The acquisition cap still applies
+        // to every purchase; it must not prevent a player from reducing an existing saved book.
+        return addition == 0 || WizardCollection.CanReceiveTreasureCards(saved, addition);
     }
     private static bool ValidBackpack(Wizard saved, List<WizClientObjectItem> items) {
         var ids = saved.InventoryBehavior?.InventoryItemIds;
