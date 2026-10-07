@@ -181,12 +181,16 @@ internal sealed class ArenaService(SessionActor sessionActor) : MessageService(s
         arena.Confirm(_charId, message.Confirm != 0);
     }
 
-    // The status window's "expand search" box and the result window's ladder refresh: nothing to do in 2009.
+    // The status window's "expand search" box: no expanded ranked brackets in this profile.
     [MessageHandler(typeof(WIZARD_12_PROTOCOL.MSG_EXPANDPVPSEARCH))]
     private void ReceiveExpandSearch(WIZARD_12_PROTOCOL.MSG_EXPANDPVPSEARCH message) { }
 
     [MessageHandler(typeof(GAME_5_PROTOCOL.MSG_GETLADDER))]
-    private void ReceiveGetLadder(GAME_5_PROTOCOL.MSG_GETLADDER message) { }
+    private void ReceiveGetLadder(GAME_5_PROTOCOL.MSG_GETLADDER message) {
+        if (!ClassicArena.Enabled || ClassicArena.Config is not { } config || GetActiveWizard() is not { } wizard) return;
+        if (ArenaShopSnapshot.Reply(wizard, message.CharacterID, message.TournamentNameID,
+                config, new ArenaLadderCollection.Raven()) is { } reply) SendToSocket(reply);
+    }
 
     // ------------------------------------------------------------ the matchmaker's trips and results
 
@@ -224,6 +228,9 @@ internal sealed class ArenaService(SessionActor sessionActor) : MessageService(s
         if (message.Receipt is null && !SaveOutcomeTickets(wizard, outcome.Tickets))
             throw new InvalidOperationException("The arena ticket outcome was not persisted.");
 
+        // CLASSIC: ranked results have already committed their ladder; the next zone attach sends this fresh score
+        // in native GameStats. The result window's separate MSG_GETLADDER also receives the saved standing.
+        ArenaShopSnapshot.RefreshLadder(wizard);
         SendToSocket(ArenaMessages.ArenaPoints(wizard.GameStats.m_currentArenaPoints));
         SendToSocket(ArenaMessages.PvpCurrency(wizard.GameStats.m_currentPvPCurrency));
         SendToSocket(outcome.Result);
