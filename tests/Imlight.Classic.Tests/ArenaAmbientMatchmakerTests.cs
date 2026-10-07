@@ -47,7 +47,7 @@ public sealed class ArenaAmbientMatchmakerTests {
         public ArenaPlayer? ReserveFriendly(int level, int school, ArenaPvpSkill skill) {
             Reservations++;
             if (Players.Values.Count(p => p.Ambient) >= MaxActive || FailAtReservation > 0 && Reservations >= FailAtReservation) return null;
-            for (var offset = 0; offset < 7; offset++)
+            for (var offset = 0; offset < 1; offset++)
                 for (var variant = (int) skill * 2; variant < (int) skill * 2 + 2; variant++) {
                     var actualSchool = (school + offset) % 7;
                     var id = ArenaAmbientParticipants.IdentityId(level, actualSchool, variant);
@@ -517,6 +517,20 @@ public sealed class ArenaAmbientMatchmakerTests {
         Assert.Equal(7, world.Released.Count); Assert.Empty(world.Arena.Snapshot()); Assert.Empty(world.Outcomes);
         var sent = world.Sent.Count; world.Arena.List(Human, world.Arena.TournamentId(ArenaKind.Practice));
         Assert.Equal(sent, world.Sent.Count);
+    }
+
+    [Fact]
+    public void ViewersOfEveryRankKeepEligibleChoicesAndSchoolSelectionSurvivesReservation() {
+        var world = new World { FriendlyEnabled = true };
+        for (var rank = 0; rank < world.Config.Ranks.Length; rank++) {
+            world.Sent.Clear();
+            world.Arena.List(Human, world.Arena.TournamentId(ArenaKind.Ranked), qualifiedOnly: true,
+                qualifiedLevel: 20, qualifiedRank: rank);
+            Assert.Equal(84, ListedRows(world, Human).Length);
+        }
+        var challenge = new ArenaFriendlyChallenge(ArenaKind.Ranked, 20, 4, ArenaPvpSkill.Advanced, 1);
+        world.Arena.Join(Human, challenge.Id, challenge.TeamIds[0]);
+        Assert.Equal("Life", Assert.Single(world.Players.Values.Where(p => p.Ambient)).School);
     }
 
 }

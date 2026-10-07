@@ -311,8 +311,9 @@ internal sealed class ArenaMatchmaker {
             var open = _matches.Values.Where(m => m.Kind == kind && Listed(m))
                 .OrderBy(m => m.Autonomous).ThenBy(m => m.CreatedUtc).ToList();
             List<ArenaFriendlyChallenge> friendly = Friendly is null || viewer is null ? [] : ArenaFriendlyRoster.Challenges(kind,
-                Math.Clamp(viewer.Level, 1, 50), qualifiedOnly && qualifiedLevel is >= 1 and <= 50 ? (int) qualifiedLevel : null)
-                .Where(c => !qualifiedOnly || qualifiedRank <= 0 || RankIndex(ArenaFriendlyRoster.InitialRating(c.Skill)) == qualifiedRank).ToList();
+                Math.Clamp(viewer.Level, 1, 50), qualifiedOnly && qualifiedLevel is >= 1 and <= 50 ? (int) qualifiedLevel : null).ToList();
+            // The request's qualifiedRank is the viewer's qualification. Classic has no lobby rank restriction;
+            // it must not become an invented exact-opponent-rank filter that leaves some ranks with no choices.
             var total = open.Count + friendly.Count;
             var start = Math.Clamp(startingIndex, 0, total);
             var count = Math.Clamp(numberOfElements > 0 ? numberOfElements : ArenaFriendlyRoster.DefaultPageSize,
