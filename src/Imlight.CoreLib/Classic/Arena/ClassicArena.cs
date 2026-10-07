@@ -34,8 +34,11 @@
 #nullable enable
 
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 using Akka.Actor;
 using Imcodec.MessageLayer;
 using Imlight.Classic;
@@ -129,35 +132,57 @@ public static class ClassicArena {
 
     /// <summary>The matchmaker, started on first use while the arena is on.</summary>
     internal static ArenaMatchmaker? Matchmaker(ActorSystem system) {
-        if (!Enabled) {
-            return null;
+        lock (s_clockGate) {
+            if (s_stopping || !Enabled) {
+                return null;
+            }
+
+            if (ArenaMatchmaker.Instance is { } running) {
+                return running;
+            }
+
+            var made = ArenaMatchmaker.Start(s_config!, new ServerArenaWorld(system));
+            StartClock(made);
+            return made;
         }
-
-        if (ArenaMatchmaker.Instance is { } running) {
-            return running;
-        }
-
-        var made = ArenaMatchmaker.Start(s_config!, new ServerArenaWorld(system));
-        StartClock(made);
-
-        return made;
     }
 
-    private static System.Threading.Timer? s_clock;
+    private static readonly object s_clockGate = new();
+    private static ArenaClock? s_clock;
+    private static Task? s_clockStopTask;
+    private static bool s_stopping;
 
     private static void StartClock(ArenaMatchmaker matchmaker) {
         if (s_clock is not null) {
             return;
         }
 
-        s_clock = new System.Threading.Timer(_ => {
+        s_clock = new ArenaClock(() => {
             try {
                 matchmaker.Tick(DateTime.UtcNow);
             }
             catch (Exception ex) {
                 Logger.Error("Arena clock: {0}", Logger.Args(ex.Message));
             }
-        }, null, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1));
+        }, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1));
+    }
+
+    /// <summary>CLASSIC: stop new arena use and await every callback before the matchmaker/database drain.</summary>
+    internal static Task StopClockAsync() {
+        lock (s_clockGate) {
+            s_stopping = true;
+            return s_clockStopTask ??= s_clock?.StopAsync() ?? Task.CompletedTask;
+        }
+    }
+
+    /// <summary>CLASSIC: cancel interrupted matches and finish accepted results while Raven is still available.</summary>
+    internal static async Task QuiesceAsync() {
+        await StopClockAsync().ConfigureAwait(false);
+        if (ArenaMatchmaker.Instance is { } matchmaker) {
+            await matchmaker.QuiesceAsync().ConfigureAwait(false);
+        }
+        // CLASSIC: Finish's Tell is not a saved human award. Keep their services alive until each save replies.
+        await ServerArenaWorld.DrainOutcomesAsync().ConfigureAwait(false);
     }
 
     /// <summary>
@@ -218,10 +243,75 @@ public static class ClassicArena {
 
 }
 
+/// <summary>CLASSIC: Timer.DisposeAsync is the barrier for callbacks already running on the thread pool.</summary>
+internal sealed class ArenaClock(Action tick, TimeSpan dueTime, TimeSpan period) {
+    private readonly object _gate = new();
+    private readonly Timer _timer = new(_ => tick(), null, dueTime, period);
+    private Task? _stopped;
+
+    internal Task StopAsync() {
+        lock (_gate) {
+            return _stopped ??= _timer.DisposeAsync().AsTask();
+        }
+    }
+}
+
+/// <summary>CLASSIC: in-process receipts for human outcomes; no retry can duplicate an uncertain save.</summary>
+internal sealed class ArenaOutcomeReceipts {
+    private readonly object _gate = new();
+    private readonly HashSet<ArenaOutcomeReceipt> _pending = [];
+    private readonly List<Task> _failures = [];
+
+    internal ArenaOutcomeReceipt Begin(ulong characterId) {
+        var receipt = new ArenaOutcomeReceipt(this, characterId);
+        lock (_gate) { _pending.Add(receipt); }
+        return receipt;
+    }
+
+    internal void Complete(ArenaOutcomeReceipt receipt, Exception? error) {
+        lock (_gate) {
+            _pending.Remove(receipt);
+            if (error is not null) _failures.Add(receipt.Completion);
+        }
+    }
+
+    internal Task DrainAsync() {
+        lock (_gate) {
+            return Task.WhenAll(_pending.Select(receipt => receipt.Completion)
+                .Concat(_failures).ToArray());
+        }
+    }
+}
+
+internal sealed class ArenaOutcomeReceipt(ArenaOutcomeReceipts owner, ulong characterId) {
+    private readonly TaskCompletionSource _completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private int _claimed;
+    internal ulong CharacterId { get; } = characterId;
+    internal Task Completion => _completion.Task;
+
+    internal bool ApplyAward(Func<bool> save) {
+        if (Interlocked.CompareExchange(ref _claimed, 1, 0) != 0) return false;
+        try {
+            if (!save()) throw new InvalidOperationException("The arena ticket outcome was not persisted.");
+            owner.Complete(this, null);
+            _completion.TrySetResult();
+            return true;
+        }
+        catch (Exception ex) {
+            owner.Complete(this, ex);
+            _completion.TrySetException(ex);
+            throw;
+        }
+    }
+}
+
 /// <summary>The live server behind the matchmaker.</summary>
 internal sealed class ServerArenaWorld(ActorSystem system) : IArenaWorld, IArenaAmbientWorld {
 
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<ulong, Wizard> s_live = new();
+    private static readonly ArenaOutcomeReceipts s_outcomes = new();
+
+    internal static Task DrainOutcomesAsync() => s_outcomes.DrainAsync();
 
     /// <summary>ArenaService keeps the live wizard of each player who used the arena.</summary>
     public static void Register(Wizard wizard) => s_live[wizard.CharId] = wizard;
@@ -271,20 +361,23 @@ internal sealed class ServerArenaWorld(ActorSystem system) : IArenaWorld, IArena
 
     public void Deliver(ulong charId, ArenaOutcome outcome) {
         if (IsAmbient(charId)) return; // CLASSIC: their ladder was saved; never write NPC tickets into player documents.
-        if (OnlinePlayerCollection.GetOnlinePlayer(charId)?.ActorPath is { Length: > 0 }) {
-            Tell(charId, new CLASSIC_FEATURES_PROTOCOL.MSG_ARENAOUTCOME { Outcome = outcome });
+        if (OnlinePlayerCollection.GetOnlinePlayer(charId)?.ActorPath is { Length: > 0 } path) {
+            var receipt = s_outcomes.Begin(charId);
+            system.ActorSelection(path).Tell(new CLASSIC_FEATURES_PROTOCOL.MSG_ARENAOUTCOME {
+                Outcome = outcome, Receipt = receipt,
+            }, ActorRefs.Nobody);
 
             return;
         }
 
         // Offline (dropped out of the fight): the tickets go straight into the saved game stats.
         if (outcome.Tickets != 0) {
-            WizardCollection.CommitCharacterMutation(charId, (_, persisted) => {
+            if (!WizardCollection.CommitCharacterMutation(charId, (_, persisted) => {
                 persisted.GameStats.m_currentArenaPoints += outcome.Tickets;
                 persisted.GameStats.m_currentPvPCurrency = persisted.GameStats.m_currentArenaPoints;
 
                 return true;
-            }, null);
+            }, null)) throw new InvalidOperationException("The offline arena ticket outcome was not persisted.");
         }
     }
 

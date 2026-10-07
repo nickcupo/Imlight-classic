@@ -41,6 +41,7 @@ using System.Net.Sockets;
 using System.Threading.Channels;
 using System.Threading.Tasks;
 using Akka.Actor;
+using Imlight.CoreLib.Classic.Admin;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;
 using Xunit;
@@ -79,6 +80,7 @@ public sealed class TcpListenerLifecycleTests {
             var listener = system.ActorOf(Props.Create(() => new RestartableListener(state, sink, instances)));
             var first = await instances.Reader.ReadAsync(TestContext.Current.CancellationToken).AsTask().WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
             Assert.Equal(IPAddress.Loopback, first.Address);
+            Assert.True(ServerAdmin.IsListenerRegistered(listener));
             using (var client = new TcpClient()) {
                 await client.ConnectAsync(first.Address, first.Port, TestContext.Current.CancellationToken);
                 using var socket = await accepted.Reader.ReadAsync(TestContext.Current.CancellationToken).AsTask().WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
@@ -87,7 +89,9 @@ public sealed class TcpListenerLifecycleTests {
             listener.Tell(new Crash());
             var restarted = await instances.Reader.ReadAsync(TestContext.Current.CancellationToken).AsTask().WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
             Assert.Equal(first, restarted);
+            Assert.True(ServerAdmin.IsListenerRegistered(listener));
             Assert.True(await listener.GracefulStop(TimeSpan.FromSeconds(5)));
+            Assert.False(ServerAdmin.IsListenerRegistered(listener));
             using var replacement = new TcpListener(first);
             replacement.Start();
             Assert.Equal(first, replacement.LocalEndpoint);

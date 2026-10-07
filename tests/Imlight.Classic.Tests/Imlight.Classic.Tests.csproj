@@ -58,6 +58,10 @@
     <ServerIntegrationTest Include="ZoneMarkerLifecycleTests.cs" />
     <ServerIntegrationTest Include="CombatRejoinTests.cs" />
     <ServerIntegrationTest Include="ServerAdminTests.cs" />
+    <ServerIntegrationTest Include="ArenaShutdownClockTests.cs" />
+    <ServerIntegrationTest Include="ArenaShutdownOutcomeTests.cs" />
+    <ServerIntegrationTest Include="ServerShutdownDrainTests.cs" />
+    <ServerIntegrationTest Include="ArenaShutdownMatchmakerTests.cs" />
     <ServerIntegrationTest Include="PerfMonitorTests.cs" />
     <ServerIntegrationTest Include="AmbientWizardRuntimeTests.cs" />
     <ServerIntegrationTest Include="BankStorageTests.cs" />
