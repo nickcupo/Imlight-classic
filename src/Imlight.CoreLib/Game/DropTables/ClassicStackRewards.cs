@@ -13,6 +13,7 @@ using Imlight.CoreLib.Shared.Resources;
 using Imlight.CoreLib.WizardData.Collections;
 using Imlight.CoreLib.WizardData.Models.Player;
 using Imlight.CoreLib.WizardData.Models.World;
+using Raven.Client.Documents.Session;
 
 namespace Imlight.CoreLib.Game.DropTables;
 
@@ -34,6 +35,15 @@ internal sealed class StackRewardDependencies {
     internal Func<WizClientObjectItem, ByteString> SerializeItem;
 }
 
+// CLASSIC: the outer quest transaction owns the save and original-row protection. Preparation and
+// staging distinguish a valid zero-capacity award from a corrupt/failed award without nested writes.
+internal sealed record PreparedStackRewards(ulong OwnerCharId, IReadOnlyList<WizClientObjectItem> Items,
+    IReadOnlyList<StackTreasureReward> Cards, IReadOnlyList<ReagentAcquisition> Reagents,
+    StackRewardDependencies Dependencies);
+internal sealed record StagedStackRewards(StackRewardReceipt Receipt, IReadOnlyList<WizClientObjectItem> Backpack) {
+    internal bool HasRewards => Receipt.Items.Count > 0 || Receipt.Cards.Count > 0 || Receipt.Reagents.Count > 0;
+}
+
 internal static class ClassicStackRewards {
     internal static readonly AsyncLocal<StackRewardDependencies> TestScope = new();
 
@@ -48,6 +58,32 @@ internal static class ClassicStackRewards {
             || items is null || treasureCards is null || reagents is null
             || (items.Count == 0 && treasureCards.Count == 0 && reagents.Count == 0)) return false;
 
+        if (!TryPrepare(live, items, treasureCards, reagents, out var prepared)
+            || (prepared.Items.Count == 0 && prepared.Cards.Count == 0 && prepared.Reagents.Count == 0)) return false;
+
+        StagedStackRewards staged = null;
+        StackRewardReceipt published = null;
+        var committed = WizardCollection.CommitCharacterMutation(live.CharId, (session, saved) => {
+            if (WizardCollection.IsInventorySnapshotUncertain(live)
+                || !TryStage(session, saved, prepared, out staged)) return false;
+            WizardInventoryTransactions.ProtectUnmodifiedRows(session);
+            return staged.HasRewards;
+        }, saved => published = Publish(live, saved, staged),
+            onSaveFailure: _ => WizardCollection.MarkInventorySnapshotUncertain(live));
+        if (!committed) {
+            if (staged is not null) receipt = new([], []) { BackpackCapacityExceeded = staged.Receipt.BackpackCapacityExceeded };
+            return false;
+        }
+        receipt = published;
+        return true;
+    }
+
+    internal static bool TryPrepare(Wizard live, IReadOnlyList<DropItemResult> items,
+        IReadOnlyList<uint> treasureCards, IReadOnlyList<DropItemResult> reagents, out PreparedStackRewards prepared) {
+        prepared = null;
+        if (live is null || live.CharId == 0 || WizardCollection.IsInventorySnapshotUncertain(live)
+            || items is null || treasureCards is null || reagents is null) return false;
+
         var d = TestScope.Value ?? new();
         var cards = new List<StackTreasureReward>();
         var acquisitions = new List<ReagentAcquisition>();
@@ -58,12 +94,12 @@ internal static class ClassicStackRewards {
                 if (drop is null || !ulong.TryParse(drop.ItemId, out var id) || Resolve(d, id) is not WizItemTemplate template
                     || template is ReagentItemTemplate) continue; // CLASSIC: reagents have their own bag/delivery path
                 if (Create(d, id, live.CharId) is not WizClientObjectItem item) return false;
-                var prepared = WizardInventoryTransactions.Prepare(live, item, initializeBehaviors: false);
-                if (prepared is null || prepared.m_templateID.Full != id) return false;
+                var candidate = WizardInventoryTransactions.Prepare(live, item, initializeBehaviors: false);
+                if (candidate is null || candidate.m_templateID.Full != id) return false;
                 // A prepared pet owns its egg/name/talent state. Other items retain the previous template init.
-                if (prepared.m_inactiveBehaviors?.OfType<ClientPetItemBehavior>().Any() != true)
-                    CoreObjectFactory.InitializeCoreObjectBehaviors(prepared, template);
-                itemCandidates.Add(prepared);
+                if (candidate.m_inactiveBehaviors?.OfType<ClientPetItemBehavior>().Any() != true)
+                    CoreObjectFactory.InitializeCoreObjectBehaviors(candidate, template);
+                itemCandidates.Add(candidate);
             }
             foreach (var id in treasureCards) {
                 if (Resolve(d, id) is SpellTemplate spell)
@@ -81,71 +117,65 @@ internal static class ClassicStackRewards {
             }
         }
         catch { return false; } // no write or client success when an asset cannot be prepared
-        if (itemCandidates.Count == 0 && cards.Count == 0 && acquisitions.Count == 0) return false;
+        prepared = new(live.CharId, itemCandidates.ToArray(), cards.ToArray(), acquisitions.ToArray(), d);
+        return true;
+    }
 
+    internal static bool TryStage(IDocumentSession session, Wizard saved, PreparedStackRewards prepared,
+        out StagedStackRewards staged) {
+        staged = null;
+        if (session is null || saved is null || prepared is null || saved.CharId == 0
+            || prepared.OwnerCharId != saved.CharId) return false;
         List<StackTreasureReward> stagedCards = [];
         List<StackReagentReward> stagedReagents = [];
         List<StackItemReward> stagedItems = [];
         List<WizClientObjectItem> backpack = [];
-        var validatedReward = false;
         var backpackCapacityExceeded = false;
-        StackRewardReceipt published = null;
-        var committed = WizardCollection.CommitCharacterMutation(live.CharId, (session, saved) => {
-            if (WizardCollection.IsInventorySnapshotUncertain(live)) return false;
-
-            IReadOnlyList<WizClientObjectItem> admittedItems = [];
-            if (itemCandidates.Count > 0) {
-                WizardInventoryTransactions.TryStageGrants(session, saved, itemCandidates, out admittedItems, out var validatedItems, out backpack);
-                if (!validatedItems) return false;
-                backpackCapacityExceeded = admittedItems.Count < itemCandidates.Count;
-            }
-
-            // Validate all reagent identities before admitting even a card-only part of this compound reward.
-            IReadOnlyList<ReagentAcquisitionReceipt> reagentReceipts = [];
-            if (acquisitions.Count > 0) {
-                WizardReagentCollection.TryStageAcquisitions(session, saved, acquisitions, out reagentReceipts, out var validated);
-                if (!validated) return false;
-            }
-
-            stagedCards = [];
-            foreach (var card in cards) {
-                if (!WizardCollection.CanReceiveTreasureCards(saved, 1)) break;
-                saved.SpellbookBehavior.AddTreasureCard(card.TemplateId);
-                stagedCards.Add(card);
-            }
-            stagedReagents = [];
-            stagedItems = [];
-            try {
-                foreach (var admitted in admittedItems) {
-                    var data = SerializeItem(d, admitted);
-                    if (data.Length == 0) return false;
-                    stagedItems.Add(new(admitted, data));
-                }
-                foreach (var acquired in reagentReceipts) {
-                    var data = Serialize(d, acquired.Reagent);
-                    if (data.Length == 0) return false;
-                    stagedReagents.Add(new(acquired.Reagent, acquired.Acquired, data));
-                }
-            }
-            catch { return false; } // disposing this unsaved session discards the entire staged group
-            validatedReward = true;
-            WizardInventoryTransactions.ProtectUnmodifiedRows(session);
-            return stagedItems.Count > 0 || stagedCards.Count > 0 || stagedReagents.Count > 0;
-        }, saved => {
-            if (stagedItems.Count > 0) WizardInventoryTransactions.PublishCommittedBackpack(live, saved, backpack);
-            if (stagedCards.Count > 0) WizardCollection.PublishTreasureCards(live, saved);
-            var publishedReagents = stagedReagents.Select(acquired => new StackReagentReward(
-                WizardReagentCollection.PublishCommittedBag(live, saved, acquired.Reagent), acquired.Acquired, acquired.Data)).ToArray();
-            published = new(stagedCards.ToArray(), publishedReagents, stagedItems.ToArray()) {
-                BackpackCapacityExceeded = backpackCapacityExceeded,
-            };
-        }, onSaveFailure: _ => WizardCollection.MarkInventorySnapshotUncertain(live));
-        if (!committed) {
-            if (validatedReward) receipt = new([], []) { BackpackCapacityExceeded = backpackCapacityExceeded };
-            return false;
+        IReadOnlyList<WizClientObjectItem> admittedItems = [];
+        if (prepared.Items.Count > 0) {
+            WizardInventoryTransactions.TryStageGrants(session, saved, prepared.Items, out admittedItems, out var validatedItems, out backpack);
+            if (!validatedItems) return false;
+            backpackCapacityExceeded = admittedItems.Count < prepared.Items.Count;
         }
-        receipt = published;
+
+        // Validate all reagent identities before admitting even a card-only part of this compound reward.
+        IReadOnlyList<ReagentAcquisitionReceipt> reagentReceipts = [];
+        if (prepared.Reagents.Count > 0) {
+            WizardReagentCollection.TryStageAcquisitions(session, saved, prepared.Reagents, out reagentReceipts, out var validated);
+            if (!validated) return false;
+        }
+
+        foreach (var card in prepared.Cards) {
+            if (!WizardCollection.CanReceiveTreasureCards(saved, 1)) break;
+            saved.SpellbookBehavior.AddTreasureCard(card.TemplateId);
+            stagedCards.Add(card);
+        }
+        try {
+            foreach (var admitted in admittedItems) {
+                var data = SerializeItem(prepared.Dependencies, admitted);
+                if (data.Length == 0) return false;
+                stagedItems.Add(new(admitted, data));
+            }
+            foreach (var acquired in reagentReceipts) {
+                var data = Serialize(prepared.Dependencies, acquired.Reagent);
+                if (data.Length == 0) return false;
+                stagedReagents.Add(new(acquired.Reagent, acquired.Acquired, data));
+            }
+        }
+        catch { return false; } // disposing the unsaved outer session discards the entire staged group
+        staged = new(new(stagedCards.ToArray(), stagedReagents.ToArray(), stagedItems.ToArray()) {
+            BackpackCapacityExceeded = backpackCapacityExceeded,
+        }, backpack.ToArray());
         return true;
+    }
+
+    // CLASSIC: invoked only by the outer acknowledged write, while it still owns the character lane.
+    internal static StackRewardReceipt Publish(Wizard live, Wizard saved, StagedStackRewards staged) {
+        if (staged.Receipt.Items.Count > 0) WizardInventoryTransactions.PublishCommittedBackpack(live, saved, staged.Backpack);
+        if (staged.Receipt.Cards.Count > 0) WizardCollection.PublishTreasureCards(live, saved);
+        var reagents = staged.Receipt.Reagents.Select(acquired => new StackReagentReward(
+            WizardReagentCollection.PublishCommittedBag(live, saved, acquired.Reagent), acquired.Acquired, acquired.Data)).ToArray();
+        return staged.Receipt with { Reagents = reagents };
     }
 
     private static CoreTemplate Resolve(StackRewardDependencies d, ulong id)

@@ -872,12 +872,15 @@ public static class WizardCollection {
     /// <param name="wizard">The wizard whose quest behavior needs to be updated.</param>
     /// <returns>True if the update was successful; otherwise, false.</returns>
     public static bool UpdateCharacterQuestBehavior(Wizard wizard) {
-        if (wizard is null || wizard.QuestBehavior is null) {
+        if (wizard is null || wizard.QuestBehavior is null || IsInventorySnapshotUncertain(wizard)) {
             return false;
         }
 
-        return UpdateCharacter(wizard.CharId, dbWizard =>
-            dbWizard.QuestBehavior = wizard.QuestBehavior);
+        return CommitCharacterMutation(wizard.CharId, (_, dbWizard) => {
+            if (IsInventorySnapshotUncertain(wizard)) return false;
+            dbWizard.QuestBehavior = wizard.QuestBehavior;
+            return true;
+        }, null, onSaveFailure: _ => MarkInventorySnapshotUncertain(wizard));
     }
 
     private static Wizard LoadWizard(Wizard wizard) {

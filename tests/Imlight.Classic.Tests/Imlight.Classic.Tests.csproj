@@ -112,6 +112,11 @@
     <ServerIntegrationTest Include="ElixirCancellationTests.Native.cs" />
     <ServerIntegrationTest Include="ElixirTransitionConcurrencyTests.cs" />
     <ServerIntegrationTest Include="CombatElixirSnapshotTests.cs" />
+    <ServerIntegrationTest Include="QuestBadgeStagingTests.cs" />
+    <ServerIntegrationTest Include="TerminalQuestStackStagingTests.cs" />
+    <ServerIntegrationTest Include="TerminalQuestClaimPersistenceTests.cs" />
+    <ServerIntegrationTest Include="TerminalQuestClaimSessionTests.cs" />
+    <ServerIntegrationTest Include="DungeonQuestReconciliationTests.cs" />
     <ServerIntegrationTest Include="ArenaPvpMinionTests.cs" />
     <ServerIntegrationTest Include="OctoberShopRuntimeTests.cs" />
     <ServerIntegrationTest Include="HouseTests.cs" />
