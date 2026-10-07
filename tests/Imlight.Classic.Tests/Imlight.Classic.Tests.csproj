@@ -28,6 +28,7 @@
     <ServerIntegrationTest Include="SnackPurchasePersistenceTests.cs" />
     <ServerIntegrationTest Include="PaidItemChangePersistenceTests.cs" />
     <ServerIntegrationTest Include="PetProgressPersistenceTests.cs" />
+    <ServerIntegrationTest Include="PetGameInitializationTests.cs" />
     <ServerIntegrationTest Include="TreasureMutationSafetyTests.cs" />
     <ServerIntegrationTest Include="MonstrologyCardSafetyTests.cs" />
     <ServerIntegrationTest Include="BazaarTransactionPersistenceTests.cs" />
@@ -85,6 +86,7 @@
     <ServerIntegrationTest Include="BankStorageTests.cs" />
     <ServerIntegrationTest Include="OpsPersistenceTests.cs" />
     <ServerIntegrationTest Include="EconomyFixesTests.cs" />
+    <ServerIntegrationTest Include="NumericRewardAcknowledgementTests.cs" />
     <ServerIntegrationTest Include="RobustnessFixesTests.cs" />
     <ServerIntegrationTest Include="PostCombatEffectsTests.cs" />
     <ServerIntegrationTest Include="ArenaMatchmakerTests.cs" />

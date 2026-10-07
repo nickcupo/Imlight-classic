@@ -247,7 +247,9 @@ public static class WizardCollection {
 
     internal static bool ChangeGold(Wizard liveWizard, long delta, bool capToPouch,
         Func<IDocumentSession> openSession = null, Func<IDocumentSession, ulong, Wizard> loadWizard = null) {
+        if (liveWizard is null || IsInventorySnapshotUncertain(liveWizard)) return false;
         return CommitCharacterMutation(liveWizard.CharId, (_, persisted) => {
+            if (IsInventorySnapshotUncertain(liveWizard)) return false;
             var gold = persisted.GameStats.m_currentGold + delta;
             if (capToPouch && gold > persisted.GameStats.m_baseGoldPouch) gold = persisted.GameStats.m_baseGoldPouch;
             // CLASSIC: gold never goes below zero; a debit the saved balance cannot cover changes nothing (fails).
@@ -255,7 +257,7 @@ public static class WizardCollection {
             persisted.GameStats.m_currentGold = (int) gold;
             return true;
         }, persisted => liveWizard.GameStats.m_currentGold = persisted.GameStats.m_currentGold,
-            openSession, loadWizard);
+            openSession, loadWizard, onSaveFailure: _ => MarkInventorySnapshotUncertain(liveWizard));
     }
 
     /// <summary>
@@ -310,14 +312,15 @@ public static class WizardCollection {
     /// </summary>
     internal static bool ChangeTrainingPoints(Wizard liveWizard, int delta,
         Func<IDocumentSession> openSession = null, Func<IDocumentSession, ulong, Wizard> loadWizard = null) {
-        if (liveWizard is null) return false;
+        if (liveWizard is null || IsInventorySnapshotUncertain(liveWizard)) return false;
         return CommitCharacterMutation(liveWizard.CharId, (_, persisted) => {
+            if (IsInventorySnapshotUncertain(liveWizard)) return false;
             var points = (long) persisted.MagicSchoolBehavior.TrainingPoints + delta;
             if (points < 0 || points > int.MaxValue) return false;
             persisted.MagicSchoolBehavior.TrainingPoints = (int) points;
             return true;
         }, persisted => liveWizard.MagicSchoolBehavior.TrainingPoints = persisted.MagicSchoolBehavior.TrainingPoints,
-            openSession, loadWizard);
+            openSession, loadWizard, onSaveFailure: _ => MarkInventorySnapshotUncertain(liveWizard));
     }
 
     /// <summary>

@@ -116,6 +116,13 @@ internal sealed partial class PetGameService(SessionActor sessionActor) : Messag
             return;
         }
 
+        // CLASSIC: prepare the native metadata before any saved pet or session change.
+        if (!PetGameInitializationCodec.TryPrepare(info, out var initData)) {
+            Logger.Warning("Pet game {0}: refused, initialization metadata could not be prepared.", Logger.Args(game));
+            SendToSocket(new PET_9_PROTOCOL.MSG_PETGAMEJOINRSP { Game = game, Success = 0 });
+            return;
+        }
+
         var selectedPet = EquippedPet(wizard);
         WizClientObjectItem pet;
         int energy;
@@ -161,7 +168,7 @@ internal sealed partial class PetGameService(SessionActor sessionActor) : Messag
         Logger.Information("Pet game {0} track {1}: {2} joins with pet {3} (level {4}, energy {5}).",
             Logger.Args(game, track, wizard.CharId, pet.m_globalID.Full, b.m_level, energy));
         SendToSocket(new PET_9_PROTOCOL.MSG_PETGAMEJOINRSP { Game = game, Success = 1 });
-        SendToSocket(new PET_9_PROTOCOL.MSG_PETGAMEINIT { Game = game, Data = "", MinLevel = 0, Track = (byte) track });
+        SendToSocket(new PET_9_PROTOCOL.MSG_PETGAMEINIT { Game = game, Data = initData, MinLevel = 0, Track = (byte) track });
     }
 
     [MessageHandler(typeof(PET_9_PROTOCOL.MSG_PETGAMEREADY))]
