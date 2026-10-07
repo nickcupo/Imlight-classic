@@ -66,6 +66,11 @@ internal static class ArenaAmbientParticipants {
     internal static ArenaPlayer? Preview(int level, int school, ArenaPvpSkill skill) {
         if (!Enabled) return null;
         var variant = (int) skill * 2;
+        lock (s_gate) {
+            if ((s_entries.ContainsKey(IdentityId(level, school, variant)) || ActiveWizardDirectory.TryGetByCharId(IdentityId(level, school, variant), out _))
+                && !s_entries.ContainsKey(IdentityId(level, school, variant + 1)) && !ActiveWizardDirectory.TryGetByCharId(IdentityId(level, school, variant + 1), out _))
+                variant++;
+        }
         var identity = Identity(level, school, variant);
         var id = IdentityId(level, school, variant);
         var gender = identity.Look.Female ? eGender.Female : eGender.Male;
@@ -80,7 +85,8 @@ internal static class ArenaAmbientParticipants {
         preferredSchool = (preferredSchool % 7 + 7) % 7;
         lock (s_gate) {
             if (s_entries.Count >= MaxParticipants) return null;
-            for (var schoolOffset = 0; schoolOffset < 7; schoolOffset++) {
+            // A chosen friendly school stays exact; only autonomous/general reservations may fall back to another school.
+            for (var schoolOffset = 0; schoolOffset < (friendlySkill is null ? 7 : 1); schoolOffset++) {
                 var school = (preferredSchool + schoolOffset) % 7;
                 var firstVariant = friendlySkill is { } skill ? (int) skill * 2 : 0;
                 var endVariant = friendlySkill is not null ? firstVariant + 2 : VariantsPerSchool;
