@@ -12,6 +12,7 @@ using Imlight.CoreLib.Classic.Elixirs;
 using Imlight.CoreLib.Game.Services;
 using Imlight.CoreLib.Shared.Behaviors;
 using Imlight.CoreLib.Shared.Networking;
+using Imlight.CoreLib.Shared.Packets;
 using Imlight.CoreLib.Shared.Resources;
 using Imlight.CoreLib.WizardData.Models.Player;
 using Xunit;
@@ -131,7 +132,10 @@ public sealed partial class ElixirCancellationTests {
         var instance = await session.Ask<SessionActor>("Identify", Timeout, TestContext.Current.CancellationToken);
         var actor = system.ActorOf(Props.Create(() => new ElixirProbe(instance, fixture.Store, fixture.Wizard)), "elixirs");
         try {
-            var all = new List<IMessage>();
+            var all = new List<IMessage>(fixture.ActivationMessages);
+            var initialEnables = all.OfType<WIZARD_12_PROTOCOL.MSG_ELIXIRSTATECHANGE>().Count(m => m.EffectEnabled == 1);
+            Assert.Equal(new ulong[] { 9100, 9101 }, all.OfType<WIZARD_12_PROTOCOL.MSG_ELIXIRSTATECHANGE>()
+                .Where(m => m.EffectEnabled == 1).Select(m => (ulong)m.parentID).Distinct().OrderBy(id => id));
             async Task<IMessage[]> Step(Action? before = null, bool pvp = false) {
                 Assert.True(await actor.Ask<bool>(new RefreshStep(before, pvp), Timeout, TestContext.Current.CancellationToken));
                 await session.Ask<SessionActor>("Identify", Timeout, TestContext.Current.CancellationToken);
@@ -141,7 +145,7 @@ public sealed partial class ElixirCancellationTests {
                 all.AddRange(got);
                 return [.. got];
             }
-            Assert.Equal(2, (await Step()).OfType<WIZARD_12_PROTOCOL.MSG_ELIXIRSTATECHANGE>().Count(m => m.EffectEnabled == 1));
+            Assert.Empty((await Step()).OfType<WIZARD_12_PROTOCOL.MSG_ELIXIRSTATECHANGE>());
             for (var i = 0; i < 3; i++)
                 Assert.Empty((await Step(() => Assert.True(ElixirCollection.AdvanceOnline(fixture.Wizard, 1).Saved)))
                     .OfType<WIZARD_12_PROTOCOL.MSG_ELIXIRSTATECHANGE>());
@@ -156,14 +160,44 @@ public sealed partial class ElixirCancellationTests {
             var cleanup = ElixirService.ExpireCommitted(fixture.Wizard, consumed, true);
             Assert.Equal((sbyte)0, Assert.Single(cleanup.OfType<WIZARD_12_PROTOCOL.MSG_ELIXIRSTATECHANGE>()).EffectEnabled);
             Assert.Empty((await Step()).OfType<WIZARD_12_PROTOCOL.MSG_ELIXIRSTATECHANGE>());
-            Assert.Equal(4, all.OfType<WIZARD_12_PROTOCOL.MSG_ELIXIRSTATECHANGE>().Count(m => m.EffectEnabled == 1));
+            Assert.Equal(initialEnables + 2, all.OfType<WIZARD_12_PROTOCOL.MSG_ELIXIRSTATECHANGE>().Count(m => m.EffectEnabled == 1));
             fixture.AssertConsumedOnlySelected();
+        }
+        finally { await system.Terminate(); }
+    }
+
+    [Theory]
+    [InlineData(false, false)] [InlineData(true, false)] [InlineData(false, true)] [InlineData(true, true)]
+    public async Task StaleAsyncDuelNotificationsCannotReverseTheAuthoritativeCombatMode(bool staleEntry, bool detached) {
+        using var fixture = new Fixture();
+        if (!staleEntry || detached) ElixirService.PublishCombatTransition(fixture.Wizard, true, true);
+        var participantGameStats = fixture.Wizard.GameStats;
+        if (detached) ElixirService.DetachCombatSession(fixture.Wizard);
+        using var system = ActorSystem.Create("elixir-stale-mode-" + Guid.NewGuid().ToString("N"), "akka.actor.provider = local");
+        var packets = Channel.CreateUnbounded<IMessage>();
+        var socket = system.ActorOf(Props.Create(() => new SocketProbe(packets)), "socket");
+        var session = system.ActorOf(Props.CreateBy(new SessionProducer(socket)), "session");
+        var instance = await session.Ask<SessionActor>("Identify", Timeout, TestContext.Current.CancellationToken);
+        var actor = system.ActorOf(Props.Create(() => new ElixirProbe(instance, fixture.Store, fixture.Wizard)), "elixirs");
+        try {
+            Assert.True(await actor.Ask<bool>(new StaleDuelNotification(staleEntry), Timeout, TestContext.Current.CancellationToken));
+            await session.Ask<SessionActor>("Identify", Timeout, TestContext.Current.CancellationToken);
+            await socket.Ask<ActorIdentity>(new Identify("drain"), Timeout, TestContext.Current.CancellationToken);
+            var emitted = new List<IMessage>(); while (packets.Reader.TryRead(out var packet)) emitted.Add(packet);
+            Assert.Equal(!staleEntry && !detached, fixture.Wizard.IsInDuel);
+            Assert.Equal(staleEntry && !detached ? 2 : 0, fixture.Wizard.GameEffects.Count);
+            Assert.Same(participantGameStats, fixture.Wizard.GameStats);
+            if (detached) Assert.Equal(0f, participantGameStats.m_dmgBonusPercentAll);
+            Assert.Empty(emitted.OfType<WIZARD_12_PROTOCOL.MSG_ELIXIRSTATECHANGE>());
+            Assert.Empty(emitted.OfType<GAME_5_PROTOCOL.MSG_ADDEFFECT>());
+            Assert.Empty(emitted.OfType<GAME_5_PROTOCOL.MSG_REMOVEEFFECT>());
         }
         finally { await system.Terminate(); }
     }
 
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(5);
     private sealed record RefreshStep(Action? Before, bool Pvp);
+    private sealed record StaleDuelNotification(bool Entered);
     private sealed class SocketProbe : ReceiveActor {
         public SocketProbe(Channel<IMessage> packets) {
             Receive<IMessage>(message => packets.Writer.TryWrite(message));
@@ -189,9 +223,19 @@ public sealed partial class ElixirCancellationTests {
                 try {
                     using var scope = _store.Scope();
                     step.Before?.Invoke();
-                    typeof(ElixirService).GetField("_pvp", Flags)!.SetValue(this, step.Pvp);
-                    typeof(ElixirService).GetField("_combat", Flags)!.SetValue(this, step.Pvp);
+                    var wizard = (Wizard)typeof(ElixirService).GetField("_wizard", Flags)!.GetValue(this)!;
+                    foreach (var message in ElixirService.PublishCombatTransition(wizard, step.Pvp, step.Pvp)) SendToSocket(message);
                     typeof(ElixirService).GetMethod("Refresh", Flags)!.Invoke(this, [false]);
+                    Sender.Tell(true);
+                }
+                catch (Exception error) { Sender.Tell(new Status.Failure(error)); }
+            });
+            Receive<StaleDuelNotification>(notification => {
+                try {
+                    using var scope = _store.Scope();
+                    if (notification.Entered) typeof(ElixirService).GetMethod("DuelEntered", Flags)!
+                        .Invoke(this, [new COMBAT_106_PROTOCOL.MSG_ACTORADDEDTODUEL()]);
+                    else typeof(ElixirService).GetMethod("DuelLeft", Flags)!.Invoke(this, null);
                     Sender.Tell(true);
                 }
                 catch (Exception error) { Sender.Tell(new Status.Failure(error)); }
@@ -209,6 +253,7 @@ public sealed partial class ElixirCancellationTests {
         private readonly Dictionary<ulong, CoreTemplate?> _previous = new();
         internal ElixirTests.Store Store { get; } = new();
         internal Wizard Wizard { get; }
+        internal readonly List<IMessage> ActivationMessages = new();
         internal WizClientObjectItem Original => (WizClientObjectItem)Store.Documents["ClassicElixirItems/42/9100"];
         internal Fixture() {
             _runtime = _canonical.OctoberRuntime();
@@ -221,14 +266,19 @@ public sealed partial class ElixirCancellationTests {
                 var template = _canonical.Template(pair.Item2);
                 _previous[pair.Item2] = _templates.TryGetValue(pair.Item2, out var previous) ? previous : null;
                 _templates[pair.Item2] = template;
-                Assert.True(ElixirCollection.Purchase(Wizard, _canonical.Item(pair.Item1, pair.Item2), template, true,
-                    _canonical.Definition, Store.LoadAccount, _ => new Imcodec.IO.ByteString(new byte[] { 1 })).Saved);
+                var purchase = ElixirCollection.Purchase(Wizard, _canonical.Item(pair.Item1, pair.Item2), template, true,
+                    _canonical.Definition, Store.LoadAccount, _ => new Imcodec.IO.ByteString(new byte[] { 1 }));
+                Assert.True(purchase.Saved); Assert.NotNull(purchase.Activation.RuntimeMessages);
+                ActivationMessages.AddRange(purchase.Activation.RuntimeMessages);
             }
         }
         internal ElixirResult Cancel() => ElixirCollection.Cancel(Wizard, 9100);
         internal void ApplyEffects() {
-            foreach (var item in Wizard.EquipmentBehavior.EquippedItems)
-                Assert.Single(ElixirRuntime.AddApprovedEffects(Wizard, item, (WizItemTemplate)_templates[item.m_templateID.Full], false, false));
+            foreach (var item in Wizard.EquipmentBehavior.EquippedItems) {
+                Assert.True(item.m_inactiveBehaviors.OfType<ClientElixirBehavior>().Single().m_statsApplied);
+                Assert.Single(Wizard.GameEffects.Snapshot(), effect => effect.m_originatorID == item.m_globalID);
+                Assert.Empty(ElixirRuntime.AddApprovedEffects(Wizard, item, (WizItemTemplate)_templates[item.m_templateID.Full], false, false));
+            }
         }
         internal void AssertConsumedOnlySelected() {
             Assert.Equal(new ulong[] { 9001 }, Wizard.InventoryBehavior.InventoryItemIds);

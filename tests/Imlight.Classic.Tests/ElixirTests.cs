@@ -7,7 +7,9 @@ using Imcodec.IO;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.CoreLib.Classic.Elixirs;
 using Imlight.CoreLib.Game.Effects;
+using Imlight.CoreLib.Game.Services;
 using Imlight.CoreLib.Shared.Behaviors;
+using Imlight.CoreLib.Shared.Resources;
 using Imlight.CoreLib.WizardData.Collections;
 using Imlight.CoreLib.WizardData.Models.Player;
 using Raven.Client.Documents.Session;
@@ -342,7 +344,7 @@ public sealed class ElixirTests {
     }
 
     [Fact]
-    public void FailedCheckpointRetainsSavedAndAttachedSecondsAndRetryChargesExactlyOnce() {
+    public void FailedCheckpointRetainsSecondsAndRequiresFreshValidatedReloadBeforeChargingExactlyOnce() {
         var store = new Store();
         using var scope = store.Scope();
         var live = store.Login();
@@ -351,9 +353,18 @@ public sealed class ElixirTests {
         Assert.False(ElixirCollection.AdvanceOnline(live, 90, store.Resolve).Saved);
         Assert.Equal(1800u, Assert.Single(store.Ledger.Active).RemainingSeconds);
         Assert.Equal(1800u, Assert.Single(ElixirRuntime.RemainingTimers(live, store.Resolve)).RemainingSeconds);
+        Assert.True(WizardCollection.IsInventorySnapshotUncertain(live));
         store.FailSave = false;
-        Assert.True(ElixirCollection.AdvanceOnline(live, 90, store.Resolve).Saved);
+        var saves = store.Saves;
+        Assert.False(ElixirCollection.AdvanceOnline(live, 90, store.Resolve).Saved);
+        Assert.Equal(saves, store.Saves); Assert.Equal(1800u, Assert.Single(store.Ledger.Active).RemainingSeconds);
+        var reloaded = store.Login(); Assert.True(ElixirCollection.LoadValidated(reloaded, store.Resolve));
+        Assert.False(WizardCollection.IsInventorySnapshotUncertain(reloaded));
+        Assert.True(ElixirCollection.AdvanceOnline(reloaded, 90, store.Resolve).Saved);
         Assert.Equal(1710u, Assert.Single(store.Ledger.Active).RemainingSeconds);
+        Assert.Equal(1710u, Assert.Single(ElixirRuntime.RemainingTimers(reloaded, store.Resolve)).RemainingSeconds);
+        saves = store.Saves; Assert.False(ElixirCollection.AdvanceOnline(live, 90, store.Resolve).Saved);
+        Assert.Equal(saves, store.Saves); Assert.Equal(1710u, Assert.Single(store.Ledger.Active).RemainingSeconds);
     }
 
     [Fact]
@@ -438,6 +449,16 @@ public sealed class ElixirTests {
         internal IDisposable Scope() {
             var previous = WizardCollection.TestStoreScope.Value;
             var previousRows = WizardInventoryTransactions.TestRowsScope.Value;
+            var previousPublication = ElixirService.TestRuntimeScope.Value;
+            if (previousPublication is null) {
+                var templates = (IDictionary<ulong, CoreTemplate>)typeof(CoreObjectFactory)
+                    .GetField("s_templateCache", BindingFlags.Static | BindingFlags.NonPublic)!.GetValue(null)!;
+                // CLASSIC: cached authored templates only; unsupported synthetic IDs stay disabled without resource reads.
+                ElixirService.TestRuntimeScope.Value = new() {
+                    Template = id => templates.TryGetValue(id, out var template) ? template as WizItemTemplate : null!,
+                    SerializeEffect = _ => new ByteString(new byte[] { 1 }),
+                };
+            }
             WizardCollection.TestStoreScope.Value = new(Open, (session, _) => session.Load<Wizard>("wizard/42"));
             // CLASSIC: ordinary trash now validates the fresh backpack against tracked original rows. Keep this
             // in the shared scope because the native service probe opens its own scope on its actor thread.
@@ -447,6 +468,7 @@ public sealed class ElixirTests {
             return new Restore(() => {
                 WizardCollection.TestStoreScope.Value = previous;
                 WizardInventoryTransactions.TestRowsScope.Value = previousRows;
+                ElixirService.TestRuntimeScope.Value = previousPublication;
             });
         }
         private IDocumentSession Open() {

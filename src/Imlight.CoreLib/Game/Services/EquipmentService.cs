@@ -81,17 +81,21 @@ internal partial class EquipmentService(SessionActor sessionActor) : MessageServ
     protected static Props Props(SessionActor parentActor)
         => Akka.Actor.Props.Create(() => new EquipmentService(parentActor));
 
-    // CLASSIC: owned-item activation uses the same trusted duel context as purchases.
+    // CLASSIC: CombatService publishes mode/effects synchronously. Delayed secondary
+    // notifications request a refresh of its current state instead of overwriting it.
     [MessageHandler(typeof(COMBAT_106_PROTOCOL.MSG_ACTORADDEDTODUEL))]
     private void ElixirDuelEntered(COMBAT_106_PROTOCOL.MSG_ACTORADDEDTODUEL message)
-        => ElixirRules.SetCombatContext(GetActiveWizard(), true, message.Duel?.Duel?.m_bPVP ?? true);
+        => ElixirDuelLeft();
     [MessageHandler(typeof(COMBAT_106_PROTOCOL.MSG_COMBATWIN))]
     private void ElixirWon(COMBAT_106_PROTOCOL.MSG_COMBATWIN message) => ElixirDuelLeft();
     [MessageHandler(typeof(COMBAT_106_PROTOCOL.MSG_COMBATDEFEAT))]
     private void ElixirLost(COMBAT_106_PROTOCOL.MSG_COMBATDEFEAT message) => ElixirDuelLeft();
     [MessageHandler(typeof(CLASSIC_FEATURES_PROTOCOL.MSG_PVPRELEASE))]
     private void ElixirReleased(CLASSIC_FEATURES_PROTOCOL.MSG_PVPRELEASE message) => ElixirDuelLeft();
-    private void ElixirDuelLeft() => ElixirRules.SetCombatContext(GetActiveWizard(), false, false);
+    private void ElixirDuelLeft() {
+        if (GetActiveWizard() is { } wizard)
+            TellOtherServices(new CLASSIC_FEATURES_PROTOCOL.MSG_ELIXIRCHANGED { CharacterId = wizard.CharId });
+    }
 
     [MessageHandler(typeof(GAME_5_PROTOCOL.MSG_EQUIPITEM))]
     private void ReceiveEquipItem(GAME_5_PROTOCOL.MSG_EQUIPITEM message) {
@@ -157,8 +161,13 @@ internal partial class EquipmentService(SessionActor sessionActor) : MessageServ
         if (ElixirRules.IsElixir(item, itemTemplate) || message.SlotName == ElixirRules.SlotName) {
             if (message.SlotName != ElixirRules.SlotName || !ElixirRules.IsElixir(item, itemTemplate)) return;
             var activated = ElixirCollection.Activate(wizard, itemId);
-            if (!activated.Saved) return;
+            if (!activated.Saved) {
+                if (WizardCollection.IsInventorySnapshotUncertain(wizard)) CloseSession();
+                return;
+            }
             SendEquipItem(activated.Item, ElixirRules.SlotName);
+            // CLASSIC: effects already belong to the ACK lane; native publication follows the item's equip confirmation.
+            foreach (var packet in activated.RuntimeMessages) SendToSocket(packet);
             TellOtherServices(new CLASSIC_FEATURES_PROTOCOL.MSG_ELIXIRCHANGED { CharacterId = wizard.CharId });
             return;
         }

@@ -41,6 +41,7 @@ using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Classic.Rules;
 using Imlight.Common;
 using Imlight.CoreLib.WizardData.Models.Player;
+using Imlight.CoreLib.WizardData.Collections;
 
 namespace Imlight.CoreLib.Game.Minigames;
 
@@ -56,28 +57,17 @@ internal static class MinigameRewards {
             return default;
         }
 
-        var maxMana = stats.m_baseMana;
-        var reward = rules.MinigameMana(maxMana);
-        var fill = rules.Fill(reward, stats.m_currentMana, maxMana, stats.m_potionCharge, stats.m_potionMax);
-        loot.m_loot.Add(new ManaLootInfo { m_lootType = LOOT_TYPE.LOOT_TYPE_MANA, m_manaAmount = reward });
-        if (fill.ManaGained > 0) {
-            wizard.UpdateMana(fill.Mana);
-            player?.Tell(new WIZARD_12_PROTOCOL.MSG_UPDATEMANA {
-                Mana = fill.Mana,
-                MaxMana = stats.GetClientTypeAlternative().m_baseMana,
-                DisplayDiff = 1,
-            });
+        try {
+            if (!WizardPotionTransactions.TryMinigameFill(wizard, rules, out var receipt)) return default;
+            // CLASSIC: the historical window shows requested mana; append it only after the complete fill ACK.
+            loot.m_loot.Add(new ManaLootInfo { m_lootType = LOOT_TYPE.LOOT_TYPE_MANA, m_manaAmount = receipt.ManaReward });
+            foreach (var packet in receipt.Messages) player?.Tell(packet);
+            return receipt.Fill;
         }
-
-        if (fill.FlasksGained > 0) {
-            wizard.UpdatePotions(fill.Flasks, stats.m_potionMax);
-            player?.Tell(new WIZARD_12_PROTOCOL.MSG_UPDATEPOTIONS { PotionMax = stats.m_potionMax, PotionCharge = fill.Flasks });
+        catch {
+            if (WizardCollection.IsInventorySnapshotUncertain(wizard)) player?.Tell("Close");
+            throw;
         }
-
-        Logger.Information("Minigame: wizard {0} reached {1} threshold(s): +{2} mana (now {3}/{4}), flasks +{5:0.##} (now {6:0.##}/{7}).",
-            Logger.Args(wizard.CharId, thresholdsReached, fill.ManaGained, fill.Mana, maxMana, fill.FlasksGained, fill.Flasks, stats.m_potionMax));
-
-        return fill;
     }
 
     /// <summary>Pays the gold the reward window shows.</summary>

@@ -555,10 +555,13 @@ public static class WizardCollection {
     /// </summary>
     /// <param name="wizard">The wizard object containing the updated level.</param>
     public static void UpdateCharacterLevel(Wizard wizard) {
-        UpdateCharacter(wizard.CharId, existingCharacter => {
+        if (wizard is null || IsInventorySnapshotUncertain(wizard)) return;
+        CommitCharacterMutation(wizard.CharId, (_, existingCharacter) => {
+            if (IsInventorySnapshotUncertain(wizard)) return false;
             existingCharacter.MagicSchoolBehavior.Level = wizard.MagicSchoolBehavior.Level;
             existingCharacter.MagicSchoolBehavior.ExperiencePoints = wizard.MagicSchoolBehavior.ExperiencePoints;
-        });
+            return true;
+        }, null, onSaveFailure: _ => MarkInventorySnapshotUncertain(wizard));
     }
 
     /// <summary>
@@ -634,18 +637,25 @@ public static class WizardCollection {
 
     internal static bool UpdateCharacterGameStats(Wizard wizard, Func<IDocumentSession> openSession,
         Func<IDocumentSession, ulong, Wizard> loadWizard) {
+        if (wizard is null || IsInventorySnapshotUncertain(wizard)) return false;
         return CommitCharacterMutation(wizard.CharId, (_, persisted) => {
+            if (IsInventorySnapshotUncertain(wizard)) return false;
             var savedStats = persisted.GameStats;
             var snapshot = wizard.GameStats.CloneSnapshotWithGold(savedStats.m_currentGold);
             // CLASSIC: preserve each stored field independently; ordinary stats saves never normalize a wallet.
             snapshot.m_currentArenaPoints = savedStats.m_currentArenaPoints;
             snapshot.m_currentPvPCurrency = savedStats.m_currentPvPCurrency;
+            // CLASSIC: ordinary HP/mana saves cannot replace an acknowledged flask grant/debit from stale live state.
+            snapshot.m_potionCharge = savedStats.m_potionCharge;
+            snapshot.m_potionMax = savedStats.m_potionMax;
             persisted.GameStats = snapshot;
             return true;
         }, persisted => {
             wizard.GameStats.m_currentGold = persisted.GameStats.m_currentGold;
             wizard.GameStats.m_currentArenaPoints = persisted.GameStats.m_currentArenaPoints;
             wizard.GameStats.m_currentPvPCurrency = persisted.GameStats.m_currentPvPCurrency;
+            wizard.GameStats.m_potionCharge = persisted.GameStats.m_potionCharge;
+            wizard.GameStats.m_potionMax = persisted.GameStats.m_potionMax;
         }, openSession, loadWizard);
     }
 

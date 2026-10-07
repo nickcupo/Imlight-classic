@@ -77,16 +77,20 @@ internal class CrownShopService(SessionActor sessionActor) : MessageService(sess
 
     private sealed record PendingHire(WIZARD_12_PROTOCOL.MSG_PCS_PURCHASE_REQUEST Request, CrownShopEntry Item, bool PayWithGold);
 
+    // CLASSIC: delayed shop notifications cannot replace CombatService's current trusted mode.
     [MessageHandler(typeof(COMBAT_106_PROTOCOL.MSG_ACTORADDEDTODUEL))]
     private void ElixirDuelEntered(COMBAT_106_PROTOCOL.MSG_ACTORADDEDTODUEL message)
-        => ElixirRules.SetCombatContext(GetActiveWizard(), true, message.Duel?.Duel?.m_bPVP ?? true);
+        => ElixirDuelLeft();
     [MessageHandler(typeof(COMBAT_106_PROTOCOL.MSG_COMBATWIN))]
     private void ElixirWon(COMBAT_106_PROTOCOL.MSG_COMBATWIN message) => ElixirDuelLeft();
     [MessageHandler(typeof(COMBAT_106_PROTOCOL.MSG_COMBATDEFEAT))]
     private void ElixirLost(COMBAT_106_PROTOCOL.MSG_COMBATDEFEAT message) => ElixirDuelLeft();
     [MessageHandler(typeof(CLASSIC_FEATURES_PROTOCOL.MSG_PVPRELEASE))]
     private void ElixirReleased(CLASSIC_FEATURES_PROTOCOL.MSG_PVPRELEASE message) => ElixirDuelLeft();
-    private void ElixirDuelLeft() => ElixirRules.SetCombatContext(GetActiveWizard(), false, false);
+    private void ElixirDuelLeft() {
+        if (GetActiveWizard() is { } wizard)
+            TellOtherServices(new CLASSIC_FEATURES_PROTOCOL.MSG_ELIXIRCHANGED { CharacterId = wizard.CharId });
+    }
 
     protected static Props Props(SessionActor parentActor)
         => Akka.Actor.Props.Create(() => new CrownShopService(parentActor));
@@ -201,13 +205,19 @@ internal class CrownShopService(SessionActor sessionActor) : MessageService(sess
             }
             var fresh = CoreObjectFactory.FinalizeCoreObject((uint)item.Template) as WizClientObjectItem;
             var purchased = ElixirCollection.Purchase(wizard, fresh, purchaseTemplate, true);
-            if (!purchased.Saved) { Fail(message, purchased.Error); return; }
+            if (!purchased.Saved) {
+                if (WizardCollection.IsInventorySnapshotUncertain(wizard)) { CloseSession(); return; }
+                Fail(message, purchased.Error);
+                return;
+            }
             SendToSocket(new GAME_5_PROTOCOL.MSG_INVENTORYBEHAVIOR_ADDITEM {
                 GlobalID = wizard.GameObjectID, SerializedItem = purchased.ItemData,
             });
             SendToSocket(new GAME_5_PROTOCOL.MSG_EQUIPITEM {
                 ItemID = fresh.m_globalID, SlotName = ElixirRules.SlotName, IsEquip = 1,
             });
+            // CLASSIC: account->character ACK and runtime effects complete together; the client must see the equipped original first.
+            foreach (var packet in purchased.Activation.RuntimeMessages) SendToSocket(packet);
             TellOtherServices(new CLASSIC_FEATURES_PROTOCOL.MSG_ELIXIRCHANGED { CharacterId = wizard.CharId });
             Complete(wizard, message, item, false);
             return;

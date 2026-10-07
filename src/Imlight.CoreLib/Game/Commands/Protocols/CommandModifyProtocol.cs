@@ -27,6 +27,7 @@ using Imlight.CoreLib.Shared.Character;
 using Imlight.CoreLib.Shared.Packets;
 using Imlight.CoreLib.Shared.Resources;
 using Imlight.CoreLib.WizardData.Models.Player;
+using Imlight.CoreLib.WizardData.Collections;
 
 namespace Imlight.CoreLib.Game.Commands.Protocols;
 
@@ -441,17 +442,21 @@ internal class CommandModifyProtocol : CommandProtocol {
             return;
         }
 
-        Context.Character.GameStats.m_baseHitpoints = healthInt;
+        WizardCollection.WithCharacterLock(Context.Character.CharId, () => {
+            if (WizardCollection.IsInventorySnapshotUncertain(Context.Character)) return false;
+            Context.Character.GameStats.m_baseHitpoints = healthInt;
 
-        var networkMessage = new WIZARD_12_PROTOCOL.MSG_UPDATEHEALTH() {
-            CharacterID = Context.CharacterObject.m_globalID,
-            NewHealth = Context.Character.GameStats.m_currentHitpoints,
-            NewHealthMax = healthInt,
-            DisplayDiff = 1,
-        };
-        Context.SessionActor.Tell(networkMessage, null);
+            var networkMessage = new WIZARD_12_PROTOCOL.MSG_UPDATEHEALTH() {
+                CharacterID = Context.CharacterObject.m_globalID,
+                NewHealth = Context.Character.GameStats.m_currentHitpoints,
+                NewHealthMax = healthInt,
+                DisplayDiff = 1,
+            };
+            Context.SessionActor.Tell(networkMessage, null);
 
-        InformSenderClient($"Set max health to {healthInt}.");
+            InformSenderClient($"Set max health to {healthInt}.");
+            return true;
+        });
     }
 
     [Help("Set your maximum mana.")]
@@ -465,16 +470,20 @@ internal class CommandModifyProtocol : CommandProtocol {
             return;
         }
 
-        Context.Character.GameStats.m_baseMana = manaInt;
+        WizardCollection.WithCharacterLock(Context.Character.CharId, () => {
+            if (WizardCollection.IsInventorySnapshotUncertain(Context.Character)) return false;
+            Context.Character.GameStats.m_baseMana = manaInt;
 
-        var networkMessage = new WIZARD_12_PROTOCOL.MSG_UPDATEMANA() {
-            Mana = Context.Character.GameStats.m_currentMana,
-            MaxMana = manaInt,
-            DisplayDiff = 1,
-        };
-        Context.SessionActor.Tell(networkMessage, null);
+            var networkMessage = new WIZARD_12_PROTOCOL.MSG_UPDATEMANA() {
+                Mana = Context.Character.GameStats.m_currentMana,
+                MaxMana = manaInt,
+                DisplayDiff = 1,
+            };
+            Context.SessionActor.Tell(networkMessage, null);
 
-        InformSenderClient($"Set max mana to {manaInt}.");
+            InformSenderClient($"Set max mana to {manaInt}.");
+            return true;
+        });
     }
 
     // CLASSIC: QA help for the Pet Pavilion; the level up itself still comes from a pet game or snack.
@@ -534,23 +543,27 @@ internal class CommandModifyProtocol : CommandProtocol {
             return;
         }
 
-        Context.Character.GameStats.m_energyMax = energyInt;
-        Context.Character.PetOwnerBehavior.SetEnergy(energyInt);
+        WizardCollection.WithCharacterLock(Context.Character.CharId, () => {
+            if (WizardCollection.IsInventorySnapshotUncertain(Context.Character)) return false;
+            Context.Character.GameStats.m_energyMax = energyInt;
+            Context.Character.PetOwnerBehavior.SetEnergy(energyInt);
 
-        var tickMsg = new PET_9_PROTOCOL.MSG_PETENERGYTICK() {
-            GlobalID = Context.Character.GameObject.m_globalID,
-            Energy = Context.Character.PetOwnerBehavior.Energy,
-            MaxEnergy = energyInt,
-            TickTime = (int) Context.Character.PetOwnerBehavior.LastEnergyTickEpoch
-        };
-        var maxMsg = new PET_9_PROTOCOL.MSG_PETENERGYMAX() {
-            MaxEnergy = energyInt
-        };
+            var tickMsg = new PET_9_PROTOCOL.MSG_PETENERGYTICK() {
+                GlobalID = Context.Character.GameObject.m_globalID,
+                Energy = Context.Character.PetOwnerBehavior.Energy,
+                MaxEnergy = energyInt,
+                TickTime = (int) Context.Character.PetOwnerBehavior.LastEnergyTickEpoch
+            };
+            var maxMsg = new PET_9_PROTOCOL.MSG_PETENERGYMAX() {
+                MaxEnergy = energyInt
+            };
 
-        Context.SessionActor.Tell(tickMsg, null);
-        Context.SessionActor.Tell(maxMsg, null);
+            Context.SessionActor.Tell(tickMsg, null);
+            Context.SessionActor.Tell(maxMsg, null);
 
-        InformSenderClient($"Set max energy to {energyInt}.");
+            InformSenderClient($"Set max energy to {energyInt}.");
+            return true;
+        });
     }
 
     [Help("Set your current health.")]
@@ -565,24 +578,28 @@ internal class CommandModifyProtocol : CommandProtocol {
             return;
         }
 
-        var newHealth = Math.Min(healthInt, Context.Character.GameStats.m_baseHitpoints);
-        Context.Character.UpdateHealth(newHealth);
+        WizardCollection.WithCharacterLock(Context.Character.CharId, () => {
+            if (WizardCollection.IsInventorySnapshotUncertain(Context.Character)) return false;
+            var newHealth = Math.Min(healthInt, Context.Character.GameStats.m_baseHitpoints);
+            Context.Character.UpdateHealth(newHealth);
 
-        // The client has a max health increase effect applied, so sending it here would double the health client side.
-        var magicSchool = Context.Character.MagicSchoolBehavior.MagicSchool;
-        var level = Context.Character.MagicSchoolBehavior.Level;
-        var baseStats = MagicLevelsConfig.GetPlayerLevelInfo(magicSchool, level);
-        var normMaxHealth = baseStats.m_hitpoints;
+            // The client has a max health increase effect applied, so sending it here would double the health client side.
+            var magicSchool = Context.Character.MagicSchoolBehavior.MagicSchool;
+            var level = Context.Character.MagicSchoolBehavior.Level;
+            var baseStats = MagicLevelsConfig.GetPlayerLevelInfo(magicSchool, level);
+            var normMaxHealth = baseStats.m_hitpoints;
 
-        var networkMessage = new WIZARD_12_PROTOCOL.MSG_UPDATEHEALTH() {
-            CharacterID = Context.CharacterObject.m_globalID,
-            NewHealth = healthInt,
-            NewHealthMax = normMaxHealth,
-            DisplayDiff = 1,
-        };
-        Context.SessionActor.Tell(networkMessage, null);
+            var networkMessage = new WIZARD_12_PROTOCOL.MSG_UPDATEHEALTH() {
+                CharacterID = Context.CharacterObject.m_globalID,
+                NewHealth = healthInt,
+                NewHealthMax = normMaxHealth,
+                DisplayDiff = 1,
+            };
+            Context.SessionActor.Tell(networkMessage, null);
 
-        InformSenderClient($"Set current health to {healthInt}.");
+            InformSenderClient($"Set current health to {healthInt}.");
+            return true;
+        });
     }
 
     [Help("Set your current mana.")]
@@ -596,23 +613,27 @@ internal class CommandModifyProtocol : CommandProtocol {
             return;
         }
 
-        var newMana = Math.Min(manaInt, Context.Character.GameStats.m_baseMana);
-        Context.Character.UpdateMana(newMana);
+        WizardCollection.WithCharacterLock(Context.Character.CharId, () => {
+            if (WizardCollection.IsInventorySnapshotUncertain(Context.Character)) return false;
+            var newMana = Math.Min(manaInt, Context.Character.GameStats.m_baseMana);
+            Context.Character.UpdateMana(newMana);
 
-        // The client has a max mana increase effect applied, so sending it here would double the mana client side.
-        var magicSchool = Context.Character.MagicSchoolBehavior.MagicSchool;
-        var level = Context.Character.MagicSchoolBehavior.Level;
-        var baseStats = MagicLevelsConfig.GetPlayerLevelInfo(magicSchool, level);
-        var normMaxMana = baseStats.m_mana;
+            // The client has a max mana increase effect applied, so sending it here would double the mana client side.
+            var magicSchool = Context.Character.MagicSchoolBehavior.MagicSchool;
+            var level = Context.Character.MagicSchoolBehavior.Level;
+            var baseStats = MagicLevelsConfig.GetPlayerLevelInfo(magicSchool, level);
+            var normMaxMana = baseStats.m_mana;
 
-        var networkMessage = new WIZARD_12_PROTOCOL.MSG_UPDATEMANA() {
-            Mana = manaInt,
-            MaxMana = normMaxMana,
-            DisplayDiff = 1,
-        };
-        Context.SessionActor.Tell(networkMessage, null);
+            var networkMessage = new WIZARD_12_PROTOCOL.MSG_UPDATEMANA() {
+                Mana = manaInt,
+                MaxMana = normMaxMana,
+                DisplayDiff = 1,
+            };
+            Context.SessionActor.Tell(networkMessage, null);
 
-        InformSenderClient($"Set current mana to {manaInt}.");
+            InformSenderClient($"Set current mana to {manaInt}.");
+            return true;
+        });
     }
 
     [Help("Set your current energy.")]
@@ -627,24 +648,28 @@ internal class CommandModifyProtocol : CommandProtocol {
             return;
         }
 
-        var newEnergy = Math.Min(energyInt, Context.Character.GameStats.m_energyMax);
-        Context.Character.UpdateEnergy(newEnergy);
+        WizardCollection.WithCharacterLock(Context.Character.CharId, () => {
+            if (WizardCollection.IsInventorySnapshotUncertain(Context.Character)) return false;
+            var newEnergy = Math.Min(energyInt, Context.Character.GameStats.m_energyMax);
+            Context.Character.UpdateEnergy(newEnergy);
 
-        // The client has a max energy increase effect applied, so sending it here would double the energy client side.
-        var magicSchool = Context.Character.MagicSchoolBehavior.MagicSchool;
-        var level = Context.Character.MagicSchoolBehavior.Level;
-        var baseStats = MagicLevelsConfig.GetPlayerLevelInfo(magicSchool, level);
-        var normMaxEnergy = baseStats.m_petEnergy;
+            // The client has a max energy increase effect applied, so sending it here would double the energy client side.
+            var magicSchool = Context.Character.MagicSchoolBehavior.MagicSchool;
+            var level = Context.Character.MagicSchoolBehavior.Level;
+            var baseStats = MagicLevelsConfig.GetPlayerLevelInfo(magicSchool, level);
+            var normMaxEnergy = baseStats.m_petEnergy;
 
-        var networkMessage = new PET_9_PROTOCOL.MSG_PETENERGYTICK() {
-            GlobalID = Context.Character.GameObject.m_globalID,
-            Energy = energyInt,
-            MaxEnergy = normMaxEnergy,
-            TickTime = (int) Context.Character.PetOwnerBehavior.LastEnergyTickEpoch
-        };
-        Context.SessionActor.Tell(networkMessage, null);
+            var networkMessage = new PET_9_PROTOCOL.MSG_PETENERGYTICK() {
+                GlobalID = Context.Character.GameObject.m_globalID,
+                Energy = energyInt,
+                MaxEnergy = normMaxEnergy,
+                TickTime = (int) Context.Character.PetOwnerBehavior.LastEnergyTickEpoch
+            };
+            Context.SessionActor.Tell(networkMessage, null);
 
-        InformSenderClient($"Set current energy to {energyInt}.");
+            InformSenderClient($"Set current energy to {energyInt}.");
+            return true;
+        });
     }
 
     [Help("Refill your health.")]
@@ -652,24 +677,28 @@ internal class CommandModifyProtocol : CommandProtocol {
     [Alias("refillhp", "heal")]
     [AuthRequired(AuthLevel.QualityAssurance)]
     private void MaxHealthCommand() {
-        var stats = Context.Character.GameStats;
-        var maxHealth = stats.m_baseHitpoints;
+        WizardCollection.WithCharacterLock(Context.Character.CharId, () => {
+            if (WizardCollection.IsInventorySnapshotUncertain(Context.Character)) return false;
+            var stats = Context.Character.GameStats;
+            var maxHealth = stats.m_baseHitpoints;
 
-        // The client has a max health increase effect applied, so sending it here would double the health client side.
-        var magicSchool = Context.Character.MagicSchoolBehavior.MagicSchool;
-        var level = Context.Character.MagicSchoolBehavior.Level;
-        var baseStats = MagicLevelsConfig.GetPlayerLevelInfo(magicSchool, level);
-        var normMaxHealth = baseStats.m_hitpoints;
+            // The client has a max health increase effect applied, so sending it here would double the health client side.
+            var magicSchool = Context.Character.MagicSchoolBehavior.MagicSchool;
+            var level = Context.Character.MagicSchoolBehavior.Level;
+            var baseStats = MagicLevelsConfig.GetPlayerLevelInfo(magicSchool, level);
+            var normMaxHealth = baseStats.m_hitpoints;
 
-        Context.Character.UpdateHealth(maxHealth);
+            Context.Character.UpdateHealth(maxHealth);
 
-        var networkMessage = new WIZARD_12_PROTOCOL.MSG_UPDATEHEALTH() {
-            CharacterID = Context.CharacterObject.m_globalID,
-            NewHealth = maxHealth,
-            NewHealthMax = normMaxHealth,
-            DisplayDiff = 1,
-        };
-        Context.SessionActor.Tell(networkMessage, null);
+            var networkMessage = new WIZARD_12_PROTOCOL.MSG_UPDATEHEALTH() {
+                CharacterID = Context.CharacterObject.m_globalID,
+                NewHealth = maxHealth,
+                NewHealthMax = normMaxHealth,
+                DisplayDiff = 1,
+            };
+            Context.SessionActor.Tell(networkMessage, null);
+            return true;
+        });
     }
 
     [Help("Refill your mana.")]
@@ -677,23 +706,27 @@ internal class CommandModifyProtocol : CommandProtocol {
     [Alias("refillmp", "rejuvenate", "rejuv")]
     [AuthRequired(AuthLevel.QualityAssurance)]
     private void MaxManaCommand() {
-        var stats = Context.Character.GameStats;
-        var maxMana = stats.m_baseMana;
+        WizardCollection.WithCharacterLock(Context.Character.CharId, () => {
+            if (WizardCollection.IsInventorySnapshotUncertain(Context.Character)) return false;
+            var stats = Context.Character.GameStats;
+            var maxMana = stats.m_baseMana;
 
-        // The client has a max mana increase effect applied, so sending it here would double the mana client side.
-        var magicSchool = Context.Character.MagicSchoolBehavior.MagicSchool;
-        var level = Context.Character.MagicSchoolBehavior.Level;
-        var baseStats = MagicLevelsConfig.GetPlayerLevelInfo(magicSchool, level);
-        var normMaxMana = baseStats.m_mana;
+            // The client has a max mana increase effect applied, so sending it here would double the mana client side.
+            var magicSchool = Context.Character.MagicSchoolBehavior.MagicSchool;
+            var level = Context.Character.MagicSchoolBehavior.Level;
+            var baseStats = MagicLevelsConfig.GetPlayerLevelInfo(magicSchool, level);
+            var normMaxMana = baseStats.m_mana;
 
-        Context.Character.UpdateMana(maxMana);
+            Context.Character.UpdateMana(maxMana);
 
-        var networkMessage = new WIZARD_12_PROTOCOL.MSG_UPDATEMANA() {
-            Mana = maxMana,
-            MaxMana = normMaxMana,
-            DisplayDiff = 1,
-        };
-        Context.SessionActor.Tell(networkMessage, null);
+            var networkMessage = new WIZARD_12_PROTOCOL.MSG_UPDATEMANA() {
+                Mana = maxMana,
+                MaxMana = normMaxMana,
+                DisplayDiff = 1,
+            };
+            Context.SessionActor.Tell(networkMessage, null);
+            return true;
+        });
     }
 
     [Help("Refill your energy.")]
@@ -701,22 +734,26 @@ internal class CommandModifyProtocol : CommandProtocol {
     [Alias("refillen", "refillnrg", "refillpet", "energize")]
     [AuthRequired(AuthLevel.QualityAssurance)]
     private void MaxEnergyCommand() {
-        // The client has a max mana increase effect applied, so sending it here would double the mana client side.
-        var magicSchool = Context.Character.MagicSchoolBehavior.MagicSchool;
-        var level = Context.Character.MagicSchoolBehavior.Level;
-        var baseStats = MagicLevelsConfig.GetPlayerLevelInfo(magicSchool, level);
-        var normMaxEnergy = baseStats.m_petEnergy;
+        WizardCollection.WithCharacterLock(Context.Character.CharId, () => {
+            if (WizardCollection.IsInventorySnapshotUncertain(Context.Character)) return false;
+            // The client has a max mana increase effect applied, so sending it here would double the mana client side.
+            var magicSchool = Context.Character.MagicSchoolBehavior.MagicSchool;
+            var level = Context.Character.MagicSchoolBehavior.Level;
+            var baseStats = MagicLevelsConfig.GetPlayerLevelInfo(magicSchool, level);
+            var normMaxEnergy = baseStats.m_petEnergy;
 
-        Context.Character.UpdateEnergy(normMaxEnergy);
+            Context.Character.UpdateEnergy(normMaxEnergy);
 
-        // Inform the client of the change.
-        var networkMessage = new PET_9_PROTOCOL.MSG_PETENERGYTICK() {
-            GlobalID = Context.Character.GameObject.m_globalID,
-            Energy = normMaxEnergy,
-            MaxEnergy = normMaxEnergy,
-            TickTime = (int) Context.Character.PetOwnerBehavior.LastEnergyTickEpoch
-        };
-        Context.SessionActor.Tell(networkMessage, null);
+            // Inform the client of the change.
+            var networkMessage = new PET_9_PROTOCOL.MSG_PETENERGYTICK() {
+                GlobalID = Context.Character.GameObject.m_globalID,
+                Energy = normMaxEnergy,
+                MaxEnergy = normMaxEnergy,
+                TickTime = (int) Context.Character.PetOwnerBehavior.LastEnergyTickEpoch
+            };
+            Context.SessionActor.Tell(networkMessage, null);
+            return true;
+        });
     }
 
     [Help("Gain a cantrip level.")]
@@ -822,17 +859,17 @@ internal class CommandModifyProtocol : CommandProtocol {
             return;
         }
 
-        Context.Character.UpdatePotions(potionMaxInt, potionMaxInt);
-
-        // Inform the player's game client that their potion max has been updated.
-        var networkMessage = new WIZARD_12_PROTOCOL.MSG_UPDATEPOTIONS {
-            PotionMax = potionMaxInt,
-            PotionCharge = potionMaxInt
-        };
-        Context.SessionActor.Tell(networkMessage, null);
-        InformSenderClient($"Set and filled potions to {potionMaxInt}.");
+        try {
+            if (!WizardPotionTransactions.TrySetPotions(Context.Character, potionMaxInt, potionMaxInt, out var receipt)) return;
+            foreach (var packet in receipt.Messages) Context.SessionActor.Tell(packet, null);
+            InformSenderClient($"Set and filled potions to {potionMaxInt}.");
+        }
+        catch {
+            if (WizardCollection.IsInventorySnapshotUncertain(Context.Character)) Context.SessionActor.Tell("Close", null);
+            throw;
+        }
     }
-    
+
     [Help("Add experience.")]
     [Command("addxp")]
     [AuthRequired(AuthLevel.QualityAssurance)]

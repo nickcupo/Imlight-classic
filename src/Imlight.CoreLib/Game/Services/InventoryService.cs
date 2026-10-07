@@ -90,6 +90,7 @@ internal class InventoryService(SessionActor sessionActor) : MessageService(sess
             if (result.Saved) {
                 foreach (var cleanup in ElixirService.ExpireCommitted(wizard, result, true)) SendToSocket(cleanup);
             }
+            else if (WizardCollection.IsInventorySnapshotUncertain(wizard)) CloseSession();
             else Logger.Information("Active elixir dismissal of item {0} by {1} refused.", Logger.Args(message.GlobalID, wizard.CharId));
             return;
         }

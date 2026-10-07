@@ -213,17 +213,14 @@ public static class LootGranter {
     }
 
     private static void UpdateWizardPotionMax(IActorRef playerActor, Wizard wizard) {
-        var currentWizardMaxPots = wizard.GameStats.m_potionMax;
-        var newWizardMaxPots = currentWizardMaxPots + 1;
-
-        wizard.UpdatePotions(newWizardMaxPots, newWizardMaxPots);
-
-        // Inform the player's game client that their potion charge has been updated.
-        var potionChargeUpdateMsg = new WIZARD_12_PROTOCOL.MSG_UPDATEPOTIONS {
-            PotionMax = newWizardMaxPots,
-            PotionCharge = newWizardMaxPots
-        };
-        Send(playerActor, potionChargeUpdateMsg);
+        try {
+            if (!WizardPotionTransactions.TryAddSlotAndFill(wizard, out var receipt)) return;
+            foreach (var packet in receipt.Messages) Send(playerActor, packet);
+        }
+        catch {
+            if (WizardCollection.IsInventorySnapshotUncertain(wizard)) Send(playerActor, "Close");
+            throw;
+        }
     }
 
     private static void SendLootInfoToClient(IActorRef playerActor, DropTableResult results, Wizard wizard) {

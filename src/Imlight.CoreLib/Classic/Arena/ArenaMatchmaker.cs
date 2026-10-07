@@ -1214,9 +1214,10 @@ internal sealed class ArenaMatchmaker {
         return ArenaMessages.Team(View(match), side, actors);
     }
 
+    // CLASSIC: r806919 admits match status 0 in Join/Friends and 4 in Watch. Only Watch's live phases advertise 4.
     private ArenaMatchView View(Match match) => new(match.Id, match.TournamentId, match.MatchNameId, match.MatchName, match.TeamSize,
         match.TeamIds, _players.GetValueOrDefault(match.Creator)?.ActorId ?? 0, match.FriendsOnly, match.MinLevel, match.MaxLevel,
-        Replaceable(match) ? 0 : 1, match.Kind == ArenaKind.Ranked);
+        Replaceable(match) ? 0 : match.Phase is Phase.Travelling or Phase.Fighting ? 4 : 1, match.Kind == ArenaKind.Ranked);
 
     private double AverageRating(Match match) {
         var members = match.Members.ToList();
