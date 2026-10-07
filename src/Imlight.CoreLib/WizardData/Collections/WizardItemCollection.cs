@@ -21,6 +21,8 @@ using System.Collections.Generic;
 using System.Linq;
 using Raven.Client.Documents;
 using Raven.Client.Documents.Operations;
+using Raven.Client.Documents.Linq;
+using Raven.Client.Documents.Session;
 using Imlight.Common;
 using Imlight.CoreLib.Game.Pet;
 using Imlight.CoreLib.Shared.Resources;
@@ -335,89 +337,61 @@ public static class WizardItemCollection {
     /// <param name="deckId">The ID of the deck.</param>
     /// <param name="spellTemplateId">The ID of the spell template.</param>
     /// <returns>True if the item was successfully added to the deck, false otherwise.</returns>
-    public static bool AddSpellToDeck(ulong deckId, uint spellTemplateId) {
-        using var session = s_store.OpenSession();
-
-        // Get the deck from the items collection.
-        var associatedDeck = session.Query<WizClientObjectItem>(collectionName: CollectionName)
-            .FirstOrDefault(x => x.m_globalID == deckId);
-
-        // If the deck was not found, return false.
-        if (associatedDeck == null) {
-            return false;
-        }
-
-        // Search through the item behaviors to find the deck behavior.
-        if (!CoreObjectFactory.FindBehaviorInstance<DeckBehavior>(associatedDeck, out var deckBehavior)) {
-            Logger.Error("Failed to find the deck behavior for item {0}.", 
-                Logger.Args(associatedDeck.m_globalID));
-
-            return false;
-        }
-
-        // Add the spell to the deck.
-        var spellList = deckBehavior.m_spellList ?? new List<SpellData>();
-        var spellDeckData = spellList.Find(x => x.m_templateID == spellTemplateId);
-        if (spellDeckData is null) {
-            // It may not be included yet. We'll add another entry.
-            var newSpellDeckData = new SpellData {
-                m_templateID = spellTemplateId,
-                m_quantity = 1
-            };
-            spellList.Add(newSpellDeckData);
-        }
-        else {
-            // Otherwise, we'll just increment the quantity.
-            spellDeckData.m_quantity++;
-        }
-
-        // Save the changes.
-        deckBehavior.m_spellList = spellList;
-        session.SaveChanges();
-
-        return true;
-    }
+    public static bool AddSpellToDeck(ulong deckId, uint spellTemplateId)
+        => ChangeDeckSpell(deckId, spellTemplateId, add: true);
 
     /// <summary>
     /// Removes a spell from a deck.
     /// </summary>
     /// <param name="deckId">The ID of the deck.</param>
     /// <param name="spellTemplateId">The ID of the spell template to remove.</param>
-    public static void RemoveSpellFromDeck(ulong deckId, uint spellTemplateId) {
-        using var session = s_store.OpenSession();
+    public static bool RemoveSpellFromDeck(ulong deckId, uint spellTemplateId)
+        => ChangeDeckSpell(deckId, spellTemplateId, add: false);
 
-        // Get the deck from the items collection.
-        var associatedDeck = session.Query<WizClientObjectItem>(collectionName: CollectionName)
-            .FirstOrDefault(x => x.m_globalID == deckId);
+    // CLASSIC: a fresh item lookup can create a cold auto-index. An empty stale result is not a missing deck.
+    internal static IQueryable<WizClientObjectItem> DeckItemQuery(IDocumentSession session, ulong deckId)
+        => session.Query<WizClientObjectItem>(collectionName: CollectionName)
+            .Customize(query => query.WaitForNonStaleResults(TimeSpan.FromSeconds(
+                ConfigurationManager.Settings["Database.DatabaseWaitForNonStaleResultsTimeout"].AsByte(5))))
+            .Where(item => item.m_globalID == deckId);
 
-        // If the deck was not found, return false.
-        if (associatedDeck == null) {
-            return;
+    internal static int? SavedDeckSpellCount(ulong deckId, uint spellTemplateId,
+        Func<IDocumentSession> openSession = null,
+        Func<IDocumentSession, ulong, WizClientObjectItem> loadItem = null) {
+        using var session = openSession is null ? s_store.OpenSession() : openSession();
+        var item = loadItem is null ? DeckItemQuery(session, deckId).FirstOrDefault() : loadItem(session, deckId);
+        if (item is null || !CoreObjectFactory.FindBehaviorInstance<DeckBehavior>(item, out var deck)) return null;
+        return deck.m_spellList?.Where(card => card.m_templateID == spellTemplateId)
+            .Sum(card => checked((int) card.m_quantity)) ?? 0;
+    }
+
+    // CLASSIC: no retry after a thrown save: its commit status is uncertain and a retry could add a second card.
+    internal static bool ChangeDeckSpell(ulong deckId, uint spellTemplateId, bool add,
+        Func<IDocumentSession> openSession = null,
+        Func<IDocumentSession, ulong, WizClientObjectItem> loadItem = null) {
+        using var session = openSession is null ? s_store.OpenSession() : openSession();
+        var item = loadItem is null ? DeckItemQuery(session, deckId).FirstOrDefault() : loadItem(session, deckId);
+        if (item is null) return false;
+        if (!CoreObjectFactory.FindBehaviorInstance<DeckBehavior>(item, out var deck)) {
+            Logger.Error("Failed to find the deck behavior for item {0}.", Logger.Args(deckId));
+            return false;
         }
 
-        // Search through the item behaviors to find the deck behavior.
-        if (!CoreObjectFactory.FindBehaviorInstance<DeckBehavior>(associatedDeck, out var deckBehavior)) {
-            Logger.Error("Failed to find the deck behavior for item {0}.", Logger.Args(associatedDeck.m_globalID));
-            return;
-        }
-
-        // Remove the spell from the deck.
-        var spellList = deckBehavior.m_spellList ?? new List<SpellData>();
-        var spellDeckData = spellList.Find(x => x.m_templateID == spellTemplateId);
-        if (spellDeckData is null) {
-            return;
-        }
-
-        if (spellDeckData.m_quantity > 1) {
-            spellDeckData.m_quantity--;
+        var cards = deck.m_spellList ?? [];
+        var card = cards.Find(candidate => candidate.m_templateID == spellTemplateId);
+        if (add) {
+            if (card is null) cards.Add(new SpellData { m_templateID = spellTemplateId, m_quantity = 1 });
+            else card.m_quantity = checked(card.m_quantity + 1);
         }
         else {
-            spellList.Remove(spellDeckData);
+            if (card is null) return false;
+            if (card.m_quantity > 1) card.m_quantity--;
+            else cards.Remove(card);
         }
 
-        // Save the changes.
-        deckBehavior.m_spellList = spellList;
+        deck.m_spellList = cards;
         session.SaveChanges();
+        return true;
     }
 
     /// <summary>

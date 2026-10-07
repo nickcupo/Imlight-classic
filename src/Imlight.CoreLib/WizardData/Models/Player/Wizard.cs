@@ -932,128 +932,89 @@ public class Wizard {
         SpellbookBehavior.RemoveTemporarySpellFromBook(spellTemplateId);
     }
 
-    public bool AddSpellToDeck(uint spellTemplateId, ulong deckId) {
-        // Find the actual item in the inventory.
-        var item = InventoryBehavior.Items.FirstOrDefault(i => i.m_globalID == deckId);
-        if (item is null) {
-            // The item may be equipped instead.
-            item = EquipmentBehavior.EquippedItems.FirstOrDefault(i => i.m_globalID == deckId);
-            if (item is null) {
-                Logger.Warning("Could not find item with global ID {0} in player {1}'s inventory or equipment.",
-                    Logger.Args(deckId, PlayerNameBehavior.GetWizardName()));
+    public bool AddSpellToDeck(uint spellTemplateId, ulong deckId)
+        => AddSpellToDeck(spellTemplateId, deckId, WizardItemCollection.AddSpellToDeck);
 
-                return false;
-            }
+    internal bool AddSpellToDeck(uint spellTemplateId, ulong deckId, Func<ulong, uint, bool> persist)
+        => ChangeRegularDeckSpell(spellTemplateId, deckId, add: true, persist);
 
-            // If the item is equipped, we'll also want to update the spellbook behavior.
-            var addedSuccess = SpellbookBehavior.AddSpellToDeck(spellTemplateId);
-            if (!addedSuccess) {
-                Logger.Debug("Could not add spell with template ID {0} to player {1}'s deck.",
-                    Logger.Args(spellTemplateId, PlayerNameBehavior.GetWizardName()));
+    public bool RemoveSpellFromDeck(uint spellTemplateId, ulong deckId)
+        => RemoveSpellFromDeck(spellTemplateId, deckId, WizardItemCollection.RemoveSpellFromDeck);
 
-                return false;
-            }
+    internal bool RemoveSpellFromDeck(uint spellTemplateId, ulong deckId, Func<ulong, uint, bool> persist)
+        => ChangeRegularDeckSpell(spellTemplateId, deckId, add: false, persist);
 
-            WizardItemCollection.AddSpellToDeck(deckId, spellTemplateId);
-
-            return true;
-        }
-
-        // Regardless, we'll want to add this spell to the deck item's DeckBehavior.
-        if (!CoreObjectFactory.FindBehaviorInstance<DeckBehavior>(item, out var deckBehavior)) {
-            Logger.Error("Could not find deck behavior for item with global ID {0}.",
-                Logger.Args(spellTemplateId));
-
+    // CLASSIC: validate a detached list; publish to the item and equipped book only after the item save commits.
+    // A refused lookup leaves both live lists untouched. A thrown save has uncertain status and is never retried.
+    private bool ChangeRegularDeckSpell(uint spellTemplateId, ulong deckId, bool add, Func<ulong, uint, bool> persist) {
+        var item = InventoryBehavior.Items.FirstOrDefault(candidate => candidate.m_globalID == deckId);
+        var equipped = item is null;
+        item ??= EquipmentBehavior.EquippedItems.FirstOrDefault(candidate => candidate.m_globalID == deckId);
+        if (item is null || !CoreObjectFactory.FindBehaviorInstance<DeckBehavior>(item, out var deck)) {
+            Logger.Warning("Could not find deck {0} in player {1}'s inventory or equipment.",
+                Logger.Args(deckId, PlayerNameBehavior.GetWizardName()));
             return false;
         }
 
-        var spellList = deckBehavior.m_spellList ??= [];
-        // CLASSIC: the stock client's own deck check (Classic/ClassicDeckRules.cs) for a deck in the backpack too.
-        if (Classic.ClassicDeckRules.DeckTemplateOf((uint) item.m_templateID) is { } deckTemplate) {
-            var refusal = Classic.ClassicDeckRules.CanAdd(deckTemplate, spellList, spellTemplateId,
-                id => CoreObjectFactory.GetCoreTemplate(id) as SpellTemplate);
-            if (refusal != Classic.DeckAddRefusal.None) {
-                Logger.Debug("Deck add of spell {0} to deck {1} refused: {2}.", Logger.Args(spellTemplateId, deckId, refusal.ToString()));
-                return false;
-            }
-        }
-
-        var spellDeckData = spellList.FirstOrDefault(s => s.m_templateID == spellTemplateId);
-        if (spellDeckData is null) {
-            // It may not be included yet. We'll add another entry.
-            var newSpellDeckData = new SpellData {
-                m_templateID = spellTemplateId,
-                m_quantity = 1
+        List<SpellData> cards;
+        if (equipped) {
+            // Use the real spellbook's existing rules without exposing an uncommitted mutation to live readers.
+            var candidate = new ServerWizSpellbookBehavior {
+                PrimarySchool = SpellbookBehavior.PrimarySchool,
+                GenericMaxRank = SpellbookBehavior.GenericMaxRank,
+                SchoolMaxRank = SpellbookBehavior.SchoolMaxRank,
+                GenericMaxInstances = SpellbookBehavior.GenericMaxInstances,
+                SchoolMaxInstances = SpellbookBehavior.SchoolMaxInstances,
+                MaxSpells = SpellbookBehavior.MaxSpells,
+                MaxTreasureCards = SpellbookBehavior.MaxTreasureCards,
+                DeckTemplate = SpellbookBehavior.DeckTemplate,
+                SpellList = CopyRegularDeckCards(SpellbookBehavior.SpellList),
             };
-            spellList.Add(newSpellDeckData);
+            if (!(add ? candidate.AddSpellToDeck(spellTemplateId) : candidate.RemoveSpellFromDeck(spellTemplateId))) return false;
+            cards = candidate.SpellList;
         }
         else {
-            // Otherwise, we'll just increment the quantity.
-            spellDeckData.m_quantity++;
-        }
-
-        // Persistent save.
-        WizardItemCollection.AddSpellToDeck(deckId, spellTemplateId);
-
-        return true;
-    }
-
-    public bool RemoveSpellFromDeck(uint spellTemplateId, ulong deckId) {
-        // Find the actual item in the inventory.
-        var item = InventoryBehavior.Items.FirstOrDefault(i => i.m_globalID == deckId);
-        if (item is null) {
-            // The item may be equipped instead.
-            item = EquipmentBehavior.EquippedItems.FirstOrDefault(i => i.m_globalID == deckId);
-            if (item is null) {
-                Logger.Warning("Could not find item with global ID {0} in player {1}'s inventory or equipment.",
-                    Logger.Args(deckId, PlayerNameBehavior.GetWizardName()));
-
-                return false;
+            cards = CopyRegularDeckCards(deck.m_spellList);
+            if (add && Classic.ClassicDeckRules.DeckTemplateOf((uint) item.m_templateID) is { } template) {
+                var refusal = Classic.ClassicDeckRules.CanAdd(template, cards, spellTemplateId,
+                    id => CoreObjectFactory.GetCoreTemplate(id) as SpellTemplate);
+                if (refusal != Classic.DeckAddRefusal.None) return false;
             }
 
-            // If the item is equipped, we'll also want to update the spellbook behavior.
-            var removedSuccess = SpellbookBehavior.RemoveSpellFromDeck(spellTemplateId);
-            if (!removedSuccess) {
-                Logger.Warning("Could not remove spell with template ID {0} from player {1}'s deck.",
-                    Logger.Args(spellTemplateId, PlayerNameBehavior.GetWizardName()));
-
-                return false;
+            var card = cards.FirstOrDefault(candidate => candidate.m_templateID == spellTemplateId);
+            if (add) {
+                if (card is null) cards.Add(new SpellData { m_templateID = spellTemplateId, m_quantity = 1 });
+                else card.m_quantity = checked(card.m_quantity + 1);
             }
-
-            WizardItemCollection.RemoveSpellFromDeck(deckId, spellTemplateId);
-
-            return true;
+            else {
+                if (card is null) return false;
+                if (card.m_quantity > 1) card.m_quantity--;
+                else cards.Remove(card);
+            }
         }
 
-        // Regardless, we'll want to remove this spell from the deck item's DeckBehavior.
-        if (!CoreObjectFactory.FindBehaviorInstance<DeckBehavior>(item, out var deckBehavior)) {
-            Logger.Error("Could not find deck behavior for item with global ID {0}.",
-                Logger.Args(spellTemplateId));
-
+        bool saved;
+        try {
+            saved = persist(deckId, spellTemplateId);
+        }
+        catch (Exception) {
+            Logger.Error("Saved deck change threw for player {0}, deck {1}, spell {2}; commit status is uncertain and the change will not be retried.",
+                Logger.Args(CharId, deckId, spellTemplateId));
+            throw;
+        }
+        if (!saved) {
+            Logger.Warning("Saved deck change refused for player {0}, deck {1}, spell {2}, add {3}.",
+                Logger.Args(CharId, deckId, spellTemplateId, add));
             return false;
         }
 
-        var spellList = deckBehavior.m_spellList ?? [];
-        var spellDeckData = spellList.FirstOrDefault(s => s.m_templateID == spellTemplateId);
-        if (spellDeckData is null) {
-            Logger.Warning("Could not find spell with template ID {0} in player {1}'s deck.",
-                Logger.Args(spellTemplateId, PlayerNameBehavior.GetWizardName()));
-
-            return false;
-        }
-
-        if (spellDeckData.m_quantity > 1) {
-            spellDeckData.m_quantity--;
-        }
-        else {
-            spellList.Remove(spellDeckData);
-        }
-
-        // Persistent save.
-        WizardItemCollection.RemoveSpellFromDeck(deckId, spellTemplateId);
-
+        deck.m_spellList = cards;
+        if (equipped) SpellbookBehavior.SpellList = cards;
         return true;
     }
+
+    private static List<SpellData> CopyRegularDeckCards(IEnumerable<SpellData> cards)
+        => cards is null ? [] : JsonConvert.DeserializeObject<List<SpellData>>(JsonConvert.SerializeObject(cards));
 
     /// <summary>
     /// Adds a treasure card to a deck, consuming one copy from the player's treasure card book.

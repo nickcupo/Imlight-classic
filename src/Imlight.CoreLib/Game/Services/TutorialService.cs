@@ -291,20 +291,14 @@ internal sealed partial class TutorialService(SessionActor sessionActor) : Messa
             RemoveControlQuests(wizard);
             CompleteTutorialIntro(wizard, playerObj);
             EquipStarterWandAndDeck(wizard);
-            FinishClassicStart(wizard); // CLASSIC
-            Teleport(TutorialExitZone()); // CLASSIC: was Character.StartingZone.
-
-            return true;
+            return CompleteStarterExit(() => FinishClassicStart(wizard), () => Teleport(TutorialExitZone())); // CLASSIC
         }
 
         // Teleport: the finale (stage 8) fires this then blocks on OnTeleported; the server must move the
         // player out of the tutorial interior.
         if (goalName == "Teleport") {
             RemoveControlQuests(wizard);
-            CompleteClassicStart(wizard); // CLASSIC
-            Teleport(TutorialExitZone()); // CLASSIC: was Character.StartingZone.
-
-            return true;
+            return CompleteStarterExit(() => CompleteClassicStart(wizard), () => Teleport(TutorialExitZone())); // CLASSIC
         }
 
         // ConfigurePlayer: right after firing this the client blocks on OnItemAddedToInventory waiting for an

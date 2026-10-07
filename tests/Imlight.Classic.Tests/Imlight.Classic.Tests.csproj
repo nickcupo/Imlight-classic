@@ -21,6 +21,7 @@
     <ServerIntegrationTest Include="C6ServerGapTests.cs" />
     <ServerIntegrationTest Include="ClassicCinematicTests.cs" />
     <ServerIntegrationTest Include="ClassicDeckRegressionTests.cs" />
+    <ServerIntegrationTest Include="StarterDeckPersistenceTests.cs" />
     <ServerIntegrationTest Include="ClassicEnchantmentPacketTests.cs" />
     <ServerIntegrationTest Include="ClassicMinionOwnershipTests.cs" />
     <ServerIntegrationTest Include="OwnedMinionControlTests.cs" />
