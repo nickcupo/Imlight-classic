@@ -404,20 +404,21 @@ public sealed class ArenaAmbientMatchmakerTests {
         Assert.DoesNotContain(world.Players.Values, p => p.Ambient);
     }
 
-    [Fact]
-    public void NativePaginationUsesStableChallengeIdsAndCanBrowseBeyondTheViewersLevel() {
+    [Theory]
+    [InlineData(ArenaKind.Practice)] [InlineData(ArenaKind.Ranked)]
+    public void NativePaginationUsesStableChallengeIdsAndCanBrowseBeyondTheViewersLevel(ArenaKind kind) {
         var world = new World { FriendlyEnabled = true };
-        world.Arena.List(Human, world.Arena.TournamentId(ArenaKind.Practice), numberOfElements: 5);
+        world.Arena.List(Human, world.Arena.TournamentId(kind), numberOfElements: 5);
         var first = ListedRows(world, Human); Assert.Equal(5, first.Length);
         world.Sent.Clear();
-        world.Arena.List(Human, world.Arena.TournamentId(ArenaKind.Practice), startingIndex: 5, numberOfElements: 5);
+        world.Arena.List(Human, world.Arena.TournamentId(kind), startingIndex: 5, numberOfElements: 5);
         var next = ListedRows(world, Human); Assert.Equal(5, next.Length);
         Assert.Empty(first.Select(row => row.m_matchID.Full).Intersect(next.Select(row => row.m_matchID.Full)));
         world.Sent.Clear();
-        world.Arena.List(Wife, world.Arena.TournamentId(ArenaKind.Practice), startingIndex: 5, numberOfElements: 5);
+        world.Arena.List(Wife, world.Arena.TournamentId(kind), startingIndex: 5, numberOfElements: 5);
         Assert.Equal(next.Select(row => row.m_matchID.Full), ListedRows(world, Wife).Select(row => row.m_matchID.Full));
         world.Sent.Clear();
-        world.Arena.List(Human, world.Arena.TournamentId(ArenaKind.Practice), startingIndex: 84, numberOfElements: 5);
+        world.Arena.List(Human, world.Arena.TournamentId(kind), startingIndex: 84, numberOfElements: 5);
         Assert.All(ListedRows(world, Human), row => Assert.Equal(19, ((PvPActor) row.m_teams[1].m_actors[0]).m_level));
         var initial = ArenaMessages.Read<NewListUpdate>(world.Sent.Select(m => m.Message).OfType<GAME_5_PROTOCOL.MSG_PVPUPDATEINFO>().Single().TournamentInfo)!;
         Assert.Equal(ArenaFriendlyRoster.ChallengeCountPerKind, initial.m_totalTeams);
