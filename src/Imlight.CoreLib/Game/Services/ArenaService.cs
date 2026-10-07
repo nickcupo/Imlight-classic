@@ -228,9 +228,6 @@ internal sealed class ArenaService(SessionActor sessionActor) : MessageService(s
         if (message.Receipt is null && !SaveOutcomeTickets(wizard, outcome.Tickets))
             throw new InvalidOperationException("The arena ticket outcome was not persisted.");
 
-        // CLASSIC: ranked results have already committed their ladder; the next zone attach sends this fresh score
-        // in native GameStats. The result window's separate MSG_GETLADDER also receives the saved standing.
-        ArenaShopSnapshot.RefreshLadder(wizard);
         SendToSocket(ArenaMessages.ArenaPoints(wizard.GameStats.m_currentArenaPoints));
         SendToSocket(ArenaMessages.PvpCurrency(wizard.GameStats.m_currentPvPCurrency));
         SendToSocket(outcome.Result);
