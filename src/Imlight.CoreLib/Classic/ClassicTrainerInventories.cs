@@ -26,11 +26,14 @@ internal static class ClassicTrainerInventories {
         RefreshOctoberTraining(ClassicSpellTemplates.Records, CoreObjectFactory.TryGetTemplateIdByPath);
     }
 
-    // CLASSIC: restore the approved October trainer additions after every resource reload, with no duplicate stock.
+    // CLASSIC: publish only active researched October additions after every reload. A deferred
+    // record must also remove the native modern offer; retaining implementation does not enable stock.
     internal static void RefreshOctoberTraining(IEnumerable<ClassicSpellRecord> records, Func<string, ulong?> resolveTemplate) {
         if (!ClassicOctoberRules.Active) return;
         SpiralDB.TryGetNpcSpellInventory(Diego, out var inventory);
         var stock = inventory?.Spells.ToList() ?? [];
+        stock.RemoveAll(spell => spell.TemplateID == ClassicOctoberTraining.Cloak);
+        var restored = false;
         foreach (var record in records.Where(spell => spell.Id == "spell.sun.cloak")) {
             if (!record.IsInProfile(ClassicRuntime.Rules.Profile.Id) || record.ClientTemplate is not { } path
                 || resolveTemplate(path) is not { } templateId || templateId != ClassicOctoberTraining.Cloak) continue;
@@ -41,9 +44,12 @@ internal static class ClassicTrainerInventories {
             }
             stock.RemoveAll(spell => spell.TemplateID == templateId);
             stock.Add(new NPCSpellEntry { TemplateID = templateId, RequiredSpellID = 0, Level = values.LevelLearned ?? 0 });
+            restored = true;
         }
         SpiralDB.RegisterNpcSpellInventory(new NPCSpellInventory { TemplateID = Diego, Spells = stock });
-        Logger.Information("Classic October trainer: restored Cloak stock; temporary Private requirement, exact October eligibility unverified.");
+        Logger.Information(restored
+            ? "Classic October trainer: restored Cloak stock; temporary Private requirement, exact October eligibility unverified."
+            : "Classic October trainer: Cloak stock deferred with Celestia.");
     }
 
     internal static void Refresh(ClassicSpellRecord? record, Func<string, ulong?> resolveTemplate) {
