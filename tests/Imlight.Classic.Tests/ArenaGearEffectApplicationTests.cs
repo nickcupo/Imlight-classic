@@ -29,6 +29,7 @@ public sealed class ArenaGearEffectApplicationTests {
     [InlineData(164169u)]
     [InlineData(164170u)]
     [InlineData(164171u)]
+    [InlineData(164172u)]
     public void EveryVerifiedManaReductionUsesActualProjectedEffectAndRestoresMaximum(uint id) {
         using var fixture = new Fixture(); var wizard = fixture.Wizard();
         var template = fixture.Projected(id);
@@ -43,6 +44,50 @@ public sealed class ArenaGearEffectApplicationTests {
         Assert.Equal(100, wizard.GameStats.m_baseMana); Assert.Equal(0, wizard.GameStats.m_currentMana);
         CharacterHelper.RecalculateGameStats(wizard);
         Assert.Equal(100, wizard.GameStats.m_baseMana); Assert.Equal(0, wizard.GameStats.m_currentMana);
+    }
+
+    [Fact]
+    public void DatedSandalsBonusesReachActualEquipmentAndSurviveRebuildExactlyOnce() {
+        using var fixture = new Fixture(); var wizard = fixture.Wizard();
+        var sandals = fixture.Projected(100540);
+        Assert.True(fixture.Equip(wizard, sandals, 901));
+        for (var iteration = 0; iteration < 3; iteration++) {
+            Assert.Equal(148, wizard.GameStats.m_baseHitpoints);
+            Assert.Equal(.03f, wizard.GameStats.m_powerPipBonusPercentAll, 6);
+            Assert.Equal(.02f, wizard.GameStats.m_dmgBonusPercent[6], 6);
+            Assert.Equal(.06f, wizard.GameStats.m_dmgReducePercent[6], 6);
+            Assert.Equal(71, wizard.GameStats.m_currentHitpoints);
+            Assert.Equal(75, wizard.GameStats.m_currentMana);
+            CharacterHelper.RecalculateGameStats(wizard);
+        }
+        Assert.True(fixture.Unequip(wizard, sandals, 901));
+        Assert.Equal(100, wizard.GameStats.m_baseHitpoints);
+        Assert.Equal(0, wizard.GameStats.m_powerPipBonusPercentAll);
+        Assert.Equal(0, wizard.GameStats.m_dmgBonusPercent[6]);
+        Assert.Equal(0, wizard.GameStats.m_dmgReducePercent[6]);
+    }
+
+    [Fact]
+    public void DatedFootgearKeepsAllFourBonusesWithItsExplicitPercentageManaPenalty() {
+        using var fixture = new Fixture(); var wizard = fixture.Wizard();
+        var footgear = fixture.Projected(164172);
+        Assert.True(fixture.Equip(wizard, footgear, 901));
+        for (var iteration = 0; iteration < 3; iteration++) {
+            Assert.Equal(0, wizard.GameStats.m_baseMana);
+            Assert.Equal(.04f, wizard.GameStats.m_powerPipBonusPercentAll, 6);
+            Assert.Equal(.05f, wizard.GameStats.m_accBonusPercentAll, 6);
+            Assert.Equal(.06f, wizard.GameStats.m_dmgBonusPercentAll, 6);
+            Assert.Equal(.10f, wizard.GameStats.m_dmgReducePercentAll, 6);
+            Assert.Equal(71, wizard.GameStats.m_currentHitpoints);
+            CharacterHelper.RecalculateGameStats(wizard);
+        }
+        Assert.True(fixture.Unequip(wizard, footgear, 901));
+        Assert.Equal(100, wizard.GameStats.m_baseMana);
+        Assert.Equal(0, wizard.GameStats.m_currentMana);
+        Assert.Equal(0, wizard.GameStats.m_powerPipBonusPercentAll);
+        Assert.Equal(0, wizard.GameStats.m_accBonusPercentAll);
+        Assert.Equal(0, wizard.GameStats.m_dmgBonusPercentAll);
+        Assert.Equal(0, wizard.GameStats.m_dmgReducePercentAll);
     }
 
     [Theory]
