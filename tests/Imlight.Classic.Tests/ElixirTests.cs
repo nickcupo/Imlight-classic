@@ -515,7 +515,7 @@ public sealed class ElixirTests {
         internal SessionProxy Session = null!;
         private readonly IMetadataDictionary _metadata = DispatchProxy.Create<IMetadataDictionary, MetadataProxy>();
         protected override object? Invoke(MethodInfo? method, object?[]? args) => method!.Name switch {
-            "set_OptimisticConcurrencyMode" => null, "GetDocumentId" => Session.DocumentId(args![0]!),
+            "set_OptimisticConcurrencyMode" or "IgnoreChangesFor" => null, "GetDocumentId" => Session.DocumentId(args![0]!),
             "GetMetadataFor" => _metadata,
             _ => throw new NotSupportedException(method.Name),
         };

@@ -45,6 +45,7 @@ internal static class ClassicItemPurchases {
             if (crowns) account.Crowns -= price;
             else saved.GameStats.m_currentGold -= price;
             acknowledged = new(prepared, data);
+            WizardInventoryTransactions.ProtectUnmodifiedRows(session);
             return true;
         }, saved => {
             WizardInventoryTransactions.PublishCommittedBackpack(live, saved, backpack);

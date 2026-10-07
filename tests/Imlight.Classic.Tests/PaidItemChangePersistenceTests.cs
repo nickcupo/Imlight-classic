@@ -255,12 +255,49 @@ public sealed class PaidItemChangePersistenceTests {
         Assert.Single(results.Where(result => result)); Assert.Equal(30, f.Saved.GameStats.m_currentGold); Assert.Equal(1, f.SaveAttempts);
     }
 
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void PaidChangeProtectsUnrelatedPetAndForeignOriginalsBeforeSavingOnlyTheSelectedRow(bool rename, bool equipped) {
+        var f = new Fixture(equipped, pet: rename);
+        var egg = Fixture.CloneItem(f.Stored); egg.m_globalID = Fixture.Id + 1; egg.m_permID = Fixture.Id + 1;
+        egg.m_inactiveBehaviors = [new ClientPetItemBehavior { m_level = 0, m_hatchedTimeSecs = 321 },
+            new ClientPetNameBehavior { m_nameKeys = Fixture.OldName }];
+        f.Rows["original/unrelated-egg"] = egg;
+        f.Saved.InventoryBehavior.InventoryItemIds.Add(egg.m_globalID.Full);
+        var foreign = Fixture.CloneItem(egg); foreign.m_globalID = Fixture.Id + 2; foreign.m_characterId = Fixture.Owner + 1;
+        f.Rows["original/foreign-pet"] = foreign;
+        using var scope = f.Scope(); var live = f.Live();
+        var liveEgg = live.InventoryBehavior.GetItem(egg.m_globalID.Full);
+        var liveEggBehaviors = liveEgg.m_inactiveBehaviors;
+        f.BeforeSave = () => {
+            var working = f.Working!;
+            Assert.Equal(2, working.Advanced.Ignored.Count);
+            Assert.Contains(working.Rows["original/unrelated-egg"], working.Advanced.Ignored);
+            Assert.Contains(working.Rows["original/foreign-pet"], working.Advanced.Ignored);
+            Assert.DoesNotContain(working.Target, working.Advanced.Ignored);
+            Assert.Equal(1, working.Advanced.ProtectionCallsByRow[working.Rows["original/unrelated-egg"]]);
+            Assert.Equal(1, working.Advanced.ProtectionCallsByRow[working.Rows["original/foreign-pet"]]);
+            Assert.Equal(60, working.Wizard.GameStats.m_currentGold);
+            Assert.Equal(100, live.GameStats.m_currentGold);
+        };
+        Assert.True(rename ? f.Rename(live, out _) : f.Dye(live, out _));
+        Assert.Equal(1, f.SaveAttempts); Assert.Equal(1, f.RowWrites[Fixture.Document]);
+        Assert.False(f.RowWrites.ContainsKey("original/unrelated-egg")); Assert.False(f.RowWrites.ContainsKey("original/foreign-pet"));
+        Assert.Equal(321u, f.Rows["original/unrelated-egg"].m_inactiveBehaviors.OfType<ClientPetItemBehavior>().Single().m_hatchedTimeSecs);
+        Assert.Equal(Fixture.Owner + 1, f.Rows["original/foreign-pet"].m_characterId.Full);
+        Assert.Same(liveEgg, live.InventoryBehavior.GetItem(egg.m_globalID.Full)); Assert.Same(liveEggBehaviors, liveEgg.m_inactiveBehaviors);
+    }
+
     private sealed class Fixture {
         internal const ulong Owner = 817411, Id = 817412; internal const uint TemplateId = 817413;
         internal const uint OldName = 0x00010001, NewName = 0xAB020003;
         internal const string Document = "original/paid-item";
         internal Wizard Saved;
         internal Dictionary<string, WizClientObjectItem> Rows = [];
+        internal readonly Dictionary<string, int> RowWrites = [];
         internal WizClientObjectItem Stored => Rows[Document];
         internal WizItemTemplate Template = new() { m_templateID = TemplateId, m_adjectiveList = ["Hat"], m_baseCost = 40,
             m_numPrimaryColors = 10, m_numSecondaryColors = 10, m_numPatterns = 10 };
@@ -324,7 +361,10 @@ public sealed class PaidItemChangePersistenceTests {
             proxy.Save = () => {
                 Assert.True(WizardCollection.HoldsWriteLane); SaveAttempts++; BeforeSave?.Invoke();
                 if (FailSave && !Durable) throw new InvalidOperationException("fixture refused modification");
-                Saved = CloneWizard(proxy.Wizard); Rows = proxy.Rows.ToDictionary(pair => pair.Key, pair => CloneItem(pair.Value));
+                foreach (var (document, item) in proxy.Rows.Where(pair => !proxy.Advanced.Ignored.Contains(pair.Value)))
+                    RowWrites[document] = RowWrites.GetValueOrDefault(document) + 1;
+                Saved = CloneWizard(proxy.Wizard); Rows = proxy.Rows.ToDictionary(pair => pair.Key,
+                    pair => CloneItem(proxy.Advanced.Ignored.Contains(pair.Value) ? Rows[pair.Key] : pair.Value));
                 if (FailSave) throw new InvalidOperationException("fixture lost modification acknowledgement");
             };
             return session;
@@ -352,11 +392,26 @@ public sealed class PaidItemChangePersistenceTests {
     public class ItemSession : DispatchProxy {
         internal Wizard Wizard = null!; internal Dictionary<string, WizClientObjectItem> Rows = [];
         internal WizClientObjectItem Target => Rows[Fixture.Document]; internal System.Action Save = null!;
-        private readonly IAdvancedSessionOperations _advanced = DispatchProxy.Create<IAdvancedSessionOperations, ItemInventoryPersistenceTests.ItemAdvanced>();
+        private readonly IAdvancedSessionOperations _advanced = DispatchProxy.Create<IAdvancedSessionOperations, ItemAdvanced>();
+        internal ItemAdvanced Advanced => (ItemAdvanced)(object)_advanced;
         protected override object? Invoke(MethodInfo? method, object?[]? args) => method!.Name switch {
             "get_Advanced" => _advanced, "SaveChanges" => SaveNow(), "Dispose" => null,
             _ => throw new NotSupportedException(method.Name),
         };
         private object? SaveNow() { Save(); return null; }
+    }
+
+    public class ItemAdvanced : DispatchProxy {
+        internal readonly HashSet<WizClientObjectItem> Ignored = new(ReferenceEqualityComparer.Instance);
+        internal readonly Dictionary<WizClientObjectItem, int> ProtectionCallsByRow = new(ReferenceEqualityComparer.Instance);
+        protected override object? Invoke(MethodInfo? method, object?[]? args) {
+            if (method!.Name == "set_OptimisticConcurrencyMode") return null;
+            if (method.Name == "IgnoreChangesFor") {
+                var original = Assert.IsType<WizClientObjectItem>(args![0]);
+                Ignored.Add(original); ProtectionCallsByRow[original] = ProtectionCallsByRow.GetValueOrDefault(original) + 1;
+                return null;
+            }
+            throw new NotSupportedException(method.Name);
+        }
     }
 }

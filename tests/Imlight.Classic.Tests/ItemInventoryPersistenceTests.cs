@@ -335,7 +335,7 @@ public sealed class ItemInventoryPersistenceTests {
     public class ItemAdvanced : DispatchProxy {
         private readonly IMetadataDictionary _metadata = DispatchProxy.Create<IMetadataDictionary, ItemMetadata>();
         protected override object? Invoke(MethodInfo? method, object?[]? args) => method!.Name switch {
-            "set_OptimisticConcurrencyMode" => null, "GetMetadataFor" => _metadata, _ => throw new NotSupportedException(method.Name),
+            "set_OptimisticConcurrencyMode" or "IgnoreChangesFor" => null, "GetMetadataFor" => _metadata, _ => throw new NotSupportedException(method.Name),
         };
     }
     public class ItemMetadata : DispatchProxy {

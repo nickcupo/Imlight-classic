@@ -53,6 +53,7 @@ internal static class ClassicPetHatchTransactions {
             saved.PetOwnerBehavior.Eggs.Add(new PetEggData { GlobalId = prepared.m_globalID.Full,
                 PetTemplateId = prepared.m_templateID.Full, HatchTimeEpoch = (int)finish });
             acknowledged = new(prepared, data, (uint)finish, (uint)(finish - now));
+            WizardInventoryTransactions.ProtectUnmodifiedRows(session);
             return true;
         }, saved => {
             WizardInventoryTransactions.PublishCommittedBackpack(live, saved, backpack);

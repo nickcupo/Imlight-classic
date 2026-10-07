@@ -42,6 +42,7 @@ internal static class ClassicPetProgressTransactions {
                 || !OwnedPetCanPublish(live, saved, snapshot)) return false;
             availableEnergy = saved.PetOwnerBehavior.Energy;
             if (!PetProgress.EnsureInitialized(snapshot)) { unchanged = true; return false; }
+            WizardInventoryTransactions.ProtectUnmodifiedRows(session, snapshot);
             return true;
         }, saved => published = WizardInventoryTransactions.PublishCommittedOwnedItem(live, saved, snapshot),
             onSaveFailure: _ => WizardCollection.MarkInventorySnapshotUncertain(live));
@@ -81,6 +82,7 @@ internal static class ClassicPetProgressTransactions {
                 prepared = new(pet, growth, applied, messages, cost, default);
             }
             catch (Exception) { return false; }
+            WizardInventoryTransactions.ProtectUnmodifiedRows(session, pet);
             return true;
         }, saved => {
             var pet = WizardInventoryTransactions.PublishCommittedOwnedItem(live, saved, prepared.Pet);
@@ -124,6 +126,7 @@ internal static class ClassicPetProgressTransactions {
                 prepared = new(pet, growth, applied, messages, 0, taste);
             }
             catch (Exception) { return false; }
+            WizardInventoryTransactions.ProtectUnmodifiedRows(session, pet);
             return true;
         }, saved => {
             var pet = WizardInventoryTransactions.PublishCommittedOwnedItem(live, saved, prepared.Pet);

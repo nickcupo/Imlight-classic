@@ -268,7 +268,7 @@ public sealed class MonstrologyConcurrencyTests {
     }
     public class AdvancedProxy : DispatchProxy {
         protected override object? Invoke(MethodInfo? method, object?[]? args) {
-            if (method!.Name == "set_OptimisticConcurrencyMode") return null;
+            if (method!.Name is "set_OptimisticConcurrencyMode" or "IgnoreChangesFor") return null;
             throw new NotSupportedException(method.Name);
         }
     }

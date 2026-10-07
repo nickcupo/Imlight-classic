@@ -278,6 +278,7 @@ internal class ShopService(SessionActor sessionActor) : MessageService(sessionAc
             saved.GameStats.m_currentArenaPoints -= price;
             saved.GameStats.m_currentPvPCurrency = saved.GameStats.m_currentArenaPoints;
             acknowledged = new(prepared, data);
+            WizardInventoryTransactions.ProtectUnmodifiedRows(session);
             return true;
         }, saved => {
             WizardInventoryTransactions.PublishCommittedBackpack(wizard, saved, backpack);
