@@ -41,416 +41,87 @@
 
 using System;
 using System.Linq;
-using System.Collections.Generic;
 using Akka.Actor;
 using Imlight.Classic;
 using Imlight.CoreLib.Classic;
-using Imlight.Classic.Bazaar;
 using Imlight.CoreLib.Shared.Resources;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.WizardData.Collections;
+using Imlight.CoreLib.WizardData.Models.Player;
 using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty.TypeCache;
-using Imcodec.CoreObject;
-using Imcodec.ObjectProperty;
-using Imcodec.IO;
-using Imcodec.Cryptography;
 using Imlight.Common;
-using Imcodec.Types;
 
 namespace Imlight.CoreLib.Game.Services;
 
 internal class AuctionHouseService(SessionActor sessionActor) : MessageService(sessionActor) {
-
-    private readonly CoreObjectSerializer _itemSerializer = new(
-        behaviors: SerializerFlags.None
-    );
-
-    private static ByteString WriteAuctionBlob(uint categoryHash, IReadOnlyCollection<AuctionHouseEntry> entries) {
-        // Writes auction house entries as binary. This is very similar to PropertyClass serialization.
-        //
-        // Format:
-        //   [0-3]  Category hash (uint32) — StringHash of category name (hat, robe, boots), or 0 for empty
-        //   [4-7]  Entry count (uint32)
-        //   [8..]  Array of entries, each 20 bytes:
-        //          [0-7]  GID / template ID (uint64, little-endian)
-        //          [8-11] Stock quantity (int32)
-        //          [12-15] Buy price (int32)
-        //          [16-19] Sell price (int32)
-        var writer = new BitWriter();
-        writer.WriteUInt32(categoryHash);
-        writer.WriteUInt32((uint) entries.Count);
-
-        foreach (var entry in entries) {
-            // Ensure the GID has Type=9
-            // Live bazaar entries use Type=9; our database entries may
-            // have Type=0 from direct ulong→GID casts.
-            var gid = new GID(entry.m_templateID.Full | (9UL << 40));
-
-            writer.WriteUInt64(gid);
-            writer.WriteInt32(entry.m_numForSale);
-            writer.WriteInt32(entry.m_buyPrice);
-            writer.WriteInt32(entry.m_sellPrice);
-        }
-
-        return writer.GetData();
-    }
-
     protected static Props Props(SessionActor parentActor)
         => Akka.Actor.Props.Create(() => new AuctionHouseService(parentActor));
 
     [MessageHandler(typeof(WIZARD_12_PROTOCOL.MSG_AUCTIONHOUSEREQUEST))]
     private void ReceiveAuctionHouseRequest(WIZARD_12_PROTOCOL.MSG_AUCTIONHOUSEREQUEST message) {
-        // CLASSIC: the Bazaar follows the profile's bazaar switch; this handler is its only gate.
+        var wizard = GetActiveWizard();
+        // CLASSIC: quotes and confirmations have the same feature, attached-character, native-kind and
+        // proximity checks. The native lock-sell quote (command 2) never sells anything; command 4 does.
+        ClassicBazaarProtocol.Dispatch(message,
+            () => Authorize(wizard, message),
+            id => CoreObjectFactory.GetCoreTemplate(id),
+            (BazaarNativeRequest request, out BazaarTransactionQuote quote) => ClassicBazaarTransactions.Quote(
+                wizard, request.IsSell, request.Kind, request.TemplateId, request.OwnedGlobalId, request.Quantity, out quote),
+            (BazaarNativeRequest request, out BazaarTransactionReceipt receipt) => request.IsSell
+                ? ClassicBazaarTransactions.Sell(wizard, request.Kind, request.TemplateId, request.OwnedGlobalId, request.Quantity, out receipt)
+                : ClassicBazaarTransactions.Buy(wizard, request.Kind, request.TemplateId, request.Quantity, request.Texture, request.Decal, out receipt),
+            () => SendAuctionHouseContents(message.npcGlobalID, message.category),
+            (request, quote) => SendToSocket(ClassicBazaarProtocol.QuoteResponse(request, quote)),
+            (request, receipt) => PublishReceipt(wizard, request, receipt),
+            () => SendFailure(message),
+            () => ClassicBazaarTransactions.IsQuarantined(wizard),
+            CloseSession);
+    }
+
+    private bool Authorize(Wizard wizard, WIZARD_12_PROTOCOL.MSG_AUCTIONHOUSEREQUEST message) {
         if (!ClassicRuntime.Rules.IsFeatureEnabled(ClassicFeatures.Bazaar)) {
-            ClassicGate.RefuseFeature(ClassicFeatures.Bazaar, GetActiveWizard()?.CharId, InformGameClient);
-
-            return;
+            ClassicGate.RefuseFeature(ClassicFeatures.Bazaar, wizard?.CharId, InformGameClient);
+            return false;
         }
-
-        // CLASSIC: the Bazaar serves only a wizard standing by it (the request's NPC, or the Bazaar last opened).
-        if (message.Command is 0 or 1 or 2 or 3
-            && ServiceProximity.FindNear<Zone.Components.InteractAuctionHouseComponent>(GetActiveWizard(), message.npcGlobalID, GetZoneObject) is null) {
-            Logger.Warning("{0} sent Bazaar command {1} away from the Bazaar.",
-                Logger.Args(GetActiveWizard()?.CharId, message.Command));
-            if (message.Command == 3) {
-                SendBuyFailure();
-            }
-
-            return;
+        if (wizard is null || wizard.CharId == 0 || wizard.AccountId == 0) return false;
+        if (ServiceProximity.FindNear<Zone.Components.InteractAuctionHouseComponent>(wizard, message.npcGlobalID, GetZoneObject) is null) {
+            Logger.Warning("{0} sent Bazaar command {1} away from the Bazaar.", Logger.Args(wizard.CharId, message.Command));
+            return false;
         }
-
-        switch (message.Command) {
-            case 0:
-                SendAuctionHouseContents(message.npcGlobalID, message.category, message.key);
-                break;
-            case 1:
-                ConfirmBuyFromAuctionHouse(message.itemTemplateID, message.key);
-                break;
-            case 2:
-                SellToAuctionHouse(message.itemGlobalID, message.key);
-                break;
-            case 3:
-                BuyFromAuctionHouse(message.itemTemplateID, message.texture, message.decal, message.key);
-                break;
-            case 4:
-                // ?
-                break;
-            case 5:
-                // ?
-                break;
-            case 6:
-                // ?
-                break;
-            case 9:
-                // ?
-                break;
-            default:
-                break;
-        }
+        return !ClassicBazaarTransactions.IsQuarantined(wizard);
     }
 
-    private void SendAuctionHouseContents(ulong npcId, uint category, uint key) {
-        // Retrieve all Auction House entries.
-        var houseEntries = AuctionHouseCollection.GetAllAuctionHouseEntries();
-
-        var entryList = houseEntries is null
-            ? new List<AuctionHouseEntry>()
-            : [.. houseEntries];
-
-        // Serialize in the compact binary format the client expects.
-        // category=0 is reserved for empty/update signals per the live capture.
-        var contentsData = WriteAuctionBlob(category, entryList);
-
-        var auctionHouseContentsMsg = new WIZARD_12_PROTOCOL.MSG_AUCTIONHOUSECONTENTS {
-            Contents = contentsData,
-            GlobalID = npcId,
-            LastSegment = 0
-        };
-        SendToSocket(auctionHouseContentsMsg);
-    }
-
-    private void ConfirmBuyFromAuctionHouse(ulong templateId, uint key) {
-        var entry = AuctionHouseCollection.GetAuctionHouseEntry(templateId);
-
-        if (entry is null) {
-            // todo: figure out correct response, should inform player the transaction failed and reload content.
-            return;
-        }
-
-        var auctionRspMsg = new WIZARD_12_PROTOCOL.MSG_AUCTIONRESPONSE {
-            Command = 1,
-            ItemTemplateID = templateId,
-            Cost = entry.m_buyPrice,
-            ReturnCode = 0
-        };
-        SendToSocket(auctionRspMsg);
-    }
-
-    private void BuyFromAuctionHouse(ulong templateId, int texture, int decal, uint key) {
-        var wizard = GetActiveWizard();
-        var coreTemplate = CoreObjectFactory.GetCoreTemplate(templateId);
-        if (wizard is null || coreTemplate is null) {
-            SendBuyFailure();
-
-            return;
-        }
-
-        // CLASSIC: never take the stock or the gold for an item the backpack cannot take.
-        var isItem = coreTemplate is not (SpellTemplate or ReagentItemTemplate);
-        if (isItem && (coreTemplate is not WizItemTemplate || wizard.InventoryBehavior.IsFull)) {
-            SendBuyFailure();
-
-            return;
-        }
-
-        // CLASSIC: one lock from reading the stock to saving it (other players and the restock timer change it too); a
-        // wizard who cannot pay is refused; with classic Bazaar rules the price follows the copies left.
-        int goldCost;
-        AuctionHouseEntry updated;
-        lock (AuctionHouseCollection.Lock) {
-            var entry = AuctionHouseCollection.GetAuctionHouseEntry(templateId);
-            if (entry is null || entry.m_numForSale < 1) {
-                SendBuyFailure();
-
-                return;
-            }
-
-            // CLASSIC: paid here, checked and spent in one save, before the stock moves or anything is given; two buys
-            // sent together could both pass a check of the live gold and drive it below zero.
-            goldCost = entry.m_buyPrice;
-            if (!wizard.RemoveGold(goldCost)) {
-                SendBuyFailure();
-
-                return;
-            }
-
-            entry.m_numForSale -= 1;
-            if (ClassicBazaar.Rules is not null) {
-                (entry.m_buyPrice, entry.m_sellPrice) = ClassicBazaar.PricesFor(templateId, entry.m_numForSale);
-            }
-
-            if (entry.m_numForSale < 1) {
-                AuctionHouseCollection.RemoveAuctionHouseEntry(templateId);
-            }
-            else {
-                AuctionHouseCollection.UpdateAuctionHouseEntry(entry);
-            }
-
-            updated = new AuctionHouseEntry {
-                m_templateID = entry.m_templateID, m_numForSale = entry.m_numForSale,
-                m_buyPrice = entry.m_buyPrice, m_sellPrice = entry.m_sellPrice,
-            };
-        }
-
-        // Inform of update.
-        SendToSocket(new GAME_5_PROTOCOL.MSG_AUCTIONHOUSEUPDATE {
-            UpdateInfo = WriteAuctionBlob(0, [updated]),
-            CharacterID = wizard.CharId
+    private void SendAuctionHouseContents(ulong npcId, uint category) {
+        // CLASSIC: retain the native category/blob shape, but never advertise a forged template or a later
+        // item kind. The same actual-template classification is checked again for every quote/commit.
+        var entries = AuctionHouseCollection.GetAllAuctionHouseEntries()
+            .Where(entry => entry.m_templateID.Full is > 0 and <= uint.MaxValue
+                && entry.m_numForSale > 0 && entry.m_buyPrice > 0 && entry.m_sellPrice >= 0
+                && CanListTemplate(entry.m_templateID.Full))
+            .ToList();
+        SendToSocket(new WIZARD_12_PROTOCOL.MSG_AUCTIONHOUSECONTENTS {
+            Contents = ClassicBazaarProtocol.WriteAuctionBlob(category, entries), GlobalID = npcId, LastSegment = 0,
         });
-
-        // CLASSIC: treasure cards go to the treasure book and reagents to the reagent bag; everything else is an item.
-        switch (coreTemplate) {
-            case SpellTemplate when templateId <= uint.MaxValue:
-                DropTables.LootGranter.GrantTreasureCard(SessionActor.ActorRef, wizard, (uint) templateId);
-                break;
-            case ReagentItemTemplate:
-                DropTables.LootGranter.GrantReagent(SessionActor.ActorRef, wizard, templateId, 1);
-                break;
-            default: {
-                var item = (WizClientObjectItem) CoreObjectFactory.FinalizeCoreObject(templateId);
-                ShopService.ApplyBuyDyes(item, (WizItemTemplate) coreTemplate, texture, decal); // CLASSIC
-                if (!_itemSerializer.Serialize(item, 1, out var itemData)) {
-                    Logger.Error("Failed to serialize item data.");
-                    wizard.RefundGold(goldCost); // CLASSIC: paid but not given.
-                    SendBuyFailure();
-
-                    return;
-                }
-
-                SendToSocket(new GAME_5_PROTOCOL.MSG_INVENTORYBEHAVIOR_ADDITEM {
-                    GlobalID = wizard.GameObjectID,
-                    SerializedItem = itemData,
-                });
-
-                // Add item to inventory after message to prevent crashes.
-                if (!wizard.AddItemToInventory(item)) {
-                    // CLASSIC: paid but not given: the gold goes back. (Restocking is the full-backpack fix's.)
-                    wizard.RefundGold(goldCost);
-                    SendToSocket(new GAME_5_PROTOCOL.MSG_INVENTORYBEHAVIOR_REMOVEITEM { GlobalID = wizard.GameObjectID, ItemID = item.m_globalID });
-                    SendToSocket(new WIZARD_12_PROTOCOL.MSG_UPDATEGOLD { Gold = wizard.GameStats.m_currentGold, MaxGold = wizard.GameStats.m_baseGoldPouch });
-                    SendBuyFailure();
-
-                    return;
-                }
-                SendToSocket(new WIZARD2_53_PROTOCOL.MSG_ITEMACQUISITION {
-                    ItemGlobalID = item.m_globalID,
-                    ItemTemplateID = (uint) item.m_templateID,
-                    ItemLocation = 1,
-                });
-                break;
-            }
-        }
-
-        // Update gold balances (already spent above).
-        var goldUpdateMsg = new WIZARD_12_PROTOCOL.MSG_UPDATEGOLD {
-            Gold = wizard.GameStats.m_currentGold,
-            MaxGold = wizard.GameStats.m_baseGoldPouch
-        };
-        SendToSocket(goldUpdateMsg);
-
-        // Confirm transaction.
-        var shopBuyConfirmMsg = new WIZARD_12_PROTOCOL.MSG_SHOPBUYCONFIRM {
-            Failure = 0,
-            WebFailure = 0,
-            Credits = 0
-        };
-        SendToSocket(shopBuyConfirmMsg);
     }
 
-    private void SendBuyFailure() => SendToSocket(new WIZARD_12_PROTOCOL.MSG_SHOPBUYCONFIRM { Failure = 1 });
-
-    private void SellToAuctionHouse(ulong itemGlobalId, uint key) {
-        var wizard = GetActiveWizard();
-        var item = wizard.InventoryBehavior.GetItem(itemGlobalId);
-
-        // Check player has item.
-        var hasItem = wizard.InventoryBehavior.HasItem(itemGlobalId);
-        if (!hasItem) {
-            // Todo: respond with error
-            var auctionRspErrorMsg = new WIZARD_12_PROTOCOL.MSG_AUCTIONRESPONSE {
-                Command = 5,
-                ItemTemplateID = 0, // Can't get this ID if item doesn't exist.
-                Cost = 0,
-                ReturnCode = 0
-            };
-            SendToSocket(auctionRspErrorMsg);
-            return;
-        }
-
-        var template = CoreObjectFactory.GetCoreTemplate(item.m_templateID) as WizItemTemplate;
-
-        // CLASSIC: no NoAuction, NoTrade, NoSell or Crowns item (ClassicBazaar.KindOf is null for them).
-        var isNoAuction = template is null || ClassicBazaar.KindOf(template) is null
-            || template.m_adjectiveList.Any(x => x == "FLAG_NoAuction");
-        if (isNoAuction) { // The item cannot be sold to the bazaar.
-            // Todo: respond with error
-            var auctionRspErrorMsg = new WIZARD_12_PROTOCOL.MSG_AUCTIONRESPONSE {
-                Command = 2,
-                ItemTemplateID = item.m_templateID,
-                Cost = 0,
-                ReturnCode = 1
-            };
-            SendToSocket(auctionRspErrorMsg);
-            return;
-        }
-
-        // CLASSIC: the Bazaar does not take Crowns items (October 2009 Update Notes).
-        var crownsItem = template.m_adjectiveList.Any(x => x == "FLAG_CrownsOnly");
-        if (ClassicRuntime.IsActive && crownsItem) {
-            SendToSocket(new WIZARD_12_PROTOCOL.MSG_AUCTIONRESPONSE {
-                Command = 2, ItemTemplateID = item.m_templateID, Cost = 0, ReturnCode = 1
-            });
-
-            return;
-        }
-
-        // Calculate gold sell value.
-        var gold = (int) Math.Ceiling(template.m_baseCost * 0.5f); // Bazaar buys items at 50% of their value.
-        if (template.m_numPrimaryColors != 1 && template.m_numSecondaryColors != 0) {
-            gold = (int) Math.Ceiling(gold * 1.225f);
-        }
-
-        // CLASSIC: the 2009 Bazaar pays by how many copies it holds already (classic-data/rules/bazaar-*.yaml).
-        if (ClassicBazaar.Rules is { } bazaar) {
-            var held = AuctionHouseCollection.GetAuctionHouseEntry(item.m_templateID)?.m_numForSale ?? 0;
-            gold = bazaar.SellPrice((int) template.m_baseCost, held, ClassicBazaar.KindOf(template) ?? BazaarKind.Gear);
-        }
-
-        // CLASSIC: the item leaves the backpack first, and a sale whose removal fails stops here. Another actor (the
-        // bank, a vendor sale) could take the same item between the check above and this point; the Bazaar used to
-        // stock and pay for it anyway. The sold item's document is deleted with it.
-        if (!wizard.DestroyInventoryItem(itemGlobalId)) {
-            Logger.Warning("Bazaar sale of item {0} by {1} refused: it is no longer in the backpack.",
-                Logger.Args(itemGlobalId, wizard.CharId));
-            SendToSocket(new WIZARD_12_PROTOCOL.MSG_AUCTIONRESPONSE {
-                Command = 5,
-                ItemTemplateID = item.m_templateID,
-                Cost = 0,
-                ReturnCode = 0
-            });
-
-            return;
-        }
-
-        var auctionRspMsg = new WIZARD_12_PROTOCOL.MSG_AUCTIONRESPONSE {
-            Command = 2,
-            ItemTemplateID = item.m_templateID,
-            Cost = gold,
-            ReturnCode = 0
-        };
-        SendToSocket(auctionRspMsg);
-
-        // Update stock and push to database.
-        AuctionHouseEntry entry;
-        lock (AuctionHouseCollection.Lock) { // CLASSIC: other players and the restock timer change the stock too.
-            var cap = ClassicBazaar.Rules?.CapFor(BazaarKind.Gear) ?? 99;
-            entry = AuctionHouseCollection.GetAuctionHouseEntry(item.m_templateID);
-            if (entry is null) {
-                entry = new AuctionHouseEntry {
-                    m_templateID = (GID) item.m_templateID,
-                    m_buyPrice = (int)(template.m_baseCost * 2), // Bazaar sells items at 200% of their value.
-                    m_numForSale = 1,
-                    m_sellPrice = gold
-                };
-                if (ClassicBazaar.Rules is not null) {
-                    (entry.m_buyPrice, entry.m_sellPrice) = ClassicBazaar.PricesFor(item.m_templateID, 1);
-                }
-
-                AuctionHouseCollection.AddAuctionHouseEntry(entry);
-            }
-            else if (entry.m_numForSale < cap) { // Players can still sell at the cap, but the stock does not grow.
-                entry.m_numForSale += 1;
-                if (ClassicBazaar.Rules is not null) {
-                    (entry.m_buyPrice, entry.m_sellPrice) = ClassicBazaar.PricesFor(item.m_templateID, entry.m_numForSale);
-                }
-
-                AuctionHouseCollection.UpdateAuctionHouseEntry(entry);
-            }
-        }
-
-        ClassicBazaar.NoteRealSale(item.m_templateID); // CLASSIC (2026-10-04): ambient wizards leave it for players a while
-
-        // Inform of update.
-        var houseEntryData = WriteAuctionBlob(0, [entry]);
-        var auctionUpdateMsg = new GAME_5_PROTOCOL.MSG_AUCTIONHOUSEUPDATE {
-            UpdateInfo = houseEntryData,
-            CharacterID = wizard.CharId
-        };
-        SendToSocket(auctionUpdateMsg);
-
-        // Update gold balances.
-        wizard.AddGold(gold);
-
-        var updateGoldMsg = new WIZARD_12_PROTOCOL.MSG_UPDATEGOLD {
-            Gold = wizard.GameStats.m_currentGold,
-            MaxGold = wizard.GameStats.m_baseGoldPouch
-        };
-        SendToSocket(updateGoldMsg);
-
-        // Remove item from inventory.
-        var removeItemMsg = new GAME_5_PROTOCOL.MSG_INVENTORYBEHAVIOR_REMOVEITEM {
-            GlobalID = wizard.GameObjectID,
-            ItemID = item.m_globalID
-        };
-        SendToSocket(removeItemMsg);
-
-        var shopSellConfirmMsg = new WIZARD_12_PROTOCOL.MSG_SHOPSELLCONFIRM {
-            ClientRequestID = 0,
-            GlobalID = 0,
-            Failure = 0
-        };
-        SendToSocket(shopSellConfirmMsg);
+    private static bool CanListTemplate(ulong templateId) {
+        var template = CoreObjectFactory.GetCoreTemplate(templateId);
+        return ClassicBazaar.KindOf(template) is not null
+            && (template is not SpellTemplate spell || !string.IsNullOrEmpty(spell.m_name)
+                && CoreObjectFactory.GetTemplatePath(templateId)?.StartsWith("Spells/TreasureCards/", StringComparison.OrdinalIgnoreCase) == true);
     }
 
+    private void PublishReceipt(Wizard wizard, BazaarNativeRequest request, BazaarTransactionReceipt receipt) {
+        // CLASSIC: this receipt is produced only after one atomic player/stock/items save was acknowledged.
+        // Its serialized delivery bytes, native row identities, quantity and gold are authoritative.
+        foreach (var packet in ClassicBazaarProtocol.ReceiptMessages(request, receipt, wizard.GameObjectID, wizard.CharId, request.TreasureNameHash)) {
+            SendToSocket(packet);
+        }
+    }
+
+    private void SendFailure(WIZARD_12_PROTOCOL.MSG_AUCTIONHOUSEREQUEST message) {
+        var failure = ClassicBazaarProtocol.FailureMessage(message);
+        if (failure is not null) SendToSocket(failure);
+    }
 }

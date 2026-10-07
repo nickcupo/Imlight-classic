@@ -49,6 +49,7 @@ using Imlight.Common;
 using Imlight.CoreLib.Game.Reagents;
 using Imlight.CoreLib.Game.WizBang;
 using Imlight.CoreLib.Game.Zone.Core;
+using Imlight.CoreLib.WizardData.Collections;
 using Imlight.CoreLib.WizardData.Models.Player;
 
 namespace Imlight.CoreLib.Game.Zone.Components;
@@ -122,26 +123,31 @@ internal sealed class InteractReagentComponent(ZoneEntity entity)
         var isRare = IsRareReagent();
         var rareReagent = isRare ? GetRareReagent(playerCharacter.CharId) : null;
 
-        // Add all reagents to the player's inventory.
-        for (int i = 0; i < quantity; i++) {
-            playerCharacter.AddReagent(reagent);
+        ReagentPickupReceipt receipt;
+        try {
+            // CLASSIC: announce only acknowledged acquisitions. A saved stack quantity is not the
+            // number rolled at this node, and a full bag must not receive a success toast or lose the node.
+            receipt = GatherReagentReceipt(playerCharacter, reagent, quantity, rareReagent);
         }
-        if (isRare) {
-            playerCharacter.AddReagent(rareReagent);
+        catch (Exception error) {
+            Logger.Warning("Reagent pickup save was not acknowledged for {0}: {1}",
+                Logger.Args(playerCharacter.CharId, error.GetType().Name));
+            // CLASSIC: a lost ACK can mean the entire pickup was saved. Retire that possibly consumed
+            // node before relog so it cannot be collected twice; a failed read leaves it available.
+            if (WizardCollection.IsInventorySnapshotUncertain(playerCharacter)) Entity.DeleteObject();
+            playerActor.Tell("Close"); // CLASSIC: reload saved state instead of repeating the pickup.
+            return;
         }
+        if (receipt.Acquired.Count == 0) return;
 
         // Inform the game client that the player has gathered reagents.
-        var reagents = isRare ? new[] { reagent, rareReagent } : [reagent];
-        SendPlayerReagentAddMessage(playerActor, reagents, playerCharacter.GameObjectID);
+        SendPlayerReagentAddMessage(playerActor, receipt.Reagents.ToArray(), playerCharacter.GameObjectID);
 
         // Inform the game client that they have gathered loot.
-        SendPlayerLootInfoMessage(playerActor, new Dictionary<ulong, int> {
-            [reagent.m_templateID] = reagent.m_quantity,
-            [rareReagent?.m_templateID ?? 0] = rareReagent?.m_quantity ?? 0,
-        }, playerCharacter.GameObjectID);
+        SendPlayerLootInfoMessage(playerActor, receipt.Acquired, playerCharacter.GameObjectID);
 
         // Play the pickup sound.
-        if (isRare) {
+        if (rareReagent is not null && receipt.Acquired.ContainsKey(rareReagent.m_templateID.Full)) {
             SendPlayerRarePickupSound(playerActor);
         }
         else {
@@ -155,6 +161,19 @@ internal sealed class InteractReagentComponent(ZoneEntity entity)
 
         // Finally, destroy this entity.
         Entity.DeleteObject();
+    }
+
+    // CLASSIC: retain the canonical final stack receipt separately from the quantity actually acquired.
+    // The entire normal/rare pickup has one save. An uncertain save retires the possibly consumed node
+    // and reloads the wizard; a refusal/full bag leaves it available without publishing a success.
+    internal sealed record ReagentPickupReceipt(IReadOnlyList<ClientReagentItem> Reagents, Dictionary<ulong, int> Acquired);
+    internal static ReagentPickupReceipt GatherReagentReceipt(Wizard wizard,
+        ClientReagentItem normal, int quantity, ClientReagentItem rare) {
+        var requests = new List<ReagentAcquisition> { new(normal, quantity) };
+        if (rare is not null) requests.Add(new(rare, 1));
+        if (!WizardReagentCollection.AddReagents(wizard, requests, out var receipts)) return new([], []);
+        return new(receipts.Select(receipt => receipt.Reagent).ToList(),
+            receipts.ToDictionary(receipt => receipt.Reagent.m_templateID.Full, receipt => receipt.Acquired));
     }
 
     private ClientReagentItem GetReagent(ulong charId, int quantity) {

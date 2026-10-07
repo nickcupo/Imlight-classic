@@ -20,235 +20,168 @@ using System.Linq;
 using System;
 using System.Collections.Generic;
 using Raven.Client.Documents;
+using Raven.Client.Documents.Linq;
 using Imlight.CoreLib.WizardData.Databases;
 using Imcodec.ObjectProperty.TypeCache;
 
 namespace Imlight.CoreLib.WizardData.Collections;
 
+// CLASSIC: stock mutations publish snapshots only after the database acknowledges one save.
 internal class AuctionHouseCollection {
-    
     public const string CollectionName = "AuctionHouse";
-
-    private static readonly IDocumentStore s_store;
+    private static readonly Lazy<IDocumentStore> s_storeSource = new(() => PlayerDatabase.Instance.Store);
+    private static IDocumentStore s_store => s_storeSource.Value;
+    // CLASSIC: scoped tracked-session seams; tests never initialize or write the live store.
+    internal static readonly System.Threading.AsyncLocal<Func<Raven.Client.Documents.Session.IDocumentSession>> TestOpenScope = new();
+    internal static readonly System.Threading.AsyncLocal<Func<Raven.Client.Documents.Session.IDocumentSession, List<AuctionHouseEntry>>> TestRowsScope = new();
+    private static Raven.Client.Documents.Session.IDocumentSession Open()
+        => TestOpenScope.Value is { } open ? open() : s_store.OpenSession();
     private static bool s_isInitialized;
-    private static List<AuctionHouseEntry> s_entries;
-
-    /// <summary>
-    /// CLASSIC: one lock for the Bazaar's stock. Every player's session actor and the server's restock timer change the
-    /// same entries; a buy or sale holds it from reading the entry to saving it.
-    /// </summary>
+    private static List<AuctionHouseEntry> s_entries = [];
     internal static readonly object Lock = new();
 
-    static AuctionHouseCollection() {
-        s_store = PlayerDatabase.Instance.Store;
-    }
+    internal static AuctionHouseEntry Snapshot(AuctionHouseEntry entry) => entry is null ? null : new() {
+        m_templateID = entry.m_templateID, m_numForSale = entry.m_numForSale,
+        m_buyPrice = entry.m_buyPrice, m_sellPrice = entry.m_sellPrice,
+    };
 
-    /// <summary>
-    /// Retrieves all Auction House entries available.
-    /// </summary>
-    /// <returns>A list of all available Auction House entries, or null if none found.</returns>
     public static List<AuctionHouseEntry> GetAllAuctionHouseEntries() {
-        lock (Lock) {
-            return [.. GetAllAuctionHouseEntriesUnlocked()]; // a snapshot: others may change the stock meanwhile
-        }
+        lock (Lock) return GetAllAuctionHouseEntriesUnlocked().Select(Snapshot).ToList();
     }
 
     private static List<AuctionHouseEntry> GetAllAuctionHouseEntriesUnlocked() {
-        if (s_isInitialized) {
-            return s_entries;
-        }
-
-        using var session = s_store.OpenSession();
-
-        // Retrieve all Auction House entries.
-        s_entries = [.. session.Query<AuctionHouseEntry>(collectionName: CollectionName)];
-
-        if (s_entries is null) {
-            s_entries = [];
-        }
-
+        if (s_isInitialized) return s_entries;
+        using var session = Open();
+        var stored = QueryStock(session).ToList();
+        s_entries = stored.Select(Snapshot).ToList();
         s_isInitialized = true;
-
         return s_entries;
     }
 
-    /// <summary>
-    /// Retrieves an Auction House entry by template ID.
-    /// </summary>
-    /// <param name="templateID">The template ID of an object.</param>
-    /// <returns>The Auction House entry, or null if not found.</returns>
-    public static AuctionHouseEntry GetAuctionHouseEntry(ulong templateID) {
+    // CLASSIC: fresh, tracked rows; never stage a transaction against detached cache entries.
+    internal static IQueryable<AuctionHouseEntry> QueryStock(Raven.Client.Documents.Session.IDocumentSession session)
+        => TestRowsScope.Value is { } read ? read(session).AsQueryable()
+            : session.Query<AuctionHouseEntry>(collectionName: CollectionName)
+                .Customize(q => q.WaitForNonStaleResults(TimeSpan.FromSeconds(5))).Take(int.MaxValue);
+
+    public static AuctionHouseEntry GetAuctionHouseEntry(ulong templateId) {
         lock (Lock) {
-            return GetAuctionHouseEntryUnlocked(templateID);
+            var matches = GetAllAuctionHouseEntriesUnlocked().Where(e => e.m_templateID.Full == templateId).ToList();
+            // Ambiguous persisted lots are refused, never summed into a purchasable forged row.
+            return matches.Count == 1 ? Snapshot(matches[0]) : null;
         }
     }
 
-    private static AuctionHouseEntry GetAuctionHouseEntryUnlocked(ulong templateID) {
-        if (!s_isInitialized) {
-            GetAllAuctionHouseEntriesUnlocked();
-        }
-
-        if (s_entries is null) {
-            return null;
-        }
-
-        var auctionHouseEntry = s_entries.FirstOrDefault(x => x.m_templateID == templateID);
-
-        return auctionHouseEntry;
+    internal static void InvalidateCache() {
+        lock (Lock) { s_isInitialized = false; s_entries = []; }
     }
 
-    /// <summary>
-    /// Adds an Auction House entry to the collection.
-    /// </summary>
-    /// <param name="entry">The Auction House entry to add.</param>
+    internal static void PublishCommitted(AuctionHouseEntry entry) {
+        lock (Lock) {
+            if (!s_isInitialized) return; // The next read hydrates the acknowledged database instead.
+            s_entries.RemoveAll(e => e.m_templateID.Full == entry.m_templateID.Full);
+            if (entry.m_numForSale > 0) s_entries.Add(Snapshot(entry));
+        }
+    }
+
     public static void AddAuctionHouseEntry(AuctionHouseEntry entry) {
         lock (Lock) {
-            AddAuctionHouseEntryUnlocked(entry);
-        }
-    }
-
-    private static void AddAuctionHouseEntryUnlocked(AuctionHouseEntry entry) {
-        if (!s_isInitialized) {
-            GetAllAuctionHouseEntriesUnlocked();
-        }
-
-        using var session = s_store.OpenSession();
-
-        session.Store(entry);
-        var metaData = session.Advanced.GetMetadataFor(entry);
-        metaData[Raven.Client.Constants.Documents.Metadata.Collection] = CollectionName;
-
-        s_entries.Add(entry);
-
-        session.SaveChanges();
-    }
-
-
-    /// <summary>
-    /// Removes an Auction House entry record from the collection based on the specified template ID.
-    /// </summary>
-    /// <param name="templateID">The template ID of the object to remove the entry for.</param>
-    /// <returns>True if the Auction House entry was successfully removed, false otherwise.</returns>
-    public static bool RemoveAuctionHouseEntry(ulong templateID) {
-        lock (Lock) {
-            return RemoveAuctionHouseEntryUnlocked(templateID);
-        }
-    }
-
-    private static bool RemoveAuctionHouseEntryUnlocked(ulong templateID) {
-        if (!s_isInitialized) {
-            GetAllAuctionHouseEntriesUnlocked();
-        }
-
-        using var session = s_store.OpenSession();
-
-        var entry = session.Query<AuctionHouseEntry>(collectionName: CollectionName)
-            .FirstOrDefault(entry => entry.m_templateID == templateID);
-
-        // Remove the entry from the collection.
-        if (entry != null) {
-            session.Delete(entry);
-            session.SaveChanges();
-        }
-
-        var removed = s_entries.RemoveAll(x => x.m_templateID == templateID);
-        return removed != 0;
-    }
-
-    /// <summary>
-    /// Updates the entry in the Auction House collection for a specific template ID.
-    /// </summary>
-    /// <param name="entry">The new Auction House entry to update with.</param>
-    /// <returns>True if the Auction House entry was updated, false if the entry could not be found.</returns>
-    public static bool UpdateAuctionHouseEntry(AuctionHouseEntry entry) {
-        lock (Lock) {
-            return UpdateAuctionHouseEntryUnlocked(entry);
-        }
-    }
-
-    private static bool UpdateAuctionHouseEntryUnlocked(AuctionHouseEntry entry) {
-        if (!s_isInitialized) {
-            GetAllAuctionHouseEntriesUnlocked();
-        }
-
-        var removeSuccess = RemoveAuctionHouseEntryUnlocked(entry.m_templateID);
-
-        if (!removeSuccess) {
-            return false;
-        }
-
-        AddAuctionHouseEntryUnlocked(entry);
-
-        return true;
-    }
-
-    /// <summary>
-    /// CLASSIC: applies a whole restock in one database session: entries to add or update by template, and templates to
-    /// remove. The caller holds <see cref="Lock"/>.
-    /// </summary>
-    internal static void ApplyStockChanges(IReadOnlyCollection<AuctionHouseEntry> upserts, IReadOnlyCollection<ulong> removals) {
-        GetAllAuctionHouseEntriesUnlocked();
-        using var session = s_store.OpenSession();
-        var stored = session.Query<AuctionHouseEntry>(collectionName: CollectionName).Take(int.MaxValue).ToList();
-        var byTemplate = stored.GroupBy(entry => entry.m_templateID.Full).ToDictionary(group => group.Key, group => group.ToList());
-
-        foreach (var template in removals) {
-            if (byTemplate.Remove(template, out var docs)) {
-                docs.ForEach(session.Delete);
-            }
-
-            s_entries.RemoveAll(entry => entry.m_templateID.Full == template);
-        }
-
-        foreach (var entry in upserts) {
-            var template = entry.m_templateID.Full;
-            if (byTemplate.TryGetValue(template, out var docs) && docs.Count > 0) {
-                docs[0].m_numForSale = entry.m_numForSale;
-                docs[0].m_buyPrice = entry.m_buyPrice;
-                docs[0].m_sellPrice = entry.m_sellPrice;
-                docs.Skip(1).ToList().ForEach(session.Delete);
-            }
-            else {
-                var copy = new AuctionHouseEntry {
-                    m_templateID = entry.m_templateID,
-                    m_numForSale = entry.m_numForSale,
-                    m_buyPrice = entry.m_buyPrice,
-                    m_sellPrice = entry.m_sellPrice,
-                };
+            try {
+                using var session = Open();
+                session.Advanced.OptimisticConcurrencyMode = Raven.Client.Documents.Session.OptimisticConcurrencyMode.Writes;
+                if (QueryStock(session).Any(e => e.m_templateID == entry.m_templateID))
+                    throw new InvalidOperationException("Bazaar stock already exists.");
+                var copy = Snapshot(entry);
                 session.Store(copy);
                 session.Advanced.GetMetadataFor(copy)[Raven.Client.Constants.Documents.Metadata.Collection] = CollectionName;
+                session.SaveChanges();
+                PublishCommitted(copy);
             }
-
-            var cached = s_entries.FirstOrDefault(x => x.m_templateID.Full == template);
-            if (cached is null) {
-                s_entries.Add(entry);
-            }
-            else {
-                cached.m_numForSale = entry.m_numForSale;
-                cached.m_buyPrice = entry.m_buyPrice;
-                cached.m_sellPrice = entry.m_sellPrice;
-            }
+            catch { InvalidateCache(); throw; }
         }
-
-        session.Advanced.MaxNumberOfRequestsPerSession = int.MaxValue;
-        session.SaveChanges();
     }
 
-    /// <summary>
-    /// CLASSIC: update only quote fields of one existing template; retain every document's copies and identity.
-    /// An acknowledged database save precedes the cache update. Failure propagates without changing the cache.
-    /// </summary>
+    public static bool RemoveAuctionHouseEntry(ulong templateId) {
+        lock (Lock) {
+            try {
+                using var session = Open();
+                session.Advanced.OptimisticConcurrencyMode = Raven.Client.Documents.Session.OptimisticConcurrencyMode.Writes;
+                var docs = QueryStock(session).ToList().Where(e => e.m_templateID.Full == templateId).ToList();
+                if (docs.Count != 1) return false;
+                session.Delete(docs[0]);
+                session.SaveChanges();
+                var snapshot = Snapshot(docs[0]); snapshot.m_numForSale = 0;
+                PublishCommitted(snapshot);
+                return true;
+            }
+            catch { InvalidateCache(); throw; }
+        }
+    }
+
+    public static bool UpdateAuctionHouseEntry(AuctionHouseEntry entry) {
+        lock (Lock) {
+            try {
+                using var session = Open();
+                session.Advanced.OptimisticConcurrencyMode = Raven.Client.Documents.Session.OptimisticConcurrencyMode.Writes;
+                var docs = QueryStock(session).ToList().Where(e => e.m_templateID.Full == entry.m_templateID.Full).ToList();
+                if (docs.Count != 1) return false;
+                var tracked = docs[0]; // Preserve original Raven identity and change vector.
+                tracked.m_numForSale = entry.m_numForSale; tracked.m_buyPrice = entry.m_buyPrice; tracked.m_sellPrice = entry.m_sellPrice;
+                session.SaveChanges();
+                PublishCommitted(tracked);
+                return true;
+            }
+            catch { InvalidateCache(); throw; }
+        }
+    }
+
+    internal static void ApplyStockChanges(IReadOnlyCollection<AuctionHouseEntry> upserts, IReadOnlyCollection<ulong> removals) {
+        lock (Lock) {
+            try {
+                using var session = Open();
+                session.Advanced.OptimisticConcurrencyMode = Raven.Client.Documents.Session.OptimisticConcurrencyMode.Writes;
+                session.Advanced.MaxNumberOfRequestsPerSession = int.MaxValue;
+                var stored = QueryStock(session).ToList();
+                var byTemplate = stored.GroupBy(e => e.m_templateID.Full).ToDictionary(g => g.Key, g => g.ToList());
+                if (upserts.GroupBy(e => e.m_templateID.Full).Any(g => g.Count() != 1)
+                    || upserts.Any(e => removals.Contains(e.m_templateID.Full)))
+                    throw new InvalidOperationException("Ambiguous Bazaar restock plan.");
+                // Restock retains its existing duplicate cleanup policy, but never touches the cache before ACK.
+                foreach (var template in removals) {
+                    if (byTemplate.Remove(template, out var docs)) docs.ForEach(session.Delete);
+                }
+                foreach (var entry in upserts) {
+                    if (byTemplate.TryGetValue(entry.m_templateID.Full, out var docs) && docs.Count > 0) {
+                        docs[0].m_numForSale = entry.m_numForSale; docs[0].m_buyPrice = entry.m_buyPrice; docs[0].m_sellPrice = entry.m_sellPrice;
+                        docs.Skip(1).ToList().ForEach(session.Delete);
+                    }
+                    else {
+                        var copy = Snapshot(entry); session.Store(copy);
+                        session.Advanced.GetMetadataFor(copy)[Raven.Client.Constants.Documents.Metadata.Collection] = CollectionName;
+                    }
+                }
+                session.SaveChanges();
+                if (s_isInitialized) {
+                    foreach (var template in removals) s_entries.RemoveAll(e => e.m_templateID.Full == template);
+                    foreach (var entry in upserts) PublishCommitted(entry);
+                }
+            }
+            catch { InvalidateCache(); throw; }
+        }
+    }
+
     internal static bool ApplyPriceChanges(ulong templateId, int expectedCopies, int buy, int sell) {
         lock (Lock) {
             GetAllAuctionHouseEntriesUnlocked();
-            using var session = s_store.OpenSession();
-            var stored = session.Query<AuctionHouseEntry>(collectionName: CollectionName)
-                .Take(int.MaxValue).ToList().Where(entry => entry.m_templateID.Full == templateId).ToList();
-            return AuctionHouseQuoteCorrection.Apply(stored, s_entries, templateId, expectedCopies, buy, sell,
-                session.SaveChanges);
+            try {
+                using var session = Open();
+                session.Advanced.OptimisticConcurrencyMode = Raven.Client.Documents.Session.OptimisticConcurrencyMode.Writes;
+                var stored = QueryStock(session).ToList().Where(e => e.m_templateID.Full == templateId).ToList();
+                return AuctionHouseQuoteCorrection.Apply(stored, s_entries, templateId, expectedCopies, buy, sell, session.SaveChanges);
+            }
+            catch { InvalidateCache(); throw; }
         }
     }
-
 }
 
 // CLASSIC: separate the bounded field update from Raven's session for acknowledged-save/failure checks.

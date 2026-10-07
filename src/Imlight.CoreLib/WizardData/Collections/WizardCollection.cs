@@ -50,6 +50,22 @@ public static class WizardCollection {
     private static int? s_heldWriteLane;
     internal static bool HoldsWriteLane => s_heldWriteLane.HasValue;
 
+    // CLASSIC: a lost save acknowledgement leaves this live instance untrusted. A later whole-inventory
+    // save (including logout) must not overwrite a purchase that may already be durable. Relog creates
+    // a fresh instance from the database; the old instance stays refused without changing player schema.
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Wizard, object> s_uncertainInventory = new();
+    internal static bool IsInventorySnapshotUncertain(Wizard wizard)
+        => wizard is not null && s_uncertainInventory.TryGetValue(wizard, out _);
+    internal static void MarkInventorySnapshotUncertain(Wizard wizard) {
+        if (wizard is not null) s_uncertainInventory.GetValue(wizard, _ => new object());
+    }
+
+    // CLASSIC: preserve the existing library's free-book server cap; deck-held cards have their own ledger.
+    internal static bool CanReceiveTreasureCards(Wizard saved, int quantity)
+        => saved?.SpellbookBehavior is not null && quantity > 0
+            && (long)(saved.SpellbookBehavior.TreasureCardTemplateIds?.Count ?? 0) + quantity
+                <= Imlight.Classic.Rules.TreasureShopRules.BookCapacity;
+
     private static readonly TimeSpan s_nonStaleWaitTimeout
         = TimeSpan.FromSeconds(ConfigurationManager.Settings["Database.DatabaseWaitForNonStaleResultsTimeout"].AsByte(5));
 
@@ -93,7 +109,7 @@ public static class WizardCollection {
 
     internal static bool CommitCharacterMutation(ulong charId, Func<IDocumentSession, Wizard, bool> operation,
         Action<Wizard> afterCommit, Func<IDocumentSession> openSession = null,
-        Func<IDocumentSession, ulong, Wizard> loadWizard = null) {
+        Func<IDocumentSession, ulong, Wizard> loadWizard = null, Action<Exception> onSaveFailure = null) {
         if (Classic.Ambient.AmbientWizards.IsAmbientChar(charId)) {
             return false; // CLASSIC: an ambient wizard has no character document.
         }
@@ -108,8 +124,16 @@ public static class WizardCollection {
             session.Advanced.OptimisticConcurrencyMode = OptimisticConcurrencyMode.Writes;
             var wizard = loadWizard is null ? GetCharacterByCharId(session, charId) : loadWizard(session, charId);
             if (wizard is null || !operation(session, wizard)) return false;
-            session.SaveChanges();
-            afterCommit?.Invoke(wizard);
+            try {
+                session.SaveChanges();
+                afterCommit?.Invoke(wizard);
+            }
+            catch (Exception error) {
+                // CLASSIC: quarantine before releasing the lane, so a queued stale inventory save cannot
+                // run between a lost acknowledgement (or failed publication) and its caller's catch.
+                onSaveFailure?.Invoke(error);
+                throw;
+            }
             return true;
         });
     }
@@ -191,7 +215,10 @@ public static class WizardCollection {
         var total = (long) quantity * unitPrice;
         if (liveWizard is null || templateId == 0 || quantity <= 0 || unitPrice < 0 || total > int.MaxValue) return false;
         return CommitCharacterMutation(liveWizard.CharId, (_, persisted) => {
-            if (persisted.GameStats.m_currentGold < total) return false;
+            // CLASSIC: capacity is checked against the saved book in the same commit as payment, rather
+            // than relying on the library's earlier live snapshot or allowing Bazaar to bypass the cap.
+            if (IsInventorySnapshotUncertain(liveWizard) || !CanReceiveTreasureCards(persisted, quantity)
+                || persisted.GameStats.m_currentGold < total) return false;
             persisted.GameStats.m_currentGold -= (int) total;
             for (var i = 0; i < quantity; i++) persisted.SpellbookBehavior.AddTreasureCard(templateId);
             return true;
@@ -488,12 +515,18 @@ public static class WizardCollection {
     /// </summary>
     /// <param name="wizard">The wizard object containing the updated equipment.</param>
     public static void UpdateCharacterItems(Wizard wizard) {
-        UpdateCharacter(wizard.CharId, existingCharacter => {
-            existingCharacter.InventoryBehavior = wizard.InventoryBehavior;
-            existingCharacter.EquipmentBehavior = wizard.EquipmentBehavior;
-            existingCharacter.StorageBehavior = wizard.StorageBehavior; // CLASSIC: the dorm bank
-            existingCharacter.PetSnackBehavior = wizard.PetSnackBehavior;
-            existingCharacter.AlchemyBehavior = wizard.AlchemyBehavior;
+        if (wizard is null) return;
+        // CLASSIC: use the same lane as uncertain-commit marking; a failed purchase may be present in
+        // the database even though its old live backpack/bag was never published.
+        WithCharacterLock(wizard.CharId, () => {
+            if (IsInventorySnapshotUncertain(wizard)) return false;
+            return UpdateCharacter(wizard.CharId, existingCharacter => {
+                existingCharacter.InventoryBehavior = wizard.InventoryBehavior;
+                existingCharacter.EquipmentBehavior = wizard.EquipmentBehavior;
+                existingCharacter.StorageBehavior = wizard.StorageBehavior; // CLASSIC: the dorm bank
+                existingCharacter.PetSnackBehavior = wizard.PetSnackBehavior;
+                existingCharacter.AlchemyBehavior = wizard.AlchemyBehavior;
+            });
         });
     }
 
@@ -678,7 +711,7 @@ public static class WizardCollection {
         }, persisted => PublishTreasureCards(wizard, persisted), openSession, loadWizard);
     }
 
-    private static void PublishTreasureCards(Wizard liveWizard, Wizard persisted) {
+    internal static void PublishTreasureCards(Wizard liveWizard, Wizard persisted) {
         liveWizard.SpellbookBehavior.TreasureCardTemplateIds = persisted.SpellbookBehavior.TreasureCardTemplateIds?.ToList() ?? [];
         // CLASSIC: the deck Treasure Card ledger is saved with the book and published with it.
         liveWizard.SpellbookBehavior.DeckTreasureCards = ServerWizSpellbookBehavior.CopyLedger(persisted.SpellbookBehavior.DeckTreasureCards);
@@ -832,6 +865,13 @@ public static class WizardCollection {
         wizard.PetSnackBehavior ??= new();
         var snackIds = wizard.PetSnackBehavior.SnackItemIds;
         wizard.PetSnackBehavior.Snacks = [.. snacks.Where(s => s.m_quantity > 0 && (snackIds is null || snackIds.Contains(s.m_globalID)))];
+
+        // CLASSIC: reagent rows live in a separate collection too. Restore only this wizard's exact
+        // saved references; orphan rows and existing counts are retained without adopting or rewriting them.
+        if (!WizardReagentCollection.TryReadOwnedBag(session, wizard, out var reagents))
+            throw new InvalidOperationException("Saved reagent bag contains ambiguous or missing owned rows.");
+        wizard.AlchemyBehavior ??= new();
+        wizard.AlchemyBehavior.Reagents = reagents;
 
         // The friends list is expanded to include a 'relationship' model
         // which helps keep track of the relationship between two players for moderation purposes.
