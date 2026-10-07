@@ -129,6 +129,7 @@
     <ServerIntegrationTest Include="TutorialProgressionAcknowledgementTests.cs" />
     <ServerIntegrationTest Include="TutorialCommandAdmissionTests.cs" />
     <ServerIntegrationTest Include="ResourceRewardAcknowledgementTests.cs" />
+    <ServerIntegrationTest Include="ResourceResultExecutionTests.cs" />
     <ServerIntegrationTest Include="DungeonQuestReconciliationTests.cs" />
     <ServerIntegrationTest Include="ArenaPvpMinionTests.cs" />
     <ServerIntegrationTest Include="OctoberShopRuntimeTests.cs" />
