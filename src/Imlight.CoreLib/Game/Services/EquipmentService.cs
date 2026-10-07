@@ -99,6 +99,8 @@ internal partial class EquipmentService(SessionActor sessionActor) : MessageServ
 
     [MessageHandler(typeof(GAME_5_PROTOCOL.MSG_EQUIPITEM))]
     private void ReceiveEquipItem(GAME_5_PROTOCOL.MSG_EQUIPITEM message) {
+        // CLASSIC: a queued request after an uncertain save needs reload, not stale ownership checks or infractions.
+        if (WizardCollection.IsInventorySnapshotUncertain(GetActiveWizard())) { CloseSession(); return; }
         try {
             if (message.IsEquip == 1) {
                 EquipItem(message);
@@ -135,6 +137,7 @@ internal partial class EquipmentService(SessionActor sessionActor) : MessageServ
 
     private void EquipItem(GAME_5_PROTOCOL.MSG_EQUIPITEM message) {
         var wizard = GetActiveWizard();
+        if (WizardCollection.IsInventorySnapshotUncertain(wizard)) { CloseSession(); return; }
         var account = GetActiveAccount();
         var itemId = message.ItemID;
 
@@ -224,6 +227,7 @@ internal partial class EquipmentService(SessionActor sessionActor) : MessageServ
 
     private void UnEquipItem(GAME_5_PROTOCOL.MSG_EQUIPITEM message) {
         var wizard = GetActiveWizard();
+        if (WizardCollection.IsInventorySnapshotUncertain(wizard)) { CloseSession(); return; }
         var wizEquipmentBehavior = wizard.EquipmentBehavior;
         var account = GetActiveAccount();
         var itemId = message.ItemID;

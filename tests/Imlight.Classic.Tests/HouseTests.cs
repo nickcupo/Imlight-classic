@@ -506,7 +506,8 @@ public sealed class HouseTests : IDisposable {
         Assert.Equal(currency == HouseCurrency.Crowns ? 20000 : 30000, store.Account.Crowns);
     }
 
-    private static HousePurchaseResult Buy(Wizard live, ulong id) => HouseCollection.Purchase(live, Deed(id), HouseCurrency.Gold);
+    private static HousePurchaseResult Buy(Wizard live, ulong id) => HouseCollection.Purchase(live, Deed(id), HouseCurrency.Gold,
+        loadAccount: (session, _) => session.Load<Account>("account/1"));
     private static WizClientObjectItem Deed(ulong id) => new() { m_globalID = id, m_templateID = Template,
         m_debugName = "Fixture deed", m_inactiveBehaviors = [new DeedBehavior()] };
     private static HousingEntry Entry(ulong id) => new() { ItemId = id, ItemDocumentId = $"item/{id}", TemplateId = Furniture,
@@ -553,8 +554,15 @@ public sealed class HouseTests : IDisposable {
         internal Account LoadAccount(IDocumentSession session, ulong id) { Assert.Equal(AccountId, id); return session.Load<Account>("account/1"); }
         internal IDisposable Scope() {
             var old = WizardCollection.TestStoreScope.Value;
+            var oldRows = WizardInventoryTransactions.TestRowsScope.Value;
             WizardCollection.TestStoreScope.Value = new(Open, (s, id) => id == Owner ? s.Load<Wizard>("wizard/1") : null!);
-            return new Restore(() => WizardCollection.TestStoreScope.Value = old);
+            WizardInventoryTransactions.TestRowsScope.Value = session => Documents
+                .Where(pair => pair.Value is WizClientObjectItem)
+                .Select(pair => session.Load<WizClientObjectItem>(pair.Key)).ToList();
+            return new Restore(() => {
+                WizardCollection.TestStoreScope.Value = old;
+                WizardInventoryTransactions.TestRowsScope.Value = oldRows;
+            });
         }
         private IDocumentSession Open() {
             var s = DispatchProxy.Create<IDocumentSession, HouseSessionProxy>(); var proxy = (HouseSessionProxy)(object)s;
@@ -575,6 +583,7 @@ public sealed class HouseTests : IDisposable {
     public class HouseSessionProxy : DispatchProxy {
         internal Dictionary<string, object> Saved = null!; internal readonly Dictionary<string, object> Working = new();
         internal readonly HashSet<string> CreateOnly = new(); internal bool OptimisticWrites;
+        internal readonly HashSet<object> Ignored = new(ReferenceEqualityComparer.Instance);
         internal Func<bool> Fail = null!; private IAdvancedSessionOperations? _advanced;
         protected override object? Invoke(MethodInfo? method, object?[]? args) {
             switch (method!.Name) {
@@ -604,7 +613,7 @@ public sealed class HouseTests : IDisposable {
                     if (Fail()) throw new IOException("Injected transaction failure.");
                     if (OptimisticWrites && CreateOnly.Any(Saved.ContainsKey))
                         throw new ConcurrencyException("A create-only fixture write cannot replace a saved document.");
-                    foreach (var pair in Working) Saved[pair.Key] = Clone(pair.Value);
+                    foreach (var pair in Working) if (!Ignored.Contains(pair.Value)) Saved[pair.Key] = Clone(pair.Value);
                     CreateOnly.Clear(); return null;
                 case "Dispose": return null;
                 default: throw new NotSupportedException(method.Name);
@@ -626,6 +635,7 @@ public sealed class HouseTests : IDisposable {
                     Owner.OptimisticWrites = (OptimisticConcurrencyMode)args![0]! == OptimisticConcurrencyMode.Writes;
                     return null;
                 case "GetMetadataFor": return _metadata;
+                case "IgnoreChangesFor": Owner.Ignored.Add(args![0]!); return null;
                 case "GetDocumentId": return Owner.Working.FirstOrDefault(p => ReferenceEquals(p.Value, args![0])).Key;
                 default: throw new NotSupportedException(method.Name);
             }

@@ -148,20 +148,39 @@ internal class ShopService(SessionActor sessionActor) : MessageService(sessionAc
         // CLASSIC: a house's price, original deed, gold/account balance and portfolio save
         // together. Never route a deed through the ordinary charge-then-give path.
         if (ClassicRuntime.IsActive && Classic.Housing.HouseCatalog.IsDeed(template)) {
+            GAME_5_PROTOCOL.MSG_INVENTORYBEHAVIOR_ADDITEM add = null;
+            WIZARD2_53_PROTOCOL.MSG_ITEMACQUISITION acquisition = null;
+            WIZARD_12_PROTOCOL.MSG_UPDATEGOLD gold = null;
+            WIZARD_12_PROTOCOL.MSG_CROWNBALANCE crowns = null;
+            WIZARD_12_PROTOCOL.MSG_SHOPBUYCONFIRM confirm = null;
             var purchased = Classic.Housing.HouseCollection.Purchase(playerWizard, item,
-                message.CurrencyType == 1 ? Classic.Housing.HouseCurrency.Crowns : Classic.Housing.HouseCurrency.Gold);
-            if (!purchased.Saved) { InformGameClient(purchased.Error); SendShopDenyMessage(); return; }
-            SendToSocket(new GAME_5_PROTOCOL.MSG_INVENTORYBEHAVIOR_ADDITEM {
-                GlobalID = playerWizard.GameObjectID, SerializedItem = purchased.ItemData,
-            });
-            SendToSocket(new WIZARD2_53_PROTOCOL.MSG_ITEMACQUISITION {
-                ItemGlobalID = purchased.Item.m_globalID, ItemTemplateID = itemTemplateID, ItemLocation = 1,
-            });
-            SendToSocket(new WIZARD_12_PROTOCOL.MSG_UPDATEGOLD {
-                Gold = playerWizard.GameStats.m_currentGold, MaxGold = playerWizard.GameStats.m_baseGoldPouch,
-            });
-            SendToSocket(ClassicCrowns.BalanceMessage(playerWizard.Account, playerWizard.CharId));
-            SendToSocket(new WIZARD_12_PROTOCOL.MSG_SHOPBUYCONFIRM());
+                message.CurrencyType == 1 ? Classic.Housing.HouseCurrency.Crowns : Classic.Housing.HouseCurrency.Gold,
+                preparePublication: prepared => {
+                    // CLASSIC: capture native success and fresh saved wallets before SaveChanges.
+                    add = new() { GlobalID = playerWizard.GameObjectID, SerializedItem = prepared.ItemData };
+                    acquisition = new() {
+                        ItemGlobalID = prepared.Item.m_globalID, ItemTemplateID = itemTemplateID, ItemLocation = 1,
+                    };
+                    gold = new() { Gold = prepared.Gold, MaxGold = prepared.MaxGold };
+                    crowns = new() {
+                        Failure = 0, TotalCrowns = prepared.Crowns, CharacterID = playerWizard.CharId,
+                        CacheBalanceForCSSegmentation = 1,
+                    };
+                    confirm = new();
+                    return true;
+                },
+                afterCommit: _ => {
+                    // CLASSIC: original native order, inside the acknowledged character lane.
+                    SendToSocket(add);
+                    SendToSocket(acquisition);
+                    SendToSocket(gold);
+                    SendToSocket(crowns);
+                    SendToSocket(confirm);
+                });
+            if (!purchased.Saved) {
+                if (WizardCollection.IsInventorySnapshotUncertain(playerWizard)) { CloseSession(); return; }
+                InformGameClient(purchased.Error); SendShopDenyMessage(); return;
+            }
             return;
         }
 

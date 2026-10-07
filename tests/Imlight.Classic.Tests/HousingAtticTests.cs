@@ -315,8 +315,15 @@ public sealed class HousingAtticTests : IDisposable {
         internal WizClientObjectItem Find(IDocumentSession session, ulong id, ulong owner) => session.Load<WizClientObjectItem>($"item/{id}");
         internal IDisposable Scope() {
             var previous = WizardCollection.TestStoreScope.Value;
+            var previousRows = WizardInventoryTransactions.TestRowsScope.Value;
             WizardCollection.TestStoreScope.Value = new(Open, (s, _) => s.Load<Wizard>("wizard/1"));
-            return new Restore(() => WizardCollection.TestStoreScope.Value = previous);
+            WizardInventoryTransactions.TestRowsScope.Value = session => Documents
+                .Where(pair => pair.Value is WizClientObjectItem)
+                .Select(pair => session.Load<WizClientObjectItem>(pair.Key)).ToList();
+            return new Restore(() => {
+                WizardCollection.TestStoreScope.Value = previous;
+                WizardInventoryTransactions.TestRowsScope.Value = previousRows;
+            });
         }
         private IDocumentSession Open() {
             var s = DispatchProxy.Create<IDocumentSession, AtticSessionProxy>(); var proxy = (AtticSessionProxy)(object)s;
@@ -329,6 +336,7 @@ public sealed class HousingAtticTests : IDisposable {
     }
     public class AtticSessionProxy : DispatchProxy {
         internal Dictionary<string, object> Saved = null!; internal readonly Dictionary<string, object> Working = new();
+        internal readonly HashSet<object> Ignored = new(ReferenceEqualityComparer.Instance);
         internal Func<bool> Fail = null!; private IAdvancedSessionOperations? _advanced;
         protected override object? Invoke(MethodInfo? method, object?[]? args) {
             switch (method!.Name) {
@@ -348,7 +356,7 @@ public sealed class HousingAtticTests : IDisposable {
                 case "Store": Working[(string)args![1]!] = args[0]!; return null;
                 case "SaveChanges":
                     if (Fail()) throw new IOException("Injected transaction failure.");
-                    foreach (var pair in Working) Saved[pair.Key] = Clone(pair.Value); return null;
+                    foreach (var pair in Working) if (!Ignored.Contains(pair.Value)) Saved[pair.Key] = Clone(pair.Value); return null;
                 case "Dispose": return null;
                 default: throw new NotSupportedException(method.Name);
             }
@@ -365,9 +373,11 @@ public sealed class HousingAtticTests : IDisposable {
         internal AtticSessionProxy Owner = null!;
         protected override object? Invoke(MethodInfo? method, object?[]? args) => method!.Name switch {
             "set_OptimisticConcurrencyMode" => null,
+            "IgnoreChangesFor" => Ignore(args![0]!),
             "GetDocumentId" => Owner.Working.FirstOrDefault(p => ReferenceEquals(p.Value, args![0])).Key,
             _ => throw new NotSupportedException(method.Name),
         };
+        private object? Ignore(object item) { Owner.Ignored.Add(item); return null; }
     }
     private sealed class Restore(System.Action undo) : IDisposable { public void Dispose() => undo(); }
 }

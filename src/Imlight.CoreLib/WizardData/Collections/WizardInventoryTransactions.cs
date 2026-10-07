@@ -264,6 +264,17 @@ internal static class WizardInventoryTransactions {
     private static bool ValidIds(IReadOnlyList<ulong> ids)
         => ids is not null && ids.All(id => id != 0) && ids.Distinct().Count() == ids.Count;
 
+    // CLASSIC: a house deed changes containers without changing its original runtime item alias.
+    // Publish only a matching owned native snapshot; callers hold the acknowledged character lane.
+    internal static void PublishCommittedItemSnapshot(WizClientObjectItem snapshot, WizClientObjectItem alias) {
+        if (snapshot is null || alias is null || snapshot.GetType() != alias.GetType()
+            || snapshot.m_globalID.Full == 0 || snapshot.m_globalID != alias.m_globalID
+            || snapshot.m_templateID.Full == 0 || snapshot.m_templateID != alias.m_templateID
+            || snapshot.m_characterId.Full == 0 || snapshot.m_characterId != alias.m_characterId)
+            throw new InvalidOperationException("Cannot publish an unmatched owned item snapshot.");
+        if (!ReferenceEquals(snapshot, alias)) CopySnapshot(snapshot, alias);
+    }
+
     private static void CopySnapshot(WizClientObjectItem snapshot, WizClientObjectItem alias)
         => CopyNativeSnapshot(snapshot, alias);
 

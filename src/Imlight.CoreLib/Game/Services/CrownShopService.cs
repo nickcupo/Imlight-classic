@@ -155,6 +155,8 @@ internal class CrownShopService(SessionActor sessionActor) : MessageService(sess
     [MessageHandler(typeof(WIZARD_12_PROTOCOL.MSG_PCS_PURCHASE_REQUEST))]
     private void ReceivePurchase(WIZARD_12_PROTOCOL.MSG_PCS_PURCHASE_REQUEST message) {
         var wizard = GetActiveWizard();
+        // CLASSIC: queued requests cannot inspect or publish an uncertain ownership/wallet snapshot.
+        if (WizardCollection.IsInventorySnapshotUncertain(wizard)) { CloseSession(); return; }
         if (wizard is null || !s_catalog.Value.Items.TryGetValue(message.Item, out var item)) {
             Fail(message, "not in the catalog");
 
@@ -228,13 +230,36 @@ internal class CrownShopService(SessionActor sessionActor) : MessageService(sess
         if (ClassicRuntime.IsActive && CoreObjectFactory.GetCoreTemplate((uint)item.Template) is WizItemTemplate deedTemplate
             && Classic.Housing.HouseCatalog.IsDeed(deedTemplate)) {
             var deed = CoreObjectFactory.FinalizeCoreObject((uint)item.Template) as WizClientObjectItem;
+            GAME_5_PROTOCOL.MSG_INVENTORYBEHAVIOR_ADDITEM add = null;
+            WIZARD_12_PROTOCOL.MSG_UPDATEGOLD gold = null;
+            WIZARD_12_PROTOCOL.MSG_PCS_PURCHASE_RESPONSE response = null;
+            WIZARD_12_PROTOCOL.MSG_CROWNBALANCE crowns = null;
             var purchased = Classic.Housing.HouseCollection.Purchase(wizard, deed,
-                payWithGold ? Classic.Housing.HouseCurrency.Gold : Classic.Housing.HouseCurrency.Crowns);
-            if (!purchased.Saved) { Fail(message, purchased.Error); return; }
-            SendToSocket(new GAME_5_PROTOCOL.MSG_INVENTORYBEHAVIOR_ADDITEM {
-                GlobalID = wizard.GameObjectID, SerializedItem = purchased.ItemData,
-            });
-            Complete(wizard, message, item, payWithGold);
+                payWithGold ? Classic.Housing.HouseCurrency.Gold : Classic.Housing.HouseCurrency.Crowns,
+                preparePublication: prepared => {
+                    // CLASSIC: preserve Complete's native order, using the staged saved wallets.
+                    add = new() { GlobalID = wizard.GameObjectID, SerializedItem = prepared.ItemData };
+                    if (payWithGold) gold = new() { Gold = prepared.Gold, MaxGold = prepared.MaxGold };
+                    response = new() {
+                        Item = message.Item, Error = 0, Cost = payWithGold ? item.Gold : item.Crowns,
+                        Count = message.Count, Gifted = 0, Type = message.Type,
+                    };
+                    crowns = new() {
+                        Failure = 0, TotalCrowns = prepared.Crowns, CharacterID = wizard.CharId,
+                        CacheBalanceForCSSegmentation = 1,
+                    };
+                    return true;
+                },
+                afterCommit: _ => {
+                    SendToSocket(add);
+                    if (gold is not null) SendToSocket(gold);
+                    SendToSocket(response);
+                    SendToSocket(crowns);
+                });
+            if (!purchased.Saved) {
+                if (WizardCollection.IsInventorySnapshotUncertain(wizard)) { CloseSession(); return; }
+                Fail(message, purchased.Error); return;
+            }
             return;
         }
 

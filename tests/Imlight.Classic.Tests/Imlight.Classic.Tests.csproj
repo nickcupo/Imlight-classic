@@ -103,6 +103,8 @@
     <ServerIntegrationTest Include="HousingTests.cs" />
     <ServerIntegrationTest Include="ClassicDormCapacityTests.cs" />
     <ServerIntegrationTest Include="HousingInventoryConcurrencyTests.cs" />
+    <ServerIntegrationTest Include="HousingAcknowledgementTests.cs" />
+    <ServerIntegrationTest Include="HouseAcknowledgementTests.cs" />
     <ServerIntegrationTest Include="ArenaAmbientActorTransportTests.cs" />
     <ServerIntegrationTest Include="ActorLoggingTests.cs" />
     <ServerIntegrationTest Include="HousingAtticTests.cs" />
