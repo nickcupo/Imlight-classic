@@ -4,6 +4,9 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Reflection;
+using System.Threading.Tasks;
+using Akka.Actor;
 using Imcodec.IO;
 using Imcodec.MessageLayer;
 using Imcodec.MessageLayer.Generated;
@@ -11,6 +14,8 @@ using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Classic.Pvp;
 using Imlight.Common;
 using Imlight.CoreLib.Classic.Arena;
+using Imlight.CoreLib.Game.Services;
+using Imlight.CoreLib.Shared.Packets;
 using Imlight.CoreLib.WizardData.Collections;
 using Xunit;
 
@@ -139,6 +144,132 @@ public sealed class ArenaNativeBrowserTests {
             Assert.True(Teams.TryAdd(team.m_nTeamID.Full, team));
             Assert.Contains(team.m_matchId.Full, Matches.Keys);
             Assert.Contains(Matches[team.m_matchId.Full].m_teams, nested => nested.m_nTeamID.Full == team.m_nTeamID.Full);
+        }
+    }
+
+    // CLASSIC: native PrePvPKiosk clears TournamentInfo before echoing; SendUpdateRequest refuses
+    // name id zero. Exercise guard entry without the old fixture's direct, preinitialized List call.
+    [Theory]
+    [InlineData(ArenaKind.Practice, 1)] [InlineData(ArenaKind.Practice, 20)] [InlineData(ArenaKind.Practice, 50)]
+    [InlineData(ArenaKind.Ranked, 1)] [InlineData(ArenaKind.Ranked, 20)] [InlineData(ArenaKind.Ranked, 50)]
+    public void ReadyGuardEchoInitializesNativeTournamentAndFriendlyRowsBeforeAnyListRequest(ArenaKind kind, int level) {
+        var world = new World(friendly: true);
+        world.Players[Viewer] = world.Players[Viewer] with { Level = level };
+        world.Arena.OpenKiosk(Viewer, kind, 123);
+        var prep = Assert.IsType<WIZARD_12_PROTOCOL.MSG_PREPVPKIOSK>(Assert.Single(world.Sent).Message);
+        Assert.Equal(world.Arena.TournamentId(kind), prep.TournamentNameID);
+        Assert.True(world.Arena.CompleteKiosk(Viewer, prep));
+        var initial = Assert.IsType<GAME_5_PROTOCOL.MSG_PVPUPDATEINFO>(world.Sent[1].Message);
+        var list = ArenaMessages.Read<NewListUpdate>(initial.TournamentInfo)!;
+        Assert.NotEqual(0u, list.m_tournamentNameID);
+        Assert.Equal(prep.TournamentNameID, list.m_tournamentNameID);
+        Assert.Equal(world.Arena.Tournament(kind), list.m_tournamentName);
+        Assert.Equal(world.Players[Viewer].ActorId, initial.CharacterID);
+        Assert.True(list.m_totalTeams > 0);
+        var page = new NativePage(); page.Read(world);
+        Assert.NotEmpty(page.Matches);
+        Assert.Equal(kind == ArenaKind.Ranked ? 4 : 0, page.Teams.Count);
+        Assert.All(page.Matches.Values, row => Assert.Equal(0, row.m_status));
+        Assert.Equal(0, world.Reservations); // Browsing must not allocate NPC actors or matches.
+        var count = world.Sent.Count;
+        Assert.False(world.Arena.CompleteKiosk(Viewer, prep));
+        Assert.Equal(count, world.Sent.Count);
+        // The initialized native name id now permits an ordinary filtered browser request.
+        world.Arena.List(Viewer, list.m_tournamentNameID, numberOfElements: 4, requestType: 1);
+        page = new NativePage(); page.Read(world, count);
+        Assert.NotEmpty(page.Matches);
+        Assert.All(page.Matches.Values, row => Assert.Equal(1u, row.m_teamSize));
+    }
+
+    [Theory]
+    [InlineData(0)] [InlineData(1)] [InlineData(2)] [InlineData(3)] [InlineData(4)]
+    public void MismatchedOrStillPatchingEchoCannotInitializeOrConsumePendingGuard(int defect) {
+        var world = new World(friendly: true);
+        world.Arena.OpenKiosk(Viewer, ArenaKind.Practice, 123);
+        var valid = Assert.IsType<WIZARD_12_PROTOCOL.MSG_PREPVPKIOSK>(Assert.Single(world.Sent).Message);
+        var bad = ArenaMessages.Kiosk(valid.TournamentNameID, valid.MobileID);
+        switch (defect) {
+            case 0: bad.TournamentNameID = world.Arena.TournamentId(ArenaKind.Ranked); break;
+            case 1: bad.MobileID++; break;
+            case 2: bad.Patching = 1; break;
+            case 3: bad.LeagueID = 1; break;
+            case 4: bad.SeasonID = 1; break;
+        }
+        Assert.False(world.Arena.CompleteKiosk(Viewer, bad)); Assert.Single(world.Sent);
+        Assert.True(world.Arena.CompleteKiosk(Viewer, valid));
+    }
+
+    [Fact]
+    public void FormerGuardEchoCannotOverwriteTheNewNativeTournament() {
+        var world = new World(friendly: true);
+        world.Arena.OpenKiosk(Viewer, ArenaKind.Practice, 123);
+        var former = (WIZARD_12_PROTOCOL.MSG_PREPVPKIOSK)world.Sent[0].Message;
+        world.Arena.OpenKiosk(Viewer, ArenaKind.Ranked, 124);
+        var current = (WIZARD_12_PROTOCOL.MSG_PREPVPKIOSK)world.Sent[1].Message;
+        Assert.False(world.Arena.CompleteKiosk(Viewer, former)); Assert.Equal(2, world.Sent.Count);
+        Assert.True(world.Arena.CompleteKiosk(Viewer, current));
+        var initial = Assert.IsType<GAME_5_PROTOCOL.MSG_PVPUPDATEINFO>(world.Sent[2].Message);
+        Assert.Equal(current.TournamentNameID, ArenaMessages.Read<NewListUpdate>(initial.TournamentInfo)!.m_tournamentNameID);
+    }
+
+    [Fact]
+    public void EchoCannotCrossArenaServiceSessionsEvenForTheSameCharacterAndGuard() {
+        var world = new World(friendly: true); var former = new object(); var current = new object();
+        world.Arena.OpenKiosk(Viewer, ArenaKind.Practice, 123, former);
+        var echo = ArenaMessages.Kiosk(world.Arena.TournamentId(ArenaKind.Practice), 123);
+        world.Arena.OpenKiosk(Viewer, ArenaKind.Practice, 123, current);
+        Assert.False(world.Arena.CompleteKiosk(Viewer, echo, former)); Assert.Equal(2, world.Sent.Count);
+        Assert.False(world.Arena.CompleteKiosk(Viewer, echo)); Assert.Equal(2, world.Sent.Count);
+        Assert.True(world.Arena.CompleteKiosk(Viewer, echo, current));
+    }
+
+    [Fact]
+    public void FormerSessionDisposalCannotRemoveItsReplacementSessionsPendingGuard() {
+        var world = new World(friendly: true); var former = new object(); var current = new object();
+        world.Arena.OpenKiosk(Viewer, ArenaKind.Practice, 123, former);
+        world.Arena.OpenKiosk(Viewer, ArenaKind.Ranked, 124, current);
+        world.Arena.RetireKiosk(Viewer, former);
+        var echo = ArenaMessages.Kiosk(world.Arena.TournamentId(ArenaKind.Ranked), 124);
+        Assert.True(world.Arena.CompleteKiosk(Viewer, echo, current));
+    }
+
+    [Theory] [InlineData(false)] [InlineData(true)]
+    public async Task ProductionArenaServiceRetiresItsPendingGuardOnGracefulDisposeOrStop(bool graceful) {
+        using var system = ActorSystem.Create("arena-kiosk-lifecycle", "akka.actor.provider = local");
+        var actor = system.ActorOf(Props.Create(() => new ArenaService(null!)), "arena");
+        var world = new World(friendly: true);
+        var identity = await actor.Ask<SERVICE_101_PROTOCOL.MSG_MESSAGESERVICEIDENTITY>(
+            new SERVICE_101_PROTOCOL.MSG_QUERYMESSAGESERVICEIDENTITY(), TimeSpan.FromSeconds(5),
+            TestContext.Current.CancellationToken);
+        var service = Assert.IsType<ArenaService>(identity.Service);
+        typeof(ArenaService).GetField("_charId", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(service, Viewer);
+        typeof(ArenaService).GetField("_kioskArena", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(service, world.Arena);
+        world.Arena.OpenKiosk(Viewer, ArenaKind.Practice, 123, service);
+        var echo = ArenaMessages.Kiosk(world.Arena.TournamentId(ArenaKind.Practice), 123);
+        try {
+            if (graceful) {
+                await actor.Ask<SERVICE_101_PROTOCOL.MSG_PREDISPOSE>(new SERVICE_101_PROTOCOL.MSG_PREDISPOSE(),
+                    TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+                Assert.False(world.Arena.CompleteKiosk(Viewer, echo, service));
+            }
+        }
+        finally { await system.Terminate(); }
+        Assert.False(world.Arena.CompleteKiosk(Viewer, echo, service)); Assert.Single(world.Sent);
+    }
+
+    [Theory] [InlineData(0)] [InlineData(1)] [InlineData(2)] [InlineData(3)]
+    public void UnsolicitedOfflineMissingViewerAndStoppedEchoesCannotPublishABrowser(int reason) {
+        var world = new World(friendly: true);
+        var echo = ArenaMessages.Kiosk(world.Arena.TournamentId(ArenaKind.Practice), 123);
+        if (reason != 0) world.Arena.OpenKiosk(Viewer, ArenaKind.Practice, 123);
+        if (reason == 1) world.Arena.Offline(Viewer);
+        if (reason == 2) world.Players.Remove(Viewer);
+        if (reason == 3) world.Arena.QuiesceAsync().GetAwaiter().GetResult();
+        var count = world.Sent.Count;
+        Assert.False(world.Arena.CompleteKiosk(Viewer, echo)); Assert.Equal(count, world.Sent.Count);
+        if (reason == 1) {
+            // Even a still-visible player record cannot revive a previous session's pending kiosk.
+            Assert.False(world.Arena.CompleteKiosk(Viewer, echo));
         }
     }
 

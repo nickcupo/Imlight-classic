@@ -337,7 +337,8 @@ public class Account {
     /// </summary>
     /// <returns>The highest level wizard on the account.</returns>
     public Wizard GetHighestLevelWizard() => Characters
-        .OrderByDescending(c => c.GameStats.Level)
+        // CLASSIC: siblings are attached before their transient GameStats.Level is initialized on load.
+        .OrderByDescending(c => c.MagicSchoolBehavior.Level)
         .FirstOrDefault();
 
 }

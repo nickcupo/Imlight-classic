@@ -198,6 +198,8 @@ internal sealed class ArenaMatchmaker {
     private readonly Dictionary<ArenaKind, Dictionary<ulong, BrowserWatch>> _watchers = new() {
         [ArenaKind.Practice] = [], [ArenaKind.Ranked] = [],
     };
+    // CLASSIC: PrePvPKiosk resets the native tournament; its matching ready echo must bootstrap the first list.
+    private readonly Dictionary<ulong, (ArenaKind Kind, ulong KioskGid, object? Owner)> _pendingKiosks = [];
     private readonly ConcurrentDictionary<ulong, ArenaRun> _runs = new();
     private readonly Random _random = new();
     private ulong _nextId = (ulong) DateTime.UtcNow.Ticks & 0x0000_FFFF_FFFF_FFFF;
@@ -246,6 +248,7 @@ internal sealed class ArenaMatchmaker {
             foreach (var spectator in _spectators.Where(pair => cancelledMatches.Contains(pair.Value)).Select(pair => pair.Key).ToList())
                 _spectators.Remove(spectator);
             foreach (var watchers in _watchers.Values) watchers.Clear();
+            _pendingKiosks.Clear();
             _goneSince.Clear();
             _nextAutonomous.Clear();
         }
@@ -299,14 +302,41 @@ internal sealed class ArenaMatchmaker {
     // ---------------------------------------------------------------- the guards
 
     /// <summary>A wizard used a guard: open the client's PvP window for its tournament.</summary>
-    public void OpenKiosk(ulong charId, ArenaKind kind, ulong kioskGid) {
+    public void OpenKiosk(ulong charId, ArenaKind kind, ulong kioskGid, object? owner = null) {
         lock (_gate) {
             if (_stopping) return;
             // CLASSIC: TournamentUpdateList has no tournament id; the native manager has only one active guard.
             foreach (var watchers in _watchers.Values) watchers.Remove(charId);
+            _pendingKiosks[charId] = (kind, kioskGid, owner);
             _world.Send(charId, ArenaMessages.Kiosk(TournamentId(kind), kioskGid));
             Logger.Information("Arena: {0} opened the {1} guard.", Logger.Args(charId, kind));
         }
+    }
+
+    // CLASSIC: r806919 creates an empty TournamentInfo before echoing Prep. Until NewListUpdate fills
+    // its name id, SendUpdateRequest refuses to send anything. Never bootstrap before that reset,
+    // or on an unsolicited, stale, still-patching or duplicate echo.
+    public bool CompleteKiosk(ulong charId, WIZARD_12_PROTOCOL.MSG_PREPVPKIOSK echo, object? owner = null) {
+        lock (_gate) {
+            if (_stopping || echo.Patching != 0 || echo.LeagueID != 0 || echo.SeasonID != 0
+                || !_pendingKiosks.TryGetValue(charId, out var pending)
+                || !ReferenceEquals(pending.Owner, owner)
+                || echo.TournamentNameID != TournamentId(pending.Kind) || echo.MobileID != pending.KioskGid
+                || _world.Player(charId) is null) return false;
+            _pendingKiosks.Remove(charId);
+            // The native browser requests four visible rows; it can then request/filter subsequent pages normally.
+            List(charId, echo.TournamentNameID, numberOfElements: 4);
+            Logger.Information("Arena: {0} initialized the {1} browser after the ready kiosk echo.",
+                Logger.Args(charId, pending.Kind));
+            return true;
+        }
+    }
+
+    // CLASSIC: disposing an old arena service must not retire a replacement session's pending guard.
+    public void RetireKiosk(ulong charId, object owner) {
+        lock (_gate)
+            if (_pendingKiosks.TryGetValue(charId, out var pending) && ReferenceEquals(pending.Owner, owner))
+                _pendingKiosks.Remove(charId);
     }
 
     /// <summary>The window asks whether Quick Join and Create work for this wizard.</summary>
@@ -574,6 +604,7 @@ internal sealed class ArenaMatchmaker {
     public void Offline(ulong charId, DateTime? nowUtc = null) {
         lock (_gate) {
             if (_stopping) return;
+            _pendingKiosks.Remove(charId); // CLASSIC: a previous session cannot open a new session's browser.
             _goneSince[charId] = nowUtc ?? DateTime.UtcNow;
         }
     }

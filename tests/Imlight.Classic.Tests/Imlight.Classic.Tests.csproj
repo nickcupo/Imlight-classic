@@ -101,6 +101,7 @@
     <ServerIntegrationTest Include="ClassicCoreObjectSerializationTests.cs" />
     <ServerIntegrationTest Include="FriendPortalTests.cs" />
     <ServerIntegrationTest Include="AccountRegistrationRaceTests.cs" />
+    <ServerIntegrationTest Include="AccountHighestLevelTests.cs" />
     <ServerIntegrationTest Include="EvermoreWaveReplayTests.cs" />
     <ServerIntegrationTest Include="ArenaPvpRuntimeTests.cs" />
     <ServerIntegrationTest Include="ArenaAmbientMatchmakerTests.cs" />
