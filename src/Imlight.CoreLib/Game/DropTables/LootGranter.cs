@@ -64,9 +64,6 @@ namespace Imlight.CoreLib.Game.DropTables;
 public static class LootGranter {
 
     private const uint LOOT_LIST_SERIALIZATION_FLAGS = 4;
-    private const uint INVENTORY_ADD_SERIALIZATION_FLAGS =
-        (uint) (PropertyFlags.Prop_Transmit | PropertyFlags.Prop_AuthorityTransmit);
-    private static readonly CoreObjectSerializer s_itemSerializer = new(behaviors: SerializerFlags.None);
     // CLASSIC: capture the actual grant-path packets without creating a session or contacting a game server.
     internal static readonly AsyncLocal<Action<IActorRef, object>> TestSendScope = new();
     private static void Send(IActorRef playerActor, object message) {
@@ -95,8 +92,7 @@ public static class LootGranter {
         UpdateWizardGold(playerActor, wizard, results.GoldAmount);
         UpdateWizardXP(playerActor, results.ExperienceAmount);
         UpdateWizardTP(playerActor, wizard, results.TrainingPoints);
-        UpdateCharacterItems(playerActor, wizard, results.Items);
-        UpdateStackRewards(playerActor, wizard, results);   // CLASSIC: one acknowledged card/reagent batch
+        UpdateStackRewards(playerActor, wizard, results);   // CLASSIC: one acknowledged gear/card/reagent batch
         if (showPopup) {
             SendLootInfoToClient(playerActor, results, wizard);
         }
@@ -168,46 +164,11 @@ public static class LootGranter {
         Send(playerActor, msg);
     }
 
-    private static void UpdateCharacterItems(IActorRef playerActor, Wizard wizard, List<DropItemResult> items) {
-        if (items.Count == 0) {
-            return;
-        }
-
-        // CLASSIC: the popup/Second Chance window lists successful grant results, rather than refused rolls.
-        var acquired = new List<DropItemResult>();
-        // Add each item to the wizard's inventory.
-        foreach (var item in items) {
-            if (item is null || !ulong.TryParse(item.ItemId, out var itemGuid)) {
-                continue;
-            }
-
-            if (!wizard.AddItemToInventory(itemGuid, out var addedItem)) {
-                Logger.Error("Failed to add item {0} to wizard {1}'s inventory.",
-                    Logger.Args(item.ItemId, wizard.CharId));
-
-                // CLASSIC: tell the player why a reward is missing; with a full backpack it used to vanish silently.
-                if (wizard.InventoryBehavior?.IsFull == true) {
-                    Send(playerActor, Classic.ClassicChat.Line(
-                        "Your backpack is full, so a reward item could not be added. Make room and try again later."));
-                }
-
-                continue;
-            }
-
-            // The attach payload (which carries the inventory) was already sent, so push each
-            // item to the client explicitly or the reward stays invisible this session.
-            SendInventoryAdd(playerActor, wizard, addedItem);
-            acquired.Add(new DropItemResult { ItemId = item.ItemId, ItemName = item.ItemName, Quantity = 1 });
-        }
-        items.Clear();
-        items.AddRange(acquired);
-    }
-
     // CLASSIC: native packets, popup counts and Second Chance results follow the same saved receipts.
     private static void UpdateStackRewards(IActorRef playerActor, Wizard wizard, DropTableResult results) {
         StackRewardReceipt receipt;
         try {
-            ClassicStackRewards.TryGrant(wizard, results.TreasureCards, results.Reagents, out receipt);
+            ClassicStackRewards.TryGrant(wizard, results.Items, results.TreasureCards, results.Reagents, out receipt);
         }
         catch {
             if (WizardCollection.IsInventorySnapshotUncertain(wizard)) Send(playerActor, "Close");
@@ -216,6 +177,12 @@ public static class LootGranter {
 
         var names = results.Reagents.Where(drop => drop is not null && ulong.TryParse(drop.ItemId, out _))
             .GroupBy(drop => ulong.Parse(drop.ItemId)).ToDictionary(group => group.Key, group => group.First().ItemName);
+        var itemNames = results.Items.Where(drop => drop is not null && ulong.TryParse(drop.ItemId, out _))
+            .GroupBy(drop => ulong.Parse(drop.ItemId)).ToDictionary(group => group.Key, group => group.First().ItemName);
+        results.Items = receipt.Items.Select(acquired => new DropItemResult {
+            ItemId = acquired.Item.m_templateID.Full.ToString(),
+            ItemName = itemNames.GetValueOrDefault(acquired.Item.m_templateID.Full, string.Empty), Quantity = 1,
+        }).ToList();
         results.TreasureCards = receipt.Cards.Select(card => card.TemplateId).ToList();
         results.TreasureCardSpellIds = receipt.Cards.Select(card => card.SpellHash).ToList();
         results.Reagents = receipt.Reagents.Select(acquired => new DropItemResult {
@@ -224,6 +191,9 @@ public static class LootGranter {
             Quantity = acquired.Acquired,
         }).ToList();
 
+        foreach (var acquired in receipt.Items) Send(playerActor, new GAME_5_PROTOCOL.MSG_INVENTORYBEHAVIOR_ADDITEM {
+            GlobalID = wizard.GameObjectID, SerializedItem = acquired.Data,
+        });
         foreach (var card in receipt.Cards) Send(playerActor, new WIZARD_12_PROTOCOL.MSG_ADDTREASURESPELLTOBOOK {
             SpellID = (int) card.SpellHash, EnchantmentID = 0,
         });
@@ -238,20 +208,8 @@ public static class LootGranter {
                 ItemLocation = 1,
             });
         }
-    }
-
-    private static void SendInventoryAdd(IActorRef playerActor, Wizard wizard, WizClientObjectItem item) {
-        if (!s_itemSerializer.Serialize(item, INVENTORY_ADD_SERIALIZATION_FLAGS, out var serializedItem)) {
-            Logger.Error("Failed to serialize reward item {0} for inventory-add.",
-                Logger.Args(item.m_globalID.Full));
-
-            return;
-        }
-
-        Send(playerActor, new GAME_5_PROTOCOL.MSG_INVENTORYBEHAVIOR_ADDITEM {
-            GlobalID = wizard.GameObjectID,
-            SerializedItem = serializedItem,
-        });
+        if (receipt.BackpackCapacityExceeded) Send(playerActor, Classic.ClassicChat.Line(
+            "Your backpack is full, so a reward item could not be added. Make room and try again later."));
     }
 
     private static void UpdateWizardPotionMax(IActorRef playerActor, Wizard wizard) {

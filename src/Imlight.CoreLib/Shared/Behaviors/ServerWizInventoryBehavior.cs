@@ -44,7 +44,8 @@ public class ServerWizInventoryBehavior : IClientBehaviorProvider<ClientWizInven
     }
 
     /// <summary>CLASSIC: the backpack's size in effect.</summary>
-    [JsonIgnore] public static int MaxItemsAllowed => s_maxItemsAllowed;
+    // CLASSIC: saved transactions use the same established fallback as AddItem, including an unset legacy ini.
+    [JsonIgnore] public static int MaxItemsAllowed => s_maxItemsAllowed is > 0 and var size ? size : s_maxItemsAllowedFallback;
     private static readonly int s_maxJewelsAllowed = ConfigurationManager.Settings["Character.MaxJewelsAllowed"].AsInt();
     private static readonly int s_maxItemsAllowedFallback = 20;
     private static readonly Lock s_writeLock = new(); // CLASSIC: static, so it is never serialized.

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Reflection;
 using System.Threading;
 using Imcodec.ObjectProperty.TypeCache;
@@ -49,8 +50,13 @@ public sealed class HousingInventoryConcurrencyTests {
         Exception? placementError = null, destroyError = null;
         Thread? placement = null, destruction = null;
         var oldScope = WizardCollection.TestStoreScope.Value;
+        var oldRows = WizardInventoryTransactions.TestRowsScope.Value;
         var store = new WizardCollection.TestStore(Open, (session, _) => session.Load<Wizard>("wizard/1"));
         WizardCollection.TestStoreScope.Value = store;
+        // CLASSIC: the original row is loaded through this transaction's session, rather than skipping deletion
+        // when a fake character store is installed. Placement keeps the row and retires only its backpack reference.
+        WizardInventoryTransactions.TestRowsScope.Value = session => documents
+            .Where(pair => pair.Value is WizClientObjectItem).Select(pair => session.Load<WizClientObjectItem>(pair.Key)).ToList();
         try {
             Assert.True(live.InventoryBehavior.AddItem((WizClientObjectItem)documents["item/1"]));
             HousingCollection.Load(Owner, create: true);
@@ -108,6 +114,7 @@ public sealed class HousingInventoryConcurrencyTests {
             placement?.Join(TimeSpan.FromSeconds(10));
             destruction?.Join(TimeSpan.FromSeconds(10));
             WizardCollection.TestStoreScope.Value = oldScope;
+            WizardInventoryTransactions.TestRowsScope.Value = oldRows;
             if (previous is null) cache.Remove(Template);
             else cache[Template] = previous;
         }

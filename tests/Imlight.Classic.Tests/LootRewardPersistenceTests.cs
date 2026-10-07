@@ -28,7 +28,7 @@ namespace Imlight.Classic.Tests;
 [Collection(nameof(ClassicRuntimeCollection))]
 public sealed class LootRewardPersistenceTests {
     public LootRewardPersistenceTests()
-        => EquipmentAttachConcurrencyTests.Configure("[Database]\nDatabaseWaitForNonStaleResultsTimeout=5\n");
+        => EquipmentAttachConcurrencyTests.Configure("[Character]\nMaxInventoryItems=150\n[Classic]\nBackpackSize=2\n[Database]\nDatabaseWaitForNonStaleResultsTimeout=5\n");
 
     [Theory]
     [InlineData(998, 1)]
@@ -246,6 +246,82 @@ public sealed class LootRewardPersistenceTests {
         public Recorder(ChannelWriter<object> writer) => ReceiveAny(message => writer.TryWrite(message));
     }
 
+    [Fact]
+    public void GearCardsAndReagentsUseOneCommitAndPublishOnlyTheFittingGearPrefix() {
+        var f = new Fixture(5); f.AddGear(101); using var scope = f.Scope(); var live = f.Live();
+        var results = Roll(3); results.Items = [Drop(Fixture.Gear, 1), Drop(Fixture.Gear, 1)]; results.TreasureCards = [Fixture.Card];
+        var gearAlias = Assert.Single(live.InventoryBehavior.Items);
+        f.BeforeSave = () => { Assert.Empty(f.Packets); Assert.Single(live.InventoryBehavior.Items); Assert.Empty(live.SpellbookBehavior.TreasureCardTemplateIds); };
+        LootGranter.Grant(ActorRefs.NoSender, live, results, false);
+        Assert.Single(results.Items); Assert.Equal(1, results.Items[0].Quantity); Assert.Single(results.TreasureCards);
+        Assert.Equal(3, Assert.Single(results.Reagents).Quantity); Assert.Equal(1, f.SaveAttempts); Assert.Equal(1, f.AcknowledgedSaves);
+        Assert.Equal(2, f.Items.Count); Assert.Equal(new ulong[] { 101, Fixture.GearId }, f.Saved.InventoryBehavior.InventoryItemIds);
+        Assert.Same(gearAlias, live.InventoryBehavior.Items[0]); Assert.Equal(Fixture.GearId, live.InventoryBehavior.Items[1].m_globalID.Full);
+        var packet = Assert.Single(f.Packets.OfType<GAME_5_PROTOCOL.MSG_INVENTORYBEHAVIOR_ADDITEM>());
+        Assert.Equal(Fixture.GearId, BitConverter.ToUInt64((byte[])packet.SerializedItem));
+        Assert.Equal(3, DropTableConverter.ToLootInfoList(results).m_loot.Count);
+    }
+
+    [Fact]
+    public void FullFreshSavedGearBagStillGrantsCardsAndReagentsWhenAttachedBagIsEmpty() {
+        var f = new Fixture(5); f.AddGear(101); f.AddGear(102); using var scope = f.Scope(); var live = f.Live();
+        live.InventoryBehavior.InventoryItemIds.Clear(); live.InventoryBehavior.Items = [];
+        var results = Roll(3); results.Items = [Drop(Fixture.Gear, 1)]; results.TreasureCards = [Fixture.Card];
+        LootGranter.Grant(ActorRefs.NoSender, live, results, false);
+        Assert.Empty(results.Items); Assert.Single(results.TreasureCards); Assert.Equal(3, Assert.Single(results.Reagents).Quantity);
+        Assert.Equal(2, f.Items.Count); Assert.Equal(new ulong[] { 101, 102 }, f.Saved.InventoryBehavior.InventoryItemIds);
+        Assert.Empty(f.Packets.OfType<GAME_5_PROTOCOL.MSG_INVENTORYBEHAVIOR_ADDITEM>()); Assert.Equal(1, f.SaveAttempts);
+    }
+
+    [Fact]
+    public void FullGearOnlyRewardShowsTheExistingCapacityExplanationWithoutAnAwardOrSave() {
+        var f = new Fixture(0); f.AddGear(101); f.AddGear(102); using var scope = f.Scope(); var results = new DropTableResult { Items = [Drop(Fixture.Gear, 1)] };
+        var live = f.Live(); live.InventoryBehavior.Items = []; live.InventoryBehavior.InventoryItemIds.Clear();
+        LootGranter.Grant(ActorRefs.NoSender, live, results, true);
+        Assert.Empty(results.Items); Assert.False(results.HasRewards); Assert.Equal(0, f.SaveAttempts);
+        Assert.Equal("Your backpack is full, so a reward item could not be added. Make room and try again later.",
+            Assert.IsType<EXTENDEDBASE_2_PROTOCOL.MSG_SERVERMESSAGE>(Assert.Single(f.Packets)).Message);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void GearSerializationFailureCancelsTheWholePreparedGearCardReagentReward(bool throws) {
+        var f = new Fixture(5); using var scope = f.Scope(); var live = f.Live(); var results = Roll(3);
+        results.Items = [Drop(Fixture.Gear, 1)]; results.TreasureCards = [Fixture.Card];
+        f.Dependencies.SerializeItem = _ => throws ? throw new InvalidOperationException("fixture gear serialization failure") : default;
+        LootGranter.Grant(ActorRefs.NoSender, live, results, false);
+        Assert.Empty(results.Items); Assert.Empty(results.TreasureCards); Assert.Empty(results.Reagents); Assert.Empty(f.Packets);
+        Assert.Empty(f.Items); Assert.Empty(live.InventoryBehavior.Items); Assert.Empty(f.Saved.SpellbookBehavior.TreasureCardTemplateIds);
+        Assert.Equal(5, Assert.Single(f.Reagents).m_quantity); Assert.Equal(0, f.SaveAttempts); Assert.False(WizardCollection.IsInventorySnapshotUncertain(live));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void GearCardReagentLostAckHasNoPartialClientInventoryOrDisplayAndCannotRepeat(bool committed) {
+        var f = new Fixture(5) { FailSave = true, CommitBeforeFailure = committed }; using var scope = f.Scope(); var live = f.Live();
+        var results = Roll(3); results.Items = [Drop(Fixture.Gear, 1)]; results.TreasureCards = [Fixture.Card]; var oldItems = results.Items;
+        Assert.Throws<InvalidOperationException>(() => LootGranter.Grant(ActorRefs.NoSender, live, results, false));
+        Assert.Equal("Close", Assert.Single(f.Packets)); Assert.Same(oldItems, results.Items);
+        Assert.Empty(live.InventoryBehavior.Items); Assert.Empty(live.SpellbookBehavior.TreasureCardTemplateIds); Assert.Equal(5, Assert.Single(live.AlchemyBehavior.Reagents).m_quantity);
+        Assert.Equal(committed ? 1 : 0, f.Items.Count); Assert.Equal(committed ? 1 : 0, f.Saved.SpellbookBehavior.TreasureCardTemplateIds.Count);
+        Assert.Equal(committed ? 8 : 5, Assert.Single(f.Reagents).m_quantity);
+        Assert.False(ClassicStackRewards.TryGrant(live, results.Items, results.TreasureCards, results.Reagents, out var receipt));
+        Assert.Empty(receipt.Items); Assert.Equal(1, f.SaveAttempts);
+    }
+
+    [Fact]
+    public void AForeignGearCollisionInAnAlreadyFullBagCancelsOtherwiseFittingCardsAndReagents() {
+        var f = new Fixture(5); f.AddGear(101); f.AddGear(102);
+        f.Items.Add(new() { m_globalID = Fixture.GearId, m_templateID = Fixture.Gear, m_characterId = Fixture.Char + 1 });
+        using var scope = f.Scope(); var live = f.Live(); var results = Roll(3);
+        results.Items = [Drop(Fixture.Gear, 1)]; results.TreasureCards = [Fixture.Card];
+        LootGranter.Grant(ActorRefs.NoSender, live, results, false);
+        Assert.Empty(results.Items); Assert.Empty(results.TreasureCards); Assert.Empty(results.Reagents); Assert.Empty(f.Packets);
+        Assert.Equal(3, f.Items.Count); Assert.Equal(5, Assert.Single(f.Reagents).m_quantity); Assert.Equal(0, f.SaveAttempts);
+    }
+
     private static DropTableResult Roll(int quantity) => new() { Reagents = [Drop(Fixture.Normal, quantity)] };
     private static DropItemResult Drop(ulong template, int quantity) => new() { ItemId = template.ToString(), ItemName = "Reward reagent", Quantity = quantity };
 
@@ -253,13 +329,16 @@ public sealed class LootRewardPersistenceTests {
     private sealed class Fixture {
         internal const ulong Char = 774171, Normal = 774172, Rare = 774173, NormalId = 774174, RareId = 774175, Deck = 774176;
         internal const uint Card = 774177, OtherCard = 774178;
+        internal const ulong Gear = 774179, GearId = 774180;
         internal Wizard Saved;
         internal List<ClientReagentItem> Reagents;
+        internal List<WizClientObjectItem> Items = [];
         internal readonly List<object> Packets = [];
         internal readonly StackRewardDependencies Dependencies;
         internal bool FailSave, CommitBeforeFailure, RefuseLoad;
         internal int SaveAttempts, AcknowledgedSaves, Reads;
         internal System.Action? BeforeSave;
+        private ulong _nextGearId = GearId;
         internal Fixture(int count, int cards = 0) {
             Reagents = count == 0 ? [] : [new() { m_globalID = NormalId, m_permID = NormalId, m_templateID = Normal, m_characterId = Char, m_quantity = count }];
             Saved = new Wizard { CharId = Char,
@@ -267,31 +346,42 @@ public sealed class LootRewardPersistenceTests {
                 SpellbookBehavior = new() { TreasureCardTemplateIds = Enumerable.Repeat(Card, cards).ToList(),
                     DeckTreasureCards = new() { [Deck] = new() { [OtherCard] = 4 } }, DeckTreasureLedgerVersion = 1 },
                 AlchemyBehavior = new() { ReagentItemIds = count == 0 ? [] : [NormalId], Reagents = [] },
+                InventoryBehavior = new() { InventoryItemIds = [], Items = [] },
+                EquipmentBehavior = new() { EquippedItemIds = [], EquippedItems = [] }, StorageBehavior = new() { BankItemIds = [], Items = [] },
             };
             Dependencies = new() {
                 Template = id => id == Card ? new SpellTemplate { m_name = "Reward card" }
                     : id == OtherCard ? new SpellTemplate { m_name = "Other reward" }
-                    : id == Normal || id == Rare ? new ReagentItemTemplate { m_templateID = (uint)id } : null!,
-                Create = id => new ClientReagentItem { m_globalID = id == Normal ? NormalId : RareId,
+                    : id == Normal || id == Rare ? new ReagentItemTemplate { m_templateID = (uint)id }
+                    : id == Gear ? new WizItemTemplate { m_templateID = (uint)id, m_behaviors = [], m_adjectiveList = ["Hat"] } : null!,
+                Create = id => id == Gear ? new WizClientObjectItem { m_globalID = _nextGearId++, m_templateID = id, m_inactiveBehaviors = [] }
+                    : new ClientReagentItem { m_globalID = id == Normal ? NormalId : RareId,
                     m_permID = id == Normal ? NormalId : RareId, m_templateID = id },
                 SerializeReagent = row => new ByteString(BitConverter.GetBytes(row.m_quantity)),
+                SerializeItem = item => new ByteString(BitConverter.GetBytes(item.m_globalID.Full)),
             };
         }
         internal Wizard Live() {
-            var live = Clone(Saved); live.AlchemyBehavior.Reagents = Reagents.Select(row => row with { }).ToList(); return live;
+            var live = Clone(Saved); live.AlchemyBehavior.Reagents = Reagents.Select(row => row with { }).ToList();
+            live.InventoryBehavior.Items = [..Items.Where(item => live.InventoryBehavior.InventoryItemIds.Contains(item.m_globalID.Full)).Select(item => item with { })]; return live;
+        }
+        internal void AddGear(ulong id) {
+            Items.Add(new() { m_globalID = id, m_templateID = Gear, m_characterId = Char, m_inactiveBehaviors = [] }); Saved.InventoryBehavior.InventoryItemIds.Add(id);
         }
         internal IDisposable Scope() {
             var previousStore = WizardCollection.TestStoreScope.Value;
             var previousRows = WizardReagentCollection.TestRowsScope.Value;
             var previousDependencies = ClassicStackRewards.TestScope.Value;
             var previousSend = LootGranter.TestSendScope.Value;
+            var previousItems = WizardInventoryTransactions.TestRowsScope.Value;
             WizardCollection.TestStoreScope.Value = new(Open, (session, id) => {
                 Assert.Equal(Char, id); return RefuseLoad ? null! : Session(session).Wizard;
             });
             WizardReagentCollection.TestRowsScope.Value = session => { Reads++; return Session(session).Rows; };
+            WizardInventoryTransactions.TestRowsScope.Value = session => Session(session).Items;
             ClassicStackRewards.TestScope.Value = Dependencies;
             LootGranter.TestSendScope.Value = (_, message) => {
-                if (message is not string) Assert.True(AcknowledgedSaves > 0);
+                if (message is not string && message is not EXTENDEDBASE_2_PROTOCOL.MSG_SERVERMESSAGE) Assert.True(AcknowledgedSaves > 0);
                 Packets.Add(message);
             };
             return new Restore(() => {
@@ -299,15 +389,18 @@ public sealed class LootRewardPersistenceTests {
                 WizardReagentCollection.TestRowsScope.Value = previousRows;
                 ClassicStackRewards.TestScope.Value = previousDependencies;
                 LootGranter.TestSendScope.Value = previousSend;
+                WizardInventoryTransactions.TestRowsScope.Value = previousItems;
             });
         }
         private IDocumentSession Open() {
             var session = DispatchProxy.Create<IDocumentSession, RewardSession>(); var proxy = Session(session);
             proxy.Wizard = Clone(Saved); proxy.Rows = Reagents.Select(row => row with { }).ToList();
+            proxy.Items = Items.Select(item => item with { }).ToList();
             proxy.Save = () => {
                 Assert.True(WizardCollection.HoldsWriteLane); SaveAttempts++; BeforeSave?.Invoke();
                 if (FailSave && !CommitBeforeFailure) throw new InvalidOperationException("fixture refused reward save");
                 Saved = Clone(proxy.Wizard); Reagents = proxy.Rows.Select(row => row with { }).ToList();
+                Items = proxy.Items.Select(item => item with { }).ToList();
                 if (FailSave) throw new InvalidOperationException("fixture lost reward acknowledgement");
                 AcknowledgedSaves++;
             };
@@ -320,22 +413,42 @@ public sealed class LootRewardPersistenceTests {
                 DeckTreasureCards = ServerWizSpellbookBehavior.CopyLedger(saved.SpellbookBehavior.DeckTreasureCards),
                 DeckTreasureLedgerVersion = saved.SpellbookBehavior.DeckTreasureLedgerVersion },
             AlchemyBehavior = new() { ReagentItemIds = [..saved.AlchemyBehavior.ReagentItemIds], Reagents = [] },
+            InventoryBehavior = new() { InventoryItemIds = [..saved.InventoryBehavior.InventoryItemIds], Items = [] },
+            EquipmentBehavior = new() { EquippedItemIds = [..saved.EquipmentBehavior.EquippedItemIds], EquippedItems = [] },
+            StorageBehavior = new() { BankItemIds = [..saved.StorageBehavior.BankItemIds], Items = [] },
         };
         private sealed class Restore(System.Action restore) : IDisposable { public void Dispose() => restore(); }
     }
     public class RewardSession : DispatchProxy {
         internal Wizard Wizard = null!;
         internal List<ClientReagentItem> Rows = [];
+        internal List<WizClientObjectItem> Items = [];
         internal System.Action Save = null!;
-        private readonly IAdvancedSessionOperations _advanced = DispatchProxy.Create<IAdvancedSessionOperations, ReagentPersistenceRegressionTests.ReagentAdvanced>();
+        private readonly IAdvancedSessionOperations _advanced = DispatchProxy.Create<IAdvancedSessionOperations, RewardAdvanced>();
         protected override object? Invoke(MethodInfo? method, object?[]? args) => method!.Name switch {
             "get_Advanced" => _advanced,
-            "Store" => Store(Assert.IsType<ClientReagentItem>(args![0])),
+            "Store" => Store(args![0]!),
             "SaveChanges" => SaveNow(),
             "Dispose" => null,
             _ => throw new NotSupportedException(method.Name),
         };
-        private object? Store(ClientReagentItem row) { Rows.Add(row); return null; }
+        private object? Store(object row) {
+            if (row is ClientReagentItem reagent) Rows.Add(reagent);
+            else Items.Add(Assert.IsType<WizClientObjectItem>(row));
+            return null;
+        }
         private object? SaveNow() { Save(); return null; }
+    }
+    public class RewardAdvanced : DispatchProxy {
+        private readonly IMetadataDictionary _metadata = DispatchProxy.Create<IMetadataDictionary, RewardMetadata>();
+        protected override object? Invoke(MethodInfo? method, object?[]? args) => method!.Name switch {
+            "set_OptimisticConcurrencyMode" => null, "GetMetadataFor" => _metadata, _ => throw new NotSupportedException(method.Name),
+        };
+    }
+    public class RewardMetadata : DispatchProxy {
+        protected override object? Invoke(MethodInfo? method, object?[]? args) {
+            Assert.Equal("set_Item", method!.Name); Assert.Equal(Raven.Client.Constants.Documents.Metadata.Collection, args![0]);
+            Assert.Contains(args[1], new[] { WizardItemCollection.CollectionName, WizardReagentCollection.CollectionName }); return null;
+        }
     }
 }

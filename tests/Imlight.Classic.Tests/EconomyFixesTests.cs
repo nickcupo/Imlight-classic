@@ -49,6 +49,7 @@ using Imlight.CoreLib.Game;
 using Imlight.CoreLib.Game.Services;
 using Imlight.CoreLib.Game.Zone.Components;
 using Imlight.CoreLib.Shared.Behaviors;
+using Imlight.CoreLib.Shared.Resources;
 using Imlight.Classic.Collections;
 using Imlight.CoreLib.WizardData.Collections;
 using Imlight.CoreLib.WizardData.Models.Player;
@@ -259,15 +260,18 @@ public sealed class EconomyFixesTests {
         // H1/L7: the removal is the check (Bazaar sale vs. bank move or vendor sale of the same item).
         for (var round = 0; round < 25; round++) {
             var store = new WizardStore();
+            store.Rows.Add(new WizClientObjectItem { m_globalID = 55, m_templateID = 123,
+                m_characterId = (Imcodec.Types.GID)Char });
+            store.Saved.InventoryBehavior.InventoryItemIds = [55];
             var live = store.Live();
             using (store.Scope()) {
-                Assert.True(live.InventoryBehavior.AddItem(new WizClientObjectItem { m_globalID = 55, m_characterId = (Imcodec.Types.GID) Char }));
                 var wins = 0;
                 Parallel.For(0, 2, _ => { if (live.DestroyInventoryItem(55)) Interlocked.Increment(ref wins); });
                 Assert.Equal(1, wins);
             }
 
             Assert.Empty(store.Saved.InventoryBehavior.InventoryItemIds);
+            Assert.Empty(store.Rows);
         }
     }
 
@@ -467,6 +471,7 @@ public sealed class EconomyFixesTests {
     private sealed class WizardStore {
 
         internal Wizard Saved;
+        internal List<WizClientObjectItem> Rows = [];
         internal int TrainingPoints { set => Saved.MagicSchoolBehavior.TrainingPoints = value; }
         private readonly object _gate = new();
 
@@ -474,24 +479,39 @@ public sealed class EconomyFixesTests {
 
         internal Wizard Live() {
             lock (_gate) {
-                return Clone(Saved);
+                var live = Clone(Saved);
+                live.InventoryBehavior.Items = [..Rows.Where(item => live.InventoryBehavior.InventoryItemIds.Contains(item.m_globalID.Full))
+                    .Select(item => item with { })];
+                return live;
             }
         }
 
         internal IDisposable Scope() {
             var previous = WizardCollection.TestStoreScope.Value;
+            var previousRows = WizardInventoryTransactions.TestRowsScope.Value;
+            var cache = (IDictionary<ulong, CoreTemplate>)typeof(CoreObjectFactory)
+                .GetField("s_templateCache", BindingFlags.Static | BindingFlags.NonPublic)!.GetValue(null)!;
+            cache.TryGetValue(123, out var previousTemplate);
+            cache[123] = new WizItemTemplate { m_templateID = 123, m_adjectiveList = [] };
             WizardCollection.TestStoreScope.Value = new WizardCollection.TestStore(Open, Load);
-            return new Restore(() => WizardCollection.TestStoreScope.Value = previous);
+            WizardInventoryTransactions.TestRowsScope.Value = session => ((WizardItemSessionProxy)(object)session).Rows;
+            return new Restore(() => {
+                WizardCollection.TestStoreScope.Value = previous;
+                WizardInventoryTransactions.TestRowsScope.Value = previousRows;
+                if (previousTemplate is null) cache.Remove(123); else cache[123] = previousTemplate;
+            });
         }
 
         internal IDocumentSession Open() {
-            var session = DispatchProxy.Create<IDocumentSession, TreasureTradeTests.MultiSessionProxy>();
-            var proxy = (TreasureTradeTests.MultiSessionProxy) (object) session;
+            var session = DispatchProxy.Create<IDocumentSession, WizardItemSessionProxy>();
+            var proxy = (WizardItemSessionProxy) (object) session;
+            lock (_gate) proxy.Rows = Rows.Select(item => item with { }).ToList();
             proxy.Commit = working => {
                 lock (_gate) {
                     foreach (var (_, wizard) in working) {
                         Saved = Clone(wizard);
                     }
+                    Rows = proxy.Rows.Select(item => item with { }).ToList();
                 }
             };
 
@@ -501,7 +521,7 @@ public sealed class EconomyFixesTests {
         internal Wizard Load(IDocumentSession session, ulong id) {
             Assert.Equal(Char, id);
             Assert.True(WizardCollection.HoldsWriteLane);
-            var proxy = (TreasureTradeTests.MultiSessionProxy) (object) session;
+            var proxy = (WizardItemSessionProxy) (object) session;
             Wizard working;
             lock (_gate) {
                 working = Clone(Saved);
@@ -537,6 +557,24 @@ public sealed class EconomyFixesTests {
             },
         };
 
+    }
+
+    // CLASSIC: tracked originals participate in the fixture commit, including actual row deletion.
+    public class WizardItemSessionProxy : DispatchProxy {
+        internal readonly Dictionary<ulong, Wizard> Working = [];
+        internal List<WizClientObjectItem> Rows = [];
+        internal Action<Dictionary<ulong, Wizard>> Commit = null!;
+        private readonly IAdvancedSessionOperations _advanced
+            = DispatchProxy.Create<IAdvancedSessionOperations, MonstrologyConcurrencyTests.AdvancedProxy>();
+        protected override object? Invoke(MethodInfo? method, object?[]? args) => method!.Name switch {
+            "get_Advanced" => _advanced,
+            "Delete" => Delete((WizClientObjectItem)args![0]!),
+            "SaveChanges" => Save(),
+            "Dispose" => null,
+            _ => throw new NotSupportedException(method.Name),
+        };
+        private object? Delete(WizClientObjectItem item) { Assert.True(Rows.Remove(item)); return null; }
+        private object? Save() { Commit(Working); return null; }
     }
 
     /// <summary>One saved account behind a fake session.</summary>

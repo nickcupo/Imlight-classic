@@ -37,6 +37,7 @@
  */
 
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using Imlight.Classic.Inventory;
 using Akka.Actor;
@@ -51,6 +52,8 @@ using Imlight.CoreLib.Classic.Elixirs;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Resources;
 using Imlight.CoreLib.Shared.Utilities;
+using Imlight.CoreLib.WizardData.Collections;
+using Imlight.CoreLib.WizardData.Models.Player;
 
 namespace Imlight.CoreLib.Game.Services;
 
@@ -63,10 +66,20 @@ internal class InventoryService(SessionActor sessionActor) : MessageService(sess
 
     [MessageHandler(typeof(GAME_5_PROTOCOL.MSG_TRASHINVENTORYITEM))]
     private void ReceiveTrashInventoryItem(GAME_5_PROTOCOL.MSG_TRASHINVENTORYITEM message) {
+        try { HandleTrashInventoryItem(message); }
+        catch {
+            // CLASSIC: do not let a restarted actor keep spending an uncertain attached snapshot.
+            if (WizardCollection.IsInventorySnapshotUncertain(GetActiveWizard())) CloseSession();
+            throw;
+        }
+    }
+
+    private void HandleTrashInventoryItem(GAME_5_PROTOCOL.MSG_TRASHINVENTORYITEM message) {
         var wizard = GetActiveWizard();
         if (wizard is null) {
             return;
         }
+        if (WizardCollection.IsInventorySnapshotUncertain(wizard)) { CloseSession(); return; }
 
         // CLASSIC: the native confirmed active-elixir dismissal reuses this message, but
         // has no backpack item. Only an exact approved active original may take this path;
@@ -84,8 +97,8 @@ internal class InventoryService(SessionActor sessionActor) : MessageService(sess
         // CLASSIC: an item the game will not let you throw away (the template's FLAG_NoDrop) stays;
         // the client knows the flag (GUI_NoDrop), so this guards against a crafted message. A trashed item's document
         // is deleted with it.
-        var item = wizard.InventoryBehavior.GetItem(message.GlobalID);
-        if (item is null || IsNoDrop(item) || !wizard.DestroyInventoryItem(message.GlobalID)) {
+        if (!TryDiscardBackpackItem(wizard, message.GlobalID)) {
+            if (WizardCollection.IsInventorySnapshotUncertain(wizard)) { CloseSession(); return; }
             Logger.Information("Trash of item {0} by {1} refused (not in the backpack, or no-discard).",
                 Logger.Args(message.GlobalID, wizard.CharId));
 
@@ -102,6 +115,59 @@ internal class InventoryService(SessionActor sessionActor) : MessageService(sess
     internal static bool IsNoDrop(WizClientObjectItem item)
         => CoreObjectFactory.GetCoreTemplate(item.m_templateID) is WizItemTemplate template
            && template.m_adjectiveList?.Exists(adjective => string.Equals(adjective, "FLAG_NoDrop", StringComparison.OrdinalIgnoreCase)) == true;
+
+    // CLASSIC: the discard policy applies to the fresh saved original, within its row/reference transaction.
+    internal static bool TryDiscardBackpackItem(Wizard wizard, ulong id,
+        Func<WizClientObjectItem, bool> canDiscard = null) {
+        if (wizard is null || WizardCollection.IsInventorySnapshotUncertain(wizard)) return false;
+        List<WizClientObjectItem> backpack = [];
+        return WizardCollection.CommitCharacterMutation(wizard.CharId, (session, saved) => {
+            if (WizardCollection.IsInventorySnapshotUncertain(wizard)
+                || !WizardInventoryTransactions.TryReadOwnedBackpack(session, saved, out var owned)) return false;
+            var item = owned.SingleOrDefault(row => row.m_globalID.Full == id);
+            if (item is null || !(canDiscard is null ? !IsNoDrop(item) : canDiscard(item))) return false;
+            return WizardInventoryTransactions.TryStageRemove(session, saved, id, destroy: true, out _, out backpack, trackedRows: owned);
+        }, saved => WizardInventoryTransactions.PublishCommittedBackpack(wizard, saved, backpack),
+            onSaveFailure: _ => WizardCollection.MarkInventorySnapshotUncertain(wizard));
+    }
+
+    // CLASSIC: all accepted originals and the saved, pouch-capped payout commit once. Prices and eligibility
+    // come from tracked saved rows; the request's quantity is never a Classic backpack stack count.
+    internal static bool TrySellBackpackItems(Wizard wizard, IEnumerable<BackpackQuickSell.Request> requests,
+        Func<WizClientObjectItem, double?> price, out IReadOnlyList<BackpackQuickSell.Sale> sales,
+        bool singleQuantity = true) {
+        sales = [];
+        if (wizard is null || requests is null || price is null || WizardCollection.IsInventorySnapshotUncertain(wizard)) return false;
+        var requested = requests.ToArray();
+        var accepted = new List<BackpackQuickSell.Sale>();
+        List<WizClientObjectItem> backpack = [];
+        var success = WizardCollection.CommitCharacterMutation(wizard.CharId, (session, saved) => {
+            if (WizardCollection.IsInventorySnapshotUncertain(wizard) || saved.GameStats is null
+                || !WizardInventoryTransactions.TryReadOwnedBackpack(session, saved, out var owned)) return false;
+            var seen = new HashSet<ulong>();
+            foreach (var request in requested) {
+                if ((singleQuantity ? request.Quantity != 1 : request.Quantity <= 0) || !seen.Add(request.Id)) continue;
+                var item = owned.SingleOrDefault(row => row.m_globalID.Full == request.Id);
+                if (item is null) continue;
+                var value = price(item);
+                if (value is null || !double.IsFinite(value.Value) || value < 0 || value > int.MaxValue) continue;
+                var total = Math.Ceiling(value.Value) * (singleQuantity ? 1 : request.Quantity);
+                if (!double.IsFinite(total) || total > int.MaxValue) continue;
+                if (!WizardInventoryTransactions.TryStageRemove(session, saved, request.Id, destroy: true,
+                    out var removed, out backpack, trackedRows: owned)) continue;
+                accepted.Add(new(removed.m_globalID.Full, (int)total));
+            }
+            if (accepted.Count == 0) return false;
+            saved.GameStats.m_currentGold += BackpackQuickSell.GoldToApply(accepted,
+                saved.GameStats.m_currentGold, saved.GameStats.m_baseGoldPouch);
+            return true;
+        }, saved => {
+            WizardInventoryTransactions.PublishCommittedBackpack(wizard, saved, backpack);
+            wizard.GameStats.m_currentGold = saved.GameStats.m_currentGold;
+        }, onSaveFailure: _ => WizardCollection.MarkInventorySnapshotUncertain(wizard));
+        if (success) sales = accepted.ToArray();
+        return success;
+    }
 
     [MessageHandler(typeof(GAME_5_PROTOCOL.MSG_FEEDINVENTORYITEM))]
     private void ReceiveFeedInventoryItem(GAME_5_PROTOCOL.MSG_FEEDINVENTORYITEM message) {
@@ -126,12 +192,20 @@ internal class InventoryService(SessionActor sessionActor) : MessageService(sess
 
     [MessageHandler(typeof(WIZARD2_53_PROTOCOL.MSG_QUICKSELLREQUEST))]
     private void ReceiveQuickSellRequest(WIZARD2_53_PROTOCOL.MSG_QUICKSELLREQUEST message) {
+        try { HandleQuickSellRequest(message); }
+        catch {
+            if (WizardCollection.IsInventorySnapshotUncertain(GetActiveWizard())) CloseSession();
+            throw;
+        }
+    }
+
+    private void HandleQuickSellRequest(WIZARD2_53_PROTOCOL.MSG_QUICKSELLREQUEST message) {
         var serializer = new ObjectSerializer(
             Behaviors: SerializerFlags.None
         );
 
         var wizard = GetActiveWizard();
-        int goldSum = 0;
+        if (WizardCollection.IsInventorySnapshotUncertain(wizard)) { CloseSession(); return; }
 
         if (!serializer.Deserialize<QuickSellItemList>(message.Data, 4, out var quickSellItemList)) {
             Logger.Log.Error("Failed to deserialize quicksell item list.");
@@ -145,21 +219,19 @@ internal class InventoryService(SessionActor sessionActor) : MessageService(sess
                 .Where(item => item is not null)
                 .Select(item => new BackpackQuickSell.Request(item.m_sellItemGID, item.m_quantity))
                 ?? Enumerable.Empty<BackpackQuickSell.Request>();
-            var sales = BackpackQuickSell.Execute(requests, id => {
-                var item = wizard.InventoryBehavior.GetItem(id);
-                if (item is null || CoreObjectFactory.GetCoreTemplate(item.m_templateID) is not WizItemTemplate template
+            TrySellBackpackItems(wizard, requests, item => {
+                if (CoreObjectFactory.GetCoreTemplate(item.m_templateID) is not WizItemTemplate template
                     || !BackpackQuickSell.IsSellable(template.m_adjectiveList)) return null;
                 var value = Math.Ceiling(template.m_baseCost * 0.05f);
                 if (template.m_numPrimaryColors != 1 && template.m_numSecondaryColors != 0)
                     value = Math.Ceiling(value * 1.2275f);
                 return value;
-            }, wizard.DestroyInventoryItem);
+            }, out var sales);
+            if (WizardCollection.IsInventorySnapshotUncertain(wizard)) { CloseSession(); return; }
             foreach (var sale in sales)
                 SendToSocket(new GAME_5_PROTOCOL.MSG_INVENTORYBEHAVIOR_REMOVEITEM {
                     GlobalID = wizard.GameObjectID, ItemID = sale.Id
                 });
-            var applied = BackpackQuickSell.GoldToApply(sales, wizard.GameStats.m_currentGold, wizard.GameStats.m_baseGoldPouch);
-            if (applied > 0) wizard.AddGold(applied);
             SendToSocket(new WIZARD_12_PROTOCOL.MSG_UPDATEGOLD {
                 Gold = wizard.GameStats.m_currentGold, MaxGold = wizard.GameStats.m_baseGoldPouch
             });
@@ -167,31 +239,28 @@ internal class InventoryService(SessionActor sessionActor) : MessageService(sess
             return;
         }
 
-        // Remove items from inventory and equipment, tally up gold sum.
-        foreach (QuickSellItem quickSellItem in quickSellItemList.m_quickSellItemList) {
-            var item = wizard.InventoryBehavior.GetItem(quickSellItem.m_sellItemGID);
-            var template = (WizItemTemplate) CoreObjectFactory.GetCoreTemplate(item.m_templateID);
-
-            if (!wizard.DestroyInventoryItem(item.m_globalID)) continue; // CLASSIC: only what really left the backpack pays
-
-            // Some items (snack, reagents) are stackable.
-            for (int i = 0; i < quickSellItem.m_quantity; i++) {
+        // CLASSIC: retain the unrestricted profile's quantity pricing, but commit its originals and payout together.
+        var legacyRequests = quickSellItemList.m_quickSellItemList?.Where(item => item is not null)
+            .Select(item => new BackpackQuickSell.Request(item.m_sellItemGID, item.m_quantity)).ToArray() ?? [];
+        TrySellBackpackItems(wizard, legacyRequests, item => {
+            if (CoreObjectFactory.GetCoreTemplate(item.m_templateID) is not WizItemTemplate template) return null;
+            var value = Math.Ceiling(template.m_baseCost * 0.05f);
+            if (template.m_numPrimaryColors != 1 && template.m_numSecondaryColors != 0)
+                value = Math.Ceiling(value * 1.2275f);
+            return value;
+        }, out var legacySales, singleQuantity: false);
+        if (WizardCollection.IsInventorySnapshotUncertain(wizard)) { CloseSession(); return; }
+        foreach (var sale in legacySales) {
+            var quantity = legacyRequests.First(request => request.Id == sale.Id && request.Quantity > 0).Quantity;
+            for (long i = 0; i < quantity; i++) {
                 SendToSocket(new GAME_5_PROTOCOL.MSG_INVENTORYBEHAVIOR_REMOVEITEM() {
                     GlobalID = wizard.GameObjectID,
-                    ItemID = quickSellItem.m_sellItemGID
+                    ItemID = sale.Id
                 });
-
-                var value = (int) Math.Ceiling(template.m_baseCost * 0.05f);
-                if (template.m_numPrimaryColors != 1 && template.m_numSecondaryColors != 0) {
-                    value = (int) Math.Ceiling(value * 1.2275f); // Dyed items are more expensive.
-                }
-
-                goldSum += value;
             }
         }
 
         // Update player with their new gold balance.
-        wizard.AddGold(goldSum);
         SendToSocket(new WIZARD_12_PROTOCOL.MSG_UPDATEGOLD() {
             Gold = wizard.GameStats.m_currentGold,
             MaxGold = wizard.GameStats.m_baseGoldPouch,

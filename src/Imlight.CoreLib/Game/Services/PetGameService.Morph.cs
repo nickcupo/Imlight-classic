@@ -335,39 +335,35 @@ internal sealed partial class PetGameService {
         var b = PetProgress.Behavior(egg);
         if (egg is null || b is null) {
             Logger.Error("Pet hatching: no egg for template {0}.", Logger.Args(baby.TemplateId));
-
+            lock (m.Lobby.Gate) { me.Done = false; me.Ready = false; }
             return;
         }
 
         // The egg carries what the baby inherited; EnsureInitialized keeps it when the egg hatches.
         b.m_maxStats = [.. baby.MaxStats.Select(kv => new PetStat { m_name = kv.Key, m_statID = PetProgress.StatId(kv.Key), m_value = kv.Value })];
         b.m_allTalents = [.. baby.TalentPool.Select(PetProgress.TalentId)];
-        // CLASSIC: checked and spent in one save; a balance spent elsewhere since the check above refuses the hatch.
-        if (!wizard.RemoveGold(cost)) {
-            InformGameClient($"Your pets cannot hatch: hatching costs {cost} gold.");
-            SendToSocket(new PET_9_PROTOCOL.MSG_PETMORPHCANAFFORD { CanAfford = 0 });
-            lock (m.Lobby.Gate) {
-                me.Done = false;
-                me.Ready = false;
+        // CLASSIC: fresh ownership/cooldown/capacity and payment are checked with the original egg
+        // and saved slot in one commit. No timer or success packet precedes acknowledgement.
+        PetHatchReceipt receipt;
+        try {
+            if (!ClassicPetHatchTransactions.TryCreate(wizard, me.PetId, mine, theirs, egg, now, out receipt)) {
+                if (WizardCollection.IsInventorySnapshotUncertain(wizard)) { CloseSession(); return; }
+                InformGameClient("Your pets cannot hatch: the saved balance, pet or backpack refused the egg.");
+                SendToSocket(new PET_9_PROTOCOL.MSG_PETMORPHCANAFFORD { CanAfford = 0 });
+                lock (m.Lobby.Gate) { me.Done = false; me.Ready = false; }
+                return;
             }
-
-            return;
         }
-
-        wizard.PetOwnerBehavior.PetHatchTimes ??= [];
-        wizard.PetOwnerBehavior.PetHatchTimes[me.PetId] = now;
-        wizard.AddPetToInventory(egg);
-        var hatchSeconds = (uint) Math.Max(0, (long) b.m_hatchedTimeSecs - now);
-        var slot = wizard.PetOwnerBehavior.CreatePetEgg(baby.TemplateId, hatchSeconds, egg.m_globalID);
-        WizardData.Collections.WizardCollection.UpdateCharacterPetOwnerBehavior(wizard);
-
-        if (s_itemSerializer.Serialize(egg, (PropertyFlags) 24, out var eggData)) {
-            SendToSocket(new GAME_5_PROTOCOL.MSG_INVENTORYBEHAVIOR_ADDITEM { GlobalID = wizard.GameObjectID, SerializedItem = eggData });
+        catch {
+            if (WizardCollection.IsInventorySnapshotUncertain(wizard)) CloseSession();
+            throw;
         }
-
+        egg = receipt.Egg;
+        var hatchSeconds = receipt.Seconds;
+        SendToSocket(new GAME_5_PROTOCOL.MSG_INVENTORYBEHAVIOR_ADDITEM { GlobalID = wizard.GameObjectID, SerializedItem = receipt.Data });
         SendToSocket(new WIZARD_12_PROTOCOL.MSG_UPDATEGOLD { Gold = wizard.GameStats.m_currentGold, MaxGold = wizard.GameStats.m_baseGoldPouch });
-        SendToSocket(new PET_9_PROTOCOL.MSG_PETEGGMORPHED { PetTemplateGID = egg.m_globalID, PetName = 0, HatchTime = (uint) slot.m_timeFinished });
-        SendToSocket(new PET_9_PROTOCOL.MSG_PETMORPHINGSLOT { GlobalID = egg.m_globalID, Removed = 0, ExpireTimeCount = (uint) slot.m_timeFinished });
+        SendToSocket(new PET_9_PROTOCOL.MSG_PETEGGMORPHED { PetTemplateGID = egg.m_globalID, PetName = 0, HatchTime = receipt.Finish });
+        SendToSocket(new PET_9_PROTOCOL.MSG_PETMORPHINGSLOT { GlobalID = egg.m_globalID, Removed = 0, ExpireTimeCount = receipt.Finish });
         Timers.StartSingleTimer($"eggHatch_{egg.m_globalID.Full}", new MorphEggTimer(egg.m_globalID), TimeSpan.FromSeconds(hatchSeconds + 1));
 
         Logger.Information("Pet hatching: {0} paid {1} gold; egg {2} of template {3} hatches in {4} s; max stats {5}; pool {6}.",
