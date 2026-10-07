@@ -85,6 +85,7 @@
     <ServerIntegrationTest Include="BankStorageTests.cs" />
     <ServerIntegrationTest Include="OpsPersistenceTests.cs" />
     <ServerIntegrationTest Include="EconomyFixesTests.cs" />
+    <ServerIntegrationTest Include="NumericRewardAcknowledgementTests.cs" />
     <ServerIntegrationTest Include="RobustnessFixesTests.cs" />
     <ServerIntegrationTest Include="PostCombatEffectsTests.cs" />
     <ServerIntegrationTest Include="ArenaMatchmakerTests.cs" />
