@@ -53,6 +53,32 @@ public sealed class ItemInventoryPersistenceTests {
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
+    public void ReagentObjectCannotEnterTheOrdinaryBackpackThroughItemOrPetGrant(bool pet) {
+        var f = new Fixture(); using var scope = f.Scope(); var live = f.Live();
+        WizClientObjectItem candidate = new ClientReagentItem { m_globalID = 13, m_templateID = Fixture.Template,
+            m_characterId = Fixture.Char, m_quantity = 5, m_inactiveBehaviors = [] };
+        Assert.False(pet ? live.AddPetToInventory(candidate) : live.AddItemToInventory(candidate));
+        Assert.Empty(live.InventoryBehavior.Items); Assert.Empty(live.InventoryBehavior.InventoryItemIds);
+        Assert.Empty(f.Items); Assert.Empty(f.Saved.InventoryBehavior.InventoryItemIds);
+        Assert.Equal(5, ((ClientReagentItem)candidate).m_quantity); Assert.Equal(0, f.Initialized);
+        Assert.Equal(0, f.Stored); Assert.Equal(0, f.SaveAttempts); Assert.False(WizardCollection.IsInventorySnapshotUncertain(live));
+    }
+
+    [Fact]
+    public void SessionStagingRefusesAReagentCandidateBeforeAnyRowOrReferenceChanges() {
+        var f = new Fixture(); using var scope = f.Scope(); var validated = true;
+        WizClientObjectItem reagent = new ClientReagentItem { m_globalID = 13, m_templateID = Fixture.Template,
+            m_characterId = Fixture.Char, m_quantity = 5 };
+        Assert.False(WizardCollection.CommitCharacterMutation(Fixture.Char, (session, saved) =>
+            WizardInventoryTransactions.TryStageGrants(session, saved, [reagent], out _, out validated, out _),
+            _ => throw new InvalidOperationException("refused candidate must never publish")));
+        Assert.False(validated); Assert.Empty(f.Items); Assert.Empty(f.Saved.InventoryBehavior.InventoryItemIds);
+        Assert.Equal(0, f.Stored); Assert.Equal(0, f.SaveAttempts);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     public void FreshSavedCapacityRefusesAStaleEmptyLiveBagForNormalItemsAndPets(bool pet) {
         var f = new Fixture(); f.AddExisting(11); f.AddExisting(12); using var scope = f.Scope(); var live = f.Live();
         live.InventoryBehavior.InventoryItemIds.Clear(); live.InventoryBehavior.Items = [];

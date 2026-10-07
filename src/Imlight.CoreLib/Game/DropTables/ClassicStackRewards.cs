@@ -55,7 +55,8 @@ internal static class ClassicStackRewards {
         try {
             foreach (var drop in items) {
                 // CLASSIC: ordinary rolled gear has always granted one copy per entry; do not change its roll.
-                if (drop is null || !ulong.TryParse(drop.ItemId, out var id) || Resolve(d, id) is not WizItemTemplate template) continue;
+                if (drop is null || !ulong.TryParse(drop.ItemId, out var id) || Resolve(d, id) is not WizItemTemplate template
+                    || template is ReagentItemTemplate) continue; // CLASSIC: reagents have their own bag/delivery path
                 if (Create(d, id) is not WizClientObjectItem item) return false;
                 var prepared = WizardInventoryTransactions.Prepare(live, item, initializeBehaviors: false);
                 if (prepared is null || prepared.m_templateID.Full != id) return false;

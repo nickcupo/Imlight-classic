@@ -263,6 +263,27 @@ public sealed class LootRewardPersistenceTests {
     }
 
     [Fact]
+    public void ReagentTemplateInOrdinaryRollIsExcludedWhileValidGearCardAndReagentCommit() {
+        var f = new Fixture(5); using var scope = f.Scope(); var live = f.Live();
+        var templateSource = f.Dependencies.Template; var createSource = f.Dependencies.Create;
+        f.Dependencies.Template = id => id == Fixture.Normal
+            ? new ReagentItemTemplate { m_templateID = (uint)id, m_behaviors = [] } : templateSource(id);
+        var gearCreations = 0; var reagentCreations = 0;
+        f.Dependencies.Create = id => { if (id == Fixture.Normal) reagentCreations++; else if (id == Fixture.Gear) gearCreations++; return createSource(id); };
+        var results = Roll(2); results.Items = [Drop(Fixture.Normal, 1), Drop(Fixture.Gear, 1)]; results.TreasureCards = [Fixture.Card];
+        LootGranter.Grant(ActorRefs.NoSender, live, results, false);
+        Assert.Equal(Fixture.Gear.ToString(), Assert.Single(results.Items).ItemId); Assert.Single(results.TreasureCards);
+        Assert.Equal(2, Assert.Single(results.Reagents).Quantity); Assert.Equal(7, Assert.Single(f.Reagents).m_quantity);
+        Assert.Equal(Fixture.Gear, Assert.Single(f.Items).m_templateID.Full); Assert.IsNotType<ClientReagentItem>(f.Items[0]);
+        Assert.Equal(Fixture.GearId, Assert.Single(f.Saved.InventoryBehavior.InventoryItemIds));
+        Assert.Equal(Fixture.NormalId, Assert.Single(f.Saved.AlchemyBehavior.ReagentItemIds));
+        Assert.Equal(1, gearCreations); Assert.Equal(0, reagentCreations); Assert.Equal(1, f.SaveAttempts);
+        Assert.Single(f.Packets.OfType<GAME_5_PROTOCOL.MSG_INVENTORYBEHAVIOR_ADDITEM>());
+        Assert.Single(f.Packets.OfType<WIZARD_12_PROTOCOL.MSG_REAGENTADD>());
+        Assert.Equal(3, DropTableConverter.ToLootInfoList(results).m_loot.Count);
+    }
+
+    [Fact]
     public void FullFreshSavedGearBagStillGrantsCardsAndReagentsWhenAttachedBagIsEmpty() {
         var f = new Fixture(5); f.AddGear(101); f.AddGear(102); using var scope = f.Scope(); var live = f.Live();
         live.InventoryBehavior.InventoryItemIds.Clear(); live.InventoryBehavior.Items = [];
