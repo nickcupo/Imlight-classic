@@ -228,16 +228,11 @@ internal class CrownShopService(SessionActor sessionActor) : MessageService(sess
             return;
         }
 
-        // CLASSIC: paid first, checked and spent in one save (TrySpend: never below zero, no clamping), and given only
-        // once paid; refunded if it cannot be given. A Crowns or gold spend elsewhere between a check and a later
-        // charge used to make the item cheaper, or let two purchases share one balance.
-        if (!TryPay(wizard, item, payWithGold)) {
-            Fail(message, "cannot afford it");
-
-            return;
-        }
-
         if (item.Category == CrownShopCategories.Henchmen) {
+            if (!TryPay(wizard, item, payWithGold)) {
+                Fail(message, "cannot afford it");
+                return;
+            }
             // Paid now; the duel confirms the henchman joined (ReceiveHenchmanHired) or the payment is refunded, also
             // when no answer comes (the duel ended first).
             _pendingHire = new PendingHire(message, item, payWithGold);
@@ -247,20 +242,32 @@ internal class CrownShopService(SessionActor sessionActor) : MessageService(sess
             return;
         }
 
-        if (!wizard.AddItemToInventory(item.Template, out var added)) {
-            Refund(wizard, item, payWithGold);
-            Fail(message, "the backpack refused it");
-
-            return;
-        }
-
+        // CLASSIC: payment, initialized item, rental expiry and saved backpack reference are one
+        // acknowledged transaction. A lost acknowledgement is never a reason to refund or repeat it.
+        var prepared = WizardInventoryTransactions.Prepare(wizard,
+            CoreObjectFactory.FinalizeCoreObject((uint)item.Template) as WizClientObjectItem, true);
+        if (prepared is null) { Fail(message, "the item could not be prepared"); return; }
         if (item.RentalDays is { } days) {
-            WizardItemCollection.SetExpireTime(added, (uint) DateTimeOffset.UtcNow.AddDays(days).ToUnixTimeSeconds());
+            if (!CoreObjectFactory.FindBehaviorInstance<ClientTimedItemBehavior>(prepared, out var timed)) {
+                Fail(message, "the rental timer could not be prepared");
+                return;
+            }
+            timed.m_expireTime = (uint)DateTimeOffset.UtcNow.AddDays(days).ToUnixTimeSeconds();
         }
-
-        var serializer = new CoreObjectSerializer(behaviors: SerializerFlags.None);
-        if (serializer.Serialize(added, 24, out var serialized)) {
-            SendToSocket(new GAME_5_PROTOCOL.MSG_INVENTORYBEHAVIOR_ADDITEM { GlobalID = wizard.GameObjectID, SerializedItem = serialized });
+        try {
+            if (!ClassicItemPurchases.Purchase(wizard, prepared, payWithGold ? item.Gold : item.Crowns,
+                !payWithGold, out var purchased, item.MinLevel)) {
+                if (WizardCollection.IsInventorySnapshotUncertain(wizard)) { CloseSession(); return; }
+                Fail(message, "the saved balance or backpack refused it");
+                return;
+            }
+            SendToSocket(new GAME_5_PROTOCOL.MSG_INVENTORYBEHAVIOR_ADDITEM {
+                GlobalID = wizard.GameObjectID, SerializedItem = purchased.Data,
+            });
+        }
+        catch {
+            if (WizardCollection.IsInventorySnapshotUncertain(wizard)) CloseSession();
+            throw;
         }
 
         Complete(wizard, message, item, payWithGold);

@@ -37,11 +37,13 @@
  */
 
 using System;
+using System.Collections.Generic;
 using Akka.Actor;
 using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty;
 using Imcodec.ObjectProperty.TypeCache;
 using Imcodec.CoreObject;
+using Imcodec.IO;
 using Imcodec.Types;
 using Imlight.Classic;
 using Imlight.Classic.Rules;
@@ -56,6 +58,7 @@ using Imlight.CoreLib.WizardData.Models.Player;
 using Imlight.CoreLib.Game.Pet;
 using Imlight.CoreLib.Game.Zone.Components;
 using Imlight.CoreLib.Game.WizBang;
+using Raven.Client.Documents.Session;
 
 namespace Imlight.CoreLib.Game.Services;
 
@@ -76,6 +79,16 @@ internal class ShopService(SessionActor sessionActor) : MessageService(sessionAc
 
     [MessageHandler(typeof(WIZARD_12_PROTOCOL.MSG_SHOPBUYREQUEST))]
     private void ReceiveShopBuyRequest(WIZARD_12_PROTOCOL.MSG_SHOPBUYREQUEST message) {
+        try { HandleShopBuyRequest(message); }
+        catch {
+            // CLASSIC: a failed/lost ACK quarantines within the lane; close before any actor restart can continue.
+            if (WizardCollection.IsInventorySnapshotUncertain(GetActiveWizard())) CloseSession();
+            throw;
+        }
+    }
+
+    private void HandleShopBuyRequest(WIZARD_12_PROTOCOL.MSG_SHOPBUYREQUEST message) {
+        if (WizardCollection.IsInventorySnapshotUncertain(GetActiveWizard())) { CloseSession(); return; }
         // Ensure that the player has interacted with an object in the zone.
         var interactedObject = GetZoneObject(message.npcGlobalID);
         if (interactedObject is null) {
@@ -155,12 +168,9 @@ internal class ShopService(SessionActor sessionActor) : MessageService(sessionAc
             return;
         }
 
-        // CLASSIC: never charge for an item the backpack cannot take.
-        if (playerWizard.InventoryBehavior.IsFull) {
-            SendShopDenyMessage();
-
-            return;
-        }
+        // CLASSIC: prepare privately; the saved backpack, wallet and original item row are checked together.
+        item = WizardInventoryTransactions.Prepare(playerWizard, item, !PetFactory.IsPetTemplate(itemTemplateID));
+        if (item is null) { SendShopDenyMessage(); return; }
 
         // CLASSIC: an Arena Ticket vendor (Diego, Roland Silverheart) sells for tickets, some items only from a PvP rank up.
         if (vendorComponent.SellsForTickets) {
@@ -176,22 +186,14 @@ internal class ShopService(SessionActor sessionActor) : MessageService(sessionAc
         var crownsOnly = template.m_adjectiveList?.Exists(adjective => adjective == "FLAG_CrownsOnly") == true;
         var crownsCost = holidayPrice?.Crowns ?? (int) template.m_creditsCost;
         if (ClassicRuntime.IsActive && crownsCost > 0 && (crownsOnly || message.CurrencyType == 1)) {
-            // CLASSIC: checked and debited in one save first; the item only after the Crowns are spent, refunded if the
-            // backpack refuses it.
             var account = playerWizard.Account;
-            if (account is null || !ClassicCrowns.TrySpend(account, crownsCost)) {
+            if (!ClassicItemPurchases.Purchase(playerWizard, item, crownsCost, crowns: true,
+                out var receipt, serialize: SerializePurchase)) {
+                if (WizardCollection.IsInventorySnapshotUncertain(playerWizard)) { CloseSession(); return; }
                 SendShopDenyMessage();
-
                 return;
             }
-
-            if (!ProcessSuccessfulPurchase(playerWizard, item, itemTemplateID)) {
-                ClassicCrowns.Add(account, crownsCost);
-                SendShopDenyMessage();
-
-                return;
-            }
-
+            ProcessSuccessfulPurchase(playerWizard, receipt);
             SendToSocket(ClassicCrowns.BalanceMessage(account, playerWizard.CharId));
             Logger.Information("{Wizard} bought {Item} for {Crowns} Crowns.", Logger.Args(playerWizard.CharId, itemTemplateID, crownsCost));
 
@@ -200,24 +202,19 @@ internal class ShopService(SessionActor sessionActor) : MessageService(sessionAc
 
         var goldCost = holidayPrice?.Gold ?? CalculateItemCost(template);
 
-        // CLASSIC: the gold is checked and spent in one save before the item is given (two purchases sent together
-        // could both pass a check of the live gold); a backpack that refuses the item gets the gold back.
-        if (!playerWizard.RemoveGold(goldCost)) {
+        if (!ClassicItemPurchases.Purchase(playerWizard, item, goldCost, crowns: false,
+            out var goldReceipt, serialize: SerializePurchase)) {
+            if (WizardCollection.IsInventorySnapshotUncertain(playerWizard)) { CloseSession(); return; }
             SendShopDenyMessage();
-
             return;
         }
-
-        if (!ProcessSuccessfulPurchase(playerWizard, item, itemTemplateID)) {
-            playerWizard.RefundGold(goldCost);
-            SendShopDenyMessage();
-        }
+        ProcessSuccessfulPurchase(playerWizard, goldReceipt);
     }
 
     // CLASSIC: a purchase from an Arena Ticket vendor: the 2009 price in tickets (price_2009 where the client's template
     // carries a later price, else the template's m_arenaPointCost; the client step "tickets" puts the 2009 price in the
     // client's template, so the shop window shows what is charged),
-    // the item's PvP rank (wiki item pages, 2009: "PvP Rank Sergeant Only"...), tickets taken in one save before the item.
+    // the item's PvP rank (wiki item pages, 2009: "PvP Rank Sergeant Only"...), saved with payment and the item.
     private void BuyWithTickets(Wizard wizard, WizClientObjectItem item, WizItemTemplate template, uint itemTemplateID, uint npcTemplate) {
         var entry = Classic.Arena.ClassicArena.TicketItem(npcTemplate, itemTemplateID);
         var config = Classic.Arena.ClassicArena.Config;
@@ -235,12 +232,11 @@ internal class ShopService(SessionActor sessionActor) : MessageService(sessionAc
             return;
         }
 
-        var rating = Classic.Arena.ArenaMatchmaker.Instance?.Standing(wizard.CharId).Rating
-                     ?? new ArenaLadderCollection.Raven().Load(wizard.CharId)?.Rating ?? config.StartRating;
-        var result = TryPurchaseWithTickets(wizard, price, rating,
-            Imlight.Classic.Pvp.ArenaRules.MinRatingOf(entry.Rank, config.Ranks),
-            () => ProcessSuccessfulPurchase(wizard, item, itemTemplateID));
+        var result = TryPurchaseWithTickets(wizard, item, price,
+            Imlight.Classic.Pvp.ArenaRules.MinRatingOf(entry.Rank, config.Ranks), config.StartRating,
+            out var receipt, SerializePurchase);
         if (result != TicketPurchaseResult.Purchased) {
+            if (WizardCollection.IsInventorySnapshotUncertain(wizard)) { CloseSession(); return; }
             if (result is TicketPurchaseResult.RankRequired or TicketPurchaseResult.TicketsUnavailable) {
                 InformGameClient(result == TicketPurchaseResult.RankRequired
                     ? $"You need the PvP rank of {entry.Rank} for that."
@@ -250,13 +246,54 @@ internal class ShopService(SessionActor sessionActor) : MessageService(sessionAc
 
             return;
         }
-
+        ProcessSuccessfulPurchase(wizard, receipt);
         SendToSocket(Classic.Arena.ArenaMessages.ArenaPoints(wizard.GameStats.m_currentArenaPoints));
         SendToSocket(Classic.Arena.ArenaMessages.PvpCurrency(wizard.GameStats.m_currentPvPCurrency));
         Logger.Information("{Wizard} bought {Item} for {Tickets} Arena Tickets.", Logger.Args(wizard.CharId, itemTemplateID, price));
     }
 
-    // CLASSIC: the production spend-then-grant workflow. Affordability comes from the saved balance;
+    // CLASSIC: tickets, the fresh persisted ladder band, original item row and backpack reference share one save.
+    internal static TicketPurchaseResult TryPurchaseWithTickets(Wizard wizard, WizClientObjectItem prepared,
+        int price, int minimumRating, int startRating, out ItemPurchaseReceipt receipt,
+        Func<WizClientObjectItem, ByteString> serialize,
+        Func<IDocumentSession, ulong, ArenaLadderEntry> loadStanding = null) {
+        receipt = null;
+        if (price < 0) return TicketPurchaseResult.InvalidPrice;
+        if (wizard is null || prepared is null || serialize is null || WizardCollection.IsInventorySnapshotUncertain(wizard))
+            return TicketPurchaseResult.InventoryRefused;
+        var result = TicketPurchaseResult.InventoryRefused;
+        ItemPurchaseReceipt acknowledged = null;
+        List<WizClientObjectItem> backpack = [];
+        var success = WizardCollection.CommitCharacterMutation(wizard.CharId, (session, saved) => {
+            if (WizardCollection.IsInventorySnapshotUncertain(wizard) || saved.GameStats is null) return false;
+            var standing = loadStanding is null
+                ? session.Load<ArenaLadderEntry>(ArenaLadderCollection.DocumentId(saved.CharId))
+                : loadStanding(session, saved.CharId);
+            if (standing is not null && standing.CharId != saved.CharId) return false;
+            if ((standing?.Rating ?? startRating) < minimumRating) { result = TicketPurchaseResult.RankRequired; return false; }
+            if (saved.GameStats.m_currentArenaPoints < price) { result = TicketPurchaseResult.TicketsUnavailable; return false; }
+            if (!WizardInventoryTransactions.TryStageGrants(session, saved, [prepared], out var admitted,
+                out _, out backpack) || admitted.Count != 1) return false;
+            ByteString data;
+            try { data = serialize(prepared); }
+            catch (Exception) { return false; }
+            if (data.Length == 0) return false;
+            saved.GameStats.m_currentArenaPoints -= price;
+            saved.GameStats.m_currentPvPCurrency = saved.GameStats.m_currentArenaPoints;
+            acknowledged = new(prepared, data);
+            return true;
+        }, saved => {
+            WizardInventoryTransactions.PublishCommittedBackpack(wizard, saved, backpack);
+            wizard.GameStats.m_currentArenaPoints = saved.GameStats.m_currentArenaPoints;
+            wizard.GameStats.m_currentPvPCurrency = saved.GameStats.m_currentPvPCurrency;
+        }, onSaveFailure: _ => WizardCollection.MarkInventorySnapshotUncertain(wizard));
+        if (!success) return result;
+        receipt = acknowledged;
+        return TicketPurchaseResult.Purchased;
+    }
+
+    // CLASSIC: retained callback contract for ticket wallet consumers; ordinary production item purchases use
+    // the atomic overload above. Affordability comes from the saved balance;
     // a known inventory refusal refunds that debit, retaining any award saved in between. A thrown
     // grant may have committed an item, so it is deliberately never retried or refunded here.
     internal static TicketPurchaseResult TryPurchaseWithTickets(Wizard wizard, int price, int rating,
@@ -288,7 +325,16 @@ internal class ShopService(SessionActor sessionActor) : MessageService(sessionAc
 
     [MessageHandler(typeof(WIZARD_12_PROTOCOL.MSG_SHOPSELLREQUEST))]
     private void ReceiveShopSellRequest(WIZARD_12_PROTOCOL.MSG_SHOPSELLREQUEST message) {
+        try { HandleShopSellRequest(message); }
+        catch {
+            if (WizardCollection.IsInventorySnapshotUncertain(GetActiveWizard())) CloseSession();
+            throw;
+        }
+    }
+
+    private void HandleShopSellRequest(WIZARD_12_PROTOCOL.MSG_SHOPSELLREQUEST message) {
         var wizard = GetActiveWizard();
+        if (WizardCollection.IsInventorySnapshotUncertain(wizard)) { CloseSession(); return; }
         var item = wizard.InventoryBehavior.GetItem(message.GlobalID);
 
         // CLASSIC: a shop buys only from a wizard standing by it (the request's NPC, or the shop last opened).
@@ -297,14 +343,6 @@ internal class ShopService(SessionActor sessionActor) : MessageService(sessionAc
             Logger.Warning("{0} tried to sell item {1} away from a shop.", Logger.Args(wizard.CharId, message.GlobalID));
             ProcessFailedSale();
 
-            return;
-        }
-
-        // CLASSIC: reject an unsellable item before removing it from the backpack.
-        if (ClassicRuntime.Rules.UsesKingsIsleQuestRules
-            && (item is null || CoreObjectFactory.GetCoreTemplate(item.m_templateID) is not WizItemTemplate sellTemplate
-                || !Imlight.Classic.Inventory.BackpackQuickSell.IsSellable(sellTemplate.m_adjectiveList))) {
-            ProcessFailedSale();
             return;
         }
 
@@ -324,18 +362,22 @@ internal class ShopService(SessionActor sessionActor) : MessageService(sessionAc
             return;
         }
 
-        var removedItemSuccess = wizard.DestroyInventoryItem(message.GlobalID);
+        var removedItemSuccess = InventoryService.TrySellBackpackItems(wizard, [new(message.GlobalID, 1)],
+            savedItem => {
+                if (CoreObjectFactory.GetCoreTemplate(savedItem.m_templateID) is not WizItemTemplate template
+                    || ClassicRuntime.Rules.UsesKingsIsleQuestRules
+                    && !Imlight.Classic.Inventory.BackpackQuickSell.IsSellable(template.m_adjectiveList)) return null;
+                return CalculateItemSellValue(template);
+            }, out var sales);
         if (!removedItemSuccess) {
+            if (WizardCollection.IsInventorySnapshotUncertain(wizard)) { CloseSession(); return; }
             Logger.Warning("Failed to find item {0} in inventory for shop sell", Logger.Args(message.GlobalID));
             ProcessFailedSale();
 
             return;
         }
 
-        var template = (WizItemTemplate) CoreObjectFactory.GetCoreTemplate(item.m_templateID);
-        var gold = CalculateItemSellValue(template);
-
-        ProcessSuccessfulSale(wizard, message.GlobalID, gold);
+        ProcessSuccessfulSale(wizard, sales[0].Id);
     }
 
     [MessageHandler(typeof(WIZARD_12_PROTOCOL.MSG_DYEREQUEST))]
@@ -508,9 +550,7 @@ internal class ShopService(SessionActor sessionActor) : MessageService(sessionAc
         ZoneBroadcast(wizBangMsg, false);
     }
 
-    private void ProcessSuccessfulSale(Wizard wizard, ulong itemID, int goldValue) {
-        wizard.AddGold(goldValue);
-
+    private void ProcessSuccessfulSale(Wizard wizard, ulong itemID) {
         // Inform the game client of the successful sale.
         var updateGoldMsg = new WIZARD_12_PROTOCOL.MSG_UPDATEGOLD {
             Gold = wizard.GameStats.m_currentGold,
@@ -655,35 +695,24 @@ internal class ShopService(SessionActor sessionActor) : MessageService(sessionAc
 
     private static readonly CoreObjectSerializer s_snackSerializer = new(behaviors: Imcodec.ObjectProperty.SerializerFlags.None);
 
-    // CLASSIC: gives a bought item that is already paid for; false (nothing sent) when it could not be given, so the
-    // caller refunds.
-    private bool ProcessSuccessfulPurchase(Wizard playerWizard, WizClientObjectItem item, uint itemTemplateID) {
-        // CLASSIC: a pet keeps the behaviors PetFactory gave it and goes out with them (as .mod additem sends one).
-        var isPet = PetFactory.IsPetTemplate(itemTemplateID);
+    // CLASSIC: native payload and flags are prepared before SaveChanges; only the acknowledged receipt is sent.
+    private static ByteString SerializePurchase(WizClientObjectItem item)
+        => s_itemSerializer.Serialize(item, PetFactory.IsPetTemplate((uint)item.m_templateID.Full) ? (PropertyFlags)24 : (PropertyFlags)1,
+            out var data) ? data : default;
 
-        // Serialize the item without behaviors.
-        if (!s_itemSerializer.Serialize(item, isPet ? (PropertyFlags) 24 : (PropertyFlags) 1, out var serializedItemWithoutBehaviors)) {
-            Logger.Error("Failed to serialize item {0} for purchase", 
-                Logger.Args(item.m_globalID));
-
-            return false;
-        }
-        var added = isPet ? playerWizard.AddPetToInventory(item) : playerWizard.AddItemToInventory(item);
-        if (!added) {
-            return false;
-        }
-
+    private void ProcessSuccessfulPurchase(Wizard playerWizard, ItemPurchaseReceipt receipt) {
+        var item = receipt.Item;
         // Inform the game client that a new item has been added to the player's inventory.
         var addItemMsg = new GAME_5_PROTOCOL.MSG_INVENTORYBEHAVIOR_ADDITEM {
             GlobalID = playerWizard.GameObjectID,
-            SerializedItem = serializedItemWithoutBehaviors,
+            SerializedItem = receipt.Data,
         };
         SendToSocket(addItemMsg);
 
         // Inform the game client that the player has acquired a new item.
         var itemAcqMsg = new WIZARD2_53_PROTOCOL.MSG_ITEMACQUISITION {
             ItemGlobalID = item.m_globalID,
-            ItemTemplateID = itemTemplateID,
+            ItemTemplateID = (uint)item.m_templateID.Full,
             ItemLocation = 1,
         };
         SendToSocket(itemAcqMsg);
@@ -699,7 +728,6 @@ internal class ShopService(SessionActor sessionActor) : MessageService(sessionAc
         var shopConfirmMsg = new WIZARD_12_PROTOCOL.MSG_SHOPBUYCONFIRM();
         SendToSocket(shopConfirmMsg);
 
-        return true;
     }
 
     // CLASSIC: the buyer's texture and decal when the shop offers colors for the item and they are valid; else the

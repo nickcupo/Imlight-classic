@@ -467,42 +467,17 @@ public class Wizard {
     }
 
     public bool AddItemToInventory(ulong itemId, out WizClientObjectItem item) {
-        // CLASSIC: an uncertain purchase requires a fresh instance, never a second legacy grant.
-        if (WizardCollection.IsInventorySnapshotUncertain(this)) { item = null; return false; }
-        item = (WizClientObjectItem) CoreObjectFactory.FinalizeCoreObject(itemId);
-        item.m_characterId = (GID) CharId;
-
-        return AddItemToInventory(item);
+        item = null;
+        if (WizardCollection.IsInventorySnapshotUncertain(this)) return false;
+        var candidate = CoreObjectFactory.FinalizeCoreObject(itemId) as WizClientObjectItem;
+        if (!AddItemToInventory(candidate)) return false;
+        item = candidate;
+        return true;
     }
 
-    public bool AddItemToInventory(WizClientObjectItem item) => WizardCollection.WithCharacterLock(CharId, () => {
-        // CLASSIC: marking and legacy item writes share a lane, including queued post-disconnect work.
-        if (WizardCollection.IsInventorySnapshotUncertain(this)) return false;
-        if (item is null) {
-            Logger.Warning("Cannot add item to inventory because that item does not exist.");
-
-            return false;
-        }
-
-        CoreObjectFactory.InitializeCoreObjectBehaviors(item, item.m_templateID);
-
-        // Ensure that the item is associated with this Wizard.
-        item.m_characterId = (GID) CharId;
-
-        var success = InventoryBehavior.AddItem(item);
-        if (!success) {
-            Logger.Warning("Could not add item {0} to player {1}'s inventory.",
-                Logger.Args(item.m_globalID, PlayerNameBehavior.GetWizardName()));
-
-            return false;
-        }
-
-        // Persistent save.
-        WizardItemCollection.AddItem(item);
-        WizardCollection.UpdateCharacterItems(this);
-
-        return true;
-    });
+    // CLASSIC: the saved item and reference commit together before the live bag changes.
+    public bool AddItemToInventory(WizClientObjectItem item)
+        => WizardInventoryTransactions.Add(this, item, initializeBehaviors: true);
 
     public bool AddHatchedPetToInventory(uint templateId, out WizClientObjectItem pet) {
         // The pet factory owns the pet's behavior state, so this skips the template
@@ -515,72 +490,20 @@ public class Wizard {
     /// <summary>
     /// CLASSIC: adds a pet PetFactory made (bought, hatched or granted) without re-initializing its behaviors from the template.
     /// </summary>
-    public bool AddPetToInventory(WizClientObjectItem pet) => WizardCollection.WithCharacterLock(CharId, () => {
-        if (WizardCollection.IsInventorySnapshotUncertain(this)) return false; // CLASSIC: no stale bag write.
-        if (pet is null) {
-            return false;
-        }
+    public bool AddPetToInventory(WizClientObjectItem pet)
+        => WizardInventoryTransactions.Add(this, pet, initializeBehaviors: false);
 
-        pet.m_characterId = (GID) CharId;
-
-        if (!InventoryBehavior.AddItem(pet)) {
-            Logger.Warning("Could not add pet {0} to player {1}'s inventory.",
-                Logger.Args(pet.m_globalID, PlayerNameBehavior.GetWizardName()));
-
-            return false;
-        }
-
-        WizardItemCollection.AddItem(pet);
-        WizardCollection.UpdateCharacterItems(this);
-
-        return true;
-    });
-
-    public bool RemoveItemFromInventory(ulong itemId) => WizardCollection.WithCharacterLock(CharId, () => {
-        if (WizardCollection.IsInventorySnapshotUncertain(this)) return false; // CLASSIC: reload before removal.
-        var success = InventoryBehavior.RemoveItem(itemId, out var item);
-        if (!success) {
-            Logger.Warning("Could not remove item {0} from wizard {1}'s inventory.",
-                Logger.Args(itemId, CharId));
-
-            return false;
-        }
-
-        // Persistent save.
-        WizardCollection.UpdateCharacterItems(this);
-
-        return true;
-    });
+    // CLASSIC: moves unlink the saved reference, preserving the original item row for the destination.
+    public bool RemoveItemFromInventory(ulong itemId)
+        => WizardInventoryTransactions.Remove(this, itemId, destroy: false);
 
     /// <summary>
     /// CLASSIC: takes an item out of the backpack for good (sold, trashed) and deletes its saved document, which used to
     /// stay behind forever. False, and nothing deleted, when the backpack no longer holds it: the removal is the check,
     /// so of two actors spending the same item only one succeeds.
     /// </summary>
-    public bool DestroyInventoryItem(ulong itemId) => WizardCollection.WithCharacterLock(CharId, () => {
-        if (WizardCollection.IsInventorySnapshotUncertain(this)) return false; // CLASSIC: no stale item claim.
-        // CLASSIC: a deed owns persisted rooms. Only the atomic furnished-house sale may
-        // retire it; forged trash/quick-sell requests cannot strand its contents.
-        if (ClassicRuntime.IsInitialized && ClassicRuntime.IsActive && Imlight.CoreLib.Classic.Housing.HouseCollection.IsDeed(InventoryBehavior.GetItem(itemId))) return false;
-        // CLASSIC: claim the live item under the same lane as housing/bank commits. Removing it before
-        // taking this lane lets a simultaneous placement save the furniture, then this path delete its document.
-        if (!RemoveItemFromInventory(itemId)) {
-            return false;
-        }
-
-        try {
-            if (WizardCollection.TestStoreScope.Value is null) { // a test's fake store has no item documents
-                WizardItemCollection.RemoveItem(CharId, itemId);
-            }
-        }
-        catch (Exception ex) {
-            // The backpack no longer lists it, so a leftover document is harmless; it is only clutter.
-            Logger.Warning("Item {0} left the backpack of {1} but its document was not deleted: {2}",
-                Logger.Args(itemId, CharId, ex.Message));
-        }
-
-        return true;
-    });
+    public bool DestroyInventoryItem(ulong itemId)
+        => WizardInventoryTransactions.Remove(this, itemId, destroy: true);
 
     public bool InventoryToEquipmentTransfer(ulong itemId, out List<GameEffectBase> equipEffects, out List<GameEffectBase> unequipEffects) {
         equipEffects = null;
