@@ -527,8 +527,8 @@ public class CombatDuelSubCircle {
 
         // Check if we're over the max index.
         var maxIndex = MagicSchools.GetMaxMagicSchoolIndex();
-        if (list.Count < maxIndex) {
-            throw new ArgumentException("List must have a count equal to the max magic school index.");
+        if (list.Count <= maxIndex) { // CLASSIC: count must include the highest zero-based index.
+            throw new ArgumentException("List must contain an entry for every defined magic school index.");
         }
 
         var index = (int) MagicSchools.GetMagicSchool(magicSchool).m_schoolIndex;
