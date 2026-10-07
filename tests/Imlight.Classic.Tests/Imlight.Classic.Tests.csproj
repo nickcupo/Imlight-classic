@@ -20,6 +20,10 @@
     <ServerIntegrationTest Include="BadgeRulesTests.cs" />
     <ServerIntegrationTest Include="C6ServerGapTests.cs" />
     <ServerIntegrationTest Include="GlacialTreasurePriceTests.cs" />
+    <ServerIntegrationTest Include="ReagentPersistenceRegressionTests.cs" />
+    <ServerIntegrationTest Include="BazaarTransactionPersistenceTests.cs" />
+    <ServerIntegrationTest Include="BazaarNativeProtocolTests.cs" />
+    <ServerIntegrationTest Include="BazaarInventorySafetyTests.cs" />
     <ServerIntegrationTest Include="ClassicCinematicTests.cs" />
     <ServerIntegrationTest Include="ClassicDeckRegressionTests.cs" />
     <ServerIntegrationTest Include="StarterDeckPersistenceTests.cs" />

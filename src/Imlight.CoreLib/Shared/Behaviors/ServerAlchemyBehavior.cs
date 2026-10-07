@@ -30,7 +30,8 @@ public class ServerAlchemyBehavior : IClientBehaviorProvider<ClientAlchemyBehavi
 
     [JsonIgnore] public bool NoTransfer { get; set; } = false;
 
-    private static readonly int s_maxReagentStackAllowed = 999;
+    internal const int MaxReagentStack = 999; // CLASSIC: shared by session staging and native bag capacity.
+    private static readonly int s_maxReagentStackAllowed = MaxReagentStack;
 
     public List<ulong> ReagentItemIds { get; set; }
 

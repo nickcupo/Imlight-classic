@@ -280,7 +280,8 @@ internal class InventoryService(SessionActor sessionActor) : MessageService(sess
         }
 
         var reagent = wizard.AlchemyBehavior.GetReagent(message.GlobalID);
-        wizard.RemoveReagent(reagent.m_globalID, out var updatedReagent);
+        // CLASSIC: a refused saved removal has no receipt. Never dereference null or announce a change.
+        if (!wizard.RemoveReagent(reagent.m_globalID, out var updatedReagent) || updatedReagent is null) return;
 
         if (updatedReagent.m_quantity > 0) {
             SendToSocket(new WIZARD_12_PROTOCOL.MSG_REAGENTUPDATE() {

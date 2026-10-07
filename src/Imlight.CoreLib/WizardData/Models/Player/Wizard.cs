@@ -467,13 +467,17 @@ public class Wizard {
     }
 
     public bool AddItemToInventory(ulong itemId, out WizClientObjectItem item) {
+        // CLASSIC: an uncertain purchase requires a fresh instance, never a second legacy grant.
+        if (WizardCollection.IsInventorySnapshotUncertain(this)) { item = null; return false; }
         item = (WizClientObjectItem) CoreObjectFactory.FinalizeCoreObject(itemId);
         item.m_characterId = (GID) CharId;
 
         return AddItemToInventory(item);
     }
 
-    public bool AddItemToInventory(WizClientObjectItem item) {
+    public bool AddItemToInventory(WizClientObjectItem item) => WizardCollection.WithCharacterLock(CharId, () => {
+        // CLASSIC: marking and legacy item writes share a lane, including queued post-disconnect work.
+        if (WizardCollection.IsInventorySnapshotUncertain(this)) return false;
         if (item is null) {
             Logger.Warning("Cannot add item to inventory because that item does not exist.");
 
@@ -498,7 +502,7 @@ public class Wizard {
         WizardCollection.UpdateCharacterItems(this);
 
         return true;
-    }
+    });
 
     public bool AddHatchedPetToInventory(uint templateId, out WizClientObjectItem pet) {
         // The pet factory owns the pet's behavior state, so this skips the template
@@ -511,7 +515,8 @@ public class Wizard {
     /// <summary>
     /// CLASSIC: adds a pet PetFactory made (bought, hatched or granted) without re-initializing its behaviors from the template.
     /// </summary>
-    public bool AddPetToInventory(WizClientObjectItem pet) {
+    public bool AddPetToInventory(WizClientObjectItem pet) => WizardCollection.WithCharacterLock(CharId, () => {
+        if (WizardCollection.IsInventorySnapshotUncertain(this)) return false; // CLASSIC: no stale bag write.
         if (pet is null) {
             return false;
         }
@@ -529,9 +534,10 @@ public class Wizard {
         WizardCollection.UpdateCharacterItems(this);
 
         return true;
-    }
+    });
 
-    public bool RemoveItemFromInventory(ulong itemId) {
+    public bool RemoveItemFromInventory(ulong itemId) => WizardCollection.WithCharacterLock(CharId, () => {
+        if (WizardCollection.IsInventorySnapshotUncertain(this)) return false; // CLASSIC: reload before removal.
         var success = InventoryBehavior.RemoveItem(itemId, out var item);
         if (!success) {
             Logger.Warning("Could not remove item {0} from wizard {1}'s inventory.",
@@ -544,7 +550,7 @@ public class Wizard {
         WizardCollection.UpdateCharacterItems(this);
 
         return true;
-    }
+    });
 
     /// <summary>
     /// CLASSIC: takes an item out of the backpack for good (sold, trashed) and deletes its saved document, which used to
@@ -552,6 +558,7 @@ public class Wizard {
     /// so of two actors spending the same item only one succeeds.
     /// </summary>
     public bool DestroyInventoryItem(ulong itemId) => WizardCollection.WithCharacterLock(CharId, () => {
+        if (WizardCollection.IsInventorySnapshotUncertain(this)) return false; // CLASSIC: no stale item claim.
         // CLASSIC: a deed owns persisted rooms. Only the atomic furnished-house sale may
         // retire it; forged trash/quick-sell requests cannot strand its contents.
         if (ClassicRuntime.IsInitialized && ClassicRuntime.IsActive && Imlight.CoreLib.Classic.Housing.HouseCollection.IsDeed(InventoryBehavior.GetItem(itemId))) return false;
@@ -818,62 +825,50 @@ public class Wizard {
     }
 
     public bool AddReagent(ulong reagentTemplateId, out ClientReagentItem reagentObj) {
-        if (AlchemyBehavior.HasReageant(reagentTemplateId)) {
-            reagentObj = AlchemyBehavior.GetReagent(reagentTemplateId);
-        }
-        else {
-            reagentObj = (ClientReagentItem) CoreObjectFactory.FinalizeCoreObject(reagentTemplateId);
-            reagentObj.m_characterId = (GID) CharId;
-            reagentObj.m_quantity = 1;
-        }
-
-        return AddReagent(reagentObj);
+        reagentObj = null;
+        if (WizardCollection.IsInventorySnapshotUncertain(this)) return false; // CLASSIC: reload after uncertain ACK.
+        // CLASSIC: return the saved stack's native identity/count, not a newly allocated duplicate identity.
+        var candidate = AlchemyBehavior?.GetReagent(reagentTemplateId)
+            ?? CoreObjectFactory.FinalizeCoreObject(reagentTemplateId) as ClientReagentItem;
+        return WizardReagentCollection.AddReagent(this, candidate, out reagentObj);
     }
 
     public bool AddReagent(ClientReagentItem reagent) {
+        if (WizardCollection.IsInventorySnapshotUncertain(this)) return false; // CLASSIC
         if (reagent is null) {
             Logger.Warning("Cannot add reagent to reagent bag because that reagent does not exist.");
 
             return false;
         }
 
-        // Ensure that the item is associated with this Wizard.
-        reagent.m_characterId = (GID) CharId;
-
-        var success = AlchemyBehavior.AddReagent(reagent);
-        if (!success) {
+        // CLASSIC: the saved quantity and wizard bag reference commit together before live publication.
+        // The candidate may alias a five-copy live stack; this request adds one, never its six-copy snapshot.
+        if (!WizardReagentCollection.AddReagent(this, reagent, out var updated)) {
             Logger.Warning("Could not add reagent {0} to player {1}'s reagent bag.",
                 Logger.Args(reagent.m_globalID, PlayerNameBehavior.GetWizardName()));
 
             return false;
         }
 
-        // Persistent save.
-        WizardReagentCollection.AddReagent(reagent);
-        WizardCollection.UpdateCharacterItems(this);
-
+        // CLASSIC: node pickup callers serialize their input after this returns. Preserve that reference while
+        // reporting the actual owned native stack, and only change it after the save is acknowledged.
+        reagent.m_globalID = updated.m_globalID;
+        reagent.m_permID = updated.m_permID;
+        reagent.m_characterId = updated.m_characterId;
+        reagent.m_quantity = updated.m_quantity;
         return true;
     }
 
     public bool RemoveReagent(ulong globalId, out ClientReagentItem reagent) {
-        if (!AlchemyBehavior.RemoveReagent(globalId, out reagent)) {
+        reagent = null;
+        if (WizardCollection.IsInventorySnapshotUncertain(this)) return false; // CLASSIC
+        // CLASSIC: stage the decrement from the saved count; last-copy removal writes zero/deletion once.
+        if (!WizardReagentCollection.RemoveReagent(this, globalId, out reagent)) {
             Logger.Warning("Could not remove reagent with global ID {0} from player {1}'s reagent bag.",
                 Logger.Args(globalId, PlayerNameBehavior.GetWizardName()));
 
             return false;
         }
-
-        if (reagent.m_quantity <= 0) {
-            // Persistent save.
-            WizardReagentCollection.RemoveReagent(reagent);
-            WizardCollection.UpdateCharacterItems(this);
-
-            return true;
-        }
-
-        // Persistent save.
-        WizardReagentCollection.UpdateReagent(reagent);
-        WizardCollection.UpdateCharacterItems(this);
 
         return true;
     }
