@@ -44,6 +44,7 @@
 using Akka.Actor;
 using Imcodec.Cryptography;
 using Imcodec.Math;
+using Imcodec.MessageLayer;
 using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
@@ -51,13 +52,16 @@ using Imlight.Classic.Rules;
 using Imlight.Classic;
 using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.Game.Spells;
+using Imlight.CoreLib.Game.Services;
 using Imlight.CoreLib.Game.Zone.Components;
 using Imlight.CoreLib.Shared.Behaviors;
 using Imlight.CoreLib.Shared.Packets;
 using Imlight.CoreLib.Shared.Resources;
 using Imlight.CoreLib.WizardData.Models.Player;
+using Imlight.CoreLib.WizardData.Collections;
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Linq;
 using System.Threading.Tasks;
 
@@ -69,6 +73,9 @@ internal enum CombatSlotType {
     Player
 
 }
+
+// CLASSIC: never serialized onto the client protocol; the native packet order is retained by CombatService.
+internal sealed record CombatElixirEntryReceipt(Wizard Wizard, ImmutableArray<IMessage> Messages);
 
 /// <summary>
 /// Represents a position in the combat duel for a single participant, managing their combat state, spells, and effects.
@@ -98,6 +105,8 @@ public class CombatDuelSubCircle {
     internal bool IsSummonedMinion { get; private set; }
     private CoreObject _minionOwnerObject;
     private CombatTeam _minionTeam = CombatTeam.Player;
+    private CombatElixirEntryReceipt _pendingElixirReceipt;
+    private bool _pendingParticipantNotice;
     // CLASSIC: local queued-action identity survives an authenticated hold/rejoin, but never a replacement occupant.
     private object _deferredActionIdentity = new();
     private CoreObject _continuedActionObject;
@@ -229,7 +238,7 @@ public class CombatDuelSubCircle {
     }
 
     internal CombatParticipant AssignParticipant(IActorRef actor, CoreObject participantObject, bool isSummonedMinion = false,
-                                                 int minionOwnerSubCircle = 0) {
+                                                 int minionOwnerSubCircle = 0, bool deferNotification = false) {
         ResetDeferredActionIdentity();
         ParticipantActor = actor;
         ParticipantObject = participantObject;
@@ -239,31 +248,65 @@ public class CombatDuelSubCircle {
         if (isSummonedMinion && ClassicRuntime.IsActive) CaptureMinionOwner(minionOwnerSubCircle);
 
         var isHumanPlayer = participantObject.m_templateID == 1;
+        CombatElixirEntryReceipt elixirReceipt = null;
 
         // Set the CombatParticipant based on what team they are.
         if (isHumanPlayer) {
-            InitializePlayerSubCircle();
+            if (!InitializePlayerSubCircle(out elixirReceipt)) {
+                RemoveParticipant();
+                _wizard = null;
+                ParticipantGameStats = null;
+                _combatDeck = null;
+                return null;
+            }
         }
         else {
             InitializeCreatureSubCircle(isSummonedMinion, minionOwnerSubCircle);
         }
 
+        _pendingElixirReceipt = elixirReceipt;
+        _pendingParticipantNotice = true;
+        if (!deferNotification) PublishAssignedParticipantNotice();
+        return CombatParticipant;
+    }
+
+    // CLASSIC: the starter prepares its player before the creature, then retains the original notification order.
+    internal bool PublishAssignedParticipantNotice() {
+        if (!_pendingParticipantNotice || !Occupied || ParticipantActor is null) return false;
+        var elixirReceipt = _pendingElixirReceipt;
+        _pendingElixirReceipt = null;
+        _pendingParticipantNotice = false;
         // Inform the actor that they've been added to a duel.
         var msg = new COMBAT_106_PROTOCOL.MSG_ACTORADDEDTODUEL {
             DuelActor = _duelActor.ActorRef,
             Duel = _duelActor,
             SubCircle = this,
             SlotPosition = WorldPosition,
-            SlotOrientation = WorldRotation
+            SlotOrientation = WorldRotation,
+            ElixirReceipt = elixirReceipt,
         };
         ParticipantActor.Tell(msg);
 
         // We don't need to await this.
 #pragma warning disable CS4014 // Because this call is not awaited, execution of the current method continues before the call is completed
-        PlayEntranceAnimation(participantObject, actor);
+        PlayEntranceAnimation(ParticipantObject, ParticipantActor);
 #pragma warning restore CS4014 // Because this call is not awaited, execution of the current method continues before the call is completed
 
-        return this.CombatParticipant;
+        return true;
+    }
+
+    // CLASSIC: a prepared player whose paired admission failed cannot resume with the changed combat offsets.
+    internal void RefusePreparedAdmission() {
+        var actor = ParticipantActor;
+        if (_wizard is { } wizard) WizardCollection.WithCharacterLock(wizard.CharId, () => {
+            WizardCollection.MarkInventorySnapshotUncertain(wizard);
+            return true;
+        });
+        RemoveParticipant();
+        _wizard = null;
+        ParticipantGameStats = null;
+        _combatDeck = null;
+        actor?.Tell("Close");
     }
 
     // CLASSIC: combat rejoin. A wizard whose client dropped keeps the seat for a while (ClassicSettings
@@ -280,7 +323,47 @@ public class CombatDuelSubCircle {
         ContinueDeferredActions(rejoined: false);
     }
 
-    internal void RejoinSeat(IActorRef actor, CoreObject participantObject, Wizard wizard) {
+    internal void RejoinSeat(IActorRef actor, CoreObject participantObject, Wizard wizard)
+        => TryRejoinSeat(actor, participantObject, wizard, out _);
+
+    // CLASSIC: validate/capture before replacing a held seat. A failed preparation leaves all held aliases intact.
+    internal bool TryRejoinSeat(IActorRef actor, CoreObject participantObject, Wizard wizard,
+        out CombatElixirEntryReceipt receipt) {
+        receipt = null;
+        if (!ElixirService.PreparesCombatSnapshots) {
+            BindRejoinedSeat(actor, participantObject, wizard);
+            return true;
+        }
+        CombatElixirEntryReceipt prepared = null;
+        var accepted = wizard?.GameStats is not null && WizardCollection.WithCharacterLock(wizard.CharId, () => {
+            if (WizardCollection.IsInventorySnapshotUncertain(wizard)
+                || WizardCollection.IsInventorySnapshotUncertain(_wizard) || !Disconnected
+                || HeldCharacterId != wizard.CharId || _wizard?.CharId != wizard.CharId
+                || ParticipantGameStats is null || CombatParticipant is null) return false;
+            try {
+                var messages = ElixirService.PublishCombatTransition(wizard, true, _duelActor?.Duel?.m_bPVP ?? true);
+                ElixirService.TestRuntimeScope.Value?.BeforeCombatSnapshot?.Invoke(wizard);
+                // The held duel's current HP is authoritative; reconnect never refills from a stale loaded alias.
+                wizard.GameStats.m_currentHitpoints = ParticipantGameStats.m_currentHitpoints;
+                var stats = wizard.GameStats.GetCombatGameStats();
+                var ownedMinions = _duelActor.SubCircles.Where(circle => circle is not null && circle != this
+                    && ReferenceEquals(circle._minionOwnerObject, ParticipantObject)).ToArray();
+                prepared = new(wizard, messages.ToImmutableArray());
+                BindRejoinedSeat(actor, participantObject, wizard, stats, ownedMinions);
+                return true;
+            }
+            catch {
+                WizardCollection.MarkInventorySnapshotUncertain(wizard);
+                return false;
+            }
+        });
+        if (!accepted) { actor?.Tell("Close"); return false; }
+        receipt = prepared;
+        return true;
+    }
+
+    private void BindRejoinedSeat(IActorRef actor, CoreObject participantObject, Wizard wizard,
+        WizGameStats capturedStats = null, IReadOnlyList<CombatDuelSubCircle> ownedMinions = null) {
         var previous = ParticipantObject;
         ParticipantActor = actor;
         ParticipantObject = participantObject;
@@ -288,6 +371,11 @@ public class CombatDuelSubCircle {
         ParticipantGameStats = wizard.GameStats;
         if (CombatParticipant is not null) {
             CombatParticipant.m_playerHealth = wizard.GameStats.m_currentHitpoints;
+            if (capturedStats is not null) {
+                CombatParticipant.m_pGameStats = capturedStats;
+                CombatParticipant.m_maxPlayerHealth = capturedStats.m_baseHitpoints;
+                CombatParticipant.m_mobLevel = wizard.GameStats.Level;
+            }
         }
 
         Disconnected = false;
@@ -295,7 +383,7 @@ public class CombatDuelSubCircle {
         ContinueDeferredActions(rejoined: true);
 
         // Minions summoned by this wizard name the old object as their owner.
-        foreach (var circle in _duelActor.SubCircles.Where(circle => circle is not null && circle != this)) {
+        foreach (var circle in ownedMinions ?? _duelActor.SubCircles.Where(circle => circle is not null && circle != this).ToArray()) {
             if (ReferenceEquals(circle._minionOwnerObject, previous)) {
                 circle._minionOwnerObject = participantObject;
             }
@@ -304,6 +392,8 @@ public class CombatDuelSubCircle {
 
     internal void RemoveParticipant() {
         ResetDeferredActionIdentity();
+        _pendingParticipantNotice = false;
+        _pendingElixirReceipt = null;
         Disconnected = false;
         HeldCharacterId = 0;
         ParticipantActor = null;
@@ -593,16 +683,52 @@ public class CombatDuelSubCircle {
     /// </summary>
     internal uint ConsumeFromVault(Spell spell) => _combatDeck.ConsumeFromVault(spell);
 
-    private void InitializePlayerSubCircle() {
+    private bool InitializePlayerSubCircle(out CombatElixirEntryReceipt receipt) {
+        receipt = null;
+        var prepareSnapshot = ElixirService.PreparesCombatSnapshots;
         // todo: this method is a mess.
         // CLASSIC: the session's pushed wizard when it has one; else the (blocking) question as before.
-        if (!ActiveWizardDirectory.TryGet(ParticipantActor, out _wizard, out _)) {
-            var queryCharacterMsg = new CHARACTER_103_PROTOCOL.MSG_QUERYACTIVEWIZARD();
-            _wizard = ParticipantActor
-                .Ask<CHARACTER_103_PROTOCOL.MSG_CHARACTER>(queryCharacterMsg, PlayerQuery.Timeout) // CLASSIC: timeout
-                .Result
-                .Wizard;
+        try {
+            if (!ActiveWizardDirectory.TryGet(ParticipantActor, out _wizard, out _)) {
+                var queryCharacterMsg = new CHARACTER_103_PROTOCOL.MSG_QUERYACTIVEWIZARD();
+                _wizard = ParticipantActor
+                    .Ask<CHARACTER_103_PROTOCOL.MSG_CHARACTER>(queryCharacterMsg, PlayerQuery.Timeout) // CLASSIC: timeout
+                    .Result
+                    .Wizard;
+            }
         }
+        catch when (prepareSnapshot) {
+            // CLASSIC: an unavailable session has not changed runtime state and cannot be admitted.
+            ParticipantActor?.Tell("Close");
+            return false;
+        }
+
+        if (!prepareSnapshot) {
+            InitializePlayerSubCircleState();
+            return true;
+        }
+        CombatElixirEntryReceipt prepared = null;
+        var accepted = _wizard?.GameStats is not null && WizardCollection.WithCharacterLock(_wizard.CharId, () => {
+            if (WizardCollection.IsInventorySnapshotUncertain(_wizard)) return false;
+            try {
+                var messages = ElixirService.PublishCombatTransition(_wizard, true, _duelActor?.Duel?.m_bPVP ?? true);
+                // The outer lane remains held after the runtime helper returns, through every derived stat copy.
+                ElixirService.TestRuntimeScope.Value?.BeforeCombatSnapshot?.Invoke(_wizard);
+                InitializePlayerSubCircleState();
+                prepared = new(_wizard, messages.ToImmutableArray());
+                return true;
+            }
+            catch {
+                WizardCollection.MarkInventorySnapshotUncertain(_wizard);
+                return false;
+            }
+        });
+        if (!accepted) { ParticipantActor?.Tell("Close"); return false; }
+        receipt = prepared;
+        return true;
+    }
+
+    private void InitializePlayerSubCircleState() {
 
         // Dyanmic symbols start at 9 for players.
         var dynamicSymbol = (DynamicSigilSymbol) (SlotIndex + 9);

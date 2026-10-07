@@ -105,6 +105,8 @@ public sealed class COMBAT_106_PROTOCOL : IServerProtocol {
         public CombatDuelSubCircle SubCircle;
         public Vector3 SlotPosition;
         public float SlotOrientation;
+        // CLASSIC: internal-only immutable receipt from preparation before the derived combat snapshot.
+        public CombatElixirEntryReceipt ElixirReceipt { get; init; }
 
     }
 

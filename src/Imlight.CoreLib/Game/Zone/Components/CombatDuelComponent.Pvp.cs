@@ -153,7 +153,7 @@ internal sealed partial class CombatDuelComponent {
             return false;
         }
 
-        AssignParticipantToSubCircle(slot, actor, participant);
+        if (!AssignParticipantToSubCircle(slot, actor, participant)) return false;
         var (now0, now1) = PvpSeats();
         actor.Tell(ClassicChat.Line(_arena
             ? $"You are on side {side + 1} ({now0} v {now1}). The match starts when everyone is here."

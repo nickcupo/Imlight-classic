@@ -61,6 +61,7 @@ using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.Classic.Ambient;
 using Imlight.Common;
 using Imlight.CoreLib.Game.Combat;
+using Imlight.CoreLib.Game.Services;
 using Imlight.CoreLib.Game.Sigils;
 using Imlight.CoreLib.Game.Zone.Core;
 using Imlight.CoreLib.Shared.Behaviors;
@@ -182,7 +183,10 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
     public override void OnPlayerJoin(CoreObject playerObj, IActorRef playerActor, Wizard playerWizard) {
         // CLASSIC: a wizard of an arena match arrives: their seat (or their held seat after a drop).
         if (_arena) {
-            if (!(_isActive && TryRejoin(playerObj, playerActor, playerWizard))) {
+            if (!(_isActive && TryRejoin(playerObj, playerActor, playerWizard))
+                && (!ElixirService.PreparesCombatSnapshots
+                    || SubCircles?.Any(circle => circle is { Occupied: true, Disconnected: true }
+                        && circle.HeldCharacterId == playerWizard?.CharId) != true)) {
                 ArenaOnPlayer(playerObj, playerActor, playerWizard);
             }
 
@@ -361,6 +365,8 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
 
         // Activate the sigil.
         InitializeDuel(message.StartingParticipants);
+        // CLASSIC: refused prepared admission must not announce or schedule an empty duel.
+        if (ElixirService.PreparesCombatSnapshots && !_isActive) return;
         _renderComponent.Enable();
         NotifyAmbientWizards(); // CLASSIC
 
@@ -802,8 +808,28 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
             return;
         }
 
-        AssignParticipantToSubCircle(availableCreatureSubCircle, startingCreatureActor.Key, startingCreatureObject);
-        AssignParticipantToSubCircle(availablePlayerSubCircle, startingPlayerActor.Key, startingPlayerObject);
+        if (ElixirService.PreparesCombatSnapshots) {
+            // CLASSIC: prepare the player first, then preserve creature->player notification/entrance order.
+            if (!AssignParticipantToSubCircle(availablePlayerSubCircle, startingPlayerActor.Key, startingPlayerObject,
+                deferNotification: true)) return;
+            try {
+                if (!AssignParticipantToSubCircle(availableCreatureSubCircle, startingCreatureActor.Key, startingCreatureObject)
+                    || !availablePlayerSubCircle.PublishAssignedParticipantNotice()) {
+                    availableCreatureSubCircle.RemoveParticipant();
+                    availablePlayerSubCircle.RefusePreparedAdmission();
+                    return;
+                }
+            }
+            catch {
+                availableCreatureSubCircle.RemoveParticipant();
+                availablePlayerSubCircle.RefusePreparedAdmission();
+                return;
+            }
+        }
+        else {
+            AssignParticipantToSubCircle(availableCreatureSubCircle, startingCreatureActor.Key, startingCreatureObject);
+            AssignParticipantToSubCircle(availablePlayerSubCircle, startingPlayerActor.Key, startingPlayerObject);
+        }
 
         _isActive = true;
         _startedUtc = DateTime.UtcNow; // CLASSIC
@@ -921,14 +947,13 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
     }
 
     private bool AssignParticipantToSubCircle(CombatDuelSubCircle subCircle, IActorRef actorRef, CoreObject coreObject,
-                                              bool isSummonedMinion = false, int minionOwnerSubCircle = 0) {
+                                              bool isSummonedMinion = false, int minionOwnerSubCircle = 0,
+                                              bool deferNotification = false) {
         if (subCircle.ParticipantActor != null) {
             return false;
         }
 
-        subCircle.AssignParticipant(actorRef, coreObject, isSummonedMinion, minionOwnerSubCircle);
-
-        return true;
+        return subCircle.AssignParticipant(actorRef, coreObject, isSummonedMinion, minionOwnerSubCircle, deferNotification) is not null;
     }
 
     internal void SummonMinion(uint creatureTid, CombatDuelSubCircle caster) {
@@ -1032,7 +1057,7 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
             return;
         }
 
-        AssignParticipantToSubCircle(subCircle, participantActor, participantObject);
+        if (!AssignParticipantToSubCircle(subCircle, participantActor, participantObject)) return;
         PublishActiveDuel(); // CLASSIC
         // CLASSIC: a wizard walking into a duel that waits for dropped wizards gets it going again (zombie duel fix).
         if (isPlayer && _isActive) {

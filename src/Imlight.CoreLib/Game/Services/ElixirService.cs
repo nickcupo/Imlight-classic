@@ -27,6 +27,7 @@ internal sealed class ElixirRuntimePublicationDependencies {
     internal Func<GameEffectBase, ByteString> SerializeEffect;
     internal System.Action<Wizard> BeforeEffects;
     internal System.Action<Wizard> BeforeCombatEffects;
+    internal System.Action<Wizard> BeforeCombatSnapshot;
 }
 
 // CLASSIC: no login/attach packet changes. The existing trusted attach-complete signal
@@ -141,8 +142,8 @@ internal class ElixirService : MessageService {
         });
     }
 
-    // CLASSIC: CombatService alone publishes duel mode. The mode and canonical effect offsets
-    // change under the same lane as progression; later service notifications only refresh this state.
+    // CLASSIC: the trusted duel path publishes mode and canonical effect offsets under the
+    // same lane as progression; later service notifications only refresh this state.
     internal static List<IMessage> PublishCombatTransition(Wizard wizard, bool inCombat, bool pvp) {
         if (wizard is null) return [];
         return RuntimeWrite(wizard, () => {
@@ -152,6 +153,8 @@ internal class ElixirService : MessageService {
             return Enabled() ? SynchronizeEffectsLocked(wizard, false) : [];
         });
     }
+
+    internal static bool PreparesCombatSnapshots => Enabled();
 
     // CLASSIC: disconnect/logout can precede an asynchronously held or fleeing seat.
     // Preserve its trusted combat context and stats until the duel actually releases it.
