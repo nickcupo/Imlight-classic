@@ -75,6 +75,7 @@
     <ServerIntegrationTest Include="PostCombatEffectsTests.cs" />
     <ServerIntegrationTest Include="ArenaMatchmakerTests.cs" />
     <ServerIntegrationTest Include="ArenaInventoryReloadTests.cs" />
+    <ServerIntegrationTest Include="ArenaShopSnapshotTests.cs" />
     <ServerIntegrationTest Include="FriendPortalTests.cs" />
     <ServerIntegrationTest Include="AccountRegistrationRaceTests.cs" />
     <ServerIntegrationTest Include="EvermoreWaveReplayTests.cs" />

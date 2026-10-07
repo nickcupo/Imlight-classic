@@ -140,6 +140,8 @@ internal class AttachService(SessionActor sessionActor) : MessageService(session
 
         // Tiny anti-cheat measure. When the character object is created, we recalculate the game stats.
         CharacterHelper.RecalculateGameStats(_wizard);
+        // CLASSIC: the native arena shop reads rank from GameStats, including before the first ranked match.
+        Classic.Arena.ArenaShopSnapshot.RefreshLadder(_wizard);
 
         // Get the best game server for this user.
         var gameServer = GetGameServer();

@@ -119,6 +119,17 @@ internal sealed class InteractVendorComponent(ZoneEntity entity) : ZoneEntityCom
     public bool SellsForTickets => TicketVendor is not null;
 
     public void OnServiceInteraction(IActorRef playerActor, Wizard playerCharacter, CoreObject playerObject, uint serviceOptionIndex) {
+        // CLASSIC: native shop validation happens before MSG_SHOPBUYREQUEST; publish the saved wallet first.
+        if (SellsForTickets && Classic.Arena.ClassicArena.Enabled) {
+            if (Classic.Arena.ArenaShopSnapshot.ReadOwn(playerCharacter) is not { } snapshot) {
+                Logger.Warning("Arena shop: refused to publish a wallet for character {0} because its saved identity could not be verified.",
+                    Logger.Args(playerCharacter.CharId));
+                playerActor.Tell(Classic.ClassicChat.Line("Unable to refresh your Arena Tickets. Please try again."));
+                return;
+            }
+            playerActor.Tell(Classic.Arena.ArenaMessages.ArenaPoints(snapshot.ArenaPoints));
+            playerActor.Tell(Classic.Arena.ArenaMessages.PvpCurrency(snapshot.PvpCurrency));
+        }
         SendShopOfferings(playerActor);
         SendPlayerIntoWizbang(playerObject.m_globalID);
         SendPlayerIntoState(playerObject.m_globalID);
