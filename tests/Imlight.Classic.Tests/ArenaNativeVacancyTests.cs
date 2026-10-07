@@ -87,9 +87,9 @@ public sealed class ArenaNativeVacancyTests {
             m_teams = [team],
             m_totalTeams = 1,
         };
-        var wire = ArenaMessages.Blob(list, new Dictionary<ulong, byte[]> { [500] = PackedName });
+        var wire = ArenaMessages.BrowserBlob(list, new Dictionary<ulong, byte[]> { [500] = PackedName });
         AssertWireNameCopies(wire, 2);
-        var decoded = Assert.IsType<NewListUpdate>(ArenaMessages.Read<NewListUpdate>(wire));
+        var decoded = Assert.IsType<NewListUpdate>(ArenaMessages.ReadBrowser<NewListUpdate>(wire));
         var matchActor = Assert.IsType<PvPActor>(Assert.Single(decoded.m_matches).m_teams[0].m_actors[0]);
         var teamActor = Assert.IsType<PvPActor>(Assert.Single(decoded.m_teams).m_actors[0]);
         Assert.Equal(System.Text.Encoding.UTF8.GetString(PackedName), matchActor.m_nameBlob);
@@ -111,9 +111,9 @@ public sealed class ArenaNativeVacancyTests {
             m_teams = [ArenaMessages.ListingTeam(view, 0, [second])],
             m_totalTeams = 1,
         };
-        var wire = ArenaMessages.Blob(list, new Dictionary<ulong, byte[]> { [500] = PackedName });
+        var wire = ArenaMessages.BrowserBlob(list, new Dictionary<ulong, byte[]> { [500] = PackedName });
         AssertWireNameCopies(wire, 2);
-        var decoded = Assert.IsType<NewListUpdate>(ArenaMessages.Read<NewListUpdate>(wire));
+        var decoded = Assert.IsType<NewListUpdate>(ArenaMessages.ReadBrowser<NewListUpdate>(wire));
         Assert.Equal(System.Text.Encoding.UTF8.GetString(PackedName), Assert.IsType<PvPActor>(decoded.m_matches[0].m_teams[0].m_actors[0]).m_nameBlob);
         Assert.Equal(System.Text.Encoding.UTF8.GetString(PackedName), Assert.IsType<PvPActor>(decoded.m_teams[0].m_actors[0]).m_nameBlob);
         Assert.Equal(original, actor.m_nameBlob);

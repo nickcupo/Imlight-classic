@@ -1,6 +1,7 @@
 // CLASSIC: replay the native browser's match/team maps and its PRE-update nested count contract.
 #nullable enable
 using System;
+using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -10,6 +11,7 @@ using Akka.Actor;
 using Imcodec.IO;
 using Imcodec.MessageLayer;
 using Imcodec.MessageLayer.Generated;
+using Imcodec.ObjectProperty;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Classic.Pvp;
 using Imlight.Common;
@@ -89,6 +91,63 @@ public sealed class ArenaNativeBrowserTests {
                 qualifiedLevel: 20, requestType: mode);
     }
 
+    [Theory]
+    [InlineData(ArenaKind.Practice)] [InlineData(ArenaKind.Ranked)]
+    public void BootstrapUsesTheNativeFlagsPrefixBeforeTheConcreteClassAndTournamentFields(ArenaKind kind) {
+        var world = new World(friendly: true);
+        world.Arena.OpenKiosk(Viewer, kind, 123);
+        var prep = Assert.IsType<WIZARD_12_PROTOCOL.MSG_PREPVPKIOSK>(world.Sent.Single().Message);
+        Assert.True(world.Arena.CompleteKiosk(Viewer, prep));
+        byte[] bytes = world.Sent.Select(sent => sent.Message).OfType<GAME_5_PROTOCOL.MSG_PVPUPDATEINFO>().Single().TournamentInfo;
+        // Independent fixed-prefix inspection follows native Load, then its non-versioned property order.
+        Assert.Equal(1u, BinaryPrimitives.ReadUInt32LittleEndian(bytes));
+        Assert.Equal(210080626u, BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(4)));
+        Assert.Equal(0UL, BinaryPrimitives.ReadUInt64LittleEndian(bytes.AsSpan(8)));
+        var length = BinaryPrimitives.ReadUInt16LittleEndian(bytes.AsSpan(16));
+        Assert.Equal(world.Arena.Tournament(kind), System.Text.Encoding.ASCII.GetString(bytes, 18, length));
+        Assert.Equal(prep.TournamentNameID, BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(18 + length)));
+        // Native handler config starts at 9, then reads the flags supplied in the envelope.
+        var native = new ObjectSerializer(Versionable: false, Behaviors: SerializerFlags.SerializeFlags | SerializerFlags.Compress);
+        Assert.True(native.Deserialize<NewListUpdate>(bytes, ArenaMessages.Mask, out var list));
+        Assert.Equal(SerializerFlags.SerializeFlags, native.SerializerFlags);
+        Assert.Equal(prep.TournamentNameID, list!.m_tournamentNameID);
+        Assert.NotEmpty(list.m_matches); Assert.True(list.m_totalTeams > 0);
+        Assert.Equal(0, world.Reservations);
+    }
+
+    [Fact]
+    public void FormerBareInitialListBecomesANullObjectUnderTheNativeFlagsReader() {
+        var list = new NewListUpdate { m_tournamentID = 0, m_tournamentName = "AuthoredTournament",
+            m_tournamentNameID = 793101, m_clearData = true, m_matches = [], m_teams = [], m_brackets = [], m_totalTeams = 0 };
+        byte[] bytes = ArenaMessages.Blob(list);
+        Assert.Equal(210080626u, BinaryPrimitives.ReadUInt32LittleEndian(bytes));
+        Assert.Equal(0u, BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(4)));
+        var native = new ObjectSerializer(Versionable: false, Behaviors: SerializerFlags.SerializeFlags | SerializerFlags.Compress);
+        Assert.False(native.Deserialize<NewListUpdate>(bytes, ArenaMessages.Mask, out var missing));
+        Assert.Null(missing);
+        Assert.Equal(210080626u, (uint) native.SerializerFlags); // The old class hash was consumed as flags.
+    }
+
+    [Theory]
+    [InlineData(ArenaKind.Practice)] [InlineData(ArenaKind.Ranked)]
+    public void ClientBrowseRequestsAndServerContinuationsRetainTheirBareNativeEnvelopes(ArenaKind kind) {
+        var request = new TournamentInfoRequest { m_tournamentNameID = kind == ArenaKind.Practice ? 793101u : 793102u,
+            m_tournamentRequestType = 5, m_startingIndex = 0, m_numberOfElements = 4 };
+        byte[] requestBytes = ArenaMessages.Blob(request);
+        Assert.Equal(request.GetHash(), BinaryPrimitives.ReadUInt32LittleEndian(requestBytes));
+        Assert.Equal(5u, ArenaMessages.Read<TournamentInfoRequest>(requestBytes)!.m_tournamentRequestType);
+        var world = new World(friendly: true);
+        world.List(kind, 0, count: 84);
+        // A page above the eight-row message bound exercises actual continuation production.
+        var continuations = world.Sent.Select(sent => sent.Message).OfType<GAME_5_PROTOCOL.MSG_TOURNAMENTUPDATE>().ToArray();
+        Assert.NotEmpty(continuations);
+        foreach (var message in continuations) {
+            byte[] update = message.Updates;
+            Assert.Equal(new TournamentUpdateList().GetHash(), BinaryPrimitives.ReadUInt32LittleEndian(update));
+            Assert.NotNull(ArenaMessages.Read<TournamentUpdateList>(update));
+        }
+    }
+
     private sealed class NativePage {
         internal readonly Dictionary<ulong, PvPMatchInfo> Matches = [];
         internal readonly Dictionary<ulong, MatchTeam> Teams = [];
@@ -99,7 +158,7 @@ public sealed class ArenaNativeBrowserTests {
                 var writer = new BitWriter(); message.Encode(writer);
                 Assert.InRange(writer.GetData().Length + 4, 1, ushort.MaxValue);
                 if (message is GAME_5_PROTOCOL.MSG_PVPUPDATEINFO initial) {
-                    var list = ArenaMessages.Read<NewListUpdate>(initial.TournamentInfo)!;
+                    var list = ArenaMessages.ReadBrowser<NewListUpdate>(initial.TournamentInfo)!;
                     Assert.True(list.m_clearData);
                     Matches.Clear(); Teams.Clear(); Total = list.m_totalTeams; Initials++;
                     foreach (var match in list.m_matches) AddMatch(Assert.IsType<PvPMatchInfo>(match));
@@ -160,7 +219,7 @@ public sealed class ArenaNativeBrowserTests {
         Assert.Equal(world.Arena.TournamentId(kind), prep.TournamentNameID);
         Assert.True(world.Arena.CompleteKiosk(Viewer, prep));
         var initial = Assert.IsType<GAME_5_PROTOCOL.MSG_PVPUPDATEINFO>(world.Sent[1].Message);
-        var list = ArenaMessages.Read<NewListUpdate>(initial.TournamentInfo)!;
+        var list = ArenaMessages.ReadBrowser<NewListUpdate>(initial.TournamentInfo)!;
         Assert.NotEqual(0u, list.m_tournamentNameID);
         Assert.Equal(prep.TournamentNameID, list.m_tournamentNameID);
         Assert.Equal(world.Arena.Tournament(kind), list.m_tournamentName);
@@ -209,7 +268,7 @@ public sealed class ArenaNativeBrowserTests {
         Assert.False(world.Arena.CompleteKiosk(Viewer, former)); Assert.Equal(2, world.Sent.Count);
         Assert.True(world.Arena.CompleteKiosk(Viewer, current));
         var initial = Assert.IsType<GAME_5_PROTOCOL.MSG_PVPUPDATEINFO>(world.Sent[2].Message);
-        Assert.Equal(current.TournamentNameID, ArenaMessages.Read<NewListUpdate>(initial.TournamentInfo)!.m_tournamentNameID);
+        Assert.Equal(current.TournamentNameID, ArenaMessages.ReadBrowser<NewListUpdate>(initial.TournamentInfo)!.m_tournamentNameID);
     }
 
     [Fact]
@@ -430,7 +489,7 @@ public sealed class ArenaNativeBrowserTests {
         var page = new NativePage(); page.Read(world);
         Assert.Equal(42, page.Total); Assert.Equal(21, page.Matches.Count); Assert.Equal(41, page.Teams.Count);
         Assert.True(page.Continuations > 0);
-        var first = ArenaMessages.Read<NewListUpdate>(world.Sent.Select(sent => sent.Message)
+        var first = ArenaMessages.ReadBrowser<NewListUpdate>(world.Sent.Select(sent => sent.Message)
             .OfType<GAME_5_PROTOCOL.MSG_PVPUPDATEINFO>().Single().TournamentInfo)!;
         Assert.Equal(5, first.m_matches.Count); Assert.Equal(8, first.m_teams.Count);
         var actors = page.Matches.Values.SelectMany(match => match.m_teams).Concat(page.Teams.Values)
@@ -443,7 +502,7 @@ public sealed class ArenaNativeBrowserTests {
             IEnumerable<MatchTeam> serializedTeams;
             if (message is GAME_5_PROTOCOL.MSG_PVPUPDATEINFO initial) {
                 bytes = initial.TournamentInfo;
-                var list = ArenaMessages.Read<NewListUpdate>(bytes)!;
+                var list = ArenaMessages.ReadBrowser<NewListUpdate>(bytes)!;
                 serializedTeams = list.m_matches.SelectMany(match => match.m_teams).Concat(list.m_teams);
             } else if (message is GAME_5_PROTOCOL.MSG_TOURNAMENTUPDATE continuation) {
                 bytes = continuation.Updates;
