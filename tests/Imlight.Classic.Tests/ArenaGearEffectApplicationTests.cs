@@ -318,7 +318,7 @@ public sealed class ArenaGearEffectApplicationTests {
             _tablesField.SetValue(null, _tables);
             _schools = (Dictionary<int, MagicSchoolTemplate>)typeof(MagicSchools).GetField("s_magicSchools", BindingFlags.Static | BindingFlags.NonPublic)!.GetValue(null)!;
             _oldSchools = new(_schools); _schools.Clear();
-            var names = new[] { "Fire", "Ice", "Storm", "Life", "Myth", "Death", "Balance", "FixtureSentinel" };
+            var names = new[] { "Fire", "Ice", "Storm", "Life", "Myth", "Death", "Balance" };
             for (var index = 0; index < names.Length; index++)
                 _schools[index] = new MagicSchoolTemplate { m_schoolName = names[index], m_schoolIndex = index };
             var baseStats = new ServerWizGameStats(default, 1);

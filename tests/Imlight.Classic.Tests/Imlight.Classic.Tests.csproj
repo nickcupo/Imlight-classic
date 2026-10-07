@@ -101,6 +101,7 @@
     <ServerIntegrationTest Include="ArenaGearProjectionTests.cs" />
     <ServerIntegrationTest Include="ArenaGearEffectApplicationTests.cs" />
     <ServerIntegrationTest Include="ArenaGearSavedReloadTests.cs" />
+    <ServerIntegrationTest Include="SchoolStatisticVectorBoundsTests.cs" />
     <ServerIntegrationTest Include="ArenaNativeShopLayoutTests.cs" />
     <ServerIntegrationTest Include="ArenaShopSnapshotTests.cs" />
     <ServerIntegrationTest Include="ClassicCoreObjectSerializationTests.cs" />

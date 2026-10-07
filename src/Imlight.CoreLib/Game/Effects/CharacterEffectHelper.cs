@@ -395,25 +395,23 @@ internal static class CharacterEffectHelper {
     }
 
     private static void ApplySchoolEffect(ref List<float> effectList, string schoolName, float value) {
-        var maxIndex = MagicSchools.GetMaxMagicSchoolIndex();
-
-        // Set the list if it doesn't exist. Give it a count equal to how many schools there are.
-        effectList ??= [.. Enumerable.Repeat(0f, (int) maxIndex)];
-
-        // Ensure that the effect list is the same length as the number of schools.
-        if (effectList.Count != maxIndex) {
-            var compensationRequired = maxIndex - effectList.Count;
-            effectList.AddRange(Enumerable.Repeat(0f, (int) compensationRequired));
-        }
-
         var schoolTemplate = MagicSchools.GetMagicSchool(schoolName);
         if (schoolTemplate is null) {
             Logger.Warning("Could not find magic school {0}.", Logger.Args(schoolName));
             return;
         }
 
+        EnsureSchoolEffectCapacity(ref effectList); // CLASSIC: the highest zero-based index needs its own cell.
         var schoolIndex = schoolTemplate.m_schoolIndex;
         effectList[schoolIndex] += value;
+    }
+
+    // CLASSIC: sparse school indices still require max+1 cells. Keep unrelated and longer vectors intact.
+    private static void EnsureSchoolEffectCapacity(ref List<float> effectList) {
+        var requiredCount = checked((int) MagicSchools.GetMaxMagicSchoolIndex() + 1);
+        effectList ??= [];
+        if (effectList.Count < requiredCount)
+            effectList.AddRange(Enumerable.Repeat(0f, requiredCount - effectList.Count));
     }
 
     private static void ApplySchoolMastery(ServerWizGameStats stats, string effectCategory) {
@@ -505,15 +503,6 @@ internal static class CharacterEffectHelper {
     }
 
     private static void RemoveSchoolEffect(ref List<float> effectList, string schoolName, float value) {
-        var maxIndex = MagicSchools.GetMaxMagicSchoolIndex();
-
-        // Ensure that the effect list is the same length as the number of schools.
-        effectList ??= [.. new float[maxIndex]];
-
-        if (effectList.Count != maxIndex) {
-            effectList = [.. new float[maxIndex]];
-        }
-
         var index = MagicSchools.GetMagicSchool(schoolName)?.m_schoolIndex ?? -1;
 
         if (index == -1) {
@@ -523,6 +512,7 @@ internal static class CharacterEffectHelper {
             return;
         }
 
+        EnsureSchoolEffectCapacity(ref effectList); // CLASSIC: removal must preserve other schools' offsets.
         effectList[index] -= value;
     }
 
