@@ -24,6 +24,7 @@ using Imlight.Common;
 using Imlight.CoreLib.Shared.Packets;
 using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.WizardData.Models.Player;
+using Imlight.CoreLib.WizardData.Collections;
 
 namespace Imlight.CoreLib.Game.Results.Handlers;
 
@@ -47,6 +48,11 @@ internal sealed class ResAddManaHandler : BaseResultHandler<ResAddMana> {
             return false;
         }
 
+        if (WizardResourceTransactions.IsActive) {
+            if (!ResourceRewardBinding.TryAccount(wizard, context, out var accountId)) return false;
+            return ApplyAcknowledged(wizard, Result, context.GetPlayerRef(), accountId);
+        }
+
         var maxMana = wizard.GameStats.m_baseMana;
         var clientMax = wizard.GameStats.GetClientTypeAlternative().m_baseMana;
         var mana = Result.m_useFlat
@@ -63,6 +69,14 @@ internal sealed class ResAddManaHandler : BaseResultHandler<ResAddMana> {
         });
 
         return true;
+    }
+
+    internal static bool ApplyAcknowledged(Wizard wizard, ResAddMana result, IActorRef player, ulong? expectedAccountId = null) {
+        if (WizardCollection.IsInventorySnapshotUncertain(wizard)) { player.Tell("Close"); return false; }
+        var status = WizardResourceTransactions.TryApplyMana(wizard, result, out _,
+            afterCommit: receipt => player.Tell(receipt.Message), expectedAccountId: expectedAccountId);
+        if (WizardCollection.IsInventorySnapshotUncertain(wizard)) { player.Tell("Close"); return false; }
+        return status != ResourceMutationStatus.Refused;
     }
 
 }

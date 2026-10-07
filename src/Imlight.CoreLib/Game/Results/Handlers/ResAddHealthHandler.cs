@@ -24,6 +24,7 @@ using Imlight.Common;
 using Imlight.CoreLib.Shared.Packets;
 using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.WizardData.Models.Player;
+using Imlight.CoreLib.WizardData.Collections;
 
 namespace Imlight.CoreLib.Game.Results.Handlers;
 
@@ -46,6 +47,11 @@ internal sealed class ResAddHealthHandler : BaseResultHandler<ResAddHealth> {
             return false;
         }
 
+        if (WizardResourceTransactions.IsActive) {
+            if (!ResourceRewardBinding.TryAccount(wizard, context, out var accountId)) return false;
+            return RefillAcknowledged(wizard, context.GetPlayerRef(), accountId);
+        }
+
         var full = wizard.GameStats.m_baseHitpoints;
         var clientMax = wizard.GameStats.GetClientTypeAlternative().m_baseHitpoints;
         wizard.UpdateHealth(full);
@@ -56,6 +62,14 @@ internal sealed class ResAddHealthHandler : BaseResultHandler<ResAddHealth> {
         });
 
         return true;
+    }
+
+    internal static bool RefillAcknowledged(Wizard wizard, IActorRef player, ulong? expectedAccountId = null) {
+        if (WizardCollection.IsInventorySnapshotUncertain(wizard)) { player.Tell("Close"); return false; }
+        var status = WizardResourceTransactions.TryRefillHealth(wizard, out _,
+            afterCommit: receipt => player.Tell(receipt.Message), expectedAccountId: expectedAccountId);
+        if (WizardCollection.IsInventorySnapshotUncertain(wizard)) { player.Tell("Close"); return false; }
+        return status != ResourceMutationStatus.Refused;
     }
 
 }

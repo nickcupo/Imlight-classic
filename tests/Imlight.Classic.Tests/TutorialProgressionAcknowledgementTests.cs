@@ -14,6 +14,7 @@ using Imlight.CoreLib.Game.Services;
 using Imlight.CoreLib.Game.DropTables;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Character;
+using Imlight.CoreLib.Shared.Services;
 using Imlight.CoreLib.Shared.Packets;
 using Imlight.CoreLib.WizardData;
 using Imlight.CoreLib.WizardData.Collections;
@@ -226,22 +227,98 @@ public sealed class TutorialProgressionAcknowledgementTests {
     [InlineData("WC-TUT-C09-014")] [InlineData("WC-TUT-C09-016")]
     public async Task NativeRefillAddAndRemoveKeepTheirExistingResourceAndJournalBehavior(string quest) {
         using var scope = new Scope(); var f = scope.F;
+        f.Live.GameStats.m_baseHitpoints += 35; f.Live.GameStats.m_baseMana += 17;
+        var oldHealth = f.Live.GameStats.m_currentHitpoints; var oldMana = f.Live.GameStats.m_currentMana;
         using var actor = await TutorialFixture.Create(f);
         actor.SetTemplates(f.Template, new QuestTemplate { m_questName = quest, m_goals = [], m_startGoals = [] });
+        f.OnSave = () => {
+            Assert.True(WizardCollection.HoldsWriteLane);
+            Assert.Equal(oldHealth, f.Live.GameStats.m_currentHitpoints); Assert.Equal(oldMana, f.Live.GameStats.m_currentMana);
+        };
         await actor.Call("ReceiveServerTutorialCommand", Command(add: quest));
         Assert.Equal(2, f.Saves); Assert.Equal(2, f.Live.QuestBehavior.CurrentQuestInstances.Count); // Quest ACK + existing resource save.
+        f.OnSave = null;
+        Assert.Equal(100, f.Saved.GameStats.m_currentGold); Assert.Equal(901, f.Live.GameStats.m_currentGold);
+        Assert.Equal(140, f.Saved.GameStats.m_baseHitpoints); Assert.Equal(50, f.Saved.GameStats.m_baseMana);
         var packets = await actor.Drain();
         if (quest == "WC-TUT-C09-014") {
             Assert.Equal(f.Live.GameStats.m_baseHitpoints, f.Live.GameStats.m_currentHitpoints);
-            Assert.Single(packets.OfType<WIZARD_12_PROTOCOL.MSG_UPDATEHEALTH>());
+            var packet = Assert.Single(packets.OfType<WIZARD_12_PROTOCOL.MSG_UPDATEHEALTH>());
+            Assert.Equal(175, packet.NewHealth); Assert.Equal(140, packet.NewHealthMax);
+            Assert.Equal(175, f.Saved.GameStats.m_currentHitpoints); Assert.Equal(oldMana, f.Saved.GameStats.m_currentMana);
         } else {
             Assert.Equal(f.Live.GameStats.m_baseMana, f.Live.GameStats.m_currentMana);
-            Assert.Single(packets.OfType<WIZARD_12_PROTOCOL.MSG_UPDATEMANA>());
+            var packet = Assert.Single(packets.OfType<WIZARD_12_PROTOCOL.MSG_UPDATEMANA>());
+            Assert.Equal(67, packet.Mana); Assert.Equal(50, packet.MaxMana);
+            Assert.Equal(67, f.Saved.GameStats.m_currentMana); Assert.Equal(oldHealth, f.Saved.GameStats.m_currentHitpoints);
         }
         await actor.Call("ReceiveServerTutorialCommand", Command(remove: quest));
         Assert.Equal(3, f.Saves); Assert.Single(f.Live.QuestBehavior.CurrentQuestInstances);
         Assert.Single((await actor.Drain()).OfType<QUEST_MESSAGES_52_PROTOCOL.MSG_REMOVEQUEST>());
         Assert.False(actor.Session.IsDisposed);
+    }
+
+    [Theory]
+    [InlineData("WC-TUT-C09-014", "before")] [InlineData("WC-TUT-C09-016", "before")]
+    [InlineData("WC-TUT-C09-014", "lost")] [InlineData("WC-TUT-C09-016", "lost")]
+    [InlineData("WC-TUT-C09-014", "publication")] [InlineData("WC-TUT-C09-016", "publication")]
+    public async Task NativeRefillFailureAfterQuestAckStopsRemainingFieldsAndClosesForReload(string quest, string fault) {
+        using var scope = new Scope(); var f = scope.F; var mana = quest == "WC-TUT-C09-016";
+        var old = mana ? f.Live.GameStats.m_currentMana : f.Live.GameStats.m_currentHitpoints;
+        var maximum = mana ? f.Live.GameStats.m_baseMana : f.Live.GameStats.m_baseHitpoints;
+        if (fault == "publication") scope.Resource.BeforePublish = _ => throw new InvalidOperationException("authored refill publication failure");
+        using var actor = await TutorialFixture.Create(f);
+        actor.SetTemplates(f.Template, new QuestTemplate { m_questName = quest, m_goals = [], m_startGoals = [] });
+        f.OnSave = () => {
+            Assert.True(WizardCollection.HoldsWriteLane);
+            Assert.Equal(old, mana ? f.Live.GameStats.m_currentMana : f.Live.GameStats.m_currentHitpoints);
+            if (f.Saves == 2) {
+                Assert.Contains(f.Live.QuestBehavior.CurrentQuestInstances, row => row.QuestName == quest);
+                f.FailSave = fault != "publication"; f.Durable = fault == "lost";
+            }
+        };
+        var reply = await actor.Call("ReceiveServerTutorialCommand", Command(add: quest, remove: quest, stage: 6));
+        await actor.Closed.Task.WaitAsync(Timeout, TestContext.Current.CancellationToken);
+        Assert.Equal(0, reply.Stage); Assert.Equal(2, f.Saves);
+        Assert.Contains(f.Quests, row => row.QuestName == quest);
+        Assert.Equal(old, mana ? f.Live.GameStats.m_currentMana : f.Live.GameStats.m_currentHitpoints);
+        Assert.Equal(fault == "before" ? old : maximum, mana ? f.Saved.GameStats.m_currentMana : f.Saved.GameStats.m_currentHitpoints);
+        Assert.True(WizardCollection.IsInventorySnapshotUncertain(f.Live)); Assert.True(actor.Session.IsDisposed);
+        var packets = await actor.Drain();
+        Assert.Empty(packets.OfType<WIZARD_12_PROTOCOL.MSG_UPDATEHEALTH>());
+        Assert.Empty(packets.OfType<WIZARD_12_PROTOCOL.MSG_UPDATEMANA>());
+        Assert.Empty(packets.OfType<QUEST_MESSAGES_52_PROTOCOL.MSG_REMOVEQUEST>());
+    }
+
+    [Theory] [InlineData("WC-TUT-C09-014")] [InlineData("WC-TUT-C09-016")]
+    public async Task AlreadyHeldHealthySavedRefillRehydratesLiveAndAdvancesWithoutAnotherSave(string quest) {
+        using var scope = new Scope(); var f = scope.F; var mana = quest == "WC-TUT-C09-016";
+        using var actor = await TutorialFixture.Create(f);
+        actor.SetTemplates(f.Template, new QuestTemplate { m_questName = quest, m_goals = [], m_startGoals = [] });
+        await actor.Call("ReceiveServerTutorialCommand", Command(add: quest)); await actor.Drain();
+        var saves = f.Saves;
+        if (mana) f.Live.GameStats.m_currentMana = 1; else f.Live.GameStats.m_currentHitpoints = 1;
+        f.OnSave = () => Assert.Fail("healthy refill retry must not save");
+        var reply = await actor.Call("ReceiveServerTutorialCommand", Command(add: quest, stage: 6));
+        Assert.Equal(6, reply.Stage); Assert.Equal(saves, f.Saves);
+        Assert.Equal(mana ? 50 : 140, mana ? f.Live.GameStats.m_currentMana : f.Live.GameStats.m_currentHitpoints);
+        var packets = await actor.Drain();
+        if (mana) Assert.Single(packets.OfType<WIZARD_12_PROTOCOL.MSG_UPDATEMANA>());
+        else Assert.Single(packets.OfType<WIZARD_12_PROTOCOL.MSG_UPDATEHEALTH>());
+        Assert.False(actor.Session.IsDisposed); Assert.False(WizardCollection.IsInventorySnapshotUncertain(f.Live));
+    }
+
+    [Theory] [InlineData("WC-TUT-C09-014")] [InlineData("WC-TUT-C09-016")]
+    public async Task RefusedNativeRefillPreparationStopsRemainingFieldsWithoutQuarantine(string quest) {
+        using var scope = new Scope(); var f = scope.F;
+        using var actor = await TutorialFixture.Create(f);
+        actor.SetTemplates(f.Template, new QuestTemplate { m_questName = quest, m_goals = [], m_startGoals = [] });
+        await actor.Call("ReceiveServerTutorialCommand", Command(add: quest)); await actor.Drain();
+        var saves = f.Saves; scope.Resource.Prepare = _ => false;
+        var reply = await actor.Call("ReceiveServerTutorialCommand", Command(add: quest, remove: quest, stage: 6));
+        Assert.Equal(0, reply.Stage); Assert.Equal(saves, f.Saves); Assert.Empty(await actor.Drain());
+        Assert.Contains(f.Quests, row => row.QuestName == quest);
+        Assert.False(actor.Session.IsDisposed); Assert.False(WizardCollection.IsInventorySnapshotUncertain(f.Live));
     }
 
     [Fact]
@@ -268,7 +345,9 @@ public sealed class TutorialProgressionAcknowledgementTests {
     private sealed class Scope : IDisposable {
         internal readonly TerminalClaimFixture F = new();
         internal readonly QuestMutationDependencies Dependencies = new();
+        internal readonly ResourceMutationDependencies Resource = new();
         private readonly QuestMutationDependencies? _old = WizardQuestTransactions.TestScope.Value;
+        private readonly ResourceMutationDependencies? _oldResource = WizardResourceTransactions.TestScope.Value;
         private static readonly FieldInfo LevelConfig = typeof(MagicLevelsConfig).GetField("s_playerLevelConfig", BindingFlags.Static | BindingFlags.NonPublic)!;
         private readonly object? _oldLevelConfig = LevelConfig.GetValue(null);
         internal Scope(string quest = Intro, string goal = Goal) {
@@ -276,6 +355,7 @@ public sealed class TutorialProgressionAcknowledgementTests {
                 [F.Live.GameStats.MagicSchool.ToString()] = Enumerable.Range(0, 5).Select(TerminalClaimFixture.Table).ToList(),
             });
             WizardQuestTransactions.TestScope.Value = Dependencies;
+            WizardResourceTransactions.TestScope.Value = Resource;
             F.Template.m_questName = quest; F.Goal.m_goalName = goal; F.Template.m_startGoals = [goal];
             F.Goal.m_completeResults = new() { m_results = [new ResPostEvent { m_eventName = ResultEvent }] };
             F.Quests[0].QuestName = quest; F.Expected.QuestName = quest;
@@ -283,8 +363,12 @@ public sealed class TutorialProgressionAcknowledgementTests {
             typeof(GoalInstance).GetProperty(nameof(GoalInstance.CurrentProgress))!.SetValue(F.Quests[0].GoalProgress[0], -1);
             typeof(GoalInstance).GetProperty(nameof(GoalInstance.CurrentProgress))!.SetValue(F.Expected.GoalProgress[0], -1);
             F.Live.Zone = "WizardCity/Tutorial_Interior";
+            F.Saved.AccountId = F.Live.AccountId = 782090;
         }
-        public void Dispose() { LevelConfig.SetValue(null, _oldLevelConfig); WizardQuestTransactions.TestScope.Value = _old; F.Dispose(); }
+        public void Dispose() {
+            LevelConfig.SetValue(null, _oldLevelConfig); WizardQuestTransactions.TestScope.Value = _old;
+            WizardResourceTransactions.TestScope.Value = _oldResource; F.Dispose();
+        }
     }
 
     private sealed record Ready;
@@ -319,12 +403,19 @@ public sealed class TutorialProgressionAcknowledgementTests {
                 f._zone = f.System.ActorOf(Props.Create(() => new ZoneSink(f)), "zone");
                 f._session = f.System.ActorOf(Props.CreateBy(new SessionProducer(f._socket)), "session");
                 f.Session = await f._session.Ask<SessionActor>("Identify", Timeout, TestContext.Current.CancellationToken);
+                var account = new Account();
+                typeof(Account).GetProperty(nameof(Account.AccountId))!.SetValue(account, store.Live.AccountId);
+                account.CharacterIds.Add(store.Live.CharId);
+                var accountService = f.System.ActorOf(Props.Create(() => new AccountProbe(f.Session, account)), "account-service");
+                var actualAccount = await accountService.Ask<AccountService>(new Ready(), Timeout, TestContext.Current.CancellationToken);
+                f.Session.RegisterService(accountService, actualAccount); store.Live.Account = account;
                 var zoneService = f.System.ActorOf(Props.Create(() => new ZoneProbe(f.Session, store.Live, f._zone)), "zone-service");
                 var actualZone = await zoneService.Ask<ZoneService>(new Ready(), Timeout, TestContext.Current.CancellationToken);
                 f.Session.RegisterService(zoneService, actualZone);
                 var dispatch = (Dictionary<Type, List<IActorRef>>)typeof(SessionActor).GetField("_dispatchTable", Private)!.GetValue(f.Session)!;
                 dispatch[typeof(ZONE_102_PROTOCOL.MSG_ZONEBROADCAST)] = [zoneService];
                 ActiveWizardDirectory.SetWizard(f._session, store.Live);
+                ActiveWizardDirectory.SetGameObject(f._session, store.Live.GameObject);
                 f._tutorial = f.System.ActorOf(Props.CreateBy(new TutorialProducer(f.Session, store, new CapturedScopes(store))), "tutorial");
                 Assert.True(await f._tutorial.Ask<bool>(new Ready(), Timeout, TestContext.Current.CancellationToken));
                 var watcher = f.System.ActorOf(Props.Create(() => new CloseWatcher(f._session, f.Closed)), "close-watch");
@@ -402,23 +493,33 @@ public sealed class TutorialProgressionAcknowledgementTests {
             Receive<Ready>(_ => Sender.Tell(this)); base.ConfigureReceivers();
         }
     }
+    private sealed class AccountProbe : AccountService {
+        public AccountProbe(SessionActor session, Account account) : base(session)
+            => typeof(AccountService).GetMethod("InternalReceiveSetAccount", Private)!.Invoke(this,
+                [new ACCOUNT_104_PROTOCOL.MSG_ACCOUNT { Account = account }]);
+        protected override void ConfigureReceivers() { Receive<Ready>(_ => Sender.Tell(this)); base.ConfigureReceivers(); }
+    }
     private static void SetCached(MessageService service, Wizard wizard) {
         typeof(MessageService).GetField("_cachedWizard", Private)!.SetValue(service, wizard);
         typeof(MessageService).GetField("_cachedWizardGameObject", Private)!.SetValue(service, wizard.GameObject);
     }
     private sealed class CapturedScopes(TerminalClaimFixture store) {
         private readonly QuestMutationDependencies? _mutation = WizardQuestTransactions.TestScope.Value;
+        private readonly ResourceMutationDependencies? _resource = WizardResourceTransactions.TestScope.Value;
         internal IDisposable Enter() {
             var oldStore = WizardCollection.TestStoreScope.Value; var oldMutation = WizardQuestTransactions.TestScope.Value;
             var oldClaim = ClassicQuestClaims.TestScope.Value; var oldStack = ClassicStackRewards.TestScope.Value;
             var oldProgression = WizardProgressionTransactions.TestScope.Value; var oldItems = WizardInventoryTransactions.TestRowsScope.Value;
             var oldReagents = WizardReagentCollection.TestRowsScope.Value;
+            var oldResource = WizardResourceTransactions.TestScope.Value;
             store.Install(); WizardQuestTransactions.TestScope.Value = _mutation;
+            WizardResourceTransactions.TestScope.Value = _resource;
             return new Restore(() => {
                 WizardCollection.TestStoreScope.Value = oldStore; WizardQuestTransactions.TestScope.Value = oldMutation;
                 ClassicQuestClaims.TestScope.Value = oldClaim; ClassicStackRewards.TestScope.Value = oldStack;
                 WizardProgressionTransactions.TestScope.Value = oldProgression; WizardInventoryTransactions.TestRowsScope.Value = oldItems;
                 WizardReagentCollection.TestRowsScope.Value = oldReagents;
+                WizardResourceTransactions.TestScope.Value = oldResource;
             });
         }
     }
