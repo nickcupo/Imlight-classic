@@ -12,6 +12,7 @@ using Imlight.CoreLib.Shared.Resources;
 using Imlight.CoreLib.WizardData.Collections;
 using Imlight.CoreLib.WizardData.Models.Player;
 using Raven.Client.Documents.Session;
+using Raven.Client.Exceptions;
 using Xunit;
 
 namespace Imlight.Classic.Tests;
@@ -288,6 +289,109 @@ public sealed class HouseTests : IDisposable {
     }
 
     [Fact]
+    public void RepeatedPublicLocationRecordsUpdateTheTrackedDocument() {
+        var store = new Store(); using var scope = store.Scope();
+        foreach (var zone in new[] { "WizardCity/WC_Hub", "WizardCity/WC_Hub", HousingRules.DormZone, "WizardCity/WC_Hub" }) {
+            Assert.True(HouseCollection.RecordLocation(Owner, Owner, 0, zone));
+            var saved = Assert.IsType<HouseLocation>(store.Documents[HouseLocation.DocumentId(Owner)]);
+            Assert.Equal(Owner, saved.CharacterId); Assert.Equal(0ul, saved.OwnerId); Assert.Equal(0ul, saved.DeedId);
+            Assert.Equal(zone, saved.Zone); Assert.Equal(Owner, store.Login().CharId);
+            Assert.False(HouseCollection.TryGetSavedLocation(Owner, Owner, zone, out _));
+        }
+        Assert.Single(store.Documents.Values.OfType<HouseLocation>());
+    }
+
+    [Fact]
+    public void HouseRoomAndOriginalDeedChangesRemainSavedAfterFreshLogin() {
+        var store = new Store(); using var scope = store.Scope(); var live = store.Login();
+        Assert.True(Buy(live, 9101).Saved); Assert.True(Buy(live, 9102).Saved);
+        Assert.True(HouseCollection.SetEquipped(live, 9101, true).Saved);
+        foreach (var zone in new[] { Exterior, Interior, Exterior }) {
+            Assert.True(HouseCollection.RecordLocation(Owner, Owner, 9101, zone));
+            Assert.True(HouseCollection.TryGetSavedLocation(store.Login().CharId, Owner, zone, out var saved));
+            Assert.Equal(9101ul, saved);
+        }
+        Assert.True(HouseCollection.SetEquipped(live, 9102, true).Saved);
+        foreach (var zone in new[] { Exterior, Interior, Interior }) {
+            Assert.True(HouseCollection.RecordLocation(Owner, Owner, 9102, zone));
+            var relogged = store.Login();
+            Assert.True(HouseCollection.TryGetSavedLocation(relogged.CharId, Owner, zone, out var saved));
+            Assert.Equal(9102ul, saved);
+            Assert.True(HouseCollection.TryGetEquipped(relogged, out var equipped)); Assert.Equal(9102ul, equipped.DeedId);
+            Assert.True(HouseCollection.TryGetOwned(Owner, 9101, out _));
+        }
+        Assert.Single(store.Documents.Values.OfType<HouseLocation>());
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void PublicOrDormEntryClearsExistingPhysicalHouseProof(bool dorm) {
+        var store = new Store(); using var scope = store.Scope(); var live = store.Login();
+        Assert.True(Buy(live, 9101).Saved);
+        Assert.True(HouseCollection.RecordLocation(Owner, Owner, 9101, Exterior));
+        var zone = dorm ? HousingRules.DormZone : "WizardCity/WC_Hub";
+        Assert.True(HouseCollection.RecordLocation(Owner, Owner, 0, zone));
+        Assert.True(HouseCollection.RecordLocation(Owner, Owner, 0, zone));
+        var saved = Assert.IsType<HouseLocation>(store.Documents[HouseLocation.DocumentId(Owner)]);
+        Assert.Equal(Owner, saved.CharacterId); Assert.Equal(0ul, saved.OwnerId); Assert.Equal(0ul, saved.DeedId);
+        Assert.Equal(zone, saved.Zone);
+        Assert.False(HouseCollection.HasSavedLocation(Owner, Owner, Exterior));
+        Assert.False(HouseCollection.TryGetSavedLocation(store.Login().CharId, Owner, Exterior, out _));
+        Assert.True(HouseCollection.TryGetOwned(Owner, 9101, out _));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void FailedLocationUpdatePreservesPreviousLotAndSuccessfulRetryUpdatesIt(bool clear) {
+        var store = new Store(); using var scope = store.Scope(); var live = store.Login();
+        Assert.True(Buy(live, 9101).Saved); Assert.True(Buy(live, 9102).Saved);
+        Assert.True(HouseCollection.RecordLocation(Owner, Owner, 9101, Exterior));
+        var balance = store.Wizard.GameStats.m_currentGold;
+        var zone = clear ? HousingRules.DormZone : Interior;
+        var deed = clear ? 0ul : 9102ul;
+        store.FailSave = true;
+        Assert.False(HouseCollection.RecordLocation(Owner, Owner, deed, zone));
+        Assert.True(HouseCollection.TryGetSavedLocation(store.Login().CharId, Owner, Exterior, out var previous));
+        Assert.Equal(9101ul, previous); Assert.Equal(balance, store.Wizard.GameStats.m_currentGold);
+        var retained = Assert.IsType<HouseLocation>(store.Documents[HouseLocation.DocumentId(Owner)]);
+        Assert.Equal(Owner, retained.CharacterId); Assert.Equal(Owner, retained.OwnerId);
+        Assert.Equal(9101ul, retained.DeedId); Assert.Equal(Exterior, retained.Zone);
+        store.FailSave = false;
+        Assert.True(HouseCollection.RecordLocation(Owner, Owner, deed, zone));
+        var saved = Assert.IsType<HouseLocation>(store.Documents[HouseLocation.DocumentId(Owner)]);
+        Assert.Equal(Owner, saved.CharacterId); Assert.Equal(clear ? 0ul : Owner, saved.OwnerId);
+        Assert.Equal(deed, saved.DeedId); Assert.Equal(zone, saved.Zone);
+        Assert.Equal(balance, store.Wizard.GameStats.m_currentGold);
+    }
+
+    [Fact]
+    public void ExistingLocationWithMismatchedCharacterCannotBeOverwritten() {
+        var store = new Store(); using var scope = store.Scope();
+        var saved = new HouseLocation { CharacterId = Owner + 1, OwnerId = Owner + 1, DeedId = 9101, Zone = Exterior };
+        store.Documents[HouseLocation.DocumentId(Owner)] = saved;
+        Assert.False(HouseCollection.RecordLocation(Owner, Owner, 0, HousingRules.DormZone));
+        Assert.Same(saved, store.Documents[HouseLocation.DocumentId(Owner)]);
+        Assert.Equal(Owner + 1, saved.CharacterId); Assert.Equal(9101ul, saved.DeedId); Assert.Equal(Exterior, saved.Zone);
+    }
+
+    [Fact]
+    public void FixtureRejectsUntrackedCreateOnlyOverwriteBeforeApplyingAnyChanges() {
+        var store = new Store(); using var scope = store.Scope();
+        var saved = new HouseLocation { CharacterId = Owner, Zone = HousingRules.DormZone };
+        store.Documents[HouseLocation.DocumentId(Owner)] = saved;
+        var balance = store.Wizard.GameStats.m_currentGold;
+        Assert.Throws<ConcurrencyException>(() => WizardCollection.CommitCharacterMutation(Owner, (session, wizard) => {
+            wizard.GameStats.m_currentGold -= 1;
+            session.Store(new HouseLocation { CharacterId = Owner, Zone = "WizardCity/WC_Hub" }, HouseLocation.DocumentId(Owner));
+            return true;
+        }, null));
+        Assert.Same(saved, store.Documents[HouseLocation.DocumentId(Owner)]);
+        Assert.Equal(HousingRules.DormZone, saved.Zone); Assert.Equal(balance, store.Wizard.GameStats.m_currentGold);
+    }
+
+    [Fact]
     public void VisitorsCannotRecoverAStaleSavedHouseWithoutPendingTransportProof() {
         var store = new Store(); using var scope = store.Scope(); var live = store.Login(); Assert.True(Buy(live, 9101).Saved);
         store.Documents[HouseLocation.DocumentId(Owner + 1)] = new HouseLocation { CharacterId = Owner + 1, OwnerId = Owner, DeedId = 9101, Zone = Exterior };
@@ -470,6 +574,7 @@ public sealed class HouseTests : IDisposable {
     }
     public class HouseSessionProxy : DispatchProxy {
         internal Dictionary<string, object> Saved = null!; internal readonly Dictionary<string, object> Working = new();
+        internal readonly HashSet<string> CreateOnly = new(); internal bool OptimisticWrites;
         internal Func<bool> Fail = null!; private IAdvancedSessionOperations? _advanced;
         protected override object? Invoke(MethodInfo? method, object?[]? args) {
             switch (method!.Name) {
@@ -486,10 +591,21 @@ public sealed class HouseTests : IDisposable {
                     var id = (string)args![0]!;
                     if (Working.TryGetValue(id, out var found)) return found;
                     return Saved.TryGetValue(id, out var saved) ? Working[id] = Clone(saved) : null;
-                case "Store": Working[(string)args![1]!] = args[0]!; return null;
+                case "Store": {
+                    var storedId = (string)args![1]!;
+                    // CLASSIC: Raven treats an untracked explicit-id Store as a new document under
+                    // optimistic writes. A blind overwrite must not make persistence tests pass.
+                    if (!Working.ContainsKey(storedId)) CreateOnly.Add(storedId);
+                    else if (!ReferenceEquals(Working[storedId], args[0]))
+                        throw new InvalidOperationException("A different object is already tracked for this fixture document.");
+                    Working[storedId] = args[0]!; return null;
+                }
                 case "SaveChanges":
                     if (Fail()) throw new IOException("Injected transaction failure.");
-                    foreach (var pair in Working) Saved[pair.Key] = Clone(pair.Value); return null;
+                    if (OptimisticWrites && CreateOnly.Any(Saved.ContainsKey))
+                        throw new ConcurrencyException("A create-only fixture write cannot replace a saved document.");
+                    foreach (var pair in Working) Saved[pair.Key] = Clone(pair.Value);
+                    CreateOnly.Clear(); return null;
                 case "Dispose": return null;
                 default: throw new NotSupportedException(method.Name);
             }
@@ -504,11 +620,16 @@ public sealed class HouseTests : IDisposable {
     public class HouseAdvancedProxy : DispatchProxy {
         internal HouseSessionProxy Owner = null!;
         private readonly IMetadataDictionary _metadata = DispatchProxy.Create<IMetadataDictionary, HouseMetadataProxy>();
-        protected override object? Invoke(MethodInfo? method, object?[]? args) => method!.Name switch {
-            "set_OptimisticConcurrencyMode" => null, "GetMetadataFor" => _metadata,
-            "GetDocumentId" => Owner.Working.FirstOrDefault(p => ReferenceEquals(p.Value, args![0])).Key,
-            _ => throw new NotSupportedException(method.Name),
-        };
+        protected override object? Invoke(MethodInfo? method, object?[]? args) {
+            switch (method!.Name) {
+                case "set_OptimisticConcurrencyMode":
+                    Owner.OptimisticWrites = (OptimisticConcurrencyMode)args![0]! == OptimisticConcurrencyMode.Writes;
+                    return null;
+                case "GetMetadataFor": return _metadata;
+                case "GetDocumentId": return Owner.Working.FirstOrDefault(p => ReferenceEquals(p.Value, args![0])).Key;
+                default: throw new NotSupportedException(method.Name);
+            }
+        }
     }
     public class HouseMetadataProxy : DispatchProxy {
         protected override object? Invoke(MethodInfo? method, object?[]? args) {

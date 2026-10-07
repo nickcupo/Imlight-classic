@@ -66,8 +66,18 @@ internal static class HouseCollection {
             return WizardCollection.CommitCharacterMutation(character, (session, wizard) => {
                 if (wizard.CharId != character) return false;
                 // Called only after validated attach. Public/dorm entry explicitly clears the old lot.
-                session.Store(new HouseLocation { CharacterId = character, OwnerId = deed == 0 ? 0 : owner,
-                    DeedId = deed, Zone = zone }, HouseLocation.DocumentId(character));
+                // CLASSIC: load before updating so Raven retains the existing change vector. Storing
+                // an untracked replacement under optimistic concurrency is a create-only write.
+                var id = HouseLocation.DocumentId(character);
+                var location = session.Load<HouseLocation>(id);
+                if (location is null) {
+                    location = new HouseLocation { CharacterId = character };
+                    session.Store(location, id);
+                }
+                else if (location.CharacterId != character) return false;
+                location.OwnerId = deed == 0 ? 0 : owner;
+                location.DeedId = deed;
+                location.Zone = zone;
                 return true;
             }, null);
         }
