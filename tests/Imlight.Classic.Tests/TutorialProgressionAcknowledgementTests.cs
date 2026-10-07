@@ -14,6 +14,7 @@ using Imlight.CoreLib.Game.Services;
 using Imlight.CoreLib.Game.DropTables;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Character;
+using Imlight.CoreLib.Shared.Services;
 using Imlight.CoreLib.Shared.Packets;
 using Imlight.CoreLib.WizardData;
 using Imlight.CoreLib.WizardData.Collections;
@@ -283,6 +284,7 @@ public sealed class TutorialProgressionAcknowledgementTests {
             typeof(GoalInstance).GetProperty(nameof(GoalInstance.CurrentProgress))!.SetValue(F.Quests[0].GoalProgress[0], -1);
             typeof(GoalInstance).GetProperty(nameof(GoalInstance.CurrentProgress))!.SetValue(F.Expected.GoalProgress[0], -1);
             F.Live.Zone = "WizardCity/Tutorial_Interior";
+            F.Saved.AccountId = F.Live.AccountId = 782090;
         }
         public void Dispose() { LevelConfig.SetValue(null, _oldLevelConfig); WizardQuestTransactions.TestScope.Value = _old; F.Dispose(); }
     }
@@ -319,12 +321,19 @@ public sealed class TutorialProgressionAcknowledgementTests {
                 f._zone = f.System.ActorOf(Props.Create(() => new ZoneSink(f)), "zone");
                 f._session = f.System.ActorOf(Props.CreateBy(new SessionProducer(f._socket)), "session");
                 f.Session = await f._session.Ask<SessionActor>("Identify", Timeout, TestContext.Current.CancellationToken);
+                var account = new Account();
+                typeof(Account).GetProperty(nameof(Account.AccountId))!.SetValue(account, store.Live.AccountId);
+                account.CharacterIds.Add(store.Live.CharId);
+                var accountService = f.System.ActorOf(Props.Create(() => new AccountProbe(f.Session, account)), "account-service");
+                var actualAccount = await accountService.Ask<AccountService>(new Ready(), Timeout, TestContext.Current.CancellationToken);
+                f.Session.RegisterService(accountService, actualAccount); store.Live.Account = account;
                 var zoneService = f.System.ActorOf(Props.Create(() => new ZoneProbe(f.Session, store.Live, f._zone)), "zone-service");
                 var actualZone = await zoneService.Ask<ZoneService>(new Ready(), Timeout, TestContext.Current.CancellationToken);
                 f.Session.RegisterService(zoneService, actualZone);
                 var dispatch = (Dictionary<Type, List<IActorRef>>)typeof(SessionActor).GetField("_dispatchTable", Private)!.GetValue(f.Session)!;
                 dispatch[typeof(ZONE_102_PROTOCOL.MSG_ZONEBROADCAST)] = [zoneService];
                 ActiveWizardDirectory.SetWizard(f._session, store.Live);
+                ActiveWizardDirectory.SetGameObject(f._session, store.Live.GameObject);
                 f._tutorial = f.System.ActorOf(Props.CreateBy(new TutorialProducer(f.Session, store, new CapturedScopes(store))), "tutorial");
                 Assert.True(await f._tutorial.Ask<bool>(new Ready(), Timeout, TestContext.Current.CancellationToken));
                 var watcher = f.System.ActorOf(Props.Create(() => new CloseWatcher(f._session, f.Closed)), "close-watch");
@@ -401,6 +410,12 @@ public sealed class TutorialProgressionAcknowledgementTests {
             Receive<ZONE_102_PROTOCOL.MSG_ZONEBROADCAST>(message => typeof(ZoneService).GetMethod("ReceiveZoneBroadcast", Private)!.Invoke(this, [message]));
             Receive<Ready>(_ => Sender.Tell(this)); base.ConfigureReceivers();
         }
+    }
+    private sealed class AccountProbe : AccountService {
+        public AccountProbe(SessionActor session, Account account) : base(session)
+            => typeof(AccountService).GetMethod("InternalReceiveSetAccount", Private)!.Invoke(this,
+                [new ACCOUNT_104_PROTOCOL.MSG_ACCOUNT { Account = account }]);
+        protected override void ConfigureReceivers() { Receive<Ready>(_ => Sender.Tell(this)); base.ConfigureReceivers(); }
     }
     private static void SetCached(MessageService service, Wizard wizard) {
         typeof(MessageService).GetField("_cachedWizard", Private)!.SetValue(service, wizard);

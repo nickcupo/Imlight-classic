@@ -198,10 +198,10 @@ internal sealed partial class TutorialService(SessionActor sessionActor) : Messa
             // The C09-014/016 levers are ADD->REMOVE with no goal ever completed, so the health/mana refill
             // happens here on ADD.
             if (commandSuccess && admitted.QuestToAdd == TUTORIAL_HEALTH_REFILL_QUEST) {
-                RefillHealth(wizard);
+                commandSuccess = RefillHealth(wizard);
             }
             else if (commandSuccess && admitted.QuestToAdd == TUTORIAL_MANA_REFILL_QUEST) {
-                RefillMana(wizard);
+                commandSuccess = RefillMana(wizard);
             }
         }
         if (admitted.Goal.Kind != TutorialGoalKind.None) {
@@ -358,7 +358,15 @@ internal sealed partial class TutorialService(SessionActor sessionActor) : Messa
         return true;
     }
 
-    private void RefillHealth(Wizard wizard) {
+    private bool RefillHealth(Wizard wizard) {
+        if (WizardResourceTransactions.IsActive) {
+            var account = SessionActor.GetAssociatedAccount();
+            if (account is not { AccountId: > 0 } || account.AccountId != wizard.AccountId) return false;
+            var status = WizardResourceTransactions.TryRefillHealth(wizard, out _,
+                afterCommit: receipt => SendToSocket(receipt.Message),
+                expectedAccountId: account.AccountId);
+            return status != ResourceMutationStatus.Refused && !StopUncertainTutorialSession(wizard);
+        }
         var full = wizard.GameStats.m_baseHitpoints;
         var clientMax = wizard.GameStats.GetClientTypeAlternative().m_baseHitpoints;
         wizard.UpdateHealth(full);
@@ -367,9 +375,18 @@ internal sealed partial class TutorialService(SessionActor sessionActor) : Messa
             NewHealth = full,
             NewHealthMax = clientMax,
         });
+        return true;
     }
 
-    private void RefillMana(Wizard wizard) {
+    private bool RefillMana(Wizard wizard) {
+        if (WizardResourceTransactions.IsActive) {
+            var account = SessionActor.GetAssociatedAccount();
+            if (account is not { AccountId: > 0 } || account.AccountId != wizard.AccountId) return false;
+            var status = WizardResourceTransactions.TryRefillMana(wizard, out _,
+                afterCommit: receipt => SendToSocket(receipt.Message),
+                expectedAccountId: account.AccountId);
+            return status != ResourceMutationStatus.Refused && !StopUncertainTutorialSession(wizard);
+        }
         var full = wizard.GameStats.m_baseMana;
         var clientMax = wizard.GameStats.GetClientTypeAlternative().m_baseMana;
         wizard.UpdateMana(full);
@@ -377,6 +394,7 @@ internal sealed partial class TutorialService(SessionActor sessionActor) : Messa
             Mana = full,
             MaxMana = clientMax,
         });
+        return true;
     }
 
     private bool RemoveControlQuests(Wizard wizard) {

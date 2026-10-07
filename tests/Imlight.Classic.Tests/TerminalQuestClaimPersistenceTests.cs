@@ -568,11 +568,11 @@ public sealed class TerminalClaimFixture : IDisposable {
         proxy.DisposeSession = () => OnDispose?.Invoke(); return session;
     }
     internal Wizard Load(IDocumentSession session, ulong id) {
-        Assert.True(WizardCollection.HoldsWriteLane); Assert.Equal(Character, id); OnLoad?.Invoke();
+        Assert.True(WizardCollection.HoldsWriteLane); Assert.Equal(Saved.CharId, id); OnLoad?.Invoke();
         return MissingWizard ? null! : ((ClaimSession)(object)session).Wizard;
     }
     internal static Wizard CloneWizard(Wizard source) {
-        var clone = NewWizard(); clone.CharId = source.CharId; clone.Zone = source.Zone;
+        var clone = NewWizard(); clone.CharId = source.CharId; clone.AccountId = source.AccountId; clone.Zone = source.Zone;
         clone.GameStats = source.GameStats.CloneSnapshotWithGold(source.GameStats.m_currentGold); clone.GameStats.Level = 0; clone.GameStats.MagicSchool = MagicSchool.None;
         clone.MagicSchoolBehavior = new() { MagicSchool = source.MagicSchoolBehavior.MagicSchool, Level = source.MagicSchoolBehavior.Level,
             ExperiencePoints = source.MagicSchoolBehavior.ExperiencePoints, TrainingPoints = source.MagicSchoolBehavior.TrainingPoints, OverflowXp = source.MagicSchoolBehavior.OverflowXp };
@@ -613,6 +613,7 @@ public sealed class TerminalClaimFixture : IDisposable {
 
     public class ClaimSession : DispatchProxy {
         internal Wizard Wizard = null!;
+        internal List<Wizard>? Characters;
         internal List<QuestInstance> Quests = [];
         internal List<DynamodSet> Dynamods = [];
         internal List<WizClientObjectItem> Items = [];
@@ -641,6 +642,7 @@ public sealed class TerminalClaimFixture : IDisposable {
             var collection = args.OfType<string>().FirstOrDefault();
             IEnumerable<T> rows;
             if (typeof(T) == typeof(QuestInstance)) { Assert.Equal(QuestInstanceCollection.CollectionName, collection); rows = Quests.Cast<T>(); }
+            else if (typeof(T) == typeof(Wizard)) { Assert.Equal(WizardCollection.CollectionName, collection); rows = (Characters ?? [Wizard]).Cast<T>(); }
             else if (typeof(T) == typeof(DynamodSet)) { Assert.Equal("DynamicMod", collection); rows = Dynamods.Cast<T>(); }
             else throw new NotSupportedException(typeof(T).Name);
             var query = DispatchProxy.Create<IRavenQueryable<T>, ClaimQuery<T>>(); ((ClaimQuery<T>)(object)query).Rows = rows.AsQueryable();
