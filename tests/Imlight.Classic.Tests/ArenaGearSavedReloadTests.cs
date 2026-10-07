@@ -13,6 +13,7 @@ using Imlight.Common;
 using Imlight.CoreLib.Classic.Arena;
 using Imlight.CoreLib.Game.Effects;
 using Imlight.CoreLib.Game.Spells;
+using Imlight.CoreLib.Game.States;
 using Imlight.CoreLib.Shared.Behaviors;
 using Imlight.CoreLib.Shared.Character;
 using Imlight.CoreLib.Shared.Items;
@@ -163,6 +164,7 @@ public sealed class ArenaGearSavedReloadTests(ITestOutputHelper output) {
         Assert.Same(wizard, WizardCollection.HydrateLoadedWizard(wizard, session));
         Assert.Equal(1, wizard.GameStats.Level); // Production AfterDatabaseLoad was reached.
         Assert.Equal(1, wizard.GameStats.m_highestCharacterLevelOnAccount);
+        Assert.NotNull(wizard.ObjectStateBehavior);
         Assert.False(WizardCollection.IsInventorySnapshotUncertain(wizard));
         return wizard;
     }
@@ -329,6 +331,8 @@ public sealed class ArenaGearSavedReloadTests(ITestOutputHelper output) {
         private readonly Dictionary<int, MagicSchoolTemplate> _schools, _oldSchools;
         private readonly Dictionary<uint, SpellTemplate> _spells, _oldSpells;
         private readonly Dictionary<uint, string> _paths, _oldPaths;
+        private readonly Dictionary<string, ObjStateSet> _stateSets;
+        private readonly ObjStateSet? _oldPlayerStates;
         private readonly JsonDocument _map;
         internal readonly Dictionary<uint, WizItemTemplate> Items = [];
         internal AuthoredResources() {
@@ -347,10 +351,15 @@ public sealed class ArenaGearSavedReloadTests(ITestOutputHelper output) {
             _spells = (Dictionary<uint, SpellTemplate>)Field(typeof(SpellFactory), "s_spellTemplates").GetValue(null)!;
             _paths = (Dictionary<uint, string>)Field(typeof(SpellFactory), "s_spellTemplatePaths").GetValue(null)!;
             _oldSpells = new(_spells); _oldPaths = new(_paths);
+            _stateSets = (Dictionary<string, ObjStateSet>)Field(typeof(StateFactory), "s_objectStateSets").GetValue(null)!;
+            _oldPlayerStates = _stateSets.TryGetValue("PlayerMobileStates", out var states) ? states : null;
         }
         internal void ActivateOctoberProjection() {
             ClassicRuntime.Initialize(ClassicDataFixture.RealRules("october-2010-arc1"));
             ClassicArenaGearTemplates.Initialize(ClassicDataFixture.Root, "october-2010-arc1");
+            // AfterDatabaseLoad constructs this runtime behavior. Gear hydration needs only a valid empty
+            // category list; no authored fixture claims to reproduce movement/state mechanics.
+            _stateSets["PlayerMobileStates"] = new ObjStateSet { m_stateSetName = "PlayerMobileStates", m_categories = [] };
             var effects = new List<GameEffectTemplate>(); var tables = new Dictionary<string, WizardStatTable>();
             foreach (var row in _map.RootElement.GetProperty("items").EnumerateArray().Where(row => Items.ContainsKey(row.GetProperty("template_id").GetUInt32()))) {
                 foreach (var effect in row.GetProperty("effects").EnumerateArray()) {
@@ -393,6 +402,8 @@ public sealed class ArenaGearSavedReloadTests(ITestOutputHelper output) {
             _schools.Clear(); foreach (var entry in _oldSchools) _schools[entry.Key] = entry.Value;
             _spells.Clear(); foreach (var entry in _oldSpells) _spells[entry.Key] = entry.Value;
             _paths.Clear(); foreach (var entry in _oldPaths) _paths[entry.Key] = entry.Value;
+            if (_oldPlayerStates is null) _stateSets.Remove("PlayerMobileStates");
+            else _stateSets["PlayerMobileStates"] = _oldPlayerStates;
             CoreObjectFactory.TemplateManifest = _oldManifest; _map.Dispose();
             ClassicRuntime.ResetForTests(); ClassicArenaGearTemplates.Initialize(null, "late-2009");
         }
