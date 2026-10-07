@@ -72,7 +72,9 @@ internal static class ClassicBadges {
     /// <summary>
     /// Saves the wizard's quest registry; tests replace it.
     /// </summary>
-    internal static Action<Wizard> Persist { get; set; } = wizard => WizardCollection.UpdateCharacterQuestBehavior(wizard);
+    private static readonly Action<Wizard> DefaultPersist = wizard => WizardCollection.UpdateCharacterQuestBehavior(wizard);
+    internal static Action<Wizard> Persist { get; set; } = DefaultPersist;
+    private static bool UsesSavedRegistry => ClassicQuestEngine.IsActive && Persist == DefaultPersist;
 
     /// <summary>
     /// Logs an award; tests replace it (Logger needs the server's configuration).
@@ -107,6 +109,10 @@ internal static class ClassicBadges {
             return;
         }
 
+        if (UsesSavedRegistry) {
+            AwardSavedRegistry(wizard, rules.ForQuest(questName), [], send);
+            return;
+        }
         AwardEarned(wizard, rules.ForQuest(questName), send);
     }
 
@@ -152,13 +158,15 @@ internal static class ClassicBadges {
 
         var counted = new HashSet<string>(rules.CountedAdjectives, StringComparer.Ordinal);
         var touched = new List<Badge>();
+        var increments = new List<string>();
         foreach (var templateId in mobTemplateIds) {
             if (CoreObjectFactory.GetCoreTemplate(templateId) is not GameObjectTemplate template) {
                 continue;
             }
 
             foreach (var adjective in (template.m_adjectiveList ?? []).Where(counted.Contains).Distinct()) {
-                wizard.QuestBehavior.Registry.AddOrUpdate(BadgeRules.KillCounterKey(adjective), 1UL, (_, count) => count + 1);
+                increments.Add(BadgeRules.KillCounterKey(adjective));
+                if (!UsesSavedRegistry) wizard.QuestBehavior.Registry.AddOrUpdate(BadgeRules.KillCounterKey(adjective), 1UL, (_, count) => count + 1);
                 touched.AddRange(rules.ForAdjective(adjective));
             }
         }
@@ -167,6 +175,10 @@ internal static class ClassicBadges {
             return;
         }
 
+        if (UsesSavedRegistry) {
+            AwardSavedRegistry(wizard, touched.Distinct(), increments, send);
+            return;
+        }
         Persist(wizard);
         AwardEarned(wizard, touched.Distinct(), send);
     }
@@ -184,9 +196,31 @@ internal static class ClassicBadges {
             return;
         }
 
+        if (UsesSavedRegistry) {
+            AwardSavedRegistry(wizard, badges, [BadgeRules.ZoneVisitKey(zone)], send);
+            return;
+        }
         wizard.QuestBehavior.Registry.AddOrUpdate(BadgeRules.ZoneVisitKey(zone), 1UL, (_, count) => count + 1);
         Persist(wizard);
         AwardEarned(wizard, badges, send);
+    }
+
+    // CLASSIC: counters and the badges they earn share one fresh registry ACK. The existing rule-test Persist
+    // hook remains explicit; production never sends or changes live registry before this selected transaction.
+    private static void AwardSavedRegistry(Wizard live, IEnumerable<Badge> candidates,
+        IReadOnlyList<string> increments, Action<IMessage> send) {
+        var selected = candidates.ToArray();
+        var awards = new List<PreparedQuestBadgeAward>();
+        WizardQuestTransactions.TryChangeRegistry(live, journal => {
+            foreach (var key in increments) journal.Registry.AddOrUpdate(key, 1UL, (_, count) => count + 1);
+            var savedView = new Wizard { QuestBehavior = journal };
+            var progress = new WizardBadgeProgress(savedView);
+            foreach (var badge in selected) {
+                if (TryStageAward(savedView, badge, progress) is { } award) awards.Add(award);
+            }
+            return increments.Count > 0 || awards.Count > 0;
+        }, out _, preparePublication: _ => awards.All(award => WizardProgressionTransactions.Prepare(award.Message)),
+            afterCommit: _ => PublishQuestCompleted(live, awards, send));
     }
 
     private static void AwardEarned(Wizard wizard, IEnumerable<Badge> candidates, Action<IMessage> send) {

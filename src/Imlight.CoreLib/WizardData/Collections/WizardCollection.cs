@@ -872,6 +872,8 @@ public static class WizardCollection {
     /// <param name="wizard">The wizard whose quest behavior needs to be updated.</param>
     /// <returns>True if the update was successful; otherwise, false.</returns>
     public static bool UpdateCharacterQuestBehavior(Wizard wizard) {
+        // CLASSIC: whole live journals may be stale; active callers must use selected fresh quest transactions.
+        if (Classic.ClassicQuestEngine.IsActive) return false;
         if (wizard is null || wizard.QuestBehavior is null || IsInventorySnapshotUncertain(wizard)) {
             return false;
         }

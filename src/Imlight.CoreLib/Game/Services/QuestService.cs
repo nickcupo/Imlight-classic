@@ -252,7 +252,7 @@ internal partial class QuestService(SessionActor sessionActor) : MessageService(
             return;
         }
 
-        wizard.IncrementQuestGoal(qInstance.QuestName, gTemplate.m_goalName);
+        if (!IncrementCommittedGoal(wizard, qInstance, gTemplate, sendProgress: true)) return; // CLASSIC
 
         var goalMax = gTemplate.m_tallyCounter?.m_count ?? 1;
         if (gInstance.CurrentProgress >= goalMax) {
@@ -261,7 +261,7 @@ internal partial class QuestService(SessionActor sessionActor) : MessageService(
             return;
         }
 
-        SendGoalMessage(gTemplate, qInstance, 2);
+        if (!ClassicQuestEngine.IsActive) SendGoalMessage(gTemplate, qInstance, 2);
     }
 
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_COMPLETEPROXIMITYGOAL))]
@@ -318,15 +318,16 @@ internal partial class QuestService(SessionActor sessionActor) : MessageService(
 
     [MessageHandler(typeof(QUEST_MESSAGES_52_PROTOCOL.MSG_ACCEPTQUEST))]
     private void ReceiveQuestAccept(QUEST_MESSAGES_52_PROTOCOL.MSG_ACCEPTQUEST message) {
-        var account = GetActiveAccount();
         var wizard = GetActiveWizard();
+        if (StopUncertainQuestSession(wizard)) return; // CLASSIC: before stale offers or infractions.
+        var account = GetActiveAccount();
 
         // Do we have this quest cached?
         string questName = message.QuestName;
         var quest = _cachedQuestOffers.Find(questName ?? "");
         // CLASSIC: an offer is accepted once; a quest already active or done is not started again.
-        if (quest != null && (wizard.HasQuest(quest.m_questName) || wizard.HasCompletedQuest(quest.m_questName))) {
-            _cachedQuestOffers.Remove(quest.m_questName);
+        if (wizard.HasQuest(quest?.m_questName ?? questName) || wizard.HasCompletedQuest(quest?.m_questName ?? questName)) {
+            _cachedQuestOffers.Remove(quest?.m_questName ?? questName);
             Logger.Warning("Player '{0}' accepted quest '{1}' again; ignored.", Logger.Args(wizard.CharId, questName));
 
             return;
@@ -349,7 +350,11 @@ internal partial class QuestService(SessionActor sessionActor) : MessageService(
         // Otherwise, we're good to start the quest. Send them the send quest message and send goal message(s)
         // for any of the starting goals the quest has.
         var questInstance = new QuestInstance(quest, wizard.CharId);
-        wizard.AddQuest(questInstance);
+        if (ClassicQuestEngine.IsActive) {
+            AcceptCommittedQuest(wizard, quest, questInstance);
+            return;
+        }
+        if (!wizard.AddQuest(questInstance)) return;
 
         if (!_cachedQuestTemplates.Contains(quest)) {
             _cachedQuestTemplates.Add(quest);
@@ -364,6 +369,7 @@ internal partial class QuestService(SessionActor sessionActor) : MessageService(
     [MessageHandler(typeof(COMBAT_106_PROTOCOL.MSG_COMBATWIN))]
     private void ReceiveCombatVictory(COMBAT_106_PROTOCOL.MSG_COMBATWIN message) {
         var wizard = GetActiveWizard();
+        if (StopUncertainQuestSession(wizard)) return; // CLASSIC
 
         // CLASSIC: iterate a copy; a kill that completes a quest removes it from (and can add to) the list.
         var heldQuests = ClassicQuestEngine.IsActive
@@ -407,10 +413,12 @@ internal partial class QuestService(SessionActor sessionActor) : MessageService(
                 }
 
                 ProcessCombatGoal(wizard, qInstance, bountyGoal, message.MobAdjectives, message.MobTemplateIds);
+                if (StopUncertainQuestSession(wizard)) return; // CLASSIC: no later credit or zone effects after unknown ACK.
             }
         }
 
         ProcessIndexedCombatGoals(wizard, message.MobTemplateIds); // CLASSIC: credit captured goals that have no adjectives to match.
+        if (StopUncertainQuestSession(wizard)) return;
         PostMonsterKilled(message.MobTemplateIds); // CLASSIC: QuestService.ZoneEvents.cs.
     }
 
@@ -628,6 +636,11 @@ internal partial class QuestService(SessionActor sessionActor) : MessageService(
 
     private void StartGoal(QuestInstance questInstance, GoalTemplate goalTemplate) {
         var wizard = GetActiveWizard();
+        if (StopUncertainQuestSession(wizard)) return; // CLASSIC
+        if (ClassicQuestEngine.IsActive) {
+            StartCommittedGoal(wizard, questInstance, goalTemplate);
+            return;
+        }
 
         // Goals with requirements only activate for wizards that meet them (e.g. per-school goals).
         if (goalTemplate.m_goalRequirements is not null
@@ -679,7 +692,12 @@ internal partial class QuestService(SessionActor sessionActor) : MessageService(
 
     private void CompleteGoal(QuestInstance questInstance, GoalTemplate goalTemplate) {
         var wizard = GetActiveWizard();
+        if (StopUncertainQuestSession(wizard)) return; // CLASSIC
         if (TryCompleteTerminalClaim(wizard, questInstance, goalTemplate)) return; // CLASSIC: before the old final-goal save.
+        if (ClassicQuestEngine.IsActive) {
+            CompleteCommittedGoal(wizard, questInstance, goalTemplate);
+            return;
+        }
 
         if (!wizard.CompleteQuestGoal(questInstance.QuestName, goalTemplate.m_goalName)) {
             Logger.Error("Failed to complete goal '{0}' for quest '{1}' for player '{2}'",
@@ -730,6 +748,11 @@ internal partial class QuestService(SessionActor sessionActor) : MessageService(
 
     private void CompleteQuest(QuestInstance questInstance) {
         var wizard = GetActiveWizard();
+        if (StopUncertainQuestSession(wizard)) return; // CLASSIC
+        if (ClassicQuestEngine.IsActive) {
+            CompleteCommittedQuest(wizard, questInstance);
+            return;
+        }
 
         if (!wizard.CompleteQuest(questInstance.QuestName)) {
             Logger.Error("Failed to complete quest '{0}' for player '{1}'",
@@ -748,15 +771,12 @@ internal partial class QuestService(SessionActor sessionActor) : MessageService(
 
         ShowQuestCompletionDialogue(qTemplate);
 
-        ResultDispatcher.ExecuteResults(
-            actorContext: Context,
-            results: qTemplate.m_endResults,
-            playerRef: SessionActor.ActorRef,
-            playerObj: GetActiveGameObject(),
-            zoneActor: ResultZoneActor(), // CLASSIC: ResSpawn and ResPostEvent need the wizard's zone.
-            questName: questInstance.QuestName
-        );
+        PublishLegacyQuestResults(wizard, questInstance, qTemplate);
+    }
 
+    // CLASSIC: tutorial/no-logic end results retain their separate legacy reward path after retirement ACK.
+    private void PublishLegacyQuestResults(Wizard wizard, QuestInstance questInstance, QuestTemplate qTemplate) {
+        if (!ExecuteAcknowledgedQuestResults(wizard, qTemplate.m_endResults, questInstance.QuestName)) return;
         // Fire the "you have learned a new spell!" cinematic for the spell rewards. Only the spells
         // go here; the gold/XP/item popup is already sent by the drop table handlers (MSG_LOOT).
         var spellRewards = new LootInfoList {
@@ -764,6 +784,7 @@ internal partial class QuestService(SessionActor sessionActor) : MessageService(
         };
         AppendSpellRewards(spellRewards.m_loot, qTemplate, wizard);
         GrantClassicQuestCards(wizard, questInstance.QuestName, spellRewards.m_loot); // CLASSIC: QuestService.ClassicRewards.cs.
+        if (StopUncertainQuestSession(wizard)) return;
         if (spellRewards.m_loot.Count > 0
             && _goalSerializer.Serialize(spellRewards, 1, out var spellRewardData)) {
             SendToSocket(new WIZARD_12_PROTOCOL.MSG_QUESTREWARDS {
@@ -773,6 +794,7 @@ internal partial class QuestService(SessionActor sessionActor) : MessageService(
         }
 
         ClassicBadges.QuestCompleted(wizard, questInstance.QuestName, SendToSocket); // CLASSIC: badges a quest finishes.
+        if (StopUncertainQuestSession(wizard)) return;
 
         // Chain advance: completion stamps the "Complete" registry entry, which is the ReqHasEntry
         // prerequisite of the next quest in the dungeon's chain.
@@ -782,6 +804,13 @@ internal partial class QuestService(SessionActor sessionActor) : MessageService(
 
     private void SendGoalMessage(GoalTemplate gTemplate, QuestInstance qInstance, byte sendType = 0, bool forceSendDestZone = true) {
         RefreshDoorLights();
+        var packet = PrepareGoalMessage(gTemplate, qInstance, sendType, forceSendDestZone);
+        if (packet is not null) SendToSocket(packet);
+    }
+
+    // CLASSIC: serialize the existing native shape before a quest save, with no live effects.
+    private QUEST_MESSAGES_52_PROTOCOL.MSG_SENDGOAL PrepareGoalMessage(GoalTemplate gTemplate, QuestInstance qInstance,
+        byte sendType, bool forceSendDestZone = true, bool strict = false) {
         var gInstance = qInstance.GoalProgress
             .FirstOrDefault(g => g.GoalName == gTemplate.m_goalName);
         if (gInstance == null) {
@@ -789,7 +818,7 @@ internal partial class QuestService(SessionActor sessionActor) : MessageService(
             Logger.Error("Quest '{0}' has no goal instance for template goal '{1}'.",
                 Logger.Args(qInstance.QuestName, gTemplate.m_goalName));
 
-            return;
+            return null;
         }
 
         // Serialize the madlib block for the goal.
@@ -798,7 +827,7 @@ internal partial class QuestService(SessionActor sessionActor) : MessageService(
             Logger.Error("Failed to serialize madlib data for goal '{0}' in quest '{1}'",
                 Logger.Args(gTemplate.m_goalName, qInstance.QuestName));
 
-            return;
+            return null;
         }
 
         // Serialize the client tags, if present.
@@ -808,6 +837,7 @@ internal partial class QuestService(SessionActor sessionActor) : MessageService(
             Logger.Error("Failed to serialize client tag data for goal '{0}' in quest '{1}'",
                 Logger.Args(gTemplate.m_goalName, qInstance.QuestName));
 
+            if (strict) return null;
             clientTagData = string.Empty;
         }
         // Or, send no data if the client tag list has no entries.
@@ -851,7 +881,7 @@ internal partial class QuestService(SessionActor sessionActor) : MessageService(
             NoQuestHelper = gTemplate.m_noQuestHelper ? (byte) 1 : (byte) 0,
         };
 
-        SendToSocket(packet);
+        return packet;
     }
 
     private void RefreshDoorLights() {
@@ -916,7 +946,7 @@ internal partial class QuestService(SessionActor sessionActor) : MessageService(
 
         if (shouldIncrement) {
             for (int i = 0; i < matchCount; i++) {
-                wizard.IncrementQuestGoal(qInstance.QuestName, goalTemplate.m_goalName);
+                if (!IncrementCommittedGoal(wizard, qInstance, goalTemplate, sendProgress: i == matchCount - 1)) return; // CLASSIC
             }
 
             var goalMax = goalTemplate.m_tallyCounter?.m_count ?? 0;
@@ -928,7 +958,7 @@ internal partial class QuestService(SessionActor sessionActor) : MessageService(
                 return;
             }
 
-            SendGoalMessage(goalTemplate, qInstance, 2);
+            if (!ClassicQuestEngine.IsActive) SendGoalMessage(goalTemplate, qInstance, 2);
         }
     }
 
@@ -1246,7 +1276,7 @@ internal partial class QuestService(SessionActor sessionActor) : MessageService(
             }
 
             var questInstance = new QuestInstance(template, wizard.CharId);
-            wizard.AddQuest(questInstance);
+            if (!wizard.AddQuest(questInstance)) return;
 
             if (!_cachedQuestTemplates.Contains(template)) {
                 _cachedQuestTemplates.Add(template);

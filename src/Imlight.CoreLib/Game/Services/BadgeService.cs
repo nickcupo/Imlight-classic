@@ -46,6 +46,7 @@ using Imlight.Common;
 using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;
+using Imlight.CoreLib.WizardData.Collections;
 
 namespace Imlight.CoreLib.Game.Services;
 
@@ -60,12 +61,14 @@ internal sealed class BadgeService(SessionActor sessionActor) : MessageService(s
             return;
         }
 
+        if (WizardCollection.IsInventorySnapshotUncertain(wizard)) { CloseSession(); return; }
         var earned = ClassicBadges.Earned(rules, wizard);
         foreach (var badgeMessage in ClassicBadges.ListMessages(earned)) {
             SendToSocket(badgeMessage);
         }
 
         ClassicBadges.ZoneEntered(wizard, wizard.Zone, SendToSocket);
+        if (WizardCollection.IsInventorySnapshotUncertain(wizard)) CloseSession();
     }
 
     [MessageHandler(typeof(GAME_5_PROTOCOL.MSG_SELECT_BADGE))]

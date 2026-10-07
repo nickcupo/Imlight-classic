@@ -46,6 +46,8 @@ using Imlight.CoreLib.WizardData.Collections;
 using Imlight.CoreLib.WizardData.Models.Player;
 using System.Linq;
 
+using Imlight.CoreLib.Classic;
+
 namespace Imlight.CoreLib.Game.Services;
 
 internal partial class QuestService {
@@ -74,6 +76,7 @@ internal partial class QuestService {
                 }
 
                 ProcessIndexedCombatGoal(wizard, qInstance, goal, defeatedMobTemplateIds);
+                if (StopUncertainQuestSession(wizard)) return; // CLASSIC: stop the whole credit traversal.
             }
         }
     }
@@ -100,7 +103,7 @@ internal partial class QuestService {
         }
 
         for (var i = 0; i < credited; i++) {
-            wizard.IncrementQuestGoal(qInstance.QuestName, goalTemplate.m_goalName);
+            if (!IncrementCommittedGoal(wizard, qInstance, goalTemplate, sendProgress: i == credited - 1)) return; // CLASSIC
         }
 
         if (gInstance.CurrentProgress >= goalMax) {
@@ -109,7 +112,7 @@ internal partial class QuestService {
             return;
         }
 
-        SendGoalMessage(goalTemplate, qInstance, 2);
+        if (!ClassicQuestEngine.IsActive) SendGoalMessage(goalTemplate, qInstance, 2);
     }
 
 }
