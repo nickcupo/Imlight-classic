@@ -226,7 +226,7 @@ public sealed class ArenaGearSavedReloadTests(ITestOutputHelper output) {
     private static void AssertOriginalItem(WizClientObjectItem item, ulong id, uint template, ulong owner) {
         Assert.Equal(id, item.m_globalID.Full); Assert.Equal(id, item.m_permID.Full);
         Assert.Equal((ulong)template, item.m_templateID.Full); Assert.Equal(owner, item.m_characterId.Full);
-        Assert.Equal(7u, item.m_primaryColor); Assert.Equal(11u, item.m_secondaryColor); Assert.Equal(3u, item.m_pattern);
+        Assert.Equal(7, item.m_primaryColor); Assert.Equal(11, item.m_secondaryColor); Assert.Equal(3, item.m_pattern);
     }
     private static string ItemDocument(ulong id) => $"saved-arena/item/{id}";
     private static void Store<T>(IDocumentSession session, T entity, string id, string collection) where T : class {
