@@ -141,7 +141,7 @@ public sealed class ArenaAmbientMatchmakerTests {
         var world = new World(); var match = world.Queue(ArenaKind.Practice, 1); world.Fill();
         world.Arena.List(Wife, world.Arena.TournamentId(ArenaKind.Practice));
         var message = world.Sent.Where(x => x.Who == Wife).Select(x => x.Message).OfType<GAME_5_PROTOCOL.MSG_PVPUPDATEINFO>().Last();
-        var list = ArenaMessages.Read<NewListUpdate>(message.TournamentInfo)!;
+        var list = ArenaMessages.ReadBrowser<NewListUpdate>(message.TournamentInfo)!;
         var row = Assert.IsType<PvPMatchInfo>(Assert.Single(list.m_matches));
         var vacancy = Assert.IsType<MatchActor>(Assert.Single(row.m_teams[1].m_actors));
         Assert.Equal(0UL, vacancy.m_nActorID.Full); Assert.Equal(0, vacancy.m_status); Assert.Equal(0, row.m_status);
@@ -366,7 +366,7 @@ public sealed class ArenaAmbientMatchmakerTests {
 
     private static PvPMatchInfo[] ListedRows(World world, ulong who) {
         var messages = world.Sent.Where(m => m.Who == who).Select(m => m.Message).ToArray();
-        var initial = ArenaMessages.Read<NewListUpdate>(messages.OfType<GAME_5_PROTOCOL.MSG_PVPUPDATEINFO>().Last().TournamentInfo)!;
+        var initial = ArenaMessages.ReadBrowser<NewListUpdate>(messages.OfType<GAME_5_PROTOCOL.MSG_PVPUPDATEINFO>().Last().TournamentInfo)!;
         var rows = initial.m_matches.Cast<PvPMatchInfo>().ToList();
         foreach (var message in messages.OfType<GAME_5_PROTOCOL.MSG_TOURNAMENTUPDATE>()) {
             var update = ArenaMessages.Read<TournamentUpdateList>(message.Updates)!;
@@ -426,7 +426,7 @@ public sealed class ArenaAmbientMatchmakerTests {
         world.Sent.Clear();
         world.Arena.List(Human, world.Arena.TournamentId(kind), startingIndex: kind == ArenaKind.Ranked ? 168 : 84, numberOfElements: pageSize);
         Assert.All(ListedRows(world, Human), row => Assert.Equal(19, ((PvPActor) row.m_teams[1].m_actors[0]).m_level));
-        var initial = ArenaMessages.Read<NewListUpdate>(world.Sent.Select(m => m.Message).OfType<GAME_5_PROTOCOL.MSG_PVPUPDATEINFO>().Single().TournamentInfo)!;
+        var initial = ArenaMessages.ReadBrowser<NewListUpdate>(world.Sent.Select(m => m.Message).OfType<GAME_5_PROTOCOL.MSG_PVPUPDATEINFO>().Single().TournamentInfo)!;
         Assert.Equal(ArenaFriendlyRoster.ChallengeCountPerKind * (kind == ArenaKind.Ranked ? 2 : 1), initial.m_totalTeams);
     }
 

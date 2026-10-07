@@ -136,7 +136,7 @@ public sealed class ArenaMatchmakerTests {
     public void CreateJoinConfirmAndGoToARandomArena() {
         var w = new World();
         w.Arena.List(E, ArenaRules.Hash("PvPPractice"));
-        Assert.Empty(ArenaMessages.Read<NewListUpdate>(w.Of<GAME_5_PROTOCOL.MSG_PVPUPDATEINFO>(E).Single().TournamentInfo)!.m_matches);
+        Assert.Empty(ArenaMessages.ReadBrowser<NewListUpdate>(w.Of<GAME_5_PROTOCOL.MSG_PVPUPDATEINFO>(E).Single().TournamentInfo)!.m_matches);
 
         w.Arena.Create(A, ArenaKind.Practice, w.Size(ArenaKind.Practice, 2), 1, 50, friendsOnly: false);
         var match = w.Arena.MatchOf(A);
@@ -145,7 +145,7 @@ public sealed class ArenaMatchmakerTests {
 
         // The watcher's list gets the new match, with the creator's packed name in the actor.
         var update = w.Of<GAME_5_PROTOCOL.MSG_PVPUPDATEINFO>(E).Last();
-        var info = (PvPMatchInfo) ArenaMessages.Read<NewListUpdate>(update.TournamentInfo)!.m_matches.Single();
+        var info = (PvPMatchInfo) ArenaMessages.ReadBrowser<NewListUpdate>(update.TournamentInfo)!.m_matches.Single();
         Assert.Equal((2u, ArenaRules.Hash("PvPPractice2v2Match")), (info.m_teamSize, info.m_matchNameID));
         Assert.Equal(50, info.m_joinQueueRequirements.m_maxLevel);
         var actor = info.m_teams[0].m_actors.OfType<PvPActor>().Single();

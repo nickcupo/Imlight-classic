@@ -405,7 +405,7 @@ internal sealed class ArenaMatchmaker {
             m_clearData = true, m_matches = [.. first.Matches], m_teams = first.Teams, m_brackets = [], m_totalTeams = page.Total,
         };
         _world.Send(charId, new GAME_5_PROTOCOL.MSG_PVPUPDATEINFO {
-            TournamentInfo = ArenaMessages.Blob(list, page.Names), CharacterID = _world.Player(charId)?.ActorId ?? 0,
+            TournamentInfo = ArenaMessages.BrowserBlob(list, page.Names), CharacterID = _world.Player(charId)?.ActorId ?? 0,
             PromptMsg = 0, DiffType = 0, IsPvPQueue = 0, IsPlayerAccountAlreadyHosting = 0,
         });
         RememberBrowserRows(browser, first.Matches, first.Teams);

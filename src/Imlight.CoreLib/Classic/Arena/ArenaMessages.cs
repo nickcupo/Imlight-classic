@@ -35,8 +35,9 @@
  *   - MSG_PVPCONFIRM (server to client): status 8, the Go to Arena buttons.
  *   - MSG_MATCHRESULT.ResultData: an ArenaMatchResults (PvPMatchResults.gui).
  *   - MSG_ARENA_ERROR.Error: the KingsIsle hash of a string-table key.
- * Every blob is a non-versioned binary object with property mask 0x18, as the
- * client's SerializerBinary writes and reads them.
+ * Every blob is a non-versioned binary object with property mask 0x18.
+ * CLASSIC: PVPUPDATEINFO also requires a serialized-flags prefix; client
+ * requests and TOURNAMENTUPDATE continuations use bare objects.
  *
  * NOTE:
  * PvPActor.m_nameBlob is a std::string carrying the packed name bytes
@@ -52,6 +53,7 @@
 #nullable enable
 
 using System;
+using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.Linq;
 using Imcodec.IO;
@@ -257,6 +259,27 @@ internal static class ArenaMessages {
         finally {
             foreach (var (actor, original) in originals) actor.m_nameBlob = original;
         }
+    }
+
+    // CLASSIC: native PVPUPDATEINFO sets reader flags 9, reads the transmitted flags first,
+    // and uses those flags for the body. Flags 1 admit an uncompressed, non-versioned object.
+    // Patch packed names in the bare body before adding the envelope; do not compress marker bytes.
+    public static ByteString BrowserBlob(NewListUpdate value, IReadOnlyDictionary<ulong, byte[]>? names = null) {
+        byte[] body = Blob(value, names);
+        var framed = new byte[sizeof(uint) + body.Length];
+        BinaryPrimitives.WriteUInt32LittleEndian(framed, (uint) SerializerFlags.SerializeFlags);
+        body.CopyTo(framed, sizeof(uint));
+        return new ByteString(framed);
+    }
+
+    // Response decoder used by native-browser replay checks. Client request decoding stays bare.
+    public static T? ReadBrowser<T>(byte[]? data) where T : PropertyClass {
+        if (data is not { Length: > 0 }) return null;
+        try {
+            var serializer = new ObjectSerializer(Versionable: false, Behaviors: SerializerFlags.SerializeFlags);
+            return serializer.Deserialize<T>(data, Mask, out var value) ? value : null;
+        }
+        catch (Exception) { return null; }
     }
 
     /// <summary>Reads a client blob (PvPMatchRequest, TournamentInfoRequest); null when it does not decode.</summary>

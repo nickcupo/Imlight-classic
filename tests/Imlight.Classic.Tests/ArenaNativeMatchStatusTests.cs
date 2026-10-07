@@ -89,7 +89,7 @@ public sealed class ArenaNativeMatchStatusTests {
     private static PvPMatchInfo[] ReadList(World world, ArenaKind kind, bool watch = false) {
         world.Sent.Clear();
         world.Arena.List(Watcher, world.Arena.TournamentId(kind), requestType: watch ? 5u : 0u);
-        var initial = ArenaMessages.Read<NewListUpdate>(world.Messages<GAME_5_PROTOCOL.MSG_PVPUPDATEINFO>(Watcher).Single().TournamentInfo)!;
+        var initial = ArenaMessages.ReadBrowser<NewListUpdate>(world.Messages<GAME_5_PROTOCOL.MSG_PVPUPDATEINFO>(Watcher).Single().TournamentInfo)!;
         var rows = initial.m_matches.Cast<PvPMatchInfo>().ToList();
         foreach (var message in world.Messages<GAME_5_PROTOCOL.MSG_TOURNAMENTUPDATE>(Watcher))
             rows.AddRange(ArenaMessages.Read<TournamentUpdateList>(message.Updates)!.m_updates
@@ -140,7 +140,7 @@ public sealed class ArenaNativeMatchStatusTests {
         world.Observe = (who, message) => {
             if (who != Watcher) return;
             IEnumerable<PvPMatchInfo> rows = message switch {
-                GAME_5_PROTOCOL.MSG_PVPUPDATEINFO initial => ArenaMessages.Read<NewListUpdate>(initial.TournamentInfo)!.m_matches.Cast<PvPMatchInfo>(),
+                GAME_5_PROTOCOL.MSG_PVPUPDATEINFO initial => ArenaMessages.ReadBrowser<NewListUpdate>(initial.TournamentInfo)!.m_matches.Cast<PvPMatchInfo>(),
                 GAME_5_PROTOCOL.MSG_TOURNAMENTUPDATE update => ArenaMessages.Read<TournamentUpdateList>(update.Updates)!.m_updates
                     .OfType<AddMatchUpdate>().Select(add => (PvPMatchInfo) add.m_matchInfo),
                 _ => [],
@@ -227,7 +227,7 @@ public sealed class ArenaNativeMatchStatusTests {
         world.Arena.Finish(run, 0, []);
         Assert.False(world.Arena.IsSpectator(Watcher));
         Assert.Null(world.Arena.Run(run));
-        var cleared = ArenaMessages.Read<NewListUpdate>(world.Messages<GAME_5_PROTOCOL.MSG_PVPUPDATEINFO>(Watcher).Last().TournamentInfo)!;
+        var cleared = ArenaMessages.ReadBrowser<NewListUpdate>(world.Messages<GAME_5_PROTOCOL.MSG_PVPUPDATEINFO>(Watcher).Last().TournamentInfo)!;
         Assert.True(cleared.m_clearData); Assert.Empty(cleared.m_matches); Assert.Equal(0, cleared.m_totalTeams);
         Assert.Empty(ReadList(world, kind, watch: true));
         RefusesWatch(world, row.m_matchID.Full);
