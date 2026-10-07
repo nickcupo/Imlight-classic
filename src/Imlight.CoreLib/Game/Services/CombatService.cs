@@ -141,16 +141,21 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
             });
         }
 
-        // Unequip mounts if the player has one equipped
-        UnEquipMount();
-
-        // Set the persistent location and orientation of the wizard
         var wizard = GetActiveWizard();
-        if (ClassicQuestEngine.IsActive && wizard.IsInCombatGrace) {
-            RemoveNoAggroEffect(); // CLASSIC: in a duel again (a PvP circle, a scripted fight): no fade at the table.
+        try {
+            if (!CompleteCombatEntry(wizard, message, () => {
+                // Unequip mounts if the player has one equipped, before the captured native elixir receipt.
+                UnEquipMount();
+                if (ClassicQuestEngine.IsActive && wizard.IsInCombatGrace) {
+                    RemoveNoAggroEffect(); // CLASSIC: in a duel again: no fade at the table.
+                }
+            }, SendToSocket)) { CloseSession(); return; }
         }
-
-        if (!PublishCombatState(wizard, true, message.Duel?.Duel?.m_bPVP ?? true)) return;
+        catch {
+            if (WizardCollection.IsInventorySnapshotUncertain(wizard)) { CloseSession(); return; }
+            throw;
+        }
+        // Set the persistent location and orientation of the wizard.
         wizard.SetPersistentLocation(message.SlotPosition);
 
         // Orientation is given in radians. It must be converted to degrees and then to a byte.
@@ -158,6 +163,24 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
         var orientationDegrees = (float) (orientationRadians * (180 / Math.PI));
         var orientation = (byte) (orientationDegrees / 360 * 256);
         wizard.SetPersistentOrientation(orientation);
+    }
+
+    // CLASSIC: prepared messages are immutable internal metadata, emitted at the original post-mount-stow position.
+    // A later idempotent runtime refresh cannot recreate the removal packets captured before the stat snapshot.
+    internal static bool CompleteCombatEntry(Wizard wizard, COMBAT_106_PROTOCOL.MSG_ACTORADDEDTODUEL message,
+        System.Action beforeEffects, System.Action<Imcodec.MessageLayer.IMessage> send) {
+        if (wizard is null || WizardCollection.IsInventorySnapshotUncertain(wizard)
+            || message.ElixirReceipt is { } captured && (!ReferenceEquals(captured.Wizard, wizard) || captured.Messages.IsDefault)) return false;
+        beforeEffects();
+        if (WizardCollection.IsInventorySnapshotUncertain(wizard)) return false;
+        if (message.ElixirReceipt is { } receipt) {
+            foreach (var packet in receipt.Messages) send(packet);
+        }
+        else {
+            foreach (var packet in ElixirService.PublishCombatTransition(wizard, true, message.Duel?.Duel?.m_bPVP ?? true))
+                send(packet); // Stock/inactive and legacy internal callers retain their existing late transition.
+        }
+        return true;
     }
 
     [MessageHandler(typeof(COMBAT_106_PROTOCOL.MSG_COMBATDEFEAT))]

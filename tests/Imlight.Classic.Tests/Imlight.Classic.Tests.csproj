@@ -111,6 +111,7 @@
     <ServerIntegrationTest Include="ElixirCancellationTests.cs" />
     <ServerIntegrationTest Include="ElixirCancellationTests.Native.cs" />
     <ServerIntegrationTest Include="ElixirTransitionConcurrencyTests.cs" />
+    <ServerIntegrationTest Include="CombatElixirSnapshotTests.cs" />
     <ServerIntegrationTest Include="ArenaPvpMinionTests.cs" />
     <ServerIntegrationTest Include="OctoberShopRuntimeTests.cs" />
     <ServerIntegrationTest Include="HouseTests.cs" />

@@ -150,9 +150,10 @@ internal sealed partial class CombatDuelComponent {
             return false;
         }
 
+        if (!circle.TryRejoinSeat(playerActor, playerObj, playerWizard, out var elixirReceipt)) return false;
+        // CLASSIC: failed preparation retains the held seat and its expiry; only an admitted alias releases them.
         Timers.Cancel(REJOIN_TIMER_PREFIX + playerWizard.CharId);
         ActiveDuels.Release(playerWizard.CharId);
-        circle.RejoinSeat(playerActor, playerObj, playerWizard);
 
         // The session needs the duel actor (moves, flee, logout); the client needs the duel and its slot.
         playerActor.Tell(new COMBAT_106_PROTOCOL.MSG_ACTORADDEDTODUEL {
@@ -161,6 +162,7 @@ internal sealed partial class CombatDuelComponent {
             SubCircle = circle,
             SlotPosition = circle.WorldPosition,
             SlotOrientation = circle.WorldRotation,
+            ElixirReceipt = elixirReceipt,
         });
         if (_serializer.Serialize(GetClientBehaviorInstance(), _combatParticipantFlags, out var duelData)) {
             playerActor.Tell(new DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_DUEL { Data = duelData });
