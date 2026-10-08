@@ -26,6 +26,7 @@ public sealed class ArenaNativeSigilIdentityTests : IDisposable {
     private readonly IDictionary<string, SigilTemplate> _templates;
 
     public ArenaNativeSigilIdentityTests() {
+        EquipmentAttachConcurrencyTests.Configure();
         ClassicRuntime.ResetForTests();
         ClassicRuntime.Initialize(ClassicDataFixture.RealRules("late-2009"));
         _templates = (IDictionary<string, SigilTemplate>)typeof(SigilFactory)
@@ -95,6 +96,42 @@ public sealed class ArenaNativeSigilIdentityTests : IDisposable {
         }
     }
 
+    [Theory]
+    [InlineData(MagicSchool.Fire, MagicSchool.Ice, true)]
+    [InlineData(MagicSchool.Ice, MagicSchool.Storm, true)]
+    [InlineData(MagicSchool.Storm, MagicSchool.Myth, true)]
+    [InlineData(MagicSchool.Myth, MagicSchool.Life, true)]
+    [InlineData(MagicSchool.Life, MagicSchool.Death, true)]
+    [InlineData(MagicSchool.Death, MagicSchool.Balance, true)]
+    [InlineData(MagicSchool.Balance, MagicSchool.Fire, true)]
+    [InlineData(MagicSchool.Fire, MagicSchool.Ice, false)]
+    [InlineData(MagicSchool.Ice, MagicSchool.Storm, false)]
+    [InlineData(MagicSchool.Storm, MagicSchool.Myth, false)]
+    [InlineData(MagicSchool.Myth, MagicSchool.Life, false)]
+    [InlineData(MagicSchool.Life, MagicSchool.Death, false)]
+    [InlineData(MagicSchool.Death, MagicSchool.Balance, false)]
+    [InlineData(MagicSchool.Balance, MagicSchool.Fire, false)]
+    public void NativeCombatSnapshotKeepsEachAuthoritativeSchoolOnBothPlayerSides(
+        MagicSchool ownerSchool, MagicSchool opponentSchool, bool loadedFromDatabase) {
+        var component = Select("PvPSigil8Actor2Sides", true);
+        var opponent = InitializeWizard(component, 0, opponentSchool, loadedFromDatabase);
+        var owner = InitializeWizard(component, 4, ownerSchool, loadedFromDatabase);
+        component.Duel.m_flatParticipantList = [component.SubCircles[0].CombatParticipant,
+            component.SubCircles[4].CombatParticipant];
+        var decoded = AssertNativeSigil(component.GetClientBehaviorInstance(), 1924535158u);
+
+        foreach (var (slot, wizard) in new[] { (0, opponent), (4, owner) }) {
+            var expected = (uint)wizard.MagicSchoolBehavior.MagicSchool;
+            // The real saved-wizard initializer or new/ambient stats constructor derives the identity;
+            // the fixture never assigns m_schoolID directly. Native participant fields must agree.
+            Assert.Equal(expected, wizard.GameStats.m_schoolID);
+            var participant = Assert.Single(decoded.m_pDuel.m_flatParticipantList.Where(p => p.m_subcircle == slot));
+            Assert.Equal(expected, (uint)participant.m_primaryMagicSchoolID);
+            Assert.Equal(expected, participant.m_pGameStats.m_schoolID);
+            Assert.Equal(participant.m_primaryMagicSchoolID, (int)participant.m_pGameStats.m_schoolID);
+        }
+    }
+
     private CombatDuelComponent Select(string name, bool pvp) {
         if (!_previous.ContainsKey(name)) _previous[name] = _templates.TryGetValue(name, out var previous) ? previous : null;
         var template = new CombatSigilTemplate {
@@ -125,19 +162,25 @@ public sealed class ArenaNativeSigilIdentityTests : IDisposable {
     private static CombatSigilTemplate SelectedTemplate(CombatDuelComponent component)
         => (CombatSigilTemplate)typeof(CombatDuelComponent).GetField("_sigilTemplate", Private)!.GetValue(component)!;
 
-    private static void InitializeWizard(CombatDuelComponent component, int slot) {
+    private static Wizard InitializeWizard(CombatDuelComponent component, int slot, MagicSchool school = MagicSchool.Ice,
+        bool loadedFromDatabase = true) {
         var circle = component.SubCircles[slot];
         var wizard = (Wizard)RuntimeHelpers.GetUninitializedObject(typeof(Wizard));
-        wizard.GameStats = (ServerWizGameStats)RuntimeHelpers.GetUninitializedObject(typeof(ServerWizGameStats));
-        wizard.GameStats.Level = 50;
+        wizard.GameStats = loadedFromDatabase
+            ? (ServerWizGameStats)RuntimeHelpers.GetUninitializedObject(typeof(ServerWizGameStats))
+            : new ServerWizGameStats(school, 50); // same constructor used by CreateAmbient/InitializeWizardGameStats
         wizard.GameStats.m_currentHitpoints = wizard.GameStats.m_baseHitpoints = 100;
         wizard.SpellbookBehavior = new();
         wizard.EquipmentBehavior = new() { SlotList = [] };
-        wizard.MagicSchoolBehavior = new() { MagicSchool = MagicSchool.Ice };
+        wizard.MagicSchoolBehavior = new() { MagicSchool = school, Level = 50 };
+        wizard.Account = (Account)RuntimeHelpers.GetUninitializedObject(typeof(Account));
+        wizard.Account.Characters = [wizard];
+        if (loadedFromDatabase) CombatRegressionTests.Invoke(wizard, "AfterDatabaseLoadWizardGameStats");
         circle._wizard = wizard;
         CombatRegressionTests.SetProperty(circle, nameof(CombatDuelSubCircle.ParticipantObject),
             new CoreObject { m_templateID = 1, m_globalID = 9000UL + (ulong)slot });
         CombatRegressionTests.Invoke(circle, "InitializePlayerSubCircleState");
+        return wizard;
     }
 
     private static WizardClientDuelBehavior AssertNativeSigil(WizardClientDuelBehavior behavior, uint expectedNativeId) {
