@@ -554,6 +554,14 @@ public class Zone : ReceiveProtocolDispatcher, IWithTimers {
         }
     }
 
+    // CLASSIC: a pet game's question about its scene objects goes to every object (path creatures included).
+    [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_QUERYTEMPLATEOBJECTS))]
+    private void ReceiveQueryTemplateObjects(ZONE_102_PROTOCOL.MSG_QUERYTEMPLATEOBJECTS message) {
+        foreach (var supervisor in _supervisors) {
+            supervisor.Forward(message);
+        }
+    }
+
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_ZONEBROADCAST))]
     private void ReceiveZoneBroadcast(ZONE_102_PROTOCOL.MSG_ZONEBROADCAST message) {
         DispatchBroadcast(message);
