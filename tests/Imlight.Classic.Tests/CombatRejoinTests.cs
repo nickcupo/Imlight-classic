@@ -46,7 +46,12 @@ using Xunit;
 
 namespace Imlight.Classic.Tests;
 
+// CLASSIC: seat rejoin takes the elixir snapshot path when another test has left an October runtime active, so these
+// tests share the runtime collection and start from no profile (they were order-dependent before, 2026-10-08).
+[Collection(nameof(ClassicRuntimeCollection))]
 public sealed class CombatRejoinTests {
+
+    public CombatRejoinTests() => Imlight.Classic.ClassicRuntime.ResetForTests();
 
     [Fact]
     public void DroppedSeatHasNoActorAndRemembersTheWizard() {
