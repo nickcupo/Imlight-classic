@@ -9,6 +9,8 @@ using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Classic.Rules;
 using Imlight.CoreLib.Classic.Elixirs;
+using Imlight.CoreLib.Classic;
+using Imlight.CoreLib.Game.Effects;
 using Imlight.CoreLib.Game.Services;
 using Imlight.CoreLib.Shared.Behaviors;
 using Imlight.CoreLib.Shared.Resources;
@@ -698,6 +700,240 @@ public sealed class ProgressionPotionPersistenceTests : IDisposable {
         Assert.Equal(1.25f, stats.m_potionCharge); Assert.Equal(3f, stats.m_potionMax);
         Assert.Equal(31, stats.m_currentHitpoints); Assert.Equal(19, stats.m_currentMana);
         Assert.Equal(150, f.Saved.MagicSchoolBehavior.ExperiencePoints); Assert.Equal(7, f.Saved.PetOwnerBehavior.Energy);
+    }
+
+    // CLASSIC: cross the real progression/claim ACK boundary with the existing derived mana ledger.
+    public static IEnumerable<object[]> ManaProgressionCases() {
+        foreach (var route in new[] { "gain", "level", "quest" })
+            foreach (var reduction in new[] { "full", "half", "stacked" })
+                foreach (var flatFirst in new[] { true, false }) yield return [route, reduction, flatFirst];
+    }
+
+    [Theory]
+    [MemberData(nameof(ManaProgressionCases))]
+    public void ManaLedgerMultilevelProgressionPublishesOnlyAfterAckAndRestoresNewUnreducedMaximum(
+        string route, string reduction, bool flatFirst) {
+        if (route == "quest") {
+            using var quest = new TerminalClaimFixture(); var live = quest.Live;
+            var pieces = AddManaPieces(live.GameStats, reduction, flatFirst); var before = State.Of(live);
+            var ledger = ManaLedger.Of(live.GameStats); var native = new List<IMessage>();
+            quest.Reward.ExperienceAmount = 250;
+            quest.OnSave = () => { Assert.Equal(before, State.Of(live)); AssertManaLedger(ledger, live.GameStats); Assert.Empty(native); };
+            quest.AfterCommit = claim => native.AddRange(claim.GoalActions.Concat(claim.EndActions).Select(action => action.Message).OfType<IMessage>());
+            Assert.Equal(QuestClaimStatus.Committed, quest.Claim(out _));
+            Assert.Equal(1, quest.Opened); Assert.Equal(1, quest.Saves);
+            Assert.Equal(ManaMaximum(77, reduction), quest.Saved.GameStats.m_baseMana);
+            Assert.Equal(quest.Saved.GameStats.m_baseMana, quest.Saved.GameStats.m_currentMana);
+            AssertManaProgressed(live, native, reduction, pieces);
+            return;
+        }
+        var f = new Fixture(); using var scope = f.Scope(); var wizard = f.Live();
+        var effects = AddManaPieces(wizard.GameStats, reduction, flatFirst); var original = State.Of(wizard);
+        var originalLedger = ManaLedger.Of(wizard.GameStats); var sent = new List<IMessage>();
+        f.OnSave = () => { Assert.Equal(original, State.Of(wizard)); AssertManaLedger(originalLedger, wizard.GameStats); Assert.Empty(sent); };
+        Assert.True(route == "gain"
+            ? WizardService.ApplyExperience(wizard, 250, sent.Add, sent.Add, () => Assert.Fail("ACK must not close"))
+            : WizardService.ApplyLevel(wizard, 4, sent.Add, sent.Add, () => Assert.Fail("ACK must not close")));
+        Assert.Equal(1, f.Opened); Assert.Equal(1, f.Saves);
+        Assert.Equal(ManaMaximum(77, reduction), f.Saved.GameStats.m_baseMana);
+        Assert.Equal(f.Saved.GameStats.m_baseMana, f.Saved.GameStats.m_currentMana);
+        AssertManaProgressed(wizard, sent, reduction, effects, route == "level" ? 300 : 350);
+    }
+
+    public static IEnumerable<object[]> ManaNoRefillCases() {
+        foreach (var route in new[] { "gain", "remove" })
+            foreach (var reduction in new[] { "full", "half", "stacked" }) yield return [route, reduction];
+    }
+    [Theory]
+    [MemberData(nameof(ManaNoRefillCases))]
+    public void ManaLedgerNoRefillKeepsCurrentEvenWhenMaximumIsLowered(string route, string reduction) {
+        var f = new Fixture(); using var scope = f.Scope(); var live = f.Live();
+        var pieces = AddManaPieces(live.GameStats, reduction); live.GameStats.m_currentMana = 91;
+        var current = live.GameStats.m_currentMana; var ledger = ManaLedger.Of(live.GameStats);
+        f.OnSave = () => { Assert.Equal(current, live.GameStats.m_currentMana); AssertManaLedger(ledger, live.GameStats); };
+        ProgressionReceipt receipt;
+        Assert.True(route == "gain" ? WizardProgressionTransactions.TryGainExperience(live, 250, out receipt, refill: false)
+            : WizardProgressionTransactions.TryRemoveExperience(live, 80, out receipt));
+        var restored = route == "gain" ? 77 : 47;
+        Assert.Equal(ManaMaximum(restored, reduction), live.GameStats.m_baseMana);
+        Assert.Equal(live.GameStats.m_baseMana, f.Saved.GameStats.m_baseMana);
+        Assert.Equal(current, live.GameStats.m_currentMana); Assert.Equal(17, f.Saved.GameStats.m_currentMana);
+        Assert.False(receipt.Refill); Assert.Empty(receipt.LevelMessages); Assert.Equal(1, f.Opened);
+        RemoveManaPieces(live.GameStats, pieces); Assert.Equal(restored, live.GameStats.m_baseMana);
+    }
+
+    [Theory]
+    [InlineData("full")] [InlineData("half")] [InlineData("stacked")]
+    public void ManaLedgerCappedNoOpDoesNotSaveOrChurn(string reduction) {
+        var f = new Fixture(350, 4); using var scope = f.Scope(); var live = f.Live();
+        var pieces = AddManaPieces(live.GameStats, reduction, baseMaximum: 70); var before = State.Of(live);
+        var ledger = ManaLedger.Of(live.GameStats);
+        Assert.True(WizardProgressionTransactions.TryGainExperience(live, 100, out var receipt));
+        Assert.False(receipt.ShouldSave); Assert.Equal(0, f.Saves); Assert.Equal(before, State.Of(live));
+        AssertManaLedger(ledger, live.GameStats); Assert.Equal(1, f.Opened);
+        RemoveManaPieces(live.GameStats, pieces); Assert.Equal(77, live.GameStats.m_baseMana);
+    }
+
+    public static IEnumerable<object[]> ManaAckFailureCases() {
+        foreach (var route in new[] { "gain", "quest" })
+            foreach (var reduction in new[] { "full", "half", "stacked" })
+                foreach (var durable in new[] { false, true }) yield return [route, reduction, durable];
+    }
+    [Theory]
+    [MemberData(nameof(ManaAckFailureCases))]
+    public void ManaLedgerFailedOrLostAckKeepsOriginalLiveMaximumAndLedger(string route, string reduction, bool durable) {
+        if (route == "quest") {
+            using var quest = new TerminalClaimFixture { FailSave = true, Durable = durable };
+            var pieces = AddManaPieces(quest.Live.GameStats, reduction); var before = State.Of(quest.Live);
+            var ledger = ManaLedger.Of(quest.Live.GameStats); var publications = 0;
+            quest.Reward.ExperienceAmount = 250; quest.AfterCommit = _ => publications++;
+            quest.OnSave = () => { Assert.Equal(before, State.Of(quest.Live)); AssertManaLedger(ledger, quest.Live.GameStats); };
+            Assert.Throws<InvalidOperationException>(() => quest.Claim(out _));
+            Assert.Equal(before, State.Of(quest.Live)); AssertManaLedger(ledger, quest.Live.GameStats);
+            Assert.True(WizardCollection.IsInventorySnapshotUncertain(quest.Live)); Assert.Equal(0, publications);
+            Assert.Equal(durable ? ManaMaximum(77, reduction) : 50, quest.Saved.GameStats.m_baseMana);
+            Assert.Equal(1, quest.Opened); Assert.Equal(1, quest.Saves);
+            RemoveManaPieces(quest.Live.GameStats, pieces); Assert.Equal(57, quest.Live.GameStats.m_baseMana);
+            return;
+        }
+        var f = new Fixture { Fail = true, Durable = durable }; using var scope = f.Scope(); var live = f.Live();
+        var effects = AddManaPieces(live.GameStats, reduction); var original = State.Of(live); var savedLedger = ManaLedger.Of(live.GameStats);
+        var native = new List<IMessage>(); var closed = 0;
+        f.OnSave = () => { Assert.Equal(original, State.Of(live)); AssertManaLedger(savedLedger, live.GameStats); };
+        Assert.Throws<InvalidOperationException>(() => WizardService.ApplyExperience(live, 250, native.Add, native.Add, () => closed++));
+        Assert.Equal(1, closed); Assert.Empty(native); Assert.Equal(original, State.Of(live)); AssertManaLedger(savedLedger, live.GameStats);
+        Assert.True(WizardCollection.IsInventorySnapshotUncertain(live)); Assert.Equal(1, f.Opened); Assert.Equal(1, f.Saves);
+        Assert.Equal(durable ? ManaMaximum(77, reduction) : 50, f.Saved.GameStats.m_baseMana);
+        RemoveManaPieces(live.GameStats, effects); Assert.Equal(57, live.GameStats.m_baseMana);
+    }
+
+    public static IEnumerable<object[]> ManaRefusalCases() {
+        foreach (var route in new[] { "gain", "quest" })
+            foreach (var reduction in new[] { "full", "half", "stacked" }) yield return [route, reduction];
+    }
+    [Theory]
+    [MemberData(nameof(ManaRefusalCases))]
+    public void ManaLedgerNativePreparationRefusalKeepsUnchangedDerivedState(string route, string reduction) {
+        if (route == "quest") {
+            using var quest = new TerminalClaimFixture(); var pieces = AddManaPieces(quest.Live.GameStats, reduction);
+            var before = State.Of(quest.Live); var ledger = ManaLedger.Of(quest.Live.GameStats);
+            quest.Reward.ExperienceAmount = 250; quest.Dependencies.Prepare = _ => false;
+            Assert.Equal(QuestClaimStatus.Refused, quest.Claim(out _)); Assert.Equal(0, quest.Saves); Assert.Equal(1, quest.Opened);
+            Assert.Equal(before, State.Of(quest.Live)); AssertManaLedger(ledger, quest.Live.GameStats);
+            Assert.False(WizardCollection.IsInventorySnapshotUncertain(quest.Live)); RemoveManaPieces(quest.Live.GameStats, pieces);
+            Assert.Equal(57, quest.Live.GameStats.m_baseMana); return;
+        }
+        var f = new Fixture(); using var scope = f.Scope(); var live = f.Live(); var effects = AddManaPieces(live.GameStats, reduction);
+        var original = State.Of(live); var old = ManaLedger.Of(live.GameStats); f.Dependencies.Prepare = _ => false;
+        Assert.False(WizardProgressionTransactions.TryGainExperience(live, 250, out var receipt)); Assert.Null(receipt);
+        Assert.Equal(0, f.Saves); Assert.Equal(1, f.Opened); Assert.Equal(original, State.Of(live)); AssertManaLedger(old, live.GameStats);
+        Assert.False(WizardCollection.IsInventorySnapshotUncertain(live)); RemoveManaPieces(live.GameStats, effects);
+        Assert.Equal(57, live.GameStats.m_baseMana);
+    }
+
+    [Theory]
+    [InlineData("full")] [InlineData("half")] [InlineData("stacked")]
+    public void ManaLedgerZeroDeltaLevelRefillPreservesLedgerIdentity(string reduction) {
+        var f = new Fixture(); using var scope = f.Scope(); var live = f.Live(); var effects = AddManaPieces(live.GameStats, reduction);
+        var ledger = ManaLedger.Of(live.GameStats);
+        Assert.True(WizardProgressionTransactions.TrySetLevel(live, 2, resetMismatchedXp: false, out _));
+        AssertManaLedger(ledger, live.GameStats); Assert.Equal(ManaMaximum(57, reduction), live.GameStats.m_currentMana);
+        Assert.Equal(1, f.Opened); RemoveManaPieces(live.GameStats, effects); Assert.Equal(57, live.GameStats.m_baseMana);
+    }
+
+    [Theory]
+    [InlineData("gain", "reset")] [InlineData("gain", "change")]
+    [InlineData("quest", "reset")] [InlineData("quest", "change")]
+    public void ManaLedgerReentrantReplacementCannotPublishStaleProgressionOrQuestFields(string route, string mutation) {
+        var publications = 0;
+        static void Mutate(ServerWizGameStats stats, string kind) {
+            if (kind == "change") CharacterEffectHelper.AddStatisticEffectToStats(stats, "CanonicalMaxMana", new WizStatisticEffect { m_manaBonus = 5 });
+            else {
+                CharacterEffectHelper.ResetRebuiltEquipmentEffects(stats); stats.m_baseMana = 100;
+                CharacterEffectHelper.AddStatisticEffectToStats(stats, "CanonicalMaxManaPercentReduce", new WizStatisticEffect { m_manaBonus = .5f, m_itemSlotID = 909 });
+            }
+        }
+        if (route == "quest") {
+            using var quest = new TerminalClaimFixture(); AddManaPieces(quest.Live.GameStats, "full");
+            quest.Reward.ExperienceAmount = 250; quest.Reward.GoldAmount = 30;
+            var journal = quest.Live.QuestBehavior; var ids = journal.CurrentQuestIDs.ToArray(); var entries = journal.CurrentQuestInstances.ToArray();
+            var registry = journal.Registry.OrderBy(row => row.Key).ToArray(); var training = quest.Live.MagicSchoolBehavior.TrainingPoints;
+            var learned = quest.Live.SpellbookBehavior.LearnedSpellTemplateIds.ToArray(); State? afterHook = null; ManaLedger? ledger = null;
+            quest.Dependencies.BeforePublish = wizard => { Mutate(wizard.GameStats, mutation); afterHook = State.Of(wizard); ledger = ManaLedger.Of(wizard.GameStats); };
+            quest.AfterCommit = _ => publications++;
+            Assert.Throws<InvalidOperationException>(() => quest.Claim(out _));
+            Assert.Equal(afterHook, State.Of(quest.Live)); AssertManaLedger(ledger!, quest.Live.GameStats);
+            Assert.Same(journal, quest.Live.QuestBehavior); Assert.Equal(ids, journal.CurrentQuestIDs); Assert.Equal(entries, journal.CurrentQuestInstances);
+            Assert.Equal(registry, journal.Registry.OrderBy(row => row.Key)); Assert.Equal(training, quest.Live.MagicSchoolBehavior.TrainingPoints);
+            Assert.Equal(learned, quest.Live.SpellbookBehavior.LearnedSpellTemplateIds); Assert.True(quest.Expected.IsGoalActive(TerminalClaimFixture.GoalName));
+            Assert.Equal(0, publications); Assert.True(WizardCollection.IsInventorySnapshotUncertain(quest.Live));
+            Assert.Equal(4, quest.Saved.MagicSchoolBehavior.Level); Assert.Equal(130, quest.Saved.GameStats.m_currentGold);
+            Assert.Equal(1, quest.Opened); Assert.Equal(1, quest.Saves); return;
+        }
+        var f = new Fixture(); using var scope = f.Scope(); var live = f.Live(); AddManaPieces(live.GameStats, "full");
+        State? expected = null; ManaLedger? latest = null;
+        f.OnSave = () => { Mutate(live.GameStats, mutation); expected = State.Of(live); latest = ManaLedger.Of(live.GameStats); };
+        Assert.Throws<InvalidOperationException>(() => WizardService.ApplyExperience(live, 250, _ => publications++, _ => publications++, () => { }));
+        Assert.Equal(expected, State.Of(live)); AssertManaLedger(latest!, live.GameStats); Assert.Equal(0, publications);
+        Assert.True(WizardCollection.IsInventorySnapshotUncertain(live)); Assert.Equal(4, f.Saved.MagicSchoolBehavior.Level);
+        Assert.Equal(1, f.Opened); Assert.Equal(1, f.Saves);
+    }
+
+    [Theory]
+    [InlineData("full")] [InlineData("half")] [InlineData("stacked")]
+    public void ManaLedgerSuccessiveLevelGainsAccumulateBeforeFinalReductionRemoval(string reduction) {
+        var f = new Fixture(); using var scope = f.Scope(); var live = f.Live(); var effects = AddManaPieces(live.GameStats, reduction);
+        Assert.True(WizardProgressionTransactions.TryGainExperience(live, 50, out _));
+        Assert.Equal(ManaMaximum(67, reduction), live.GameStats.m_baseMana);
+        Assert.True(WizardProgressionTransactions.TryGainExperience(live, 100, out _));
+        Assert.Equal(ManaMaximum(77, reduction), live.GameStats.m_baseMana);
+        Assert.Equal(2, f.Opened); Assert.Equal(2, f.Saves);
+        RemoveManaPieces(live.GameStats, effects.Reverse().ToArray()); Assert.Equal(77, live.GameStats.m_baseMana);
+        CharacterEffectHelper.RemoveStatisticEffectFromStats(live.GameStats, "CanonicalMaxMana", new WizStatisticEffect { m_manaBonus = 7 });
+        Assert.Equal(70, live.GameStats.m_baseMana);
+    }
+
+    private static int ManaMaximum(int unreduced, string mode) => mode == "half" ? (int)Math.Floor(unreduced * .5) : 0;
+    private static WizStatisticEffect[] AddManaPieces(ServerWizGameStats stats, string mode, bool flatFirst = true, int baseMaximum = 50) {
+        stats.m_baseMana = baseMaximum;
+        var flat = new WizStatisticEffect { m_manaBonus = 7 };
+        var pieces = mode == "stacked" ? new[] { new WizStatisticEffect { m_itemSlotID = 901, m_manaBonus = .5f },
+            new WizStatisticEffect { m_itemSlotID = 902, m_manaBonus = .5f } }
+            : new[] { new WizStatisticEffect { m_itemSlotID = 901, m_manaBonus = mode == "half" ? .5f : 1f } };
+        if (flatFirst) CharacterEffectHelper.AddStatisticEffectToStats(stats, "CanonicalMaxMana", flat);
+        foreach (var piece in pieces) CharacterEffectHelper.AddStatisticEffectToStats(stats, "CanonicalMaxManaPercentReduce", piece);
+        if (!flatFirst) CharacterEffectHelper.AddStatisticEffectToStats(stats, "CanonicalMaxMana", flat);
+        return pieces;
+    }
+    private static void RemoveManaPieces(ServerWizGameStats stats, WizStatisticEffect[] pieces) {
+        foreach (var piece in pieces) CharacterEffectHelper.RemoveStatisticEffectFromStats(stats, "CanonicalMaxManaPercentReduce", piece);
+    }
+    private static void AssertManaProgressed(Wizard wizard, List<IMessage> packets, string reduction, WizStatisticEffect[] pieces, int xp = 350) {
+        Assert.Equal(4, wizard.MagicSchoolBehavior.Level); Assert.Equal(xp, wizard.MagicSchoolBehavior.ExperiencePoints);
+        Assert.Equal(ManaMaximum(77, reduction), wizard.GameStats.m_baseMana); Assert.Equal(wizard.GameStats.m_baseMana, wizard.GameStats.m_currentMana);
+        var mana = Assert.Single(packets.OfType<WIZARD_12_PROTOCOL.MSG_UPDATEMANA>());
+        Assert.Equal(70, mana.Mana); Assert.Equal(70, mana.MaxMana);
+        var health = Assert.Single(packets.OfType<WIZARD_12_PROTOCOL.MSG_UPDATEHEALTH>());
+        Assert.Equal(180, health.NewHealth); Assert.Equal(180, health.NewHealthMax);
+        if (pieces.Length == 2) {
+            CharacterEffectHelper.RemoveStatisticEffectFromStats(wizard.GameStats, "CanonicalMaxManaPercentReduce", pieces[0]);
+            Assert.Equal(38, wizard.GameStats.m_baseMana);
+            CharacterEffectHelper.RemoveStatisticEffectFromStats(wizard.GameStats, "CanonicalMaxManaPercentReduce", pieces[1]);
+        } else RemoveManaPieces(wizard.GameStats, pieces);
+        Assert.Equal(77, wizard.GameStats.m_baseMana);
+    }
+    private sealed record ManaLedger(object Identity, int Unreduced, KeyValuePair<uint, float>[] Reductions) {
+        internal static ManaLedger Of(ServerWizGameStats stats) {
+            var table = typeof(CharacterEffectHelper).GetField("s_manaAdjustments", BindingFlags.Static | BindingFlags.NonPublic)!.GetValue(null)!;
+            object?[] args = [stats, null]; Assert.True((bool)table.GetType().GetMethod("TryGetValue")!.Invoke(table, args)!);
+            var entry = args[1]!; var flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+            return new(entry, (int)entry.GetType().GetField("UnreducedMaximum", flags)!.GetValue(entry)!,
+                ((Dictionary<uint, float>)entry.GetType().GetField("Reductions", flags)!.GetValue(entry)!).OrderBy(row => row.Key).ToArray());
+        }
+    }
+    private static void AssertManaLedger(ManaLedger expected, ServerWizGameStats stats) {
+        var actual = ManaLedger.Of(stats); Assert.Same(expected.Identity, actual.Identity); Assert.Equal(expected.Unreduced, actual.Unreduced);
+        Assert.Equal(expected.Reductions, actual.Reductions);
     }
 
     private static void AssertLevelPackets(IReadOnlyList<IMessage> packets, Wizard live, int level) {
