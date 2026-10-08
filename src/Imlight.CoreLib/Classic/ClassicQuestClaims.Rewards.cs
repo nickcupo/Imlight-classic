@@ -81,7 +81,7 @@ internal static partial class ClassicQuestClaims {
                 if (saved.GameStats is null) return false;
                 var before = saved.GameStats.m_currentGold;
                 if (before < 0 || saved.GameStats.m_baseGoldPouch < 0) return false;
-                var balance = Math.Min((long)before + reward.GoldAmount, saved.GameStats.m_baseGoldPouch);
+                var balance = (long)before + WizardCollection.CappedGoldDelta(saved.GameStats, reward.GoldAmount); // keeps an over-full wallet
                 if (balance < 0 || balance > int.MaxValue) return false;
                 saved.GameStats.m_currentGold = (int)balance;
                 accepted.GoldAmount = Math.Max(0, (int)balance - before);
