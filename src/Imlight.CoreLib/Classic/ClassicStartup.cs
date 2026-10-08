@@ -105,6 +105,7 @@ public static class ClassicStartup {
             var rules = new ClassicRules(profile, zones);
             var classicDataRoot = Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(profilesPath));
             Arena.ClassicArenaGearTemplates.Initialize(classicDataRoot, profile.Id); // CLASSIC: dated October item effects.
+            ClassicMountTemplates.Initialize(classicDataRoot, profile.Id); // CLASSIC: October 1 Day mount price and speed.
             if (rules.IsRestricted) {
                 var accuracyTablePath = profile.Rules.AccuracyTable is { } table && classicDataRoot is not null
                     ? Path.Combine(classicDataRoot, table)
@@ -202,6 +203,7 @@ public static class ClassicStartup {
 
         // CLASSIC: an item preview/equipped-stat disagreement must stop boot before players can log in.
         Arena.ClassicArenaGearTemplates.ValidateAfterResources();
+        ClassicMountTemplates.ValidateAfterResources();
 
         try {
             var rules = ClassicRuntime.Rules;

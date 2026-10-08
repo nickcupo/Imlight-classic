@@ -187,6 +187,7 @@ public class CoreObjectFactory : RootSingleResourceSingleton<CoreObjectFactory>,
 
             ClassicSpellTemplates.Apply(templateObj, templateLocation.m_filename); // CLASSIC: combat reads this copy of a spell template.
             Imlight.CoreLib.Classic.Arena.ClassicArenaGearTemplates.Apply(templateObj, templateLocation.m_filename); // CLASSIC: match sourced client previews.
+            Imlight.CoreLib.Classic.ClassicMountTemplates.Apply(templateObj, templateLocation.m_filename); // CLASSIC: October 1 Day mounts.
 
             return templateObj;
         });

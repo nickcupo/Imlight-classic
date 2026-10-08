@@ -129,6 +129,7 @@ internal class InteractService(SessionActor sessionActor) : MessageService(sessi
         || npc.GetComponentOfType<InteractAuctionHouseComponent>() is not null
         || npc.GetComponentOfType<InteractTrainerComponent>() is not null
         || npc.GetComponentOfType<InteractDyeShopComponent>() is not null
+        || npc.GetComponentOfType<InteractSeamstressComponent>() is not null
         || npc.GetComponentOfType<InteractReagentComponent>() is not null;
 
     private void CloseShop(ulong gameObjectId) {

@@ -1,5 +1,7 @@
 // CLASSIC: dye and pet-name changes save the original tracked row and its gold payment together.
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using Imcodec.CoreObject;
 using Imcodec.IO;
 using Imcodec.ObjectProperty;
@@ -65,6 +67,56 @@ internal static class ClassicPaidItemChanges {
         }, onSaveFailure: _ => WizardCollection.MarkInventorySnapshotUncertain(live));
         if (success) receipt = acknowledged;
         return success;
+    }
+
+    /// <summary>
+    /// CLASSIC: Eloise Merryweather's stitch: the backpack item <paramref name="statsId"/> keeps its template (stats and
+    /// name) and takes the appearance and colors of the backpack item <paramref name="displayId"/>, which is destroyed.
+    /// Both must be clothing of one slot (hat, robe or shoes). The Crowns are paid by the caller before this call.
+    /// </summary>
+    internal static bool Stitch(Wizard live, ulong statsId, ulong displayId, out PaidItemChangeReceipt receipt,
+        out List<WizClientObjectItem> publishedBackpack, Func<ulong, WizItemTemplate> templates = null) {
+        receipt = null; publishedBackpack = null;
+        if (live is null || statsId == 0 || displayId == 0 || statsId == displayId
+            || WizardCollection.IsInventorySnapshotUncertain(live)) return false;
+        WizClientObjectItem stats = null;
+        List<WizClientObjectItem> backpack = null;
+        PaidItemChangeReceipt acknowledged = null;
+        var success = WizardCollection.CommitCharacterMutation(live.CharId, (session, saved) => {
+            if (WizardCollection.IsInventorySnapshotUncertain(live)
+                || !WizardInventoryTransactions.TryReadOwnedBackpack(session, saved, out var rows)) return false;
+            stats = rows.SingleOrDefault(row => row.m_globalID.Full == statsId);
+            var display = rows.SingleOrDefault(row => row.m_globalID.Full == displayId);
+            if (stats is null || display is null) return false;               // both from the backpack, not worn
+            WizItemTemplate Template(WizClientObjectItem item) => templates is null
+                ? CoreObjectFactory.GetCoreTemplate(item.m_templateID) as WizItemTemplate : templates(item.m_templateID.Full);
+            var statsTemplate = Template(stats);
+            var displayTemplate = Template(display);
+            if (statsTemplate is null || displayTemplate is null || !IsStitchable(statsTemplate, displayTemplate)) return false;
+            var look = display.m_displayID.Full != 0 ? display.m_displayID.Full : display.m_templateID.Full;
+            stats.m_displayID = look;
+            stats.m_primaryColor = display.m_primaryColor;
+            stats.m_secondaryColor = display.m_secondaryColor;
+            stats.m_pattern = display.m_pattern;
+            if (!WizardInventoryTransactions.TryStageRemove(session, saved, displayId, destroy: true, out var removed, out backpack, rows)) return false;
+            WizardInventoryTransactions.ProtectUnmodifiedRows(session, stats, removed);
+            return true;
+        }, saved => {
+            WizardInventoryTransactions.PublishCommittedBackpack(live, saved, backpack);
+            var item = live.InventoryBehavior.Items.Single(row => row.m_globalID.Full == statsId);
+            acknowledged = new(item, 0, saved.GameStats.m_currentGold, saved.GameStats.m_baseGoldPouch);
+        }, onSaveFailure: _ => WizardCollection.MarkInventorySnapshotUncertain(live));
+        if (success) { receipt = acknowledged; publishedBackpack = live.InventoryBehavior.Items.ToList(); }
+        return success;
+    }
+
+    /// <summary>CLASSIC: two pieces of clothing of the same slot (October 2009: hats, robes, boots).</summary>
+    internal static bool IsStitchable(WizItemTemplate stats, WizItemTemplate display) {
+        EquipmentSlotType? Slot(WizItemTemplate template) {
+            try { return ItemHelper.GetItemSlot(template)?.SlotType; } catch (InvalidOperationException) { return null; }
+        }
+        var slot = Slot(stats);
+        return slot is EquipmentSlotType.Hat or EquipmentSlotType.Robe or EquipmentSlotType.Shoes && slot == Slot(display);
     }
 
     internal static bool Rename(Wizard live, ulong id, uint nameKeys, out PaidItemChangeReceipt receipt,

@@ -77,7 +77,8 @@ public sealed class BadgeRulesTests {
         Assert.Equal("badges-2009", rules.Id);
         Assert.Equal(98, rules.Badges.Length);
         Assert.Equal(rules.Badges.Length, rules.Badges.Select(b => b.Id).Distinct().Count());
-        Assert.Equal(71, rules.Granted.Count());
+        Assert.Equal(93, rules.Granted.Count()); // CLASSIC: only the five crafting badges are not granted.
+        Assert.All(rules.Badges.Where(b => !b.IsGranted), b => Assert.Contains("crafting", ((NotGrantedBadgeAward) b.Award).Reason));
         Assert.All(rules.Badges, badge => Assert.StartsWith("BadgeFilterNames_", badge.FilterKey));
     }
 
@@ -117,6 +118,65 @@ public sealed class BadgeRulesTests {
     }
 
     [Fact]
+    public void RankBadgesFollowTheArenaThresholds() {
+        var ranks = RealBadges().PvpRankBadges;
+
+        Assert.Equal(["Sergeant", "Veteran", "Knight", "Captain", "Commander", "Warlord"],
+            ranks.Select(b => ((PvpRankBadgeAward) b.Award).Rank));
+        var progress = new Progress { Rank = "Knight" };
+        Assert.Equal([true, true, true, false, false, false], ranks.Select(b => BadgeRules.IsEarned(b, progress)));
+    }
+
+    [Fact]
+    public void SchoolSpellBadgesNeedEveryAvailableSpellOfTheOwnSchool() {
+        var rules = RealBadges();
+        var fire = rules.Find("master-of-fire")!;
+        var spells = ((SchoolSpellsBadgeAward) fire.Award).Spells;
+        Assert.Contains("spell.fire.fire_cat", spells);
+        Assert.DoesNotContain("spell.fire.fire_shield", spells); // crossover (Sabrina), not counted
+        Assert.DoesNotContain("spell.life.pixie", ((SchoolSpellsBadgeAward) rules.Find("master-of-nature")!.Award).Spells);
+
+        var progress = new Progress { School = "fire" };
+        progress.Available.UnionWith(spells);
+        progress.Known.UnionWith(spells.Skip(1));
+        Assert.False(BadgeRules.IsEarned(fire, progress));
+        progress.Known.Add(spells[0]);
+        Assert.True(BadgeRules.IsEarned(fire, progress));
+        progress.School = "ice";
+        Assert.False(BadgeRules.IsEarned(fire, progress));          // only your own school's badge
+        progress.School = "fire";
+        progress.Known.Remove(spells[0]);
+        progress.Available.Remove(spells[0]);                      // a spell the profile lacks is not needed
+        Assert.True(BadgeRules.IsEarned(fire, progress));
+        progress.Available.Clear();
+        Assert.False(BadgeRules.IsEarned(fire, progress));         // no available spell: never earned
+    }
+
+    [Fact]
+    public void WorldBadgesNeedTheCommonAndOwnSchoolQuests() {
+        var rules = RealBadges();
+        var oasis = rules.Find("master-of-the-oasis")!;
+        var area = (AreaQuestsBadgeAward) oasis.Award;
+        Assert.Contains("KT-MAIN-C01-004", area.Quests);
+        var balance = area.BySchool["balance"];
+        Assert.Contains("KT-BAL-C04-001", balance);
+        Assert.DoesNotContain("KT-BAL-C04-001", area.Quests);
+
+        var progress = new Progress { School = "fire" };
+        progress.Completed.UnionWith(area.Quests);
+        Assert.True(BadgeRules.IsEarned(oasis, progress));          // fire has no Krokotopia school quests
+        progress.School = "balance";
+        Assert.False(BadgeRules.IsEarned(oasis, progress));
+        progress.Completed.UnionWith(balance);
+        Assert.True(BadgeRules.IsEarned(oasis, progress));
+        Assert.Contains(oasis, rules.ForQuest(balance[0]));
+
+        var savior = (AreaQuestsBadgeAward) rules.Find("savior-of-wizard-city")!.Award;
+        Assert.Equal(7, savior.BySchool.Count);
+        Assert.DoesNotContain("WC-MAIN-C01-012", savior.Quests);   // Bad Blood opens Dragonspyre
+    }
+
+    [Fact]
     public void SecretShopperCountsVisits() {
         var shopper = Assert.Single(RealBadges().ForZone("Krokotopia/Interiors/KT_ShopSecret"));
 
@@ -126,10 +186,10 @@ public sealed class BadgeRulesTests {
 
     [Fact]
     public void BadgesWithoutARuleAreNeverEarned() {
-        var fire = RealBadges().Find("master-of-fire")!;
+        var crafter = RealBadges().Find("novice-crafter")!;
 
-        Assert.False(fire.IsGranted);
-        Assert.False(BadgeRules.IsEarned(fire, new Progress()));
+        Assert.False(crafter.IsGranted);
+        Assert.False(BadgeRules.IsEarned(crafter, new Progress()));
     }
 
     [Fact]
@@ -210,6 +270,28 @@ public sealed class BadgeRulesTests {
     }
 
     [Fact]
+    public void ARankedRatingAwardsEveryRankItReachesOnce() {
+        var rules = RealBadges();
+        var wizard = NewWizard();
+        var sent = new List<IMessage>();
+        using var hooks = new Hooks(rules);
+        var config = Imlight.Classic.Pvp.ArenaLoader.Load(Path.Combine(ClassicDataFixture.Root, "pvp", "arena-2009.yaml"));
+        var ranks = ClassicBadges.ArenaRanks;
+        ClassicBadges.ArenaRanks = () => config.Ranks;
+        try {
+            ClassicBadges.PvpRatingChanged(wizard, 549, sent.Add);
+            Assert.Empty(sent);
+            ClassicBadges.PvpRatingChanged(wizard, 610, sent.Add);
+            Assert.Equal(["sergeant", "veteran"], ClassicBadges.Earned(rules, wizard).Select(b => b.Id));
+            Assert.Equal(2, sent.Count);
+            ClassicBadges.PvpRatingChanged(wizard, 520, sent.Add);     // a later loss keeps the earned badges
+            Assert.Equal(2, ClassicBadges.Earned(rules, wizard).Count);
+            Assert.Equal(2, sent.Count);
+        }
+        finally { ClassicBadges.ArenaRanks = ranks; }
+    }
+
+    [Fact]
     public void TwoActorsEarningOneBadgeAwardItOnce() {
         var rules = RealBadges();
         using var hooks = new Hooks(rules);
@@ -261,12 +343,21 @@ public sealed class BadgeRulesTests {
     private sealed class Progress : IBadgeProgress {
 
         public HashSet<string> Completed { get; } = [];
+        public HashSet<string> Known { get; } = [];
+        public HashSet<string> Available { get; } = [];
+        public string? School { get; set; }
+        public string? Rank { get; set; }
+        private static readonly string[] s_ranks = ["Private", "Corporal", "Sergeant", "Veteran", "Knight", "Captain", "Commander", "Warlord"];
         public Dictionary<string, int> Kills { get; } = [];
         public Dictionary<string, int> Visits { get; } = [];
 
         public bool HasCompletedQuest(string quest) => Completed.Contains(quest);
         public int KillCount(string adjective) => Kills.GetValueOrDefault(adjective);
         public int ZoneVisits(string zone) => Visits.GetValueOrDefault(zone);
+        public string? PrimarySchool => School;
+        public bool KnowsSpell(string spellId) => Known.Contains(spellId);
+        public bool IsSpellAvailable(string spellId) => Available.Contains(spellId);
+        public bool ReachedPvpRank(string rank) => Rank is not null && Array.IndexOf(s_ranks, rank) <= Array.IndexOf(s_ranks, Rank);
 
     }
 
