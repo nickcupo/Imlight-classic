@@ -164,7 +164,7 @@ public sealed class SecondChanceSavedTransactionTests(ITestOutputHelper output) 
         using var f = new Fixture(output, cards: 999, reagent: 999, uses: 0, fullBackpack: true);
         var before = f.Database.RawDocuments(f.OriginalDocuments);
         // Prepared reward admission must use the saved rows/references, not these stale attached capacities.
-        f.Live.InventoryBehavior.InventoryItemIds.Clear(); f.Live.InventoryBehavior.Items.Clear();
+        f.Live.InventoryBehavior.InventoryItemIds.Clear(); f.Live.InventoryBehavior.Items = [];
         f.Live.SpellbookBehavior.TreasureCardTemplateIds.Clear(); f.Live.AlchemyBehavior.Reagents[0].m_quantity = 1;
         f.Roll = () => CompoundRoll(gold: 0);
         Assert.Equal(SecondChanceStatus.Opened, f.Open().Status); f.Packets.Clear();
