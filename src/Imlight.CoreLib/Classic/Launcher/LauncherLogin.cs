@@ -152,7 +152,11 @@ internal sealed class LauncherLogin {
     }
 
     /// <summary>Answers one request body from <paramref name="remote"/> (an address, for the failure limit).</summary>
-    internal string Handle(string body, string remote) {
+    /// <param name="keyAddress">CLASSIC (go-live): the address the session key is bound to, when it differs from
+    /// <paramref name="remote"/>. Behind the local tunnel <paramref name="remote"/> is the visitor (CF-Connecting-IP,
+    /// for lockouts and logs) and this is loopback: the visitor's game may connect over IPv4 while its HTTPS login came
+    /// over IPv6, so the key stays unbound there (LoginKeyPolicy.SameClient) instead of failing every attach.</param>
+    internal string Handle(string body, string remote, string? keyAddress = null) {
         string user, password, token;
         bool remember, forget;
         try {
@@ -213,7 +217,7 @@ internal sealed class LauncherLogin {
 
         _throttle?.Success(user);
         var sessionKey = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
-        _accounts.StoreSessionKey(accountId, sessionKey, remote);
+        _accounts.StoreSessionKey(accountId, sessionKey, keyAddress ?? remote);
         string? newToken = null;
         if (remember && tokenHash is null) {
             newToken = Convert.ToHexString(RandomNumberGenerator.GetBytes(24)).ToLowerInvariant();

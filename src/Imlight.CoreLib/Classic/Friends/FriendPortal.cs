@@ -58,7 +58,7 @@ internal static class FriendPortal {
                 Json(response, 403, new { error = "This request is not allowed." }); return;
             }
             var token = request.Cookies[CookieName]?.Value;
-            var address = request.RemoteEndPoint?.Address.ToString() ?? "unknown";
+            var address = ClientAddress(request); // CLASSIC (go-live): the visitor behind the local tunnel
             switch (path, method) {
                 case ("/friends", "GET"):
                     response.StatusCode = 302; response.RedirectLocation = "/friends/"; response.Close(); break;
@@ -133,9 +133,18 @@ internal static class FriendPortal {
     }
 
     private static void Register(HttpListenerContext context, FriendPortalBackend backend) {
-        var result = backend.Register(ReadBody(context.Request), context.Request.RemoteEndPoint?.Address.ToString() ?? "unknown");
+        var result = backend.Register(ReadBody(context.Request), ClientAddress(context.Request));
         if (result.Status == 201) Json(context.Response, 201, new { username = result.Username });
         else Json(context.Response, result.Status, new { error = result.Error });
+    }
+
+    /// <summary>
+    /// CLASSIC (go-live): the address for rate limits. A loopback peer (the Cloudflare tunnel in this container) may
+    /// name its visitor in [Classic] TrustedProxyHeader; access control still uses the peer (AllowsAddress).
+    /// </summary>
+    internal static string ClientAddress(HttpListenerRequest request) {
+        var header = Setting("Classic.TrustedProxyHeader");
+        return PublicAccess.ClientAddress(request.RemoteEndPoint?.Address, header is null ? null : request.Headers[header]);
     }
 
     private static bool KnownPath(string path) => path is "/friends" or "/friends/" or "/friends/spiral.png"
