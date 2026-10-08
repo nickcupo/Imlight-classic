@@ -343,10 +343,38 @@ public sealed class SecondChanceSavedTransactionTests(ITestOutputHelper output) 
     private static void AssertUnchangedDocuments(IReadOnlyDictionary<string, JToken> before,
         IReadOnlyDictionary<string, JToken> after, IEnumerable<string> ids) {
         foreach (var id in ids.Distinct()) {
-            Assert.Equal(before[id]["@metadata"]!["@change-vector"]!.Value<string>(),
-                after[id]["@metadata"]!["@change-vector"]!.Value<string>());
-            Assert.True(JToken.DeepEquals(before[id], after[id]), "Unexpected saved document change: " + id);
+            var oldData = (JObject)before[id].DeepClone(); var newData = (JObject)after[id].DeepClone();
+            oldData.Remove("@metadata"); newData.Remove("@metadata");
+            var paths = ChangedAuthoredPaths(oldData, newData, "").ToArray();
+            // Report authored JSON-pointer paths only. Never render changed values, config or credentials.
+            var diagnostic = "Unexpected saved document change: " + id + "; data paths excluding @metadata: "
+                + (paths.Length == 0 ? "(none)" : string.Join(", ", paths));
+            Assert.True(string.Equals(before[id]["@metadata"]!["@change-vector"]!.Value<string>(),
+                after[id]["@metadata"]!["@change-vector"]!.Value<string>(), StringComparison.Ordinal), diagnostic);
+            Assert.True(JToken.DeepEquals(before[id], after[id]), diagnostic);
         }
+    }
+
+    private static IEnumerable<string> ChangedAuthoredPaths(JToken before, JToken after, string path) {
+        if (JToken.DeepEquals(before, after)) yield break;
+        if (before is JObject oldObject && after is JObject newObject) {
+            var names = oldObject.Properties().Select(property => property.Name)
+                .Concat(newObject.Properties().Select(property => property.Name)).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal);
+            foreach (var name in names) {
+                var childPath = path + "/" + name.Replace("~", "~0", StringComparison.Ordinal).Replace("/", "~1", StringComparison.Ordinal);
+                if (!oldObject.TryGetValue(name, StringComparison.Ordinal, out var oldChild)
+                    || !newObject.TryGetValue(name, StringComparison.Ordinal, out var newChild)) yield return childPath;
+                else foreach (var changed in ChangedAuthoredPaths(oldChild, newChild, childPath)) yield return changed;
+            }
+        }
+        else if (before is JArray oldArray && after is JArray newArray) {
+            for (var index = 0; index < Math.Max(oldArray.Count, newArray.Count); index++) {
+                var childPath = path + "/" + index.ToString(CultureInfo.InvariantCulture);
+                if (index >= oldArray.Count || index >= newArray.Count) yield return childPath;
+                else foreach (var changed in ChangedAuthoredPaths(oldArray[index], newArray[index], childPath)) yield return changed;
+            }
+        }
+        else yield return path.Length == 0 ? "/" : path;
     }
 
     private static void AssertPreservedChangedRows(IReadOnlyDictionary<string, JToken> before,
