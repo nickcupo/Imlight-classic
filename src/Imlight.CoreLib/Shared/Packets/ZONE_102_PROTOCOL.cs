@@ -1160,4 +1160,31 @@ public class ZONE_102_PROTOCOL : IServerProtocol {
 
     }
 
+
+    /// <summary>
+    /// CLASSIC: a pet game asks its private phantom zone where the objects of some templates are (the cannon's target,
+    /// the maze's ghosts). Every matching entity answers <see cref="Requester"/> with a <see cref="MSG_TEMPLATEOBJECTLOCATION"/>.
+    /// </summary>
+    public sealed class MSG_QUERYTEMPLATEOBJECTS : IServerMessage {
+
+        public byte MessageOrder { get; } = 140;
+        public byte ServiceID { get; } = 102;
+
+        public uint[] TemplateIds = [];
+        public IActorRef Requester;
+
+    }
+
+    /// <summary>CLASSIC: one answer to <see cref="MSG_QUERYTEMPLATEOBJECTS"/>.</summary>
+    public sealed class MSG_TEMPLATEOBJECTLOCATION : IServerMessage {
+
+        public byte MessageOrder { get; } = 141;
+        public byte ServiceID { get; } = 102;
+
+        public ulong GlobalId;
+        public uint TemplateId;
+        public Imcodec.Math.Vector3 Location;
+
+    }
+
 }

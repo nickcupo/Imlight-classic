@@ -1,4 +1,4 @@
-// CLASSIC: one owner-only native Dance logic object per completed scene attachment.
+// CLASSIC: one owner-only native pet-game logic object per game and completed scene attachment.
 using System;
 using System.Collections.Generic;
 using System.Threading;
@@ -15,8 +15,9 @@ using Imlight.CoreLib.WizardData.Models.Player;
 namespace Imlight.CoreLib.Shared.Networking;
 
 internal sealed record PetGameAttachContext(Wizard Wizard, CoreObject World, ulong Character, ZoneAttachContext Attach);
+// SendJoinResponse: Dance answers its JOIN here; a phantom-zone game already answered it before its transfer.
 internal sealed record PetGamePublication(object Token, PetGameAttachContext Context,
-    PreparedPetGameObject Object, PET_9_PROTOCOL.MSG_PETGAMEINIT Init);
+    PreparedPetGameObject Object, PET_9_PROTOCOL.MSG_PETGAMEINIT Init, bool SendJoinResponse = true);
 internal sealed record PetGamePublicationResult(object Token, bool Accepted, bool ContextValid);
 // CLASSIC: acknowledged training output still belongs to its exact completed attachment.
 internal sealed record PetGameSessionOutput(object Token, PetGameAttachContext Context,
@@ -26,7 +27,14 @@ internal sealed record PetGameSessionOutputRefused(object Token, PetGameAttachCo
 public sealed partial class SessionActor {
     private PetGameAttachContext _petGameAttach;
     private PetGameAttachContext _danceObjectAttach;
-    private PreparedPetGameObject _danceObject;
+    private readonly Dictionary<string, PreparedPetGameObject> _petGameObjects = new(StringComparer.Ordinal);
+    private long _summonedPetGlobalId;
+
+    /// <summary>CLASSIC: the world GID of the pet EquipmentService has summoned in this scene (0: none).</summary>
+    internal ulong SummonedPetGlobalId {
+        get => (ulong) Interlocked.Read(ref _summonedPetGlobalId);
+        set => Interlocked.Exchange(ref _summonedPetGlobalId, (long) value);
+    }
 
     private bool IsRegisteredPetGameService(IActorRef actor)
         => actor is not null && _services.TryGetValue(actor, out var service) && service is PetGameService;
@@ -67,12 +75,12 @@ public sealed partial class SessionActor {
             && string.Equals(wizard.Zone, attach.Zone, StringComparison.OrdinalIgnoreCase))
         {
             var completed = new PetGameAttachContext(wizard, world, wizard.CharId, attach);
-            if (_danceObject is not null && (!ReferenceEquals(_danceObjectAttach.Wizard, wizard)
+            if (_petGameObjects.Count != 0 && (!ReferenceEquals(_danceObjectAttach.Wizard, wizard)
                 || !ReferenceEquals(_danceObjectAttach.World, world)
                 || !MatchesPetGameScene(_danceObjectAttach.Attach, attach))) {
                 // A trusted new completed scene retires its former scene-owned cache. Same-scene completion
                 // replay retains it; no per-game REMOVEOBJECT can race a later named logic registration.
-                _danceObject = null;
+                _petGameObjects.Clear();
                 _danceObjectAttach = null;
             }
             Volatile.Write(ref _petGameAttach, completed);
@@ -84,11 +92,13 @@ public sealed partial class SessionActor {
     private void ReceivePetGamePublication(PetGamePublication message) {
         if (!IsRegisteredPetGameService(Sender)) return;
         var valid = MatchesPetGameAttach(message.Context);
+        var game = message.Init?.Game.ToString();
         var accepted = valid && message.Token is not null && message.Object is { GlobalId: not 0 }
             && message.Object.Data.Length != 0 && message.Object.GlobalId != message.Context.Attach.Owner
             && message.Init is not null && message.Init.Data.Length != 0
-            && string.Equals(message.Init.Game.ToString(), PetGameObjectCodec.Dance, StringComparison.Ordinal);
-        if (_danceObject is not null && (!ReferenceEquals(_danceObjectAttach.Wizard, message.Context?.Wizard)
+            && game is not null && PetGameObjectCodec.LogicTemplates.ContainsKey(game)
+            && (message.SendJoinResponse || PetGameScenes.IsPhantomGame(game));
+        if (_petGameObjects.Count != 0 && (!ReferenceEquals(_danceObjectAttach.Wizard, message.Context?.Wizard)
             || !MatchesPetGameScene(_danceObjectAttach.Attach, message.Context?.Attach))) {
             accepted = false;
             valid = false; // A retained object cannot be replaced inside a different scene on this parent.
@@ -98,13 +108,13 @@ public sealed partial class SessionActor {
             return;
         }
 
-        var first = _danceObject is null;
-        if (first) { _danceObject = message.Object; _danceObjectAttach = message.Context; }
+        var first = !_petGameObjects.TryGetValue(game, out var logic);
+        if (first) { logic = message.Object; _petGameObjects[game] = logic; _danceObjectAttach = message.Context; }
         // Result and subsequent native pet requests share this parent sender. The service stages old callbacks
         // until this result, then commits its new training state before it can process a follow-on READY.
         Sender.Tell(new PetGamePublicationResult(message.Token, true, true), Self);
-        _socketSenderRef.Tell(new PET_9_PROTOCOL.MSG_PETGAMEJOINRSP { Game = PetGameObjectCodec.Dance, Success = 1 }, Self);
-        if (first) _socketSenderRef.Tell(new GAME_5_PROTOCOL.MSG_NEWOBJECT { Data = _danceObject.Data }, Self);
+        if (message.SendJoinResponse) _socketSenderRef.Tell(new PET_9_PROTOCOL.MSG_PETGAMEJOINRSP { Game = game, Success = 1 }, Self);
+        if (first) _socketSenderRef.Tell(new GAME_5_PROTOCOL.MSG_NEWOBJECT { Data = logic.Data }, Self);
         _socketSenderRef.Tell(message.Init, Self);
     }
 
@@ -125,7 +135,7 @@ public sealed partial class SessionActor {
     private void RetirePetGamePublication() {
         Volatile.Write(ref _petGameAttach, null);
         _danceObjectAttach = null;
-        _danceObject = null;
+        _petGameObjects.Clear();
         // No per-game REMOVEOBJECT: client scene teardown owns the retained invisible object.
     }
 }

@@ -95,6 +95,14 @@ internal abstract class ZoneEntitySupervisor(Core.Zone zone) : ReceiveProtocolDi
         }
     }
 
+    // CLASSIC: pet-game scene query (ZonePath passes it on to its creatures).
+    [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_QUERYTEMPLATEOBJECTS))]
+    public virtual void ReceiveQueryTemplateObjects(ZONE_102_PROTOCOL.MSG_QUERYTEMPLATEOBJECTS message) {
+        foreach (var entity in EntityActors) {
+            entity?.Forward(message);
+        }
+    }
+
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_ZONESTART))]
     public virtual void ReceiveZoneStart(ZONE_102_PROTOCOL.MSG_ZONESTART message) {
         foreach (var entity in EntityActors) {

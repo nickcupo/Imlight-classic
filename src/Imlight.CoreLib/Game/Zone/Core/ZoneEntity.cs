@@ -301,6 +301,23 @@ public class ZoneEntity(
         }
     }
 
+    // CLASSIC: a pet game (the cannon's target, the maze's ghosts) asks where this object is.
+    [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_QUERYTEMPLATEOBJECTS))]
+    private void ReceiveQueryTemplateObjects(ZONE_102_PROTOCOL.MSG_QUERYTEMPLATEOBJECTS message) {
+        if (ActiveGameObject is not { } active || message.Requester is null || message.TemplateIds is null) {
+            return;
+        }
+
+        var templateId = (uint) active.m_templateID.Full;
+        if (Array.IndexOf(message.TemplateIds, templateId) < 0) {
+            return;
+        }
+
+        message.Requester.Tell(new ZONE_102_PROTOCOL.MSG_TEMPLATEOBJECTLOCATION {
+            GlobalId = active.m_globalID.Full, TemplateId = templateId, Location = active.m_location,
+        });
+    }
+
     [MessageHandler(typeof(IServerMessage))]
     protected virtual void ReceiveElse(IServerMessage message) {
         if (message is ZONE_102_PROTOCOL.MSG_ZONEOBJECTLOADBEGIN) {
