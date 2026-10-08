@@ -116,7 +116,9 @@ public sealed partial class PetGameSessionAdmissionTests {
         f.Store.Live.PreviousZone = "WizardCity/WC_Streets/Interiors/WC_PET_Park";
         f.Store.Live.Zone = PetGameScenes.ZoneFor(Maze, 0);
         await f.CompleteAttach(f.Attach with { Zone = f.Store.Live.Zone, Generation = f.Attach.Generation + 1 });
-        await f.State(); await f.FanoutBarrier();
+        await f.State();
+        await f.ParentBarrier(); // The service's transfer passes through the session before its fanout.
+        await f.FanoutBarrier();
         Assert.True(f.Transfers.TryDequeue(out var back));
         Assert.Equal("WizardCity/WC_Streets/Interiors/WC_PET_Park", back.DestinationZone);
         Assert.Equal("Start", back.DestinationLocation);

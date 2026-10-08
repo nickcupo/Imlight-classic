@@ -136,7 +136,8 @@ public sealed class MazeGame {
     /// <summary>The pet is at <paramref name="pet"/>; the ghosts at <paramref name="ghosts"/>.</summary>
     public IReadOnlyList<MazeEvent> PetMoved(Vector3 pet, IEnumerable<(ulong Ghost, Vector3 Position)> ghosts) {
         var events = new List<MazeEvent>();
-        if (_timesUp) {
+        // CLASSIC: the existing freeze also prevents fresh pickups from later move reports.
+        if (_timesUp || Frozen) {
             return events;
         }
 
