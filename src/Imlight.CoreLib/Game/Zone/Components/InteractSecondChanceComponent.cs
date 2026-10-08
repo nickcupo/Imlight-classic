@@ -35,6 +35,7 @@
  */
 
 using System;
+using Action = System.Action;
 using System.Collections.Generic;
 using Akka.Actor;
 using Imcodec.MessageLayer;
