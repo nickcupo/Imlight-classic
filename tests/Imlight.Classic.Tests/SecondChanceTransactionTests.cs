@@ -54,11 +54,14 @@ public sealed class SecondChanceTransactionTests {
         f.Saved.SpellbookBehavior.TreasureCardTemplateIds = Enumerable.Repeat(Fixture.Card, 998).ToList();
         f.Reload(); var stats = f.Live.GameStats; var account = f.Live.Account; var book = f.Live.SpellbookBehavior;
         var reagent = Assert.Single(f.Live.AlchemyBehavior.Reagents); var deck = book.DeckTreasureCards;
+        var deckCards = deck[Fixture.Deck]; deckCards[Fixture.Card] = 41;
+        deck[Fixture.Deck + 1] = new() { [Fixture.Card] = 7 }; // stale attached ledger must be replaced from saved authority
         f.Live.Account.Crowns = 1; f.Live.GameStats.m_currentGold = 3;
         f.Roll = new() { GoldAmount = 17, Items = [Fixture.Drop(Fixture.Gear, 9)], TreasureCards = [Fixture.Card, Fixture.Card],
             Reagents = [Fixture.Drop(Fixture.Reagent, 3)] };
         Assert.Equal(SecondChanceStatus.Opened, f.Open().Status); f.Sent.Clear(); f.Prepared.Clear(); var before = f.LiveSnapshot();
-        f.OnSave = () => { Assert.Equal(before, f.LiveSnapshot()); Assert.Empty(f.Sent); Assert.NotEmpty(f.Prepared); };
+        f.OnSave = () => { Assert.Equal(before, f.LiveSnapshot()); Assert.Empty(f.Sent); Assert.NotEmpty(f.Prepared);
+            Assert.Same(deck, book.DeckTreasureCards); Assert.Equal(41, book.DeckTreasureCount(Fixture.Deck, Fixture.Card)); Assert.Equal(2, deck.Count); };
         f.OnSend = _ => { Assert.True(WizardCollection.HoldsWriteLane); Assert.Equal(1, f.Saves); Assert.Equal(950, f.Live.Account.Crowns); };
         var result = f.Use(); Assert.Equal(SecondChanceStatus.Committed, result.Status); var receipt = result.Receipt!;
         var scaled = ClassicSettings.Scale(17, ClassicSettings.GoldMultiplier); var expectedGold = Math.Min(1000, 980 + scaled);
@@ -69,8 +72,15 @@ public sealed class SecondChanceTransactionTests {
         Assert.Equal(999, f.Saved.SpellbookBehavior.TreasureCardTemplateIds.Count); Assert.Single(receipt.Rewards.Cards);
         Assert.Equal(999, Assert.Single(f.Reagents).m_quantity); Assert.Equal(1, Assert.Single(receipt.Rewards.Reagents).Acquired);
         Assert.Same(stats, f.Live.GameStats); Assert.Same(account, f.Live.Account); Assert.Same(book, f.Live.SpellbookBehavior);
-        Assert.Same(reagent, Assert.Single(f.Live.AlchemyBehavior.Reagents)); Assert.Same(deck, f.Live.SpellbookBehavior.DeckTreasureCards);
+        Assert.Same(reagent, Assert.Single(f.Live.AlchemyBehavior.Reagents)); Assert.Equal(999, book.TreasureCardTemplateIds.Count);
+        Assert.NotSame(deck, book.DeckTreasureCards); Assert.NotSame(deckCards, book.DeckTreasureCards[Fixture.Deck]);
+        Assert.NotSame(f.Saved.SpellbookBehavior.DeckTreasureCards, book.DeckTreasureCards);
+        Assert.NotSame(f.Saved.SpellbookBehavior.DeckTreasureCards[Fixture.Deck], book.DeckTreasureCards[Fixture.Deck]);
+        Assert.Equal(Fixture.Deck, Assert.Single(book.DeckTreasureCards).Key);
+        var publishedCard = Assert.Single(book.DeckTreasureCards[Fixture.Deck]);
+        Assert.Equal(Fixture.Card, publishedCard.Key); Assert.Equal(3, publishedCard.Value);
         Assert.Equal(3, f.Saved.SpellbookBehavior.DeckTreasureCards[Fixture.Deck][Fixture.Card]);
+        Assert.Equal(41, deckCards[Fixture.Card]); Assert.Equal(2, deck.Count);
         Assert.Equal(77, f.Saved.MagicSchoolBehavior.ExperiencePoints); Assert.Equal(4, f.Saved.MagicSchoolBehavior.TrainingPoints);
         Assert.Equal(1.25f, f.Saved.GameStats.m_potionCharge);
         Assert.Equal(new[] { typeof(WIZARD_12_PROTOCOL.MSG_UPDATEGOLD), typeof(GAME_5_PROTOCOL.MSG_INVENTORYBEHAVIOR_ADDITEM),
