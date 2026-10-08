@@ -45,8 +45,8 @@ internal static class ElixirRules {
 
     // CLASSIC: February 23, 2010 Friendly Necromancer chart, corroborated by the March 24
     // Crown Shop oldid65819 and both owned native clients. Only these ten verified products
-    // are approved in the bounded October profile; unrelated school/Gold/Battle/XP elixirs
-    // remain closed. A Crown catalog row cannot approve an effect by itself.
+    // are approved in the bounded October profile (plus the six school Battle elixirs below);
+    // Gold/XP/Regeneration and the remaining Battle elixirs remain closed. A Crown catalog row cannot approve an effect by itself.
     private const string Evidence = "https://thefriendlynecromancer.blogspot.com/2010/02/whats-point-of-those-potions-how-do-i.html; https://wizard101.fandom.com/wiki/Crown_Shop?oldid=65819";
     private static readonly FrozenDictionary<uint, ElixirDefinition> s_verified = new[] {
         Verified(191099, 1800, "PowerPip", "CanonicalPowerPip", 119, .20f, 200),
@@ -59,7 +59,24 @@ internal static class ElixirRules {
         Verified(191106, 3600, "MaxHealth", "CanonicalMaxHealth", 499, 500f, 225),
         Verified(191107, 1800, "MaxMana", "CanonicalMaxMana", 402, 500f, 100),
         Verified(191108, 3600, "MaxMana", "CanonicalMaxMana", 402, 500f, 175),
+        // CLASSIC (2026-10-08): six school Battle elixirs, 300 Crowns and 30 minutes in the February 23, 2010 chart,
+        // the March 24 (oldid 65819) and October 26, 2010 (oldid 119160) Crown Shop lists and both native clients,
+        // which agree on each school's accuracy and damage points. Balance Battle (chart and clients disagree), the
+        // all-school Battle pair (price conflict), Gold, XP and Regeneration stay closed.
+        Battle(191117, "BattleFire", "Fire", 114, .15f, 109, .10f),
+        Battle(191118, "BattleIce", "Ice", 109, .10f, 119, .20f),
+        Battle(191119, "BattleStorm", "Storm", 114, .15f, 109, .10f),
+        Battle(191120, "BattleMyth", "Myth", 109, .10f, 114, .15f),
+        Battle(191121, "BattleLife", "Life", 104, .05f, 119, .20f),
+        Battle(191122, "BattleDeath", "Death", 109, .10f, 114, .15f),
     }.ToFrozenDictionary(d => d.TemplateId);
+
+    private const string BattleEvidence = Evidence + "; https://wizard101.fandom.com/wiki/Crown_Shop?oldid=119160";
+
+    private static ElixirDefinition Battle(uint id, string family, string school, int accuracyIndex, float accuracy,
+        int damageIndex, float damage)
+        => new(id, 1800, [family], true, false, BattleEvidence,
+            [new($"Canonical{school}Accuracy", accuracyIndex, accuracy), new($"Canonical{school}Damage", damageIndex, damage)], 300);
 
     private static ElixirDefinition Verified(uint id, uint seconds, string family, string effect, int index, float value, int crowns)
         => new(id, seconds, [family], true, false, Evidence, [new(effect, index, value)], crowns);
