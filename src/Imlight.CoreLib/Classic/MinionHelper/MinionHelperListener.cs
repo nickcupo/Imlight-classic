@@ -504,7 +504,8 @@ internal static class MinionHelperListener {
             answer = await Task.Run(() => Launcher.LauncherLogin.Shared.Handle(body, address));
         } catch (Exception ex) {
             // CLASSIC: a failing login must say so in the log (it used to drop the connection silently).
-            Logger.Error("Launcher login failed with {0}: {1}", Logger.Args(ex.GetType().Name, ex.Message));
+            // Exception messages can include account input or database connection details.
+            Logger.Error("Launcher login failed with {0}", Logger.Args(ex.GetType().Name));
             await Respond(stream, "500 Internal Server Error", "application/json", "{\"ok\":false,\"error\":\"server-error\"}"u8.ToArray());
             return;
         }

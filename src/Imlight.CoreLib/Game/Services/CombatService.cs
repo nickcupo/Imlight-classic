@@ -227,7 +227,9 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
 
         SetNoAggroGrace();
         if (message.Fought) {
-            InformGameClient(message.Won ? "Your side won the duel!" : "Your side lost the duel.");
+            // CLASSIC: the native duel/result UI already shows this; a non-modal notice creates a "!" alert.
+            Logger.Information("PvP result for {0} (log only): {1}",
+                Logger.Args(wizard.CharId, message.Won ? "Your side won the duel!" : "Your side lost the duel."));
         }
     }
 
@@ -235,7 +237,7 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
     [MessageHandler(typeof(CLASSIC_FEATURES_PROTOCOL.MSG_PVPCOMMAND))]
     private void ReceivePvpCommand(CLASSIC_FEATURES_PROTOCOL.MSG_PVPCOMMAND message) {
         if (_currentDuelActor is null) {
-            InformGameClient("You are not in an open PvP circle.");
+            InformGameClient("You are not in an open PvP circle.", isImportant: true);
 
             return;
         }
