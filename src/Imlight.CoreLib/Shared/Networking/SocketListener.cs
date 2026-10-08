@@ -90,6 +90,12 @@ internal sealed class SocketListener : ReceiveActor, IDisposable {
         this._sessionActorRef = sessionActor;
         this._socket = socket;
         this._sessionid = sessionid;
+        // CLASSIC (go-live): the login port may have its own, stricter bucket ([Advanced] LoginSessionTokenBucket*).
+        if (Imlight.CoreLib.Auth.SecuritySettings.LoginBucketFor((socket.LocalEndPoint as System.Net.IPEndPoint)?.Port ?? 0) is { } login) {
+            this._tokenBucketMax = login.Max;
+            this._tokenBucketPerSecond = login.PerSecond;
+            this._tokenBucketFailedAcquisitionLimit = login.Limit;
+        }
         this._tokenBucket = new TokenBucket(_tokenBucketMax, _tokenBucketPerSecond);
 
         Receive<string>(x => x == "Close", x => Dispose());
