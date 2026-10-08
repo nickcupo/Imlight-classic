@@ -389,7 +389,10 @@ internal sealed class ServerArenaWorld(ActorSystem system) : IArenaWorld, IArena
 
     public void Send(ulong charId, IMessage message) => Tell(charId, message);
 
-    public void Inform(ulong charId, string text) => Tell(charId, ClassicChat.Line(text));
+    // CLASSIC (owner, 2026-10-08): non-modal server messages are "!" alerts in r806919; only failures reach the player.
+    public void Inform(ulong charId, string text) => Logger.Information("Arena notice to {0} (log only): {1}", Logger.Args(charId, text));
+
+    public void InformFailure(ulong charId, string text) => Tell(charId, ClassicChat.Line(text));
 
     public void Travel(ulong charId, string zone, string location, ulong runId) {
         if (IsAmbient(charId)) ArenaAmbientParticipants.Travel(charId, zone, location, runId);

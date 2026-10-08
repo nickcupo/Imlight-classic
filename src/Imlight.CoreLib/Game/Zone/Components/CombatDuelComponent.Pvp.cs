@@ -148,18 +148,18 @@ internal sealed partial class CombatDuelComponent {
 
         var slot = side < 0 ? null : SubCircles.FirstOrDefault(c => !c.Occupied && (side == 0 ? c.SlotIndex < 4 : c.SlotIndex >= 4));
         if (slot is null) {
-            actor.Tell(ClassicChat.Line("This duel circle is full."));
+            PvpNote("This duel circle is full.");
 
             return false;
         }
 
         if (!AssignParticipantToSubCircle(slot, actor, participant)) return false;
         var (now0, now1) = PvpSeats();
-        actor.Tell(ClassicChat.Line(_arena
+        PvpNote(_arena
             ? $"You are on side {side + 1} ({now0} v {now1}). The match starts when everyone is here."
             : now0 > 0 && now1 > 0
             ? $"You joined side {side + 1} ({now0} v {now1}). The duel starts soon; say .pvp ready to start sooner, .pvp leave to step out."
-            : $"You joined side {side + 1}. Waiting for a wizard on the other side; .pvp leave to step out."));
+            : $"You joined side {side + 1}. Waiting for a wizard on the other side; .pvp leave to step out.");
         Logger.Information("Duel {0} | open PvP: {1} joined side {2} ({3} v {4}).",
             Logger.Args(Duel.m_duelID.Full, participant.m_globalID.Full, side + 1, now0, now1));
         PvpPublish();
@@ -256,7 +256,7 @@ internal sealed partial class CombatDuelComponent {
     private void ReceivePvpCommand(CLASSIC_FEATURES_PROTOCOL.MSG_PVPCOMMAND message) {
         var seat = SubCircles?.FirstOrDefault(c => c is { Occupied: true } && c.ParticipantActor == message.Actor);
         if (!_pvp || !_isActive || seat is null) {
-            message.Actor?.Tell(ClassicChat.Line("You are not in an open PvP circle."));
+            PvpNote("You are not in an open PvP circle.");
 
             return;
         }
@@ -335,7 +335,7 @@ internal sealed partial class CombatDuelComponent {
         Logger.Information("Duel {0} | open PvP circle closed: {1}.", Logger.Args(Duel.m_duelID.Full, reason));
         ArenaReport(-1); // CLASSIC: an arena match that never fought (no-op when already reported)
         foreach (var seat in SubCircles.Where(c => c is { Occupied: true }).ToList()) {
-            seat.ParticipantActor?.Tell(ClassicChat.Line($"The duel circle closed: {reason}."));
+            PvpNote($"The duel circle closed: {reason}.");
             PvpReleaseSeat(seat, won: false, fought: false);
         }
 
@@ -359,11 +359,13 @@ internal sealed partial class CombatDuelComponent {
         }
     }
 
-    private void PvpTellSeated(string text) {
-        foreach (var seat in SubCircles.Where(c => c is { Occupied: true, IsWizard: true })) {
-            seat.ParticipantActor?.Tell(ClassicChat.Line(text));
-        }
-    }
+    // CLASSIC (owner, 2026-10-08): r806919 shows every non-modal MSG_SERVERMESSAGE as a "!" alert
+    // (WizardGUIManager::HandleServerMessage), and the 2009 arena sent no such notices, so PvP status lines go to the
+    // server log only. The circle, PvP window and duel phases already show the player what happens.
+    private void PvpTellSeated(string text) => PvpNote(text);
+
+    private void PvpNote(string text)
+        => Logger.Debug("Duel {0} | PvP notice (log only): {1}", Logger.Args(Duel?.m_duelID.Full ?? 0UL, text));
 
     private void PvpPublish() {
         if (!_isActive) {
