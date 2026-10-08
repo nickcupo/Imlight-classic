@@ -235,6 +235,45 @@ internal sealed class WizardReagentCollection {
             && TryValidateBag(saved, ReadRows(session), out _, out owned);
     }
 
+    /// <summary>
+    /// CLASSIC (owner, 2026-10-08): loading only. A saved reference with no row at all (left by older code) holds
+    /// nothing, so it is dropped from the loaded wizard instead of locking the character out of login. Write paths stay
+    /// strict; <see cref="DropMissingReferences"/> saves the same drop. Any real conflict still refuses.
+    /// </summary>
+    internal static bool TryReadOwnedBagForLoad(IDocumentSession session, Wizard saved, out List<ClientReagentItem> owned,
+        out List<ulong> dropped) {
+        owned = []; dropped = [];
+        if (session is null || saved is null || saved.CharId == 0) return false;
+        var rows = ReadRows(session);
+        dropped = MissingReferences(saved, rows);
+        if (dropped.Count > 0) {
+            var missing = dropped;
+            saved.AlchemyBehavior.ReagentItemIds = [.. saved.AlchemyBehavior.ReagentItemIds.Where(id => !missing.Contains(id))];
+        }
+        return TryValidateBag(saved, rows, out _, out owned);
+    }
+
+    /// <summary>CLASSIC: saves the load-time drop of row-less reagent references, under the character's write lane.</summary>
+    internal static bool DropMissingReferences(ulong charId, Func<IDocumentSession> openSession = null,
+        Func<IDocumentSession, ulong, Wizard> loadWizard = null) {
+        List<ulong> dropped = [];
+        var committed = WizardCollection.CommitCharacterMutation(charId, (session, saved) => {
+            if (saved?.AlchemyBehavior?.ReagentItemIds is null) return false;
+            dropped = MissingReferences(saved, ReadRows(session));
+            if (dropped.Count == 0) return false;
+            var missing = dropped;
+            saved.AlchemyBehavior.ReagentItemIds = [.. saved.AlchemyBehavior.ReagentItemIds.Where(id => !missing.Contains(id))];
+            return true;
+        }, null, openSession, loadWizard);
+        if (committed) Logger.Warning("Wizard {0}: dropped {1} saved reagent reference(s) with no row: {2}",
+            Logger.Args(charId, dropped.Count, string.Join(",", dropped)));
+        return committed;
+    }
+
+    private static List<ulong> MissingReferences(Wizard saved, IReadOnlyList<ClientReagentItem> rows)
+        => (saved?.AlchemyBehavior?.ReagentItemIds ?? []).Where(id => id != 0
+            && !rows.Any(row => row is not null && row.m_globalID.Full == id)).Distinct().ToList();
+
     internal static bool TryValidateBag(Wizard saved, IReadOnlyList<ClientReagentItem> rows,
         out List<ulong> ids, out List<ClientReagentItem> owned) {
         ids = saved?.AlchemyBehavior?.ReagentItemIds ?? [];

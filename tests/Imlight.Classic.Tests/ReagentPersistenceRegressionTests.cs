@@ -339,6 +339,39 @@ public sealed class ReagentPersistenceRegressionTests {
     }
 
     [Fact]
+    public void OwnedBagHydrationDropsAReferenceWithNoRowAndKeepsTheRest() {
+        var store = new ReagentStore(2);
+        using var scope = store.Scope();
+        using var session = store.Open();
+        var saved = store.ForStage(session);
+        const ulong dangling = ReagentStore.ItemId + 77;
+        saved.AlchemyBehavior.ReagentItemIds = [dangling, ReagentStore.ItemId];
+        Assert.False(WizardReagentCollection.TryReadOwnedBag(session, saved, out _)); // write paths stay strict
+        Assert.True(WizardReagentCollection.TryReadOwnedBagForLoad(session, saved, out var owned, out var dropped));
+        Assert.Equal(dangling, Assert.Single(dropped));
+        Assert.Equal(ReagentStore.ItemId, Assert.Single(owned).m_globalID.Full);
+        Assert.Equal(2, Assert.Single(owned).m_quantity);
+        Assert.Equal(new[] { ReagentStore.ItemId }, saved.AlchemyBehavior.ReagentItemIds);
+        Assert.Single(ReagentStore.Session(session).Rows);
+        Assert.Equal(0, store.SaveAttempts);
+        Assert.Equal(0, store.Deleted);
+    }
+
+    [Fact]
+    public void DropMissingReferencesSavesOnlyTheRowLessReferenceAndIsANoOpOtherwise() {
+        var store = new ReagentStore(2);
+        const ulong dangling = ReagentStore.ItemId + 77;
+        store.Saved.AlchemyBehavior.ReagentItemIds = [dangling, ReagentStore.ItemId];
+        using var scope = store.Scope();
+        Assert.True(WizardReagentCollection.DropMissingReferences(ReagentStore.Char));
+        Assert.Equal(new[] { ReagentStore.ItemId }, store.Saved.AlchemyBehavior.ReagentItemIds);
+        Assert.Equal(2, Assert.Single(store.SavedRows).m_quantity);
+        Assert.Equal(1, store.SaveAttempts); Assert.Equal(0, store.Deleted);
+        Assert.False(WizardReagentCollection.DropMissingReferences(ReagentStore.Char));
+        Assert.Equal(1, store.SaveAttempts);
+    }
+
+    [Fact]
     public void OwnedBagHydrationRefusesDuplicateOrForeignReferencesWithoutDeletingAnything() {
         var store = new ReagentStore(5);
         store.SavedRows[0].m_characterId = ReagentStore.Char + 1;
