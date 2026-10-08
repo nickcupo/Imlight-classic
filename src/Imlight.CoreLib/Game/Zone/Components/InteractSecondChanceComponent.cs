@@ -117,8 +117,8 @@ internal sealed class InteractSecondChanceComponent(ZoneEntity entity) : ZoneEnt
                 return result with { Status = SecondChanceStatus.ContextLost };
             }
             if (result.Status == SecondChanceStatus.PreparationFailed) { if (wizard is not null) state.CloseOwned(wizard.CharId, owner); close(); }
-            else if (result.Refusal == ChestRefusal.BossNotDefeated) send(ClassicChat.Notice(
-                $"Defeat {chest.Boss} first: the chest offers a second chance at {chest.Boss}'s rewards.", false));
+            else if (result.Refusal == ChestRefusal.BossNotDefeated) send(ClassicChat.Line(
+                $"Defeat {chest.Boss} first: the chest offers a second chance at {chest.Boss}'s rewards."));
             return result;
         }
         catch (Exception error) {
