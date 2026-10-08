@@ -534,7 +534,8 @@ internal sealed partial class PetGameService {
     private void PetMoved(ulong gid, ushort x, ushort y, ushort z) {
         if (_session is not { Phantom: { } state, Started: true, Ended: false } session || !EnsureTrainingContext(session)) return;
         var pet = SessionActor.SummonedPetGlobalId;
-        if (gid == 0 || (pet != 0 && gid != pet)) {
+        // CLASSIC: wait for EquipmentService to bind this scene's summoned world pet.
+        if (pet == 0 || gid != pet) {
             Logger.Debug("Pet game {0}: a move for {1} is not the summoned pet {2}.", Logger.Args(session.Game, gid, pet));
             return;
         }

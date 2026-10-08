@@ -188,6 +188,49 @@ public class PetMinigameTests {
         Assert.Empty(game.PetMoved(far, [ghost])); // Gone until it respawns.
     }
 
+    // CLASSIC: a frozen pet cannot collect a fresh pickup from a later move report.
+    [Theory]
+    [InlineData(MazePickupKind.Snack, MazeEventKind.Snack)]
+    [InlineData(MazePickupKind.Clock, MazeEventKind.Clock)]
+    [InlineData(MazePickupKind.SpeedBoost, MazeEventKind.SpeedBoost)]
+    [InlineData(MazePickupKind.Star, MazeEventKind.Star)]
+    public void MazeKeepsFreshPickupsUntilTheThreeSecondFreezeExpires(MazePickupKind kind, MazeEventKind eventKind) {
+        var game = new MazeGame(Grid(20), new Random(5));
+        var pickup = game.Pickups.First(p => p.Kind == kind);
+        var pickupCount = game.Pickups.Count;
+        var ghost = (Ghost: 77UL, Position: new Vector3(-9000, 0, 0));
+        var frozen = Assert.Single(game.PetMoved(ghost.Position, [ghost]));
+        Assert.Equal(MazeEventKind.Frozen, frozen.Kind);
+        Assert.True(game.Frozen);
+        Assert.Equal(3d, PetMinigameRules.MazeFreezeSeconds);
+
+        // Both immediately after the collision and halfway through the verified freeze,
+        // ignore movement onto a previously untouched snack or bonus without consuming it.
+        for (var attempt = 0; attempt < 2; attempt++) {
+            Assert.Empty(game.PetMoved(pickup.Position, []));
+            Assert.Contains(pickup, game.Pickups);
+            Assert.Equal(pickupCount, game.Pickups.Count);
+            Assert.Equal(0, game.Score);
+            Assert.Equal(PetMinigameRules.MazeStartSeconds, game.TimeLimit);
+            Assert.False(game.Immune);
+            Assert.True(game.Frozen);
+            Assert.Null(game.Advance(PetMinigameRules.MazeFreezeSeconds / 2));
+        }
+
+        Assert.Equal(3d, game.Elapsed);
+        Assert.False(game.Frozen);
+        var collected = Assert.Single(game.PetMoved(pickup.Position, []));
+        Assert.Equal(eventKind, collected.Kind);
+        Assert.Same(pickup, collected.Pickup);
+        Assert.DoesNotContain(pickup, game.Pickups);
+        Assert.Equal(pickupCount - 1, game.Pickups.Count);
+        Assert.Equal(kind == MazePickupKind.Snack ? 1 : 0, game.Score);
+        Assert.Equal(game.Score, collected.Score);
+        Assert.Equal(PetMinigameRules.MazeStartSeconds + (kind == MazePickupKind.Clock ? PetMinigameRules.MazeClockSeconds : 0), game.TimeLimit);
+        Assert.Equal(kind == MazePickupKind.Star, game.Immune);
+        Assert.Empty(game.PetMoved(pickup.Position, [])); // The same pickup still awards only once.
+    }
+
     [Fact]
     public void MazeEndsOnItsClockAndScoresAgainstSeventy() {
         var game = new MazeGame(Grid(80), new Random(1));
