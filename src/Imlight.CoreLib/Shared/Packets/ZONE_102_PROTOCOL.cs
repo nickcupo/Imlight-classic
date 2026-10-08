@@ -429,6 +429,9 @@ public class ZONE_102_PROTOCOL : IServerProtocol {
         /// </summary>
         public ZoneBroadcastTarget Targets = ZoneBroadcastTarget.All;
 
+        /// <summary>CLASSIC: exact actors omitted from this internal broadcast; no native protocol field.</summary>
+        public IReadOnlyCollection<IActorRef> ExcludedRecipients = [];
+
     }
 
     /// <summary>

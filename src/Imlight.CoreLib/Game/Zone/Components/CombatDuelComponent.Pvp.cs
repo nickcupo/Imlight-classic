@@ -68,6 +68,7 @@ internal sealed partial class CombatDuelComponent {
     private DateTime _pvpLobbyOpenedUtc;
     private DateTime? _pvpCountdownStartedUtc;
     private readonly HashSet<IActorRef> _pvpReady = [];
+    private readonly HashSet<IActorRef> _pvpResultRecipients = []; // CLASSIC: personal winner already sent before Ended.
 
     /// <summary>Wizards on each side (seated, whether or not the fight has started).</summary>
     private (int Side0, int Side1) PvpSeats()
@@ -288,6 +289,16 @@ internal sealed partial class CombatDuelComponent {
         // DuelBroadcast cannot reach this wizard, and native EndDuel sees a duel we no longer participate in.
         // End only this client's combat before release; teammates may still be fighting in the shared duel.
         if (wasAdded && circle.Occupied && actor is not null && !circle.Disconnected) {
+            // CLASSIC: deliver the native winner through the same actor route before its Ended phase.
+            // A team conceder loses personally now even if their remaining teammates later win.
+            if (fought) {
+                var ownTeam = circle.OccupiedTeam;
+                var winningTeam = won ? ownTeam : ownTeam == CombatTeam.Monster ? CombatTeam.Player : CombatTeam.Monster;
+                actor.Tell(new DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_COMBATMATCHRESULT {
+                    DuelID = SigilId, WinningTeam = (int) winningTeam,
+                });
+                _pvpResultRecipients.Add(actor);
+            }
             SendCombatPhase((byte) kDuelPhase.kPhase_Ended, actor);
         }
 
@@ -330,7 +341,13 @@ internal sealed partial class CombatDuelComponent {
 
         ArenaReport(side1Won ? 1 : 0); // CLASSIC: slots 1-4 are side 1 (index 0)
 
-        ZoneBroadcast(new DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_COMBATMATCHRESULT { DuelID = SigilId, WinningTeam = (byte) winning });
+        // CLASSIC: preserve the public winner for observers without re-sending a contrary shared result to
+        // a wizard who already conceded. Copy the recipients: cleanup runs before asynchronous zone fanout.
+        Entity.ZoneRef.Tell(new ZONE_102_PROTOCOL.MSG_ZONEBROADCAST {
+            Selfless = false, Sender = Self,
+            Message = new DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_COMBATMATCHRESULT { DuelID = SigilId, WinningTeam = (int) winning },
+            ExcludedRecipients = _pvpResultRecipients.ToArray(),
+        });
         Duel.m_duelPhase = kDuelPhase.kPhase_Ended;
         SendCombatPhase((byte) Duel.m_duelPhase);
         ZoneBroadcast(new DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_ENDDUEL { DuelID = SigilId });
@@ -355,6 +372,7 @@ internal sealed partial class CombatDuelComponent {
         _pvpLobby = false;
         _pvpCountdownStartedUtc = null;
         _pvpReady.Clear();
+        _pvpResultRecipients.Clear();
         ClassicPvp.Forget(Entity.Zone?.ZonePath ?? "", _combatSigilObjectInfo?.m_zoneTag ?? "");
 
         // The circle stays in the zone for the next fight: the duel state goes, the entity does not. Wizards still
