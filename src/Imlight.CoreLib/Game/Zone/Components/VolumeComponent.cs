@@ -110,7 +110,8 @@ internal sealed class VolumeComponent(ZoneEntity entity) : ZoneEntityComponent(e
     }
 
     // CLASSIC: box volumes (m_primitiveType "Box", radius 0) never fired: only the radius was tested. KingsIsle's box is
-    // axis-aligned about the volume's position: width along X, length along Y, height (the float in unknown_int) along Z.
+    // centred on the volume's position: width along its local X, length along local Y, height (the float in unknown_int)
+    // along Z, turned by the volume's yaw (VolumeBounds).
     private bool InVolume(CoreObject playerObj)
         => VolumeBounds.Contains(_volume, Entity.ActiveGameObject.m_location.X, Entity.ActiveGameObject.m_location.Y,
             Entity.ActiveGameObject.m_location.Z, playerObj.m_location.X, playerObj.m_location.Y, playerObj.m_location.Z);
@@ -209,7 +210,15 @@ internal sealed class VolumeComponent(ZoneEntity entity) : ZoneEntityComponent(e
 
 }
 
-/// <summary>CLASSIC: whether a point is inside a client volume (sphere by radius, or axis-aligned box).</summary>
+/// <summary>CLASSIC: whether a point is inside a client volume (sphere by radius, or a box turned by its yaw).</summary>
+/// <remarks>
+/// A box is centred on the volume's position: width along its local X, length along local Y, height (unknown_int read
+/// as a float) along Z. Its local frame is the world turned by the yaw in m_orientation.Z the way Gamebryo turns
+/// objects (clockwise seen from above), so the player's offset is turned by +yaw into it. Checked against the
+/// walkable floors in collision.bcd of the 412 boxes with a real yaw (door-volumes report): the turned box covers the
+/// room it was drawn in (38 of 40 clear cases near 90 degrees), and +yaw beats -yaw 74 to 9. Pitch and roll are
+/// about 1e-8 on every box, and m_fScale is 1 or unset (0), so neither is applied.
+/// </remarks>
 internal static class VolumeBounds {
 
     public static bool Contains(Volume volume, float cx, float cy, float cz, float px, float py, float pz) {
@@ -217,8 +226,13 @@ internal static class VolumeBounds {
             && volume.m_radius <= 0f && volume.m_length > 0f && volume.m_width > 0f) {
             var height = System.BitConverter.Int32BitsToSingle(volume.unknown_int);
             var zOk = !(height > 0f && height < 1e6f) || System.Math.Abs(pz - cz) <= height / 2f;
+            if (!zOk) {
+                return false;
+            }
 
-            return zOk && System.Math.Abs(px - cx) <= volume.m_width / 2f && System.Math.Abs(py - cy) <= volume.m_length / 2f;
+            var (localX, localY) = ToLocal(volume.m_orientation.Z, px - cx, py - cy);
+
+            return System.Math.Abs(localX) <= volume.m_width / 2f && System.Math.Abs(localY) <= volume.m_length / 2f;
         }
 
         var dx = px - cx;
@@ -226,6 +240,18 @@ internal static class VolumeBounds {
         var dz = pz - cz;
 
         return dx * dx + dy * dy + dz * dz <= volume.m_radius * volume.m_radius;
+    }
+
+    /// <summary>A world offset in the box's own frame: turned by +yaw (the box's frame is the world turned by -yaw).</summary>
+    internal static (float X, float Y) ToLocal(float yaw, float dx, float dy) {
+        if (yaw == 0f || !float.IsFinite(yaw)) {
+            return (dx, dy);
+        }
+
+        var cos = System.MathF.Cos(yaw);
+        var sin = System.MathF.Sin(yaw);
+
+        return (cos * dx - sin * dy, sin * dx + cos * dy);
     }
 
 }
