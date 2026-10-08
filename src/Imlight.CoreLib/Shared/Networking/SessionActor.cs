@@ -343,6 +343,7 @@ public sealed partial class SessionActor : ReceiveActor, IDisposable {
 
         Logger.Debug("SessionActor {Id} disposing.", Logger.Args(SessionID));
         _isDisposed = true;
+        RetirePetGamePublication(); // CLASSIC: queued owner-only pet setup cannot publish during shutdown.
 
         // CLASSIC: the session is gone for everyone at once. Zone triggers stop asking it for its wizard (each Ask
         // waited 5 s, one after another: 40 s of stalled triggers on live 2026-10-01), and it leaves the online list
@@ -466,6 +467,8 @@ public sealed partial class SessionActor : ReceiveActor, IDisposable {
 
         Receive<LegacyDoorOwnerObject>(ReceiveLegacyDoorOwnerObject);
         Receive<LegacyDoorSocketBatch>(ReceiveLegacyDoorSocketBatch);
+        Receive<SERVICE_101_PROTOCOL.MSG_ATTACHCOMPLETE>(ReceivePetGameAttachComplete);
+        Receive<PetGamePublication>(ReceivePetGamePublication);
 
         // CLASSIC: a batch of client messages (ambient wizards' moves): each goes to the socket, in order.
         Receive<ZONE_102_PROTOCOL.MSG_CLIENTBATCH>(batch => {
@@ -491,6 +494,10 @@ public sealed partial class SessionActor : ReceiveActor, IDisposable {
 
     private void SendToSocket(IMessage message) {
         ObserveOutgoing(message); // CLASSIC: a server teleport re-anchors the movement guard (SessionActor.Movement.cs)
+        if (IsRegisteredPetGameService(Sender)) {
+            _socketSenderRef.Tell(message, Self); // CLASSIC: ordinary pet output and setup use one socket sender.
+            return;
+        }
         _socketSenderRef.Forward(message);
     }
 
@@ -577,7 +584,9 @@ public sealed partial class SessionActor : ReceiveActor, IDisposable {
 
         if (_dispatchTable.TryGetValue(packet.GetType(), out var handlers)) {
             foreach (var handler in handlers) {
-                handler.Forward(packet);
+                // CLASSIC: the setup result precedes follow-on pet requests from this same parent sender.
+                if (IsRegisteredPetGameService(handler)) handler.Tell(packet, Self);
+                else handler.Forward(packet);
             }
             return;
         }
