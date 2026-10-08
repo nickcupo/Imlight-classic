@@ -46,6 +46,9 @@ using Xunit;
 
 namespace Imlight.Classic.Tests;
 
+// CLASSIC: RejoinSeat reads ElixirService.PreparesCombatSnapshots, which follows the shared ClassicRuntime rules; run with
+// the other tests that replace them, never beside one (a long pet-game fixture made the old race visible).
+[Collection(nameof(ClassicRuntimeCollection))]
 public sealed class CombatRejoinTests {
 
     [Fact]
