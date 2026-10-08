@@ -849,12 +849,16 @@ public sealed class ProgressionPotionPersistenceTests : IDisposable {
         static void Mutate(ServerWizGameStats stats, string kind) {
             if (kind == "change") CharacterEffectHelper.AddStatisticEffectToStats(stats, "CanonicalMaxMana", new WizStatisticEffect { m_manaBonus = 5 });
             else {
-                CharacterEffectHelper.ResetRebuiltEquipmentEffects(stats); stats.m_baseMana = 100;
-                CharacterEffectHelper.AddStatisticEffectToStats(stats, "CanonicalMaxManaPercentReduce", new WizStatisticEffect { m_manaBonus = .5f, m_itemSlotID = 909 });
+                var previous = ManaLedger.Of(stats); var maximum = stats.m_baseMana;
+                CharacterEffectHelper.ResetRebuiltEquipmentEffects(stats); AddManaPieces(stats, "full");
+                var rebuilt = ManaLedger.Of(stats);
+                Assert.NotSame(previous.Identity, rebuilt.Identity); Assert.Equal(previous.Unreduced, rebuilt.Unreduced);
+                Assert.Equal(previous.Reductions, rebuilt.Reductions); Assert.Equal(maximum, stats.m_baseMana);
             }
         }
         if (route == "quest") {
             using var quest = new TerminalClaimFixture(); AddManaPieces(quest.Live.GameStats, "full");
+            var originalLedger = ManaLedger.Of(quest.Live.GameStats);
             quest.Reward.ExperienceAmount = 250; quest.Reward.GoldAmount = 30;
             var journal = quest.Live.QuestBehavior; var ids = journal.CurrentQuestIDs.ToArray(); var entries = journal.CurrentQuestInstances.ToArray();
             var registry = journal.Registry.OrderBy(row => row.Key).ToArray(); var training = quest.Live.MagicSchoolBehavior.TrainingPoints;
@@ -868,15 +872,25 @@ public sealed class ProgressionPotionPersistenceTests : IDisposable {
             Assert.Equal(learned, quest.Live.SpellbookBehavior.LearnedSpellTemplateIds); Assert.True(quest.Expected.IsGoalActive(TerminalClaimFixture.GoalName));
             Assert.Equal(0, publications); Assert.True(WizardCollection.IsInventorySnapshotUncertain(quest.Live));
             Assert.Equal(4, quest.Saved.MagicSchoolBehavior.Level); Assert.Equal(130, quest.Saved.GameStats.m_currentGold);
-            Assert.Equal(1, quest.Opened); Assert.Equal(1, quest.Saves); return;
+            Assert.Equal(1, quest.Opened); Assert.Equal(1, quest.Saves);
+            if (mutation == "reset") AssertResetLedgerRetained(quest.Live.GameStats, originalLedger);
+            return;
         }
         var f = new Fixture(); using var scope = f.Scope(); var live = f.Live(); AddManaPieces(live.GameStats, "full");
+        var initialLedger = ManaLedger.Of(live.GameStats);
         State? expected = null; ManaLedger? latest = null;
         f.OnSave = () => { Mutate(live.GameStats, mutation); expected = State.Of(live); latest = ManaLedger.Of(live.GameStats); };
         Assert.Throws<InvalidOperationException>(() => WizardService.ApplyExperience(live, 250, _ => publications++, _ => publications++, () => { }));
         Assert.Equal(expected, State.Of(live)); AssertManaLedger(latest!, live.GameStats); Assert.Equal(0, publications);
         Assert.True(WizardCollection.IsInventorySnapshotUncertain(live)); Assert.Equal(4, f.Saved.MagicSchoolBehavior.Level);
         Assert.Equal(1, f.Opened); Assert.Equal(1, f.Saves);
+        if (mutation == "reset") AssertResetLedgerRetained(live.GameStats, initialLedger);
+    }
+
+    private static void AssertResetLedgerRetained(ServerWizGameStats stats, ManaLedger original) {
+        Assert.Equal(57, (int)original.Identity.GetType().GetField("UnreducedMaximum", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(original.Identity)!);
+        RemoveManaPieces(stats, [new WizStatisticEffect { m_itemSlotID = 901, m_manaBonus = 1 }]);
+        Assert.Equal(57, stats.m_baseMana);
     }
 
     [Theory]

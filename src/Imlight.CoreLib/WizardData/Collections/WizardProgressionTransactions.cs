@@ -9,6 +9,7 @@ using Imcodec.ObjectProperty.TypeCache;
 using Imcodec.Cryptography;
 using Imlight.Classic;
 using Imlight.CoreLib.Classic.Elixirs;
+using Imlight.CoreLib.Game.Effects;
 using Imlight.CoreLib.Shared.Items;
 using Imlight.CoreLib.Shared.Behaviors;
 using Imlight.CoreLib.Shared.Character;
@@ -19,7 +20,9 @@ namespace Imlight.CoreLib.WizardData.Collections;
 
 internal sealed record ProgressionReceipt(int OldXp, int AppliedXp, int OldLevel, int Level,
     bool AdjustStats, bool Refill, bool ShouldSave, int Health, int Mana, float PowerPips,
-    IReadOnlyList<IMessage> LevelMessages, WIZARD_12_PROTOCOL.MSG_UPDATEXP XpMessage);
+    IReadOnlyList<IMessage> LevelMessages, WIZARD_12_PROTOCOL.MSG_UPDATEXP XpMessage) {
+    internal ManaProgressionMaximum ManaTransition { get; init; }
+}
 
 // CLASSIC: fixtures replace table/native preparation only; persisted authority and the write lane stay real.
 internal sealed class ProgressionDependencies {
@@ -163,6 +166,7 @@ internal static class WizardProgressionTransactions {
         var health = live.GameStats.m_baseHitpoints;
         var mana = live.GameStats.m_baseMana;
         var pips = live.GameStats.m_powerPipBase;
+        ManaProgressionMaximum manaTransition = null;
         List<IMessage> messages = [];
         if (adjustStats) {
             var before = LevelInfo(saved.MagicSchoolBehavior.MagicSchool, oldLevel);
@@ -170,7 +174,8 @@ internal static class WizardProgressionTransactions {
             if (before is null || after is null) return false;
             // CLASSIC: fresh Raven rows do not contain the runtime gear/effect offsets or JsonIgnore pip base.
             health += after.m_hitpoints - before.m_hitpoints;
-            mana += after.m_mana - before.m_mana;
+            manaTransition = CharacterEffectHelper.PrepareManaProgressionMaximum(live.GameStats, after.m_mana - before.m_mana);
+            if (manaTransition is not null) mana = manaTransition.Maximum;
             pips += after.m_pipChance - before.m_pipChance;
             saved.GameStats.m_baseHitpoints = health;
             saved.GameStats.m_baseMana = mana;
@@ -194,11 +199,17 @@ internal static class WizardProgressionTransactions {
         var xpMessage = sendXp ? new WIZARD_12_PROTOCOL.MSG_UPDATEXP { GlobalID = live.GameObjectID, XP = applied, OldXP = oldXp } : null;
         try { if (messages.Any(message => !Prepare(message)) || xpMessage is not null && !Prepare(xpMessage)) return false; }
         catch (Exception) { return false; }
-        receipt = new(oldXp, applied, oldLevel, level, adjustStats, refill, true, health, mana, pips, messages, xpMessage);
+        receipt = new(oldXp, applied, oldLevel, level, adjustStats, refill, true, health, mana, pips, messages, xpMessage) {
+            ManaTransition = manaTransition
+        };
         return true;
     }
 
+    internal static void ValidatePublication(Wizard live, ProgressionReceipt receipt)
+        => CharacterEffectHelper.ValidateManaProgressionMaximum(live.GameStats, receipt.ManaTransition);
+
     internal static void Publish(Wizard live, Wizard saved, ProgressionReceipt receipt) {
+        CharacterEffectHelper.PublishManaProgressionMaximum(live.GameStats, receipt.ManaTransition);
         live.MagicSchoolBehavior.ExperiencePoints = saved.MagicSchoolBehavior.ExperiencePoints;
         live.MagicSchoolBehavior.Level = saved.MagicSchoolBehavior.Level;
         live.GameStats.Level = saved.MagicSchoolBehavior.Level;
