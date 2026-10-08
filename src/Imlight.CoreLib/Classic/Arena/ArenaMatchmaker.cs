@@ -78,6 +78,7 @@ internal interface IArenaWorld {
 
     /// <summary>A chat line to an online wizard.</summary>
     void Inform(ulong charId, string text);
+    void InformFailure(ulong charId, string text) => Inform(charId, text); // a failure the player must see
 
     /// <summary>Sends an online wizard into a match's arena instance.</summary>
     void Travel(ulong charId, string zone, string location, ulong runId);
@@ -851,7 +852,7 @@ internal sealed class ArenaMatchmaker {
                             if (ambientMembers.Contains(member)) (_world as IArenaAmbientWorld)?.ReleaseAmbient(member);
                             else if (!delivered.Contains(member)) {
                                 if (playerSnapshot[member] is { } player) SendStatus(member, player, null, -1, 0);
-                                _world.Inform(member, "The arena result could not be completed. Returning to the arena hall; please tell the server owner.");
+                                _world.InformFailure(member, "The arena result could not be completed. Returning to the arena hall; please tell the server owner.");
                                 _world.Travel(member, _config.HallZone, _config.HallLocation, 0);
                             }
                         }
