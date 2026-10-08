@@ -469,6 +469,7 @@ public sealed partial class SessionActor : ReceiveActor, IDisposable {
         Receive<LegacyDoorSocketBatch>(ReceiveLegacyDoorSocketBatch);
         Receive<SERVICE_101_PROTOCOL.MSG_ATTACHCOMPLETE>(ReceivePetGameAttachComplete);
         Receive<PetGamePublication>(ReceivePetGamePublication);
+        Receive<PetGameSessionOutput>(ReceivePetGameSessionOutput);
 
         // CLASSIC: a batch of client messages (ambient wizards' moves): each goes to the socket, in order.
         Receive<ZONE_102_PROTOCOL.MSG_CLIENTBATCH>(batch => {

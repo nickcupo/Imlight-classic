@@ -1,6 +1,8 @@
 // CLASSIC: one owner-only native Dance logic object per completed scene attachment.
 using System;
+using System.Collections.Generic;
 using System.Threading;
+using Imcodec.MessageLayer;
 using Akka.Actor;
 using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty.TypeCache;
@@ -16,6 +18,10 @@ internal sealed record PetGameAttachContext(Wizard Wizard, CoreObject World, ulo
 internal sealed record PetGamePublication(object Token, PetGameAttachContext Context,
     PreparedPetGameObject Object, PET_9_PROTOCOL.MSG_PETGAMEINIT Init);
 internal sealed record PetGamePublicationResult(object Token, bool Accepted, bool ContextValid);
+// CLASSIC: acknowledged training output still belongs to its exact completed attachment.
+internal sealed record PetGameSessionOutput(object Token, PetGameAttachContext Context,
+    IReadOnlyList<IMessage> Messages, CHARACTER_103_PROTOCOL.MSG_RESUMMONPET Resummon = null);
+internal sealed record PetGameSessionOutputRefused(object Token, PetGameAttachContext Context);
 
 public sealed partial class SessionActor {
     private PetGameAttachContext _petGameAttach;
@@ -100,6 +106,20 @@ public sealed partial class SessionActor {
         _socketSenderRef.Tell(new PET_9_PROTOCOL.MSG_PETGAMEJOINRSP { Game = PetGameObjectCodec.Dance, Success = 1 }, Self);
         if (first) _socketSenderRef.Tell(new GAME_5_PROTOCOL.MSG_NEWOBJECT { Data = _danceObject.Data }, Self);
         _socketSenderRef.Tell(message.Init, Self);
+    }
+
+    private void ReceivePetGameSessionOutput(PetGameSessionOutput message) {
+        // Only the registered pet service may request this narrow contextual publication. Never widen
+        // the generic client-batch route, and never close a connection merely because it is travelling.
+        if (!IsRegisteredPetGameService(Sender)) return;
+        if (message.Token is null || !MatchesPetGameAttach(message.Context)) {
+            Sender.Tell(new PetGameSessionOutputRefused(message.Token, message.Context), Self);
+            return;
+        }
+        foreach (var packet in message.Messages ?? []) _socketSenderRef.Tell(packet, Self);
+        if (message.Resummon is not null && _dispatchTable.TryGetValue(message.Resummon.GetType(), out var handlers)) {
+            foreach (var handler in handlers) if (handler != Sender) handler.Tell(message.Resummon, Self);
+        }
     }
 
     private void RetirePetGamePublication() {

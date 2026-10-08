@@ -81,6 +81,7 @@ internal sealed partial class PetGameService(SessionActor sessionActor) : Messag
         public int Track;
         public ulong PetId;
         public DanceGame Dance;
+        public PetGameAttachContext Context;
         public bool Started;
         public bool Ended;
         public bool Fed;
@@ -104,7 +105,7 @@ internal sealed partial class PetGameService(SessionActor sessionActor) : Messag
     // CLASSIC: preserve queued training/Morph work while the parent completes one local publication.
     // Identity and lifecycle messages must still run, so closing cannot wait on the publication result.
     internal bool ShouldStashForPublication(object message)
-        => _pendingJoin is not null && message is not PetGamePublicationResult
+        => _pendingJoin is not null && message is not PetGamePublicationResult and not PetGameSessionOutputRefused
             and not SERVICE_101_PROTOCOL.MSG_QUERYMESSAGESERVICEIDENTITY
             and not SERVICE_101_PROTOCOL.MSG_PREDISPOSE and not SERVICE_101_PROTOCOL.MSG_DISPOSE
             and not Exception and not Status.Failure and not Terminated;
@@ -119,6 +120,7 @@ internal sealed partial class PetGameService(SessionActor sessionActor) : Messag
     [MessageHandler(typeof(PET_9_PROTOCOL.MSG_PETGAMEJOIN))]
     private void ReceiveJoin(PET_9_PROTOCOL.MSG_PETGAMEJOIN message) {
         if (_closing) return;
+        EnsureTrainingContext(_session); // A refused candidate preserves only a still-valid former game.
         var game = message.Game.ToString();
         var wizard = GetActiveWizard();
         if (game == MorphGame) {
@@ -160,6 +162,7 @@ internal sealed partial class PetGameService(SessionActor sessionActor) : Messag
             if (!ClassicPetProgressTransactions.TryInitializeForGame(wizard, selectedPet?.m_globalID.Full ?? 0, out pet, out energy,
                 attach is null ? null : () => SessionActor.MatchesPetGameAttach(attach))) {
                 if (WizardCollection.IsInventorySnapshotUncertain(wizard)) { CloseSession(); return; }
+                EnsureTrainingContext(_session);
                 InformGameClient("Equip a pet to play the pet games.");
                 SendToSocket(new PET_9_PROTOCOL.MSG_PETGAMEJOINRSP { Game = game, Success = 0 });
                 return;
@@ -194,6 +197,7 @@ internal sealed partial class PetGameService(SessionActor sessionActor) : Messag
             Track = track,
             PetId = pet.m_globalID,
             Dance = game == "PetGameDance" ? new DanceGame(Random.Shared) : null,
+            Context = attach,
         };
         Logger.Information("Pet game {0} track {1}: {2} joins with pet {3} (level {4}, energy {5}).",
             Logger.Args(game, track, wizard.CharId, pet.m_globalID.Full, b.m_level, energy));
@@ -218,16 +222,15 @@ internal sealed partial class PetGameService(SessionActor sessionActor) : Messag
             || !ReferenceEquals(pending.Token, message.Token)) return;
         _pendingJoin = null;
         if (_closing) { Stash.ClearStash(); return; }
-        if (message.Accepted) {
+        if (message.Accepted && SessionActor.MatchesPetGameAttach(pending.Context)) {
             LeaveMorph();
             RetireTraining();
             _session = pending.Candidate;
         }
-        else if (!message.ContextValid) {
-            // A changed/disposed scene also invalidates the old binding; normal shutdown retires it.
-            RetireGamesForClose();
-            CloseSession();
-            return;
+        else if (!message.ContextValid || !SessionActor.MatchesPetGameAttach(pending.Context)) {
+            // Scene loss is ordinary travel, not a socket failure. Discard the stale candidate and
+            // only a former game whose own binding is invalid; keep a later completed attachment usable.
+            EnsureTrainingContext(_session);
         }
         else SendToSocket(new PET_9_PROTOCOL.MSG_PETGAMEJOINRSP { Game = pending.Candidate.Game, Success = 0 });
         Stash.UnstashAll();
@@ -235,19 +238,22 @@ internal sealed partial class PetGameService(SessionActor sessionActor) : Messag
 
     [MessageHandler(typeof(PET_9_PROTOCOL.MSG_PETGAMEREADY))]
     private void ReceiveReady(PET_9_PROTOCOL.MSG_PETGAMEREADY message) {
-        if (_session is null || _session.Started || _session.Ended) {
+        var session = _session;
+        if (!EnsureTrainingContext(session)) return;
+        if (session.Started || session.Ended) {
             return;
         }
 
-        _session.Started = true;
-        SendToSocket(new PET_9_PROTOCOL.MSG_PETGAMESTART { Game = _session.Game, Data = "" });
-        if (_session.Dance is not null) {
-            Timers.StartSingleTimer("petDanceRound", new SendNextRound(_session, _session.Dance.Round), s_roundDelay);
+        session.Started = true;
+        if (!SendTrainingOutput(session, [new PET_9_PROTOCOL.MSG_PETGAMESTART { Game = session.Game, Data = "" }])) return;
+        if (session.Dance is not null) {
+            Timers.StartSingleTimer("petDanceRound", new SendNextRound(session, session.Dance.Round), s_roundDelay);
         }
     }
 
     [MessageHandler(typeof(SendNextRound))]
     private void ReceiveSendNextRound(SendNextRound message) {
+        if (!EnsureTrainingContext(message.Session)) return;
         // CLASSIC: neither an old mailbox callback nor a duplicate callback may replace an outstanding round.
         if (!ReferenceEquals(_session, message.Session) || _session is not { Started: true, Ended: false }
             || _session.Dance is not { Current: null } dance || dance.Round != message.Round) return;
@@ -256,11 +262,12 @@ internal sealed partial class PetGameService(SessionActor sessionActor) : Messag
             return;
         }
 
-        SendToSocket(new PET_9_PROTOCOL.MSG_PETGAMEDANCE { Moves = moves });
+        SendTrainingOutput(_session, [new PET_9_PROTOCOL.MSG_PETGAMEDANCE { Moves = moves }]);
     }
 
     [MessageHandler(typeof(PET_9_PROTOCOL.MSG_PETGAMEDANCE))]
     private void ReceiveDance(PET_9_PROTOCOL.MSG_PETGAMEDANCE message) {
+        if (!EnsureTrainingContext(_session)) return;
         var dance = _session?.Dance;
         // CLASSIC: READY must precede play, and each issued round accepts exactly one answer.
         if (dance is null || !_session.Started || _session.Ended || dance.Current is null) {
@@ -293,6 +300,7 @@ internal sealed partial class PetGameService(SessionActor sessionActor) : Messag
         if (_session is null || !string.Equals(game, _session.Game, StringComparison.Ordinal)) {
             return;
         }
+        if (!EnsureTrainingContext(_session)) return;
 
         byte[] data = message.Data;
         data ??= [];
@@ -339,9 +347,38 @@ internal sealed partial class PetGameService(SessionActor sessionActor) : Messag
         _session = null;
     }
 
+    // CLASSIC: stale training is retired without interrupting a legitimate zone/realm transfer.
+    // A queued callback/refusal for a replaced Session cannot retire the current game or pending candidate.
+    private bool EnsureTrainingContext(Session expected) {
+        if (expected is null || !ReferenceEquals(_session, expected)) return false;
+        if (expected.Context is null || SessionActor.MatchesPetGameAttach(expected.Context)) return true;
+        RetireTraining();
+        return false;
+    }
+
+    [MessageHandler(typeof(PetGameSessionOutputRefused))]
+    private void ReceiveOutputRefused(PetGameSessionOutputRefused message) {
+        if (Sender != SessionActor.ActorRef || _session is not { } current
+            || !ReferenceEquals(current, message.Token) || !ReferenceEquals(current.Context, message.Context)) return;
+        RetireTraining();
+    }
+
+    private bool SendTrainingOutput(Session session, IReadOnlyList<IMessage> messages,
+        CHARACTER_103_PROTOCOL.MSG_RESUMMONPET resummon = null) {
+        if (!EnsureTrainingContext(session)) return false;
+        if (session.Context is not null) {
+            SessionActor.ActorRef.Tell(new PetGameSessionOutput(session, session.Context, messages, resummon), Self);
+            return true;
+        }
+        foreach (var message in messages) SendToSocket(message);
+        if (resummon is not null) TellOtherServices(resummon);
+        return true;
+    }
+
     private void Finish(int points, int wins) {
-        if (_session is null || _session.Ended) return;
-        var wizard = GetActiveWizard();
+        var session = _session;
+        if (!EnsureTrainingContext(session) || session.Ended) return;
+        var wizard = session.Context?.Wizard ?? GetActiveWizard();
         if (wizard is null || !PetGameConfigs.TryGet(_session.Game, out var info)) {
             CloseFailedTerminalDance();
             return;
@@ -349,23 +386,38 @@ internal sealed partial class PetGameService(SessionActor sessionActor) : Messag
         var track = info.m_trackChoices?.ElementAtOrDefault(_session.Track);
         var changes = (track?.m_modifications ?? []).Where(m => m is not null)
             .Select(m => new PetStatChange(m.m_name.ToString(), m.m_change)).ToList();
+        var contextLost = false;
+        bool StillValid() {
+            if (contextLost) return false;
+            if (SessionActor.MatchesPetGameAttach(session.Context)) return true;
+            contextLost = true;
+            return false;
+        }
         try {
             // CLASSIC: the fresh pet and energy cost become visible together after one save acknowledgement.
             if (!ClassicPetProgressTransactions.TryFinish(wizard, _session.PetId, _session.Game,
-                track?.m_name.ToString() ?? "", changes, points, wins, out var receipt)) {
-                if (!CloseFailedTerminalDance() && WizardCollection.IsInventorySnapshotUncertain(wizard)) CloseSession();
+                track?.m_name.ToString() ?? "", changes, points, wins, out var receipt,
+                contextStillValid: session.Context is null ? null : StillValid)) {
+                if (WizardCollection.IsInventorySnapshotUncertain(wizard)) { RetireGamesForClose(); CloseSession(); }
+                else if (contextLost || !EnsureTrainingContext(session)) { if (ReferenceEquals(_session, session)) RetireTraining(); }
+                else CloseFailedTerminalDance();
                 return;
             }
-            _session.Ended = true;
+            // A valid save acknowledgement may persist after its last context check. Do not pretend to
+            // roll it back; suppress the stale native result and leave normal travel intact.
+            if (!EnsureTrainingContext(session)) return;
+            session.Ended = true;
             Timers.Cancel("petDanceRound");
             Logger.Information("Pet game {0} ended: {1} point(s), {2}; +{3} XP (total {4}), level {5} -> {6}; energy -{7} (now {8}).",
                 Logger.Args(_session.Game, points, string.Join(", ", receipt.Applied.Select(a => $"{a.Stat} +{a.Change}")),
                     receipt.Growth.Xp, PetProgress.Behavior(receipt.Pet).m_XP, receipt.Growth.OldLevel,
                     receipt.Growth.NewLevel, receipt.Cost, wizard.PetOwnerBehavior.Energy));
-            PublishProgress(receipt);
+            PublishProgress(session, receipt);
         }
         catch {
-            if (!CloseFailedTerminalDance() && WizardCollection.IsInventorySnapshotUncertain(wizard)) CloseSession();
+            if (WizardCollection.IsInventorySnapshotUncertain(wizard)) { RetireGamesForClose(); CloseSession(); }
+            else if (contextLost || !EnsureTrainingContext(session)) { if (ReferenceEquals(_session, session)) RetireTraining(); }
+            else CloseFailedTerminalDance();
             throw;
         }
     }
@@ -380,40 +432,55 @@ internal sealed partial class PetGameService(SessionActor sessionActor) : Messag
     }
 
     private void FeedSnack(ulong snackId) {
-        var wizard = GetActiveWizard();
+        var session = _session;
+        if (session is not null && !EnsureTrainingContext(session)) return;
+        var wizard = session?.Context?.Wizard ?? GetActiveWizard();
         if (_session is null || wizard is null || !_session.Ended || _session.Fed) {
-            SendToSocket(new PET_9_PROTOCOL.MSG_PETGAMESNACKFEEDFAILED());
+            if (session is null) SendToSocket(new PET_9_PROTOCOL.MSG_PETGAMESNACKFEEDFAILED());
+            else SendTrainingOutput(session, [new PET_9_PROTOCOL.MSG_PETGAMESNACKFEEDFAILED()]);
             return;
+        }
+        var contextLost = false;
+        bool StillValid() {
+            if (contextLost) return false;
+            if (SessionActor.MatchesPetGameAttach(session.Context)) return true;
+            contextLost = true;
+            return false;
         }
         try {
             // CLASSIC: consume the fresh saved stack and grow the fresh owned pet in the same transaction.
-            if (!ClassicPetProgressTransactions.TryFeed(wizard, _session.PetId, snackId, out var receipt)) {
-                if (WizardCollection.IsInventorySnapshotUncertain(wizard)) { CloseSession(); return; }
+            if (!ClassicPetProgressTransactions.TryFeed(wizard, _session.PetId, snackId, out var receipt,
+                contextStillValid: session.Context is null ? null : StillValid)) {
+                if (WizardCollection.IsInventorySnapshotUncertain(wizard)) { RetireGamesForClose(); CloseSession(); return; }
+                if (contextLost || !EnsureTrainingContext(session)) { if (ReferenceEquals(_session, session)) RetireTraining(); return; }
                 Logger.Information("Pet snack {0}: refused; no snack or progress was committed.", Logger.Args(snackId));
-                SendToSocket(new PET_9_PROTOCOL.MSG_PETGAMESNACKFEEDFAILED());
+                SendTrainingOutput(session, [new PET_9_PROTOCOL.MSG_PETGAMESNACKFEEDFAILED()]);
                 return;
             }
-            _session.Fed = true;
+            if (!EnsureTrainingContext(session)) return;
+            session.Fed = true;
             Logger.Information("Pet fed snack {0} ({1}): {2}; +{3} XP (total {4}), level {5} -> {6}.",
                 Logger.Args(snackId, receipt.Taste, string.Join(", ", receipt.Applied.Select(a => $"{a.Stat} +{a.Change}")),
                     receipt.Growth.Xp, PetProgress.Behavior(receipt.Pet).m_XP, receipt.Growth.OldLevel, receipt.Growth.NewLevel));
-            PublishProgress(receipt);
+            PublishProgress(session, receipt);
         }
         catch {
-            if (WizardCollection.IsInventorySnapshotUncertain(wizard)) CloseSession();
+            if (WizardCollection.IsInventorySnapshotUncertain(wizard)) { RetireGamesForClose(); CloseSession(); }
+            else if (contextLost || !EnsureTrainingContext(session)) { if (ReferenceEquals(_session, session)) RetireTraining(); }
             throw;
         }
     }
 
-    private void PublishProgress(PetProgressReceipt receipt) {
+    private void PublishProgress(Session session, PetProgressReceipt receipt) {
         // CLASSIC: every native payload was prepared before the acknowledged write; retain its original order.
-        foreach (var message in receipt.Messages) SendToSocket(message);
+        CHARACTER_103_PROTOCOL.MSG_RESUMMONPET resummon = null;
         if (receipt.Growth.LeveledUp) {
             Logger.Information("Pet {0} grew to {1}; learned {2}.", Logger.Args(receipt.Pet.m_globalID.Full,
                 PetRules.LevelName(receipt.Growth.NewLevel),
                 string.Join(", ", receipt.Growth.NewTalents.Select(t => PetProgress.TalentName(t) ?? t.ToString()))));
-            TellOtherServices(new CHARACTER_103_PROTOCOL.MSG_RESUMMONPET { PetItemId = receipt.Pet.m_globalID });
+            resummon = new CHARACTER_103_PROTOCOL.MSG_RESUMMONPET { PetItemId = receipt.Pet.m_globalID };
         }
+        SendTrainingOutput(session, receipt.Messages, resummon);
     }
 
     internal static WizClientObjectItem EquippedPet(Wizard wizard)
