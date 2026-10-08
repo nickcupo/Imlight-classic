@@ -229,6 +229,29 @@ internal sealed class WizardReagentCollection {
 
     // CLASSIC: only materialize rows referenced exactly once by this saved wizard, with exact full native IDs.
     // This is validation, not a migration: orphaned rows and historic counts are left intact on refusal.
+    // CLASSIC: characters saved before the atomic reagent bag keep ids whose row was deleted when the stack ran out.
+    // That left the character unloadable ("ambiguous or missing owned rows"). A reference with no row anywhere is
+    // dangling, not ambiguous: drop exactly those ids (idempotent, logged) and keep every strict check for the rest.
+    internal static void RepairDanglingReferences(Wizard loaded, IDocumentSession readSession) {
+        var ids = loaded?.AlchemyBehavior?.ReagentItemIds;
+        if (ids is null || ids.Count == 0 || loaded.CharId == 0 || readSession is null) return;
+        var present = ReadRows(readSession).Select(row => row.m_globalID.Full).ToHashSet();
+        var dangling = ids.Where(id => id != 0 && !present.Contains(id)).ToList();
+        if (dangling.Count == 0) return;
+        WizardCollection.CommitCharacterMutation(loaded.CharId, (session, saved) => {
+            var savedIds = saved.AlchemyBehavior?.ReagentItemIds;
+            if (savedIds is null) return false;
+            var rows = ReadRows(session).Select(row => row.m_globalID.Full).ToHashSet();
+            var keep = savedIds.Where(id => id == 0 || rows.Contains(id)).ToList();
+            if (keep.Count == savedIds.Count) return false;
+            saved.AlchemyBehavior.ReagentItemIds = keep;
+            return true;
+        }, null);
+        loaded.AlchemyBehavior.ReagentItemIds = [.. ids.Where(id => id == 0 || present.Contains(id))];
+        Logger.Warning("Reagent bag of {0}: dropped {1} dangling reference(s) with no row (saved before the atomic bag).",
+            Logger.Args(loaded.CharId, dangling.Count));
+    }
+
     internal static bool TryReadOwnedBag(IDocumentSession session, Wizard saved, out List<ClientReagentItem> owned) {
         owned = [];
         return session is not null && saved is not null && saved.CharId != 0

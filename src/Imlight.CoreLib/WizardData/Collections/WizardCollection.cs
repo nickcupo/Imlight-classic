@@ -903,6 +903,7 @@ public static class WizardCollection {
 
     private static Wizard LoadWizard(Wizard wizard) {
         using var session = s_store.OpenSession();
+        WizardReagentCollection.RepairDanglingReferences(wizard, session); // CLASSIC: legacy dangling reagent ids
         return HydrateLoadedWizard(wizard, session);
     }
 

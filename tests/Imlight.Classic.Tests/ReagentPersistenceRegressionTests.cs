@@ -339,6 +339,23 @@ public sealed class ReagentPersistenceRegressionTests {
     }
 
     [Fact]
+    public void LegacyDanglingReferencesAreDroppedOnLoadAndTheBagThenValidates() {
+        var store = new ReagentStore(4);
+        store.Saved.AlchemyBehavior.ReagentItemIds.Add(ReagentStore.ItemId + 99); // row deleted before the atomic bag
+        using var scope = store.Scope();
+        var live = store.Live();
+        live.AlchemyBehavior.ReagentItemIds = [.. store.Saved.AlchemyBehavior.ReagentItemIds];
+        using var session = store.Open();
+        Assert.False(WizardReagentCollection.TryReadOwnedBag(session, store.ForStage(session), out _));
+        WizardReagentCollection.RepairDanglingReferences(live, session);
+        Assert.Equal(ReagentStore.ItemId, Assert.Single(live.AlchemyBehavior.ReagentItemIds));
+        Assert.Equal(ReagentStore.ItemId, Assert.Single(store.Saved.AlchemyBehavior.ReagentItemIds));
+        Assert.True(WizardReagentCollection.TryReadOwnedBag(session, store.ForStage(session), out var owned));
+        Assert.Equal(4, Assert.Single(owned).m_quantity);
+        Assert.Equal(1, Assert.Single(store.SavedRows) is { } ? 1 : 0);
+    }
+
+    [Fact]
     public void OwnedBagHydrationRefusesDuplicateOrForeignReferencesWithoutDeletingAnything() {
         var store = new ReagentStore(5);
         store.SavedRows[0].m_characterId = ReagentStore.Char + 1;
