@@ -51,7 +51,7 @@ internal class CommandAmbientProtocol : CommandProtocol {
         var zone = Context.Character.Zone;
         var wizards = AmbientWizards.All.Where(w => string.Equals(w.Zone, zone, StringComparison.OrdinalIgnoreCase)).ToList();
         InformSenderClient(wizards.Count == 0 ? "No ambient wizard in this zone."
-            : string.Join("; ", wizards.Select(w => $"{w.Name} L{w.Wizard.MagicSchoolBehavior.Level} {w.Identity.School} {w.Activity} "
+            : string.Join("; ", wizards.Select(w => $"{w.Name} L{w.Wizard.MagicSchoolBehavior.Level} {w.Identity.School} {w.Activity}{(w.Stands > 1 ? $" stood{w.Stands}" : "")} "
                 + $"{(int) MathF.Sqrt((w.Position.X - here.X) * (w.Position.X - here.X) + (w.Position.Y - here.Y) * (w.Position.Y - here.Y))}")));
     }
 

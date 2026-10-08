@@ -250,6 +250,8 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
         // (a second "Duel ended" and a MSG_SENDTOHUB).
         _currentDuelActor = null;
         if (!PublishCombatState(GetActiveWizard(), false, false)) return;
+        // CLASSIC: the health the wizard walks away with, before any reward (a level-up refill comes after it).
+        if (HealthAfterDuel(GetActiveWizard()) is { } health) SendToSocket(health);
         PushHelperIdle();
         EquipMount();
         SetNoAggroGrace();
@@ -278,6 +280,27 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
         TellOtherServices(msg);
 
         GrantMobCrowns(GrantMobLoot(message.MobTemplateIds));
+    }
+
+    /// <summary>
+    /// CLASSIC: the wizard's health after a won duel, for the HUD. The duel changed health on the server only (the
+    /// client saw it in MSG_COMBATHEALTH); nothing else told the client after the duel, so a wizard's own health stat
+    /// stayed at its pre-duel value until the next zone change (playbot DS 2026-10-05: wizards chained fights at
+    /// 100-300 health believing they were full). The maximum is the level table's, as in every other MSG_UPDATEHEALTH:
+    /// the client adds its equipment effects itself. DisplayDiff 0: no floating number. Null without a level table.
+    /// </summary>
+    internal static WIZARD_12_PROTOCOL.MSG_UPDATEHEALTH HealthAfterDuel(Wizard wizard) {
+        if (wizard?.GameStats is not { } stats || wizard.MagicSchoolBehavior is not { } school
+            || WizardProgressionTransactions.LevelInfo(school.MagicSchool, school.Level) is not { m_hitpoints: > 0 } table) {
+            return null;
+        }
+
+        return new WIZARD_12_PROTOCOL.MSG_UPDATEHEALTH {
+            CharacterID = wizard.GameObjectID,
+            NewHealth = Math.Max(stats.m_currentHitpoints, 0),
+            NewHealthMax = table.m_hitpoints,
+            DisplayDiff = 0,
+        };
     }
 
     // CLASSIC: the bosses this wizard beat here open their Second Chance chests (October 2009).

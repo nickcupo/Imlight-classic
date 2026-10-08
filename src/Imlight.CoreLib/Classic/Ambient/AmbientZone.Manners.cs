@@ -338,7 +338,8 @@ internal sealed partial class AmbientZone {
             var reach = 300 + _rng.NextDouble() * 600;
             var at = new Vector3(wizard.Position.X + (float) (Math.Cos(angle) * reach),
                 wizard.Position.Y + (float) (Math.Sin(angle) * reach), wizard.Position.Z);
-            if (_nav.Snap(Num(at), 200f) is { } open && WalkTo(wizard, new Vector3(open.X, open.Y, open.Z), AmbientActivity.Walking)) {
+            if (_nav.Snap(Num(at), 200f) is { } open && InArea(new Vector3(open.X, open.Y, open.Z))
+                && WalkTo(wizard, new Vector3(open.X, open.Y, open.Z), AmbientActivity.Walking)) {
                 return true;
             }
         }
@@ -429,13 +430,49 @@ internal sealed partial class AmbientZone {
         return false;
     }
 
+    /// <summary>
+    /// CLASSIC (2026-10-08): where a wizard may stroll: the part of the zone its places are in (EnsureSpots): a hub's
+    /// area around the start (its far corners can be other floors or closed areas), a street's ground near the start's
+    /// height.
+    /// </summary>
+    private bool InArea(Vector3 at)
+        => _zone.Contains("Hub", StringComparison.OrdinalIgnoreCase)
+            ? Distance(at, _start) < 6000 && MathF.Abs(at.Z - _start.Z) < 400
+            : MathF.Abs(at.Z - _start.Z) < 800;
+
     /// <summary>Stay a while, with a small turn or two at uneven times.</summary>
     private void StandAWhile(AmbientWizard wizard, DateTime now) {
+        // CLASSIC (2026-10-08): a wizard that has found no walk several times running stands where no walk starts (a duel
+        // slot or a spot cut off from the zone's ground): it steps back to the zone's start (logged, and shown by
+        // ".ambient status" as "stood N") instead of standing there for good.
+        if (++wizard.Stands >= StuckStands && Unstick(wizard)) {
+            return;
+        }
+
         wizard.Activity = AmbientActivity.Idle;
         var stay = 5 + _rng.Next(20);
         wizard.Until = now.AddSeconds(stay);
         Timers.StartSingleTimer($"fidget-{wizard.CharId}", new Later(wizard, Glance),
             TimeSpan.FromSeconds(1.5 + _rng.NextDouble() * (stay - 2)));
+    }
+
+    private const int StuckStands = 6;
+
+    private bool Unstick(AmbientWizard wizard) {
+        if (_nav?.Snap(Num(_start)) is not { } start) {
+            return false;
+        }
+
+        Logger.Warning("Ambient wizard {Name} in {Zone}: no walk from ({X:F0}, {Y:F0}) {Stands} times running; back to the zone's start.",
+            Logger.Args(wizard.Name, _zone, wizard.Position.X, wizard.Position.Y, wizard.Stands));
+        Halt(wizard);
+        wizard.Stands = 0;
+        wizard.Position = new Vector3(start.X, start.Y, start.Z);
+        wizard.Wizard.Location = wizard.Position;
+        wizard.Activity = AmbientActivity.Idle;
+        wizard.Until = DateTime.UtcNow.AddSeconds(2 + _rng.Next(4));
+        Send([Move(wizard), new GAME_5_PROTOCOL.MSG_MOVESTATE { GlobalID = wizard.Wizard.GameObjectID, NewState = 0 }]);
+        return true;
     }
 
     /// <summary>The zone's doorways: its named arrival spots and its start.</summary>
