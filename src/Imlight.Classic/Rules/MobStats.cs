@@ -94,7 +94,7 @@ public static class MobStatsLoader {
     internal static readonly FrozenSet<string> s_rootKeys = FrozenSet.Create(StringComparer.Ordinal,
         "id", "title", "profiles", "provenance", "license_tag", "notes", "mobs");
     internal static readonly FrozenSet<string> s_mobKeys = FrozenSet.Create(StringComparer.Ordinal,
-        "name", "templates", "health", "modern_health", "rank", "school", "source", "source_date", "confidence", "notes");
+        "name", "templates", "health", "modern_health", "rank", "school", "source", "source_date", "confidence", "notes", "profiles");
     internal static readonly FrozenSet<string> s_schools = FrozenSet.Create(StringComparer.Ordinal,
         "Fire", "Ice", "Storm", "Myth", "Life", "Death", "Balance");
     private static readonly Regex s_id = new(@"^mob-stats-[a-z0-9][a-z0-9-]*\z", RegexOptions.CultureInvariant);
@@ -103,7 +103,13 @@ public static class MobStatsLoader {
     /// Loads the stats at <paramref name="path"/>.
     /// </summary>
     /// <exception cref="ClassicDataException">The file is missing or invalid; every error is reported.</exception>
-    public static MobStats Load(string path) {
+    public static MobStats Load(string path) => Load(path, null);
+
+    /// <summary>
+    /// CLASSIC: loads the creatures for <paramref name="profileId"/>: an entry with its own <c>profiles</c> list (a dated
+    /// value of a later profile, e.g. october-2010-arc1) counts only for those profiles, and overrides no other entry.
+    /// </summary>
+    public static MobStats Load(string path, string? profileId) {
         var fullPath = Path.GetFullPath(path);
         var display = ClassicDataLocator.DisplayPath(fullPath);
         if (!File.Exists(fullPath)) {
@@ -140,6 +146,16 @@ public static class MobStatsLoader {
                 }
 
                 diagnostics.CheckKeys(mob, keyPath, s_mobKeys, ["name", "templates", "health", "source", "source_date"]);
+                if (mob.Find("profiles") is { } only) {
+                    if (diagnostics.ReadList(only.Value, YamlTree.Join(keyPath, "profiles")) is not { } entryProfiles) {
+                        continue;
+                    }
+                    var listed = entryProfiles.Items.Select(item => diagnostics.ReadString(item, YamlTree.Join(keyPath, "profiles"))).ToList();
+                    if (profileId is null || !listed.Contains(profileId, StringComparer.Ordinal)) {
+                        continue;
+                    }
+                }
+
                 var hp = mob.Find("health") is { } h ? diagnostics.ReadInt(h.Value, YamlTree.Join(keyPath, "health"), 1, 10_000_000) : null;
                 if (mob.Find("templates") is not { } templatesEntry
                     || diagnostics.ReadList(templatesEntry.Value, YamlTree.Join(keyPath, "templates")) is not { } templates
