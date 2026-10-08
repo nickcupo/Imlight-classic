@@ -284,6 +284,13 @@ internal sealed partial class CombatDuelComponent {
         var actor = circle.ParticipantActor;
         var participantId = circle.ParticipantObject?.m_globalID ?? 0;
         var wasAdded = circle.AddedToDuel;
+        // CLASSIC: the native ending phase closes the planning hand. Once the seat is cleared, the final
+        // DuelBroadcast cannot reach this wizard, and native EndDuel sees a duel we no longer participate in.
+        // End only this client's combat before release; teammates may still be fighting in the shared duel.
+        if (wasAdded && circle.Occupied && actor is not null && !circle.Disconnected) {
+            SendCombatPhase((byte) kDuelPhase.kPhase_Ended, actor);
+        }
+
         if (circle.Disconnected) {
             if (circle._wizard is { } away && away.GameStats.m_currentHitpoints <= 0) {
                 away.UpdateHealth(1);
