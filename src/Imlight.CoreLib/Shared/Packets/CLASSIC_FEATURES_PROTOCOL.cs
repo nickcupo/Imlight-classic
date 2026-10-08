@@ -250,6 +250,16 @@ internal sealed class CLASSIC_FEATURES_PROTOCOL : IServerProtocol {
 
     }
 
+    /// <summary>CLASSIC: a RideService timer: a ride zone's fallback (ClassicRides).</summary>
+    public sealed class MSG_RIDEFALLBACK : IServerMessage {
+        public byte MessageOrder { get; } = 18;
+        public byte ServiceID { get; } = 110;
+        public string Zone;
+        public long Arrival;
+        /// <summary>True: start the ride (post its start event); false: the fallback.</summary>
+        public bool Start;
+    }
+
     /// <summary>CLASSIC: a committed activation requests a timer/effect refresh; never on the wire.</summary>
     public sealed class MSG_ELIXIRCHANGED : IServerMessage {
         public byte MessageOrder { get; } = 17;
