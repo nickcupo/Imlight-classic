@@ -132,7 +132,10 @@ internal sealed partial class PetGameService {
         var zone = PetGameScenes.ZoneFor(game, track);
         var account = GetActiveAccount();
         if (account is null || zone is null || !PetGameScenes.TryLoad(game, track, out _)) { Refuse("its zone data is not available"); return; }
-        if (!SessionActor.TryCapturePetGameAttach(wizard, out var attach)) { Refuse("no completed attachment"); return; }
+        if (!SessionActor.TryCapturePetGameAttach(wizard, out var attach)) {
+            Refuse("no completed attachment: " + SessionActor.DescribePetGameAttach(wizard));
+            return;
+        }
 
         var selectedPet = EquippedPet(wizard);
         WizClientObjectItem pet;
@@ -171,12 +174,32 @@ internal sealed partial class PetGameService {
 
     // ------------------------------------------------------------------ arrival in the game's zone
 
+    private sealed record PhantomArrivalTimeout;
+    /// <summary>How long an arrival waits for the parent to trust the completed attach before it gives up.</summary>
+    private static readonly TimeSpan ArrivalWait = TimeSpan.FromSeconds(5);
+    private const string PhantomArrival = "petGameArrival";
+
     [MessageHandler(typeof(SERVICE_101_PROTOCOL.MSG_ATTACHCOMPLETE))]
-    private void ReceivePhantomAttachComplete(SERVICE_101_PROTOCOL.MSG_ATTACHCOMPLETE message) {
+    private void ReceivePhantomAttachComplete(SERVICE_101_PROTOCOL.MSG_ATTACHCOMPLETE message) => TryArrive(final: false);
+
+    // CLASSIC: the parent trusted the completed attach only after its world object was recorded.
+    [MessageHandler(typeof(PetGameSceneTrusted))]
+    private void ReceivePhantomSceneTrusted(PetGameSceneTrusted message) => TryArrive(final: false);
+
+    [MessageHandler(typeof(PhantomArrivalTimeout))]
+    private void ReceivePhantomArrivalTimeout(PhantomArrivalTimeout message) => TryArrive(final: true);
+
+    private void TryArrive(bool final) {
         if (_closing || !Enabled) return;
         var wizard = GetActiveWizard();
         if (wizard is null || !PetGameScenes.IsGameZone(wizard.Zone)) return;
         if (_session?.Phantom is not null || _pendingJoin is not null) return; // A repeated completion of the same scene.
+        if (!final && !SessionActor.TryCapturePetGameAttach(wizard, out _)) {
+            // Not trusted yet: wait for the parent (PetGameSceneTrusted), and give up after a short while.
+            if (!Timers.IsTimerActive(PhantomArrival)) Timers.StartSingleTimer(PhantomArrival, new PhantomArrivalTimeout(), ArrivalWait);
+            return;
+        }
+        Timers.Cancel(PhantomArrival);
 
         var account = GetActiveAccount();
         if (account is null || !PetGameTransfers.TryConsume(account.AccountId, wizard.CharId, wizard.Zone, DateTime.UtcNow, out var pending)) {
@@ -192,7 +215,10 @@ internal sealed partial class PetGameService {
             SendHome(pending, wizard);
         }
 
-        if (!SessionActor.TryCapturePetGameAttach(wizard, out var attach)) { Abandon("no completed attachment"); return; }
+        if (!SessionActor.TryCapturePetGameAttach(wizard, out var attach)) {
+            Abandon("no completed attachment: " + SessionActor.DescribePetGameAttach(wizard));
+            return;
+        }
         if (!PetGameConfigs.TryGet(pending.Game, out var info) || !PetGameInitializationCodec.TryPrepare(info, out var initData)) {
             Abandon("no game configuration"); return;
         }

@@ -10,6 +10,7 @@ using Imcodec.MessageLayer;
 using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Classic.Pets;
+using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.Game.Pet;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;
@@ -325,5 +326,72 @@ public sealed partial class PetGameSessionAdmissionTests {
         Assert.False(PetGameScenes.IsGameZone("ThePhantomZoneWorld/PetGameDance"));
         Assert.False(PetGameScenes.IsGameZone("WizardCity/WC_Hub"));
         Assert.Equal("ThePhantomZoneWorld/PetGameCannon/Range05", PetGameScenes.ZoneFor(Cannon, 4));
+    }
+}
+
+public sealed partial class PetGameSessionAdmissionTests {
+
+    private static async Task<bool> Eventually(Func<bool> condition) {
+        for (var i = 0; i < 100 && !condition(); i++) await Task.Delay(30, TestContext.Current.CancellationToken);
+        return condition();
+    }
+
+    // Live a2b88dd9 trusted ATTACHCOMPLETE only if WizardService had already recorded the attach's world object; the zone
+    // answers both in parallel, so a fresh session's first attach was never trusted (rig: every Dance join refused).
+    [Fact]
+    public async Task ACompletionBeforeTheWorldObjectIsRecordedIsTrustedOnceItIsAndFansOutOnce() {
+        using var f = await Fixture.Create();
+        await f.FanoutBarrier();
+        var fanouts = f.AttachFanout.Count;
+        ActiveWizardDirectory.SetGameObject(f.Endpoint, null!);
+        var next = f.Attach with { Generation = f.Attach.Generation + 1 };
+        await f.CompleteAttach(next);
+        Assert.False(f.Instance.TryCapturePetGameAttach(f.Store.Live, out _));
+        ActiveWizardDirectory.SetGameObject(f.Endpoint, f.Store.Live.GameObject);
+        Assert.True(await Eventually(() => f.Instance.TryCapturePetGameAttach(f.Store.Live, out var c) && c.Attach.Generation == next.Generation));
+        await f.FanoutBarrier();
+        Assert.Equal(fanouts + 1, f.AttachFanout.Count); // The retry re-evaluates trust only.
+        await f.Join(Dance);
+        var setup = await f.Drain();
+        Assert.Equal(1, Assert.Single(setup.OfType<PET_9_PROTOCOL.MSG_PETGAMEJOINRSP>()).Success);
+        Assert.Single(setup.OfType<PET_9_PROTOCOL.MSG_PETGAMEINIT>());
+    }
+
+    [Fact]
+    public async Task APhantomArrivalWaitsForTheTrustedSceneOrGoesBackAfterItsWait() {
+        using var f = await Fixture.Create();
+        await f.Send(new PET_9_PROTOCOL.MSG_PETGAMEJOIN { Game = Maze, Track = "0" });
+        await f.Drain(); await f.FanoutBarrier(); Assert.True(f.Transfers.TryDequeue(out var transfer));
+        var origin = f.Store.Live.Zone;
+        f.Store.Live.Zone = transfer.DestinationZone;
+        ActiveWizardDirectory.SetGameObject(f.Endpoint, null!);
+        await f.CompleteAttach(f.Attach with { Zone = transfer.DestinationZone, Generation = f.Attach.Generation + 1 });
+        await f.State();
+        Assert.DoesNotContain(await f.Drain(), p => p is PET_9_PROTOCOL.MSG_PETGAMEINIT);
+        var wait = await Timer(f, "petGameArrival");
+        ActiveWizardDirectory.SetGameObject(f.Endpoint, f.Store.Live.GameObject);
+        Assert.True(await Eventually(() => f.Packets.Any(p => p is PET_9_PROTOCOL.MSG_PETGAMEINIT)),
+            string.Join(",", f.Ingress.Select(i => i.Type.Name)) + " | " + string.Join(",", f.Packets.Select(p => p.GetType().Name))
+            + " | trusted=" + f.Instance.TryCapturePetGameAttach(f.Store.Live, out _));
+        Assert.Equal(Maze, (await f.State()).Game);
+        await f.Fire(wait); // A late wait changes nothing once the game is set up.
+        Assert.Equal(Maze, (await f.State()).Game);
+        await f.FanoutBarrier();
+        Assert.Empty(f.Transfers);
+
+        // A second trip whose scene is never trusted gives up and goes back.
+        await f.Send(new PET_9_PROTOCOL.MSG_PETGAMEENDING { Game = Maze }); await f.FanoutBarrier(); f.Transfers.Clear();
+        f.Store.Live.Zone = origin;
+        await f.CompleteAttach(f.Attach with { Zone = origin, Generation = f.Attach.Generation + 1 }); // Back at the kiosk.
+        await f.Send(new PET_9_PROTOCOL.MSG_PETGAMEJOIN { Game = Maze, Track = "0" });
+        await f.FanoutBarrier(); Assert.True(f.Transfers.TryDequeue(out _)); await f.Drain();
+        f.Store.Live.Zone = transfer.DestinationZone;
+        ActiveWizardDirectory.SetGameObject(f.Endpoint, null!);
+        await f.CompleteAttach(f.Attach with { Zone = transfer.DestinationZone, Generation = f.Attach.Generation + 1 });
+        await f.Fire(await Timer(f, "petGameArrival"));
+        await f.FanoutBarrier();
+        Assert.True(f.Transfers.TryDequeue(out var back));
+        Assert.Equal(origin, back.DestinationZone);
+        Assert.Null((await f.State()).Session);
     }
 }

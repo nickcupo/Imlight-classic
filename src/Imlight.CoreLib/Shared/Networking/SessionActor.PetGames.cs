@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using System.Threading;
 using Imcodec.MessageLayer;
+using Imlight.Common;
 using Akka.Actor;
 using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty.TypeCache;
@@ -23,6 +24,11 @@ internal sealed record PetGamePublicationResult(object Token, bool Accepted, boo
 internal sealed record PetGameSessionOutput(object Token, PetGameAttachContext Context,
     IReadOnlyList<IMessage> Messages, CHARACTER_103_PROTOCOL.MSG_RESUMMONPET Resummon = null);
 internal sealed record PetGameSessionOutputRefused(object Token, PetGameAttachContext Context);
+// CLASSIC: told to the pet service when a completed attach became trusted after the fanout already passed.
+internal sealed record PetGameSceneTrusted(long Generation) : IServerMessage {
+    public byte MessageOrder => 142;
+    public byte ServiceID => 101;
+}
 
 public sealed partial class SessionActor {
     private PetGameAttachContext _petGameAttach;
@@ -43,6 +49,17 @@ public sealed partial class SessionActor {
     internal bool TryCapturePetGameAttach(Wizard wizard, out PetGameAttachContext context) {
         context = Volatile.Read(ref _petGameAttach);
         return context is not null && ReferenceEquals(context.Wizard, wizard) && MatchesPetGameAttach(context);
+    }
+
+    // CLASSIC: why the completed-attachment capture failed, for the refusal log (no secrets, only identities).
+    internal string DescribePetGameAttach(Wizard wizard) {
+        var completed = Volatile.Read(ref _petGameAttach);
+        var current = DoorAttach;
+        ActiveWizardDirectory.TryGet(ActorRef, out var selected, out var world);
+        return $"completed={(completed is null ? "none" : $"{completed.Attach?.Zone}#{completed.Attach?.Generation}")} " +
+            $"door={(current is null ? "none" : $"{current.Zone}#{current.Generation}")} disposed={IsDisposed} transferring={TransferringOut} " +
+            $"sameWizard={ReferenceEquals(completed?.Wizard, wizard)} selectedSame={ReferenceEquals(selected, wizard)} " +
+            $"sameWorld={ReferenceEquals(completed?.World, world)} zone={wizard?.Zone}";
     }
 
     internal bool MatchesPetGameAttach(PetGameAttachContext expected) {
@@ -66,27 +83,67 @@ public sealed partial class SessionActor {
             && current.Generation == expected.Generation
             && string.Equals(current.Zone, expected.Zone, StringComparison.OrdinalIgnoreCase);
 
+    // CLASSIC: the zone answers MSG_ADDPLAYER to AttachService and WizardService in parallel, so the directory's world
+    // object can still be missing (first attach of this SessionActor) when ATTACHCOMPLETE reaches the parent. The trust
+    // decision waits briefly for exactly that object; it never trusts a different scene, sender or owner.
+    internal sealed record PetGameAttachRetry(SERVICE_101_PROTOCOL.MSG_ATTACHCOMPLETE Message, int Attempt);
+    private const int PetGameAttachRetries = 40;
+    private static readonly TimeSpan s_petGameAttachRetry = TimeSpan.FromMilliseconds(50);
+
     private void ReceivePetGameAttachComplete(SERVICE_101_PROTOCOL.MSG_ATTACHCOMPLETE message) {
-        if (!IsDisposed && !TransferringOut && _services.TryGetValue(Sender, out var service)
-            && service is AttachService && DoorAttach is { } attach
-            && attach.Actor == message.ZoneActorRef && attach.Generation == message.AttachGeneration
-            && ActiveWizardDirectory.TryGet(ActorRef, out var wizard, out var world) && world is not null
-            && attach.Owner != 0 && attach.Owner == wizard.GameObjectID && world.m_globalID.Full == attach.Owner
-            && string.Equals(wizard.Zone, attach.Zone, StringComparison.OrdinalIgnoreCase))
-        {
-            var completed = new PetGameAttachContext(wizard, world, wizard.CharId, attach);
-            if (_petGameObjects.Count != 0 && (!ReferenceEquals(_danceObjectAttach.Wizard, wizard)
-                || !ReferenceEquals(_danceObjectAttach.World, world)
-                || !MatchesPetGameScene(_danceObjectAttach.Attach, attach))) {
-                // A trusted new completed scene retires its former scene-owned cache. Same-scene completion
-                // replay retains it; no per-game REMOVEOBJECT can race a later named logic registration.
-                _petGameObjects.Clear();
-                _danceObjectAttach = null;
-            }
-            Volatile.Write(ref _petGameAttach, completed);
+        if (_services.TryGetValue(Sender, out var service) && service is AttachService) {
+            TryCompletePetGameAttach(message, 0);
         }
-        // Keep the existing ZoneService and other post-attach recipients, including their original sender.
+        else {
+            Logger.Debug("Pet games: attach completion from a non-attach sender ignored for session {0}.", Logger.Args(SessionID));
+        }
+        // Keep the existing ZoneService and other post-attach recipients, including their original sender. Only once:
+        // a retry below re-evaluates the pet-game trust alone.
         HandleInternalTell(message);
+    }
+
+    private void ReceivePetGameAttachRetry(PetGameAttachRetry retry) => TryCompletePetGameAttach(retry.Message, retry.Attempt);
+
+    private void TryCompletePetGameAttach(SERVICE_101_PROTOCOL.MSG_ATTACHCOMPLETE message, int attempt) {
+        if (IsDisposed || TransferringOut || DoorAttach is not { } attach || attach.Actor != message.ZoneActorRef
+            || attach.Generation != message.AttachGeneration || !ActiveWizardDirectory.TryGet(ActorRef, out var wizard, out var world)
+            || wizard is null || attach.Owner == 0 || attach.Owner != wizard.GameObjectID
+            || !string.Equals(wizard.Zone, attach.Zone, StringComparison.OrdinalIgnoreCase)) {
+            var door = DoorAttach;
+            ActiveWizardDirectory.TryGet(ActorRef, out var w, out _);
+            Logger.Debug("Pet games: attach completion not trusted for session {0}: door={1} sameActor={2} generation={3}/{4} " +
+                "owner={5}/{6} zone={7}/{8}", Logger.Args(SessionID, door is not null, door?.Actor == message.ZoneActorRef,
+                    door?.Generation, message.AttachGeneration, door?.Owner, w?.GameObjectID, w?.Zone, door?.Zone));
+            return;
+        }
+        if (world is null || world.m_globalID.Full != attach.Owner) {
+            // WizardService has not recorded this attach's world object yet.
+            if (attempt < PetGameAttachRetries) {
+                Context.System.Scheduler.ScheduleTellOnce(s_petGameAttachRetry, Self, new PetGameAttachRetry(message, attempt + 1), Self);
+            }
+            else {
+                Logger.Warning("Pet games: session {0} never saw its world object for attach generation {1}.",
+                    Logger.Args(SessionID, message.AttachGeneration));
+            }
+            return;
+        }
+
+        var completed = new PetGameAttachContext(wizard, world, wizard.CharId, attach);
+        if (_petGameObjects.Count != 0 && (!ReferenceEquals(_danceObjectAttach.Wizard, wizard)
+            || !ReferenceEquals(_danceObjectAttach.World, world)
+            || !MatchesPetGameScene(_danceObjectAttach.Attach, attach))) {
+            // A trusted new completed scene retires its former scene-owned cache. Same-scene completion
+            // replay retains it; no per-game REMOVEOBJECT can race a later named logic registration.
+            _petGameObjects.Clear();
+            _danceObjectAttach = null;
+        }
+        Volatile.Write(ref _petGameAttach, completed);
+        if (attempt != 0) {
+            Logger.Debug("Pet games: session {0} trusted attach generation {1} after {2} wait(s) for its world object.",
+                Logger.Args(SessionID, message.AttachGeneration, attempt));
+            // A pet service that already handled the fanout re-checks its arrival now that the scene is trusted.
+            HandleInternalTell(new PetGameSceneTrusted(message.AttachGeneration));
+        }
     }
 
     private void ReceivePetGamePublication(PetGamePublication message) {
