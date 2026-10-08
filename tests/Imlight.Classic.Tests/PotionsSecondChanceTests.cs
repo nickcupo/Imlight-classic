@@ -99,17 +99,17 @@ public sealed class PotionsSecondChanceTests {
         var chest = rules.ChestByName("MS_MonsterChest_PlagueOni")!;
         const string zone = "MooShu/MS_Plague/Interiors/MS_Plague2_PalaceInterior";
 
-        Assert.Equal(ChestRefusal.BossNotDefeated, state.Open(1, 900, chest, zone, 7, rules));
+        Assert.Equal(ChestRefusal.BossNotDefeated, state.OpenForFixture(1, 900, chest, zone, 7, rules));
         state.RecordWin(1, zone, 7, [77505]); // Ideyoshi, not the Plague Oni
-        Assert.Equal(ChestRefusal.BossNotDefeated, state.Open(1, 900, chest, zone, 7, rules));
+        Assert.Equal(ChestRefusal.BossNotDefeated, state.OpenForFixture(1, 900, chest, zone, 7, rules));
         state.RecordWin(1, zone, 7, [77504]);
-        Assert.Equal(ChestRefusal.BossNotDefeated, state.Open(1, 900, chest, zone, 8, rules)); // another instance
-        Assert.Equal(ChestRefusal.None, state.Open(1, 900, chest, zone, 7, rules));
-        Assert.Equal(77504UL, state.BossFor(1, chest));
+        Assert.Equal(ChestRefusal.BossNotDefeated, state.OpenForFixture(1, 900, chest, zone, 8, rules)); // another instance
+        Assert.Equal(ChestRefusal.None, state.OpenForFixture(1, 900, chest, zone, 7, rules));
+        Assert.Equal(77504UL, state.BossForFixture(1, chest));
 
         // A win elsewhere replaces the record.
         state.RecordWin(1, "MooShu/MS_Hub", 0, [1]);
-        Assert.Equal(ChestRefusal.BossNotDefeated, state.Open(1, 900, chest, zone, 7, rules));
+        Assert.Equal(ChestRefusal.BossNotDefeated, state.OpenForFixture(1, 900, chest, zone, 7, rules));
     }
 
     [Fact]
@@ -120,7 +120,7 @@ public sealed class PotionsSecondChanceTests {
         var chest = rules.ChestByName("DS_MonsterChest_Malistaire")!;
         const string zone = "DragonSpire/DS_A3_Kings/Interiors/DS_MalistaireLair";
         state.RecordWin(5, zone, 3, [126504]);
-        Assert.Equal(ChestRefusal.None, state.Open(5, 42, chest, zone, 3, rules));
+        Assert.Equal(ChestRefusal.None, state.OpenForFixture(5, 42, chest, zone, 3, rules));
 
         var crowns = 3000;
         var paid = new System.Collections.Generic.List<int>();
@@ -136,27 +136,27 @@ public sealed class PotionsSecondChanceTests {
         }
 
         for (var i = 0; i < rules.DailyUses; i++) {
-            Assert.Equal(ChestRefusal.None, state.TryUse(5, 42, zone, 3, rules, Pay, out _, out _));
+            Assert.Equal(ChestRefusal.None, state.TryUseForFixture(5, 42, zone, 3, rules, Pay, out _, out _));
         }
 
         Assert.Equal(Enumerable.Range(0, rules.DailyUses).Select(i => 50 + 50 * i), paid);
-        Assert.Equal(ChestRefusal.NoUsesLeft, state.TryUse(5, 42, zone, 3, rules, Pay, out _, out _));
-        Assert.Equal(0, state.UsesLeft(5, chest, rules));
+        Assert.Equal(ChestRefusal.NoUsesLeft, state.TryUseForFixture(5, 42, zone, 3, rules, Pay, out _, out _));
+        Assert.Equal(0, state.UsesLeftForFixture(5, chest, rules));
 
         // The next UTC day starts again at 50 Crowns; a wizard short of Crowns pays nothing and keeps the use.
         now = now.AddDays(1);
-        Assert.Equal(ChestRefusal.BossNotDefeated, state.TryUse(5, 42, zone, 3, rules, Pay, out _, out _)); // the win is old
+        Assert.Equal(ChestRefusal.BossNotDefeated, state.TryUseForFixture(5, 42, zone, 3, rules, Pay, out _, out _)); // the win is old
         state.RecordWin(5, zone, 3, [126504]);
         crowns = 49;
-        Assert.Equal(ChestRefusal.NotEnoughCrowns, state.TryUse(5, 42, zone, 3, rules, Pay, out _, out int cost));
+        Assert.Equal(ChestRefusal.NotEnoughCrowns, state.TryUseForFixture(5, 42, zone, 3, rules, Pay, out _, out int cost));
         Assert.Equal(50, cost);
-        Assert.Equal(rules.DailyUses, state.UsesLeft(5, chest, rules));
+        Assert.Equal(rules.DailyUses, state.UsesLeftForFixture(5, chest, rules));
 
         // A roll needs the chest's own window: another chest id, or a closed window, is refused.
         crowns = 1000;
-        Assert.Equal(ChestRefusal.NoPrompt, state.TryUse(5, 43, zone, 3, rules, Pay, out _, out _));
+        Assert.Equal(ChestRefusal.NoPrompt, state.TryUseForFixture(5, 43, zone, 3, rules, Pay, out _, out _));
         state.Close(5);
-        Assert.Equal(ChestRefusal.NoPrompt, state.TryUse(5, 42, zone, 3, rules, Pay, out _, out _));
+        Assert.Equal(ChestRefusal.NoPrompt, state.TryUseForFixture(5, 42, zone, 3, rules, Pay, out _, out _));
         Assert.Equal(1000, crowns); // nothing was taken
     }
 
@@ -166,10 +166,10 @@ public sealed class PotionsSecondChanceTests {
         var state = new SecondChanceChests();
         var chest = rules.ChestByName("KT_MonsterChest_Krokopatra")!;
         state.RecordWin(9, chest.Zone, 0, [35433]);
-        state.Open(9, 1, chest, chest.Zone, 0, rules);
+        state.OpenForFixture(9, 1, chest, chest.Zone, 0, rules);
         var spent = 0;
         var results = Enumerable.Range(0, 64).AsParallel().Select(attempt =>
-            state.TryUse(9, 1, chest.Zone, 0, rules, cost => { System.Threading.Interlocked.Add(ref spent, cost); return true; }, out _, out _)).ToArray();
+            state.TryUseForFixture(9, 1, chest.Zone, 0, rules, cost => { System.Threading.Interlocked.Add(ref spent, cost); return true; }, out _, out _)).ToArray();
         Assert.Equal(rules.DailyUses, results.Count(r => r == ChestRefusal.None));
         Assert.Equal(Enumerable.Range(0, rules.DailyUses).Sum(i => rules.CostOfUse(i)), spent);
     }

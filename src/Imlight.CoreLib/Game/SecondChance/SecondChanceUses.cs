@@ -34,8 +34,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
-using System.Linq;
-using Imlight.CoreLib.WizardData.Databases;
+using Raven.Client.Documents.Session;
 
 namespace Imlight.CoreLib.Game.SecondChance;
 
@@ -69,38 +68,34 @@ public sealed class SecondChanceUseRecord {
 
 }
 
-/// <summary>The uses in the player database.</summary>
-internal sealed class RavenSecondChanceUseStore : ISecondChanceUseStore {
-
-    public IReadOnlyDictionary<ulong, int> Load(ulong charId, DateOnly day) {
-        if (PlayerDatabase.Instance.Store is not { } store) {
-            return new Dictionary<ulong, int>();
+// CLASSIC: same-session read/stage helpers; no independent saved use counter is reachable by production.
+internal static class SecondChanceUses {
+    internal static bool TryRead(IDocumentSession session, ulong charId, DateOnly day,
+        out SecondChanceUseRecord record, out Dictionary<string, int> uses) {
+        record = session.Load<SecondChanceUseRecord>(SecondChanceUseRecord.DocumentId(charId));
+        uses = [];
+        if (record is null) return true;
+        if (record.CharId != charId || record.Uses is null
+            || !DateOnly.TryParseExact(record.Day, "yyyy-MM-dd", CultureInfo.InvariantCulture,
+                DateTimeStyles.None, out var storedDay) || storedDay > day) return false;
+        foreach (var (key, count) in record.Uses) {
+            if (!ulong.TryParse(key, NumberStyles.None, CultureInfo.InvariantCulture, out var template)
+                || template == 0 || key != template.ToString(CultureInfo.InvariantCulture) || count < 0) return false;
         }
-
-        using var session = store.OpenSession();
-        var record = session.Load<SecondChanceUseRecord>(SecondChanceUseRecord.DocumentId(charId));
-        if (record is null || record.Day != SecondChanceUseRecord.DayText(day)) {
-            return new Dictionary<ulong, int>(); // none, or an older day's (replaced on the next save)
-        }
-
-        return record.Uses
-            .Where(entry => ulong.TryParse(entry.Key, NumberStyles.None, CultureInfo.InvariantCulture, out _))
-            .ToDictionary(entry => ulong.Parse(entry.Key, CultureInfo.InvariantCulture), entry => entry.Value);
+        if (storedDay == day) uses = new(record.Uses);
+        return true;
     }
 
-    public void Save(ulong charId, DateOnly day, IReadOnlyDictionary<ulong, int> uses) {
-        if (PlayerDatabase.Instance.Store is not { } store) {
-            return;
+    internal static void Stage(IDocumentSession session, ulong charId, DateOnly day,
+        SecondChanceUseRecord record, Dictionary<string, int> uses) {
+        var created = record is null;
+        record ??= new();
+        record.CharId = charId;
+        record.Day = SecondChanceUseRecord.DayText(day);
+        record.Uses = uses;
+        if (created) {
+            session.Store(record, SecondChanceUseRecord.DocumentId(charId));
+            session.Advanced.GetMetadataFor(record)[Raven.Client.Constants.Documents.Metadata.Collection] = SecondChanceUseRecord.CollectionName;
         }
-
-        using var session = store.OpenSession();
-        session.Advanced.UseOptimisticConcurrency = false; // only this server writes it, under the chests' lock
-        session.Store(new SecondChanceUseRecord {
-            CharId = charId,
-            Day = SecondChanceUseRecord.DayText(day),
-            Uses = uses.ToDictionary(entry => entry.Key.ToString(CultureInfo.InvariantCulture), entry => entry.Value),
-        }, SecondChanceUseRecord.DocumentId(charId));
-        session.SaveChanges();
     }
-
 }

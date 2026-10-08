@@ -38,15 +38,15 @@
  */
 
 using System;
+using Akka.Actor;
 using System.Collections.Generic;
 using System.Linq;
 using Imlight.Classic.Rules;
-using Imlight.Common;
 
 namespace Imlight.CoreLib.Game.SecondChance;
 
 /// <summary>Why a wizard may not use a chest now.</summary>
-internal enum ChestRefusal { None, NoChest, BossNotDefeated, NoUsesLeft, NotEnoughCrowns, NoPrompt }
+internal enum ChestRefusal { None, NoChest, BossNotDefeated, NoUsesLeft, NotEnoughCrowns, NoPrompt, QuoteChanged }
 
 /// <summary>CLASSIC: Second Chance chest state for every wizard.</summary>
 internal sealed class SecondChanceChests {
@@ -59,7 +59,8 @@ internal sealed class SecondChanceChests {
     private readonly object _gate = new();
     private readonly Dictionary<ulong, Win> _wins = [];
     private readonly Dictionary<(ulong CharId, ulong Chest, DateOnly Day), int> _uses = [];
-    private readonly Dictionary<ulong, (ulong ChestGid, SecondChanceChest Chest)> _prompts = [];
+    private readonly Dictionary<ulong, (ulong ChestGid, SecondChanceChest Chest)> _fixturePrompts = [];
+    private readonly Dictionary<ulong, SecondChanceQuote> _quotes = [];
     private readonly HashSet<(ulong CharId, DateOnly Day)> _loaded = [];
     private readonly Func<DateTime> _now;
     private readonly ISecondChanceUseStore _store;
@@ -67,7 +68,7 @@ internal sealed class SecondChanceChests {
     private DateOnly _usesDay;
 
     /// <param name="now">The clock (UTC).</param>
-    /// <param name="store">Where the day's uses are saved; null keeps them in memory only.</param>
+    /// <param name="store">Fixture-only legacy count store; production reads/stages in its outer transaction.</param>
     /// <param name="dayOf">The game day of an instant; null: its UTC date.</param>
     public SecondChanceChests(Func<DateTime> now = null, ISecondChanceUseStore store = null, Func<DateTime, DateOnly> dayOf = null) {
         _now = now ?? (() => DateTime.UtcNow);
@@ -76,7 +77,7 @@ internal sealed class SecondChanceChests {
     }
 
     public static SecondChanceChests Instance { get; }
-        = new(store: new RavenSecondChanceUseStore(), dayOf: Imlight.CoreLib.Classic.ClassicTime.DayOf);
+        = new(dayOf: Imlight.CoreLib.Classic.ClassicTime.DayOf);
 
     private DateOnly Today => _dayOf(_now());
 
@@ -94,36 +95,28 @@ internal sealed class SecondChanceChests {
             _usesDay = day;
         }
 
-        if (_store is not null && _loaded.Add((charId, day))) {
-            try {
-                foreach (var (template, count) in _store.Load(charId, day)) {
-                    var key = (charId, template, day);
-                    _uses[key] = Math.Max(_uses.GetValueOrDefault(key), count);
-                }
+        // CLASSIC: only the explicit fixture API uses this cache/store. Failures must propagate.
+        if (_store is not null && !_loaded.Contains((charId, day))) {
+            var loaded = _store.Load(charId, day);
+            foreach (var (template, count) in loaded) {
+                var key = (charId, template, day);
+                _uses[key] = Math.Max(_uses.GetValueOrDefault(key), count);
             }
-            catch (Exception ex) {
-                Logger.Warning("Second Chance: could not read the uses of {0} for {1}: {2}", Logger.Args(charId, day, ex.Message));
-            }
+            _loaded.Add((charId, day));
         }
 
         return _uses.GetValueOrDefault((charId, chest, day));
     }
 
     /// <summary>Saves <paramref name="charId"/>'s uses on <paramref name="day"/>. Call under _gate.</summary>
-    private void SaveUses(ulong charId, DateOnly day) {
+    private void SaveUsesForFixture(ulong charId, DateOnly day) {
         if (_store is null) {
             return;
         }
 
         var uses = _uses.Where(entry => entry.Key.CharId == charId && entry.Key.Day == day)
             .ToDictionary(entry => entry.Key.Chest, entry => entry.Value);
-        try {
-            _store.Save(charId, day, uses);
-        }
-        catch (Exception ex) {
-            // The use stays counted in memory; only a restart today would give it back.
-            Logger.Warning("Second Chance: could not save the uses of {0} for {1}: {2}", Logger.Args(charId, day, ex.Message));
-        }
+        _store.Save(charId, day, uses);
     }
 
     /// <summary>The wizards and days whose uses are held in memory (tests).</summary>
@@ -165,22 +158,23 @@ internal sealed class SecondChanceChests {
         }
     }
 
-    /// <summary>Uses of <paramref name="chest"/> left today.</summary>
-    public int UsesLeft(ulong charId, SecondChanceChest chest, SecondChanceRules rules) {
+    // CLASSIC: legacy fixture-only rule/store tests; production uses ClassicSecondChanceTransactions.
+    /// <summary>Uses of <paramref name="chest"/> left today (fixture).</summary>
+    internal int UsesLeftForFixture(ulong charId, SecondChanceChest chest, SecondChanceRules rules) {
         lock (_gate) {
             return Math.Max(0, rules.DailyUses - UsesOn(charId, chest.Template, Today));
         }
     }
 
     /// <summary>The Crowns the next use costs.</summary>
-    public int NextCost(ulong charId, SecondChanceChest chest, SecondChanceRules rules) {
+    internal int NextCostForFixture(ulong charId, SecondChanceChest chest, SecondChanceRules rules) {
         lock (_gate) {
             return rules.CostOfUse(UsesOn(charId, chest.Template, Today));
         }
     }
 
     /// <summary>The wizard clicked a chest: remember it for the answer to the prompt.</summary>
-    public ChestRefusal Open(ulong charId, ulong chestGid, SecondChanceChest chest, string zone, ulong instance, SecondChanceRules rules) {
+    internal ChestRefusal OpenForFixture(ulong charId, ulong chestGid, SecondChanceChest chest, string zone, ulong instance, SecondChanceRules rules) {
         if (chest is null) {
             return ChestRefusal.NoChest;
         }
@@ -190,16 +184,17 @@ internal sealed class SecondChanceChests {
         }
 
         lock (_gate) {
-            _prompts[charId] = (chestGid, chest);
+            _fixturePrompts[charId] = (chestGid, chest);
         }
 
-        return UsesLeft(charId, chest, rules) > 0 ? ChestRefusal.None : ChestRefusal.NoUsesLeft;
+        return UsesLeftForFixture(charId, chest, rules) > 0 ? ChestRefusal.None : ChestRefusal.NoUsesLeft;
     }
 
     /// <summary>The wizard closed the chest window.</summary>
     public void Close(ulong charId) {
         lock (_gate) {
-            _prompts.Remove(charId);
+            _fixturePrompts.Remove(charId);
+            _quotes.Remove(charId);
         }
     }
 
@@ -208,12 +203,12 @@ internal sealed class SecondChanceChests {
     /// debit, given the price; false when the wizard cannot pay) and counts the use, all at once.
     /// </summary>
     /// <returns>The chest and price, or the refusal.</returns>
-    public ChestRefusal TryUse(ulong charId, ulong chestGid, string zone, ulong instance, SecondChanceRules rules,
+    internal ChestRefusal TryUseForFixture(ulong charId, ulong chestGid, string zone, ulong instance, SecondChanceRules rules,
                                Func<int, bool> pay, out SecondChanceChest chest, out int cost) {
         chest = null;
         cost = 0;
         lock (_gate) {
-            if (!_prompts.TryGetValue(charId, out var prompt) || prompt.ChestGid != chestGid) {
+            if (!_fixturePrompts.TryGetValue(charId, out var prompt) || prompt.ChestGid != chestGid) {
                 return ChestRefusal.NoPrompt;
             }
 
@@ -237,18 +232,42 @@ internal sealed class SecondChanceChests {
             }
 
             _uses[key] = used + 1;
-            SaveUses(charId, day);
+            SaveUsesForFixture(charId, day);
 
             return ChestRefusal.None;
         }
     }
 
     /// <summary>The boss whose rewards a chest rolls: the first of its templates the wizard beat.</summary>
-    public ulong BossFor(ulong charId, SecondChanceChest chest) {
+    internal ulong BossForFixture(ulong charId, SecondChanceChest chest) {
         lock (_gate) {
             return _wins.TryGetValue(charId, out var win)
                 ? chest.BossTemplates.FirstOrDefault(win.Templates.Contains, chest.BossTemplates[0])
                 : chest.BossTemplates[0];
+        }
+    }
+
+    // CLASSIC: production reads durable counts in its account/character transaction. This gate only
+    // protects win eligibility and the exact quote already displayed; it never opens/saves Raven.
+    internal T WithGate<T>(Func<T> operation) { lock (_gate) return operation(); }
+    internal DateOnly CaptureDay() => Today;
+    internal SecondChanceQuote QuoteFor(ulong charId) => _quotes.GetValueOrDefault(charId);
+    internal void Remember(SecondChanceQuote quote) => _quotes[quote.CharId] = quote;
+    internal ulong WonBoss(ulong charId, SecondChanceChest chest)
+        => _wins.TryGetValue(charId, out var win)
+            ? chest.BossTemplates.FirstOrDefault(win.Templates.Contains) : 0;
+
+    // CLASSIC: actor identity includes its incarnation UID. An old connection cannot retire a new
+    // connection's prompt, including a prompt opened without ever sending a paid response.
+    internal void CloseOwned(ulong charId, IActorRef owner) {
+        lock (_gate) {
+            if (_quotes.TryGetValue(charId, out var quote) && Equals(quote.Owner, owner)) _quotes.Remove(charId);
+        }
+    }
+    internal void ForgetOwner(IActorRef owner) {
+        lock (_gate) {
+            foreach (var charId in _quotes.Where(pair => Equals(pair.Value.Owner, owner)).Select(pair => pair.Key).ToArray())
+                _quotes.Remove(charId);
         }
     }
 

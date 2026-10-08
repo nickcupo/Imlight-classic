@@ -34,9 +34,10 @@
  * Last Updated: 10/04/2026
  */
 
+using System;
 using System.Collections.Generic;
 using Akka.Actor;
-using Imcodec.MessageLayer.Generated;
+using Imcodec.MessageLayer;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Classic.Rules;
 using Imlight.Common;
@@ -84,24 +85,46 @@ internal sealed class InteractSecondChanceComponent(ZoneEntity entity) : ZoneEnt
             return;
         }
 
-        var chests = SecondChanceChests.Instance;
         var chestGid = Entity.ActiveGameObject.m_globalID.Full;
         var instance = OnlinePlayerCollection.GetOnlinePlayer(wizard.CharId)?.InstanceOwnerId ?? 0;
-        var refusal = chests.Open(wizard.CharId, chestGid, chest, wizard.Zone, instance, rules);
-        if (refusal == ChestRefusal.BossNotDefeated) {
-            playerActor.Tell(ClassicChat.Notice($"Defeat {chest.Boss} first: the chest offers a second chance at {chest.Boss}'s rewards.", false));
-
-            return;
-        }
-
-        Logger.Information("Second Chance: wizard {0} opens {1} ({2} uses left, next {3} Crowns).",
-            Logger.Args(wizard.CharId, chest.Chest, chests.UsesLeft(wizard.CharId, chest, rules), chests.NextCost(wizard.CharId, chest, rules)));
-        playerActor.Tell(new WIZARD_12_PROTOCOL.MSG_PAID_LOOT_CROWNS_BALANCE { Balance = wizard.Account?.Crowns ?? 0 });
-        playerActor.Tell(new WIZARD_12_PROTOCOL.MSG_PAID_LOOT_ROLL_PROMPT {
-            Id = chestGid,
-            Cost = chests.NextCost(wizard.CharId, chest, rules),
-            Uses = chests.UsesLeft(wizard.CharId, chest, rules),
-        });
+        var charId = wizard.CharId; var zone = wizard.Zone; var accountId = wizard.Account?.AccountId;
+        OpenAcknowledged(wizard, chestGid, chest, zone, instance, rules, packet => playerActor.Tell(packet),
+            () => playerActor.Tell("Close"), () => ActiveWizardDirectory.TryGet(playerActor, out var selected, out var world)
+                && ReferenceEquals(selected, wizard) && ReferenceEquals(world, playerObject)
+                && world is not null && world.m_globalID.Full == wizard.GameObjectID
+                && string.Equals(Entity.Zone?.ZonePath, zone, StringComparison.OrdinalIgnoreCase)
+                && wizard.CharId == charId && wizard.Account?.AccountId == accountId
+                && string.Equals(wizard.Zone, zone, StringComparison.OrdinalIgnoreCase)
+                && (OnlinePlayerCollection.GetOnlinePlayer(charId)?.InstanceOwnerId ?? 0) == instance, owner: playerActor);
     }
 
+    // CLASSIC: the real interaction prepares a freshly priced prompt, never a fallible cached use count.
+    internal static SecondChanceResult OpenAcknowledged(Wizard wizard, ulong chestId, SecondChanceChest chest,
+        string zone, ulong instance, SecondChanceRules rules, Action<IMessage> send, Action close,
+        Func<bool> isCurrent = null, SecondChanceChests state = null, IActorRef owner = null) {
+        state ??= SecondChanceChests.Instance;
+        try {
+            var result = ClassicSecondChanceTransactions.TryOpen(wizard, chestId, chest, zone, instance, rules,
+                packets => { foreach (var packet in packets) {
+                    if (isCurrent?.Invoke() == false) break;
+                    send(packet);
+                } }, isCurrent, state, owner);
+            Logger.Information("Second Chance: wizard {0}, chest {1}, open outcome {2}, refusal {3}.",
+                Logger.Args(wizard?.CharId ?? 0, chestId, result.Status, result.Refusal));
+            if (isCurrent?.Invoke() == false && !WizardCollection.IsInventorySnapshotUncertain(wizard)) {
+                if (wizard is not null) state.CloseOwned(wizard.CharId, owner);
+                return result with { Status = SecondChanceStatus.ContextLost };
+            }
+            if (result.Status == SecondChanceStatus.PreparationFailed) { if (wizard is not null) state.CloseOwned(wizard.CharId, owner); close(); }
+            else if (result.Refusal == ChestRefusal.BossNotDefeated) send(ClassicChat.Notice(
+                $"Defeat {chest.Boss} first: the chest offers a second chance at {chest.Boss}'s rewards.", false));
+            return result;
+        }
+        catch (Exception error) {
+            Logger.Warning("Second Chance: wizard {0}, chest {1}, open failed ({2}).",
+                Logger.Args(wizard?.CharId ?? 0, chestId, error.GetType().Name));
+            if (wizard is not null) state.CloseOwned(wizard.CharId, owner);
+            close(); return new(SecondChanceStatus.PreparationFailed);
+        }
+    }
 }

@@ -32,88 +32,83 @@
  */
 
 using System;
+using System.Collections.Generic;
 using Akka.Actor;
+using Imcodec.MessageLayer;
 using Imcodec.MessageLayer.Generated;
-using Imcodec.ObjectProperty;
+using Imlight.Classic.Rules;
 using Imlight.Common;
 using Imlight.CoreLib.Classic;
-using Imlight.CoreLib.Game.DropTables;
 using Imlight.CoreLib.Game.SecondChance;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.WizardData.Collections;
-using Imlight.CoreLib.WizardData.Models.World;
+using Imlight.CoreLib.WizardData.Models.Player;
 
 namespace Imlight.CoreLib.Game.Services;
 
 internal sealed class SecondChanceService(SessionActor sessionActor) : MessageService(sessionActor) {
-
     protected static Props Props(SessionActor parentActor)
         => Akka.Actor.Props.Create(() => new SecondChanceService(parentActor));
-
-    private static readonly ObjectSerializer s_lootSerializer = new(Behaviors: SerializerFlags.None);
-
-    private ulong _charId;
 
     [MessageHandler(typeof(WIZARD_12_PROTOCOL.MSG_PAID_LOOT_ROLL_RESPONSE))]
     private void ReceivePaidLootRollResponse(WIZARD_12_PROTOCOL.MSG_PAID_LOOT_ROLL_RESPONSE message) {
         var wizard = GetActiveWizard();
-        var chests = SecondChanceChests.Instance;
-        if (wizard is null) {
-            return;
-        }
-
-        _charId = wizard.CharId;
-        if (message.Response == 0 || ClassicProgression.SecondChance is not { } rules || ClassicProgression.MobRewards is not { } mobRewards) {
-            chests.Close(wizard.CharId);
-
-            return;
-        }
-
+        if (wizard is null) return;
         var instance = OnlinePlayerCollection.GetOnlinePlayer(wizard.CharId)?.InstanceOwnerId ?? 0;
-        var refusal = chests.TryUse(wizard.CharId, message.Id, wizard.Zone, instance, rules,
-            cost => ClassicCrowns.TrySpend(wizard.Account, cost), out var chest, out var cost);
-        if (refusal != ChestRefusal.None) {
-            Logger.Information("Second Chance: wizard {0} roll refused: {1}.", Logger.Args(wizard.CharId, refusal));
-            if (refusal == ChestRefusal.NotEnoughCrowns) {
-                InformGameClient($"You need {chests.NextCost(wizard.CharId, chest, rules)} Crowns for another chance.");
+        var charId = wizard.CharId; var zone = wizard.Zone; var accountId = wizard.Account?.AccountId;
+        // The MessageService cache is not proof of current selection. Use the existing completed
+        // attachment snapshot, which also checks directory/world/owner/generation/travel/disposal.
+        SessionActor.TryCapturePetGameAttach(wizard, out var attach);
+        UseAcknowledged(wizard, message, zone, instance, ClassicProgression.SecondChance, ClassicProgression.MobRewards,
+            SendToSocket, CloseSession, () => attach is not null && SessionActor.MatchesPetGameAttach(attach)
+                && wizard.CharId == charId && wizard.Account?.AccountId == accountId
+                && (OnlinePlayerCollection.GetOnlinePlayer(charId)?.InstanceOwnerId ?? 0) == instance, owner: SessionActor.ActorRef);
+
+    }
+
+    // CLASSIC: the actual response handler and caller fixtures share this complete failure/publication path.
+    internal static SecondChanceResult UseAcknowledged(Wizard wizard, WIZARD_12_PROTOCOL.MSG_PAID_LOOT_ROLL_RESPONSE message,
+        string zone, ulong instance, SecondChanceRules rules, MobRewardRules rewards, Action<IMessage> send,
+        Action close, Func<bool> isCurrent = null, SecondChanceChests state = null, IActorRef owner = null) {
+        state ??= SecondChanceChests.Instance;
+        if (wizard is null || message is null) return new(SecondChanceStatus.Refused);
+        if (message.Response == 0 || rules is null || rewards is null) {
+            state.CloseOwned(wizard.CharId, owner); return new(SecondChanceStatus.Refused);
+        }
+        try {
+            var result = ClassicSecondChanceTransactions.TryUse(wizard, message.Id, zone, instance, rules, rewards,
+                packets => { foreach (var packet in packets) {
+                    if (isCurrent?.Invoke() == false) break;
+                    send(packet);
+                } }, isCurrent, state, owner);
+            Logger.Information("Second Chance: wizard {0}, chest {1}, outcome {2}, refusal {3}.",
+                Logger.Args(wizard.CharId, message.Id.Full, result.Status, result.Refusal));
+            if (isCurrent?.Invoke() == false && !WizardCollection.IsInventorySnapshotUncertain(wizard)) {
+                state.CloseOwned(wizard.CharId, owner);
+                return result with { Status = SecondChanceStatus.ContextLost };
             }
-
-            SendToSocket(new WIZARD_12_PROTOCOL.MSG_PAID_LOOT_ROLL_ERROR());
-
-            return;
+            if (result.Status == SecondChanceStatus.PreparationFailed) {
+                state.CloseOwned(wizard.CharId, owner); close();
+            }
+            else if (result.Status == SecondChanceStatus.Refused) {
+                if (result.Refusal == ChestRefusal.NotEnoughCrowns && result.Quote is { } quote)
+                    send(ClassicChat.Line($"You need {quote.Cost} Crowns for another chance."));
+                send(new WIZARD_12_PROTOCOL.MSG_PAID_LOOT_ROLL_ERROR());
+            }
+            return result;
         }
-
-        // The boss's rewards, rolled as a won duel rolls them (no XP), granted without the duel's loot popup.
-        var boss = chests.BossFor(wizard.CharId, chest);
-        var result = new DropTableResult { DropTableId = "second_chance:" + chest.Chest };
-        CombatService.AddClassicMobLoot(mobRewards, boss, result, Random.Shared);
-        LootGranter.Grant(SessionActor.ActorRef, wizard, result, showPopup: false);
-
-        var loot = DropTableConverter.ToLootInfoList(result);
-        if (!s_lootSerializer.Serialize(loot, 5, out var lootData)) {
-            Logger.Error("Second Chance: the loot of {0} did not serialize.", Logger.Args(chest.Chest));
-            lootData = new Imcodec.IO.ByteString(System.Array.Empty<byte>());
+        catch (Exception error) {
+            // No compensation/reroll: the save may have committed. The transaction already quarantined
+            // every unknown save/publication outcome under its original lane; pre-save errors also close.
+            Logger.Warning("Second Chance: wizard {0}, chest {1}, failed ({2}), uncertain {3}.",
+                Logger.Args(wizard.CharId, message.Id.Full, error.GetType().Name, WizardCollection.IsInventorySnapshotUncertain(wizard)));
+            state.CloseOwned(wizard.CharId, owner); close();
+            return new(SecondChanceStatus.PreparationFailed);
         }
-
-        var balance = wizard.Account?.Crowns ?? 0;
-        Logger.Information("Second Chance: wizard {0} paid {1} Crowns at {2} (boss {3}): {4} gold, {5} items, {6} cards, {7} reagents; {8} Crowns left.",
-            Logger.Args(wizard.CharId, cost, chest.Chest, boss, result.GoldAmount, result.Items.Count, result.TreasureCards.Count, result.Reagents.Count, balance));
-        SendToSocket(ClassicCrowns.BalanceMessage(wizard.Account, wizard.CharId));
-        SendToSocket(new WIZARD_12_PROTOCOL.MSG_PAID_LOOT_ROLL_RESULT {
-            Id = message.Id,
-            Cost = chests.NextCost(wizard.CharId, chest, rules),
-            Balance = balance,
-            Uses = chests.UsesLeft(wizard.CharId, chest, rules),
-            Loot = lootData,
-        });
     }
 
     protected override void OnPreDispose() {
-        if (_charId != 0) {
-            SecondChanceChests.Instance.Forget(_charId);
-        }
-
+        SecondChanceChests.Instance.ForgetOwner(SessionActor.ActorRef);
         base.OnPreDispose();
     }
-
 }

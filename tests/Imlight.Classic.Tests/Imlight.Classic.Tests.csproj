@@ -22,6 +22,8 @@
     <ServerIntegrationTest Include="GlacialTreasurePriceTests.cs" />
     <ServerIntegrationTest Include="ReagentPersistenceRegressionTests.cs" />
     <ServerIntegrationTest Include="LootRewardPersistenceTests.cs" />
+    <ServerIntegrationTest Include="SecondChanceTransactionTests.cs" />
+    <ServerIntegrationTest Include="SecondChanceSavedTransactionTests.cs" />
     <ServerIntegrationTest Include="ItemInventoryPersistenceTests.cs" />
     <ServerIntegrationTest Include="AtomicShopInventoryTests.cs" />
     <ServerIntegrationTest Include="ItemPurchaseAndHatchPersistenceTests.cs" />
