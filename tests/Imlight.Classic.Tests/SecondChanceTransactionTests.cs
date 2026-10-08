@@ -434,6 +434,7 @@ public sealed class SecondChanceTransactionTests {
     }
 
     internal sealed class Fixture : IDisposable {
+        private readonly ClassicConfigurationSnapshot _configuration = new();
         internal const ulong Owner = 786001, AccountId = 786002, ChestId = 0x4C00000000786003, Instance = 786004;
         internal const uint Gear = 786010, Card = 786011, Reagent = 786012;
         internal const ulong ReagentId = 0x4C00000000786013, Deck = 786014;
@@ -443,7 +444,7 @@ public sealed class SecondChanceTransactionTests {
         internal SecondChanceChest Chest => Rules.ChestByName("KT_MonsterChest_Krokopatra")!;
         internal readonly SecondChanceChests State;
         internal Wizard Saved, Live;
-        internal Account Account = NewAccount(1000);
+        internal Account Account;
         internal List<WizClientObjectItem> Items = [];
         internal List<ClientReagentItem> Reagents = [];
         internal SecondChanceUseRecord? UseRecord;
@@ -462,30 +463,38 @@ public sealed class SecondChanceTransactionTests {
         private readonly StackRewardDependencies? _stack;
         private readonly Func<IDocumentSession, List<WizClientObjectItem>>? _items;
         private readonly Func<IDocumentSession, List<ClientReagentItem>>? _reagents;
+        private bool _scopesCaptured, _disposed;
         internal int Used => UseRecord?.Uses.GetValueOrDefault(Chest.Template.ToString(CultureInfo.InvariantCulture)) ?? 0;
 
         internal Fixture() {
-            EquipmentAttachConcurrencyTests.Configure("[Logging]\nLogLevel=FATAL\n[Character]\nMaxInventoryItems=150\n[Classic]\nBackpackSize=2\n[Database]\nDatabaseWaitForNonStaleResultsTimeout=5\n");
-            _store = WizardCollection.TestStoreScope.Value; _dependencies = ClassicSecondChanceTransactions.TestScope.Value;
-            _stack = ClassicStackRewards.TestScope.Value; _items = WizardInventoryTransactions.TestRowsScope.Value; _reagents = WizardReagentCollection.TestRowsScope.Value;
-            State = new(() => Now); Win();
-            Saved = NewWizard(); Live = NewWizard(); Reload();
-            Dependencies = new() {
-                Roll = (boss, _) => { Assert.Equal(35433UL, boss); Rolls++; return Roll; },
-                SerializeLoot = (loot, flags) => { Loot.Add((loot, flags)); return (ByteString)BitConverter.GetBytes(786099); },
-                Prepare = packet => { Prepared.Add(packet); return true; },
-            };
-            Stack = new() {
-                Template = id => id switch { Gear => new WizItemTemplate { m_templateID = Gear, m_behaviors = [] },
-                    Card => new SpellTemplate { m_name = "Authored paid chest card" }, Reagent => new ReagentItemTemplate { m_templateID = Reagent }, _ => null! },
-                Create = id => id == Reagent ? ReagentRow(0) : new WizClientObjectItem { m_globalID = 0x4C00000000000000UL + (ulong)Interlocked.Increment(ref _itemNumber),
-                    m_templateID = (uint)id, m_characterId = Owner, m_inactiveBehaviors = [] },
-                SerializeItem = item => (ByteString)BitConverter.GetBytes(item.m_globalID.Full),
-                SerializeReagent = row => (ByteString)BitConverter.GetBytes(row.m_quantity),
-            };
-            WizardCollection.TestStoreScope.Value = new(OpenSession, null);
-            ClassicSecondChanceTransactions.TestScope.Value = Dependencies; ClassicStackRewards.TestScope.Value = Stack;
-            WizardInventoryTransactions.TestRowsScope.Value = null; WizardReagentCollection.TestRowsScope.Value = null;
+            try {
+                EquipmentAttachConcurrencyTests.Configure("[Logging]\nLogLevel=FATAL\n[Character]\nMaxInventoryItems=150\n[Classic]\nBackpackSize=2\n[Database]\nDatabaseWaitForNonStaleResultsTimeout=5\n");
+                _store = WizardCollection.TestStoreScope.Value; _dependencies = ClassicSecondChanceTransactions.TestScope.Value;
+                _stack = ClassicStackRewards.TestScope.Value; _items = WizardInventoryTransactions.TestRowsScope.Value; _reagents = WizardReagentCollection.TestRowsScope.Value;
+                _scopesCaptured = true;
+                Account = NewAccount(1000);
+                State = new(() => Now); Win();
+                Saved = NewWizard(); Live = NewWizard(); Reload();
+                Dependencies = new() {
+                    Roll = (boss, _) => { Assert.Equal(35433UL, boss); Rolls++; return Roll; },
+                    SerializeLoot = (loot, flags) => { Loot.Add((loot, flags)); return (ByteString)BitConverter.GetBytes(786099); },
+                    Prepare = packet => { Prepared.Add(packet); return true; },
+                };
+                Stack = new() {
+                    Template = id => id switch { Gear => new WizItemTemplate { m_templateID = Gear, m_behaviors = [] },
+                        Card => new SpellTemplate { m_name = "Authored paid chest card" }, Reagent => new ReagentItemTemplate { m_templateID = Reagent }, _ => null! },
+                    Create = id => id == Reagent ? ReagentRow(0) : new WizClientObjectItem { m_globalID = 0x4C00000000000000UL + (ulong)Interlocked.Increment(ref _itemNumber),
+                        m_templateID = (uint)id, m_characterId = Owner, m_inactiveBehaviors = [] },
+                    SerializeItem = item => (ByteString)BitConverter.GetBytes(item.m_globalID.Full),
+                    SerializeReagent = row => (ByteString)BitConverter.GetBytes(row.m_quantity),
+                };
+                WizardCollection.TestStoreScope.Value = new(OpenSession, null);
+                ClassicSecondChanceTransactions.TestScope.Value = Dependencies; ClassicStackRewards.TestScope.Value = Stack;
+                WizardInventoryTransactions.TestRowsScope.Value = null; WizardReagentCollection.TestRowsScope.Value = null;
+            } catch {
+                Dispose();
+                throw;
+            }
         }
         internal void Win() => State.RecordWin(Owner, Chest.Zone, Instance, [35433]);
         internal SecondChanceResult Open(Func<bool>? current = null, IActorRef? owner = null)
@@ -552,8 +561,16 @@ public sealed class SecondChanceTransactionTests {
         private static WizClientObjectItem CloneItem(WizClientObjectItem source) => source with { m_inactiveBehaviors = source.m_inactiveBehaviors is null ? [] : [..source.m_inactiveBehaviors] };
         private static SecondChanceUseRecord? CloneUse(SecondChanceUseRecord? source) => source is null ? null : new() { CharId = source.CharId, Day = source.Day, Uses = new(source.Uses) };
         public void Dispose() {
-            WizardCollection.TestStoreScope.Value = _store; ClassicSecondChanceTransactions.TestScope.Value = _dependencies;
-            ClassicStackRewards.TestScope.Value = _stack; WizardInventoryTransactions.TestRowsScope.Value = _items; WizardReagentCollection.TestRowsScope.Value = _reagents;
+            if (_disposed) return;
+            _disposed = true;
+            try {
+                if (_scopesCaptured) {
+                    WizardCollection.TestStoreScope.Value = _store; ClassicSecondChanceTransactions.TestScope.Value = _dependencies;
+                    ClassicStackRewards.TestScope.Value = _stack; WizardInventoryTransactions.TestRowsScope.Value = _items; WizardReagentCollection.TestRowsScope.Value = _reagents;
+                }
+            } finally {
+                _configuration.Restore();
+            }
         }
     }
 

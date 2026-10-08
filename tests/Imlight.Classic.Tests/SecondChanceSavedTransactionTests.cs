@@ -8,6 +8,7 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Runtime.ExceptionServices;
 using System.Text;
 using Imcodec.CoreObject;
 using Imcodec.Cryptography;
@@ -74,7 +75,7 @@ public sealed class SecondChanceSavedTransactionTests(ITestOutputHelper output) 
         var opened = f.Open();
         Assert.Equal(SecondChanceStatus.Opened, opened.Status);
         Assert.Equal(2, opened.Quote.Used); Assert.Equal(150, opened.Quote.Cost);
-        Assert.Equal(0, f.Database.AcknowledgedSaves); f.Packets.Clear();
+        f.Database.AssertSaves(0); f.Packets.Clear();
         f.Database.AfterAcknowledgement = () => {
             // This hook runs after real Raven ACK and before the transaction publishes to attached aliases.
             Assert.Empty(f.Packets); Assert.Equal(3, f.Live.Account.Crowns); Assert.Equal(7, f.Live.GameStats.m_currentGold);
@@ -87,7 +88,7 @@ public sealed class SecondChanceSavedTransactionTests(ITestOutputHelper output) 
         };
         var committed = f.Use();
         Assert.Equal(SecondChanceStatus.Committed, committed.Status);
-        Assert.Equal(1, f.Database.AcknowledgedSaves); Assert.Equal(1, f.RollCalls);
+        f.Database.AssertSaves(1); Assert.Equal(1, f.RollCalls);
         Assert.Equal(3, committed.Receipt.NewUsed); Assert.Equal(850, committed.Receipt.Balance);
         Assert.Equal(1000, committed.Receipt.Gold); Assert.Equal(20, committed.Receipt.AppliedGold);
         var item = Assert.Single(committed.Receipt.Rewards.Items);
@@ -148,12 +149,12 @@ public sealed class SecondChanceSavedTransactionTests(ITestOutputHelper output) 
         f.Packets.Clear();
         var refused = f.Use();
         Assert.Equal(SecondChanceStatus.Refused, refused.Status); Assert.Equal(ChestRefusal.QuoteChanged, refused.Refusal);
-        Assert.Equal(1, f.Database.AcknowledgedSaves); Assert.Equal(1, f.RollCalls);
+        f.Database.AssertSaves(1); Assert.Equal(1, f.RollCalls);
         Assert.DoesNotContain(f.Packets, message => message is WIZARD_12_PROTOCOL.MSG_PAID_LOOT_ROLL_RESULT);
         AssertUnchangedDocuments(beforeRefusal, f.Database.RawDocuments(f.OriginalDocuments), f.OriginalDocuments);
         Assert.Equal(SecondChanceStatus.Opened, f.Open().Status); f.Packets.Clear();
         Assert.Equal(ChestRefusal.NoUsesLeft, f.Use().Refusal);
-        Assert.Equal(1, f.Database.AcknowledgedSaves); Assert.Equal(1, f.RollCalls);
+        f.Database.AssertSaves(1); Assert.Equal(1, f.RollCalls);
         AssertUnchangedDocuments(beforeRefusal, f.Database.RawDocuments(f.OriginalDocuments), f.OriginalDocuments);
         Assert.False(PlayerDatabase.IsCreated);
     }
@@ -169,7 +170,7 @@ public sealed class SecondChanceSavedTransactionTests(ITestOutputHelper output) 
         f.Roll = () => CompoundRoll(gold: 0);
         Assert.Equal(SecondChanceStatus.Opened, f.Open().Status); f.Packets.Clear();
         var result = f.Use();
-        Assert.Equal(SecondChanceStatus.Committed, result.Status); Assert.Equal(1, f.Database.AcknowledgedSaves);
+        Assert.Equal(SecondChanceStatus.Committed, result.Status); f.Database.AssertSaves(1);
         Assert.Equal(1, f.RollCalls); Assert.Equal(950, result.Receipt.Balance); Assert.Equal(1, result.Receipt.NewUsed);
         Assert.Equal(0, result.Receipt.AppliedGold); Assert.Empty(result.Receipt.Rewards.Items);
         Assert.Empty(result.Receipt.Rewards.Cards); Assert.Empty(result.Receipt.Rewards.Reagents);
@@ -197,7 +198,7 @@ public sealed class SecondChanceSavedTransactionTests(ITestOutputHelper output) 
         f.Roll = () => new DropTableResult();
         Assert.Equal(SecondChanceStatus.Opened, f.Open().Status); f.Packets.Clear();
         var result = f.Use();
-        Assert.Equal(SecondChanceStatus.Committed, result.Status); Assert.Equal(1, f.Database.AcknowledgedSaves);
+        Assert.Equal(SecondChanceStatus.Committed, result.Status); f.Database.AssertSaves(1);
         Assert.Equal(1, f.RollCalls); Assert.Equal(900, result.Receipt.Balance); Assert.Equal(2, result.Receipt.NewUsed);
         Assert.Equal(0, result.Receipt.AppliedGold); Assert.Empty(result.Receipt.Rewards.Items);
         Assert.Empty(result.Receipt.Rewards.Cards); Assert.Empty(result.Receipt.Rewards.Reagents);
@@ -217,7 +218,7 @@ public sealed class SecondChanceSavedTransactionTests(ITestOutputHelper output) 
         f.Roll = () => new DropTableResult { GoldAmount = 17 };
         Assert.Equal(SecondChanceStatus.Opened, f.Open().Status); f.Packets.Clear();
         var result = f.Use();
-        Assert.Equal(SecondChanceStatus.Committed, result.Status); Assert.Equal(1, f.Database.AcknowledgedSaves);
+        Assert.Equal(SecondChanceStatus.Committed, result.Status); f.Database.AssertSaves(1);
         Assert.Equal(1, f.RollCalls); Assert.Equal(950, result.Receipt.Balance);
         Assert.Equal(1100, result.Receipt.Gold); Assert.Equal(0, result.Receipt.AppliedGold);
         AssertPaidLoot(f.Packets, 0, null, 0, false);
@@ -245,10 +246,10 @@ public sealed class SecondChanceSavedTransactionTests(ITestOutputHelper output) 
         var before = f.Database.RawDocuments(f.OriginalDocuments);
         f.Roll = () => new DropTableResult();
         Assert.Equal(SecondChanceStatus.Opened, f.Open().Status);
-        Assert.Equal(200, f.Open().Quote.Cost); Assert.Equal(0, f.Database.AcknowledgedSaves);
+        Assert.Equal(200, f.Open().Quote.Cost); f.Database.AssertSaves(0);
         f.Packets.Clear(); Assert.Equal(SecondChanceStatus.Committed, f.Use().Status);
         using (var fresh = f.Database.OpenReadSession()) AssertUseRecord(fresh, 4, 4, DateOnly.FromDateTime(InitialTime));
-        Assert.Equal(1, f.Database.AcknowledgedSaves);
+        f.Database.AssertSaves(1);
         f.Now = InitialTime.AddDays(1);
         f.State.RecordWin(Owner, Zone, Instance, [Boss]);
         using (var external = f.Database.OpenReadSession()) {
@@ -260,7 +261,7 @@ public sealed class SecondChanceSavedTransactionTests(ITestOutputHelper output) 
         var priorRefusal = f.Database.RawDocuments(f.OriginalDocuments); f.Packets.Clear();
         var refused = f.Use();
         Assert.Equal(SecondChanceStatus.Refused, refused.Status); Assert.Equal(ChestRefusal.NotEnoughCrowns, refused.Refusal);
-        Assert.Equal(1, f.Database.AcknowledgedSaves); Assert.Equal(1, f.RollCalls);
+        f.Database.AssertSaves(1); Assert.Equal(1, f.RollCalls);
         AssertUnchangedDocuments(priorRefusal, f.Database.RawDocuments(f.OriginalDocuments), f.OriginalDocuments);
         using (var external = f.Database.OpenReadSession()) {
             external.Load<Account>(AccountDocument).Crowns = 500;
@@ -268,7 +269,7 @@ public sealed class SecondChanceSavedTransactionTests(ITestOutputHelper output) 
         }
         Assert.Equal(SecondChanceStatus.Opened, f.Open().Status); f.Packets.Clear();
         var rollover = f.Use();
-        Assert.Equal(SecondChanceStatus.Committed, rollover.Status); Assert.Equal(2, f.Database.AcknowledgedSaves);
+        Assert.Equal(SecondChanceStatus.Committed, rollover.Status); f.Database.AssertSaves(2);
         Assert.Equal(2, f.RollCalls); Assert.Equal(450, rollover.Receipt.Balance); Assert.Equal(1, rollover.Receipt.NewUsed);
         using (var fresh = f.Database.OpenReadSession()) {
             var record = fresh.Load<SecondChanceUseRecord>(SecondChanceUseRecord.DocumentId(Owner));
@@ -521,10 +522,11 @@ public sealed class SecondChanceSavedTransactionTests(ITestOutputHelper output) 
 
     private sealed class SavedDatabase : IDisposable {
         internal readonly IDocumentStore Store = null!;
+        internal int SubmittedSaves;
         internal int AcknowledgedSaves;
         internal Action? AfterAcknowledgement;
         private readonly EmbeddedServer? _server;
-        private readonly ConfigurationSnapshot _configuration = new();
+        private readonly ClassicConfigurationSnapshot _configuration = new();
         private bool _disposed;
         internal SavedDatabase(ITestOutputHelper output) {
             try {
@@ -560,11 +562,18 @@ public sealed class SecondChanceSavedTransactionTests(ITestOutputHelper output) 
             return session;
         }
         internal IDocumentSession OpenTransactionSession() {
-            var session = OpenReadSession();
-            session.Advanced.OnAfterSaveChanges += (_, _) => {
+            var session = DispatchProxy.Create<IDocumentSession, ForwardingSession>();
+            var forwarding = (ForwardingSession)(object)session;
+            forwarding.Inner = OpenReadSession();
+            forwarding.Submitted = () => { SubmittedSaves++; Assert.True(WizardCollection.HoldsWriteLane); };
+            forwarding.Acknowledged = () => {
                 AcknowledgedSaves++; Assert.True(WizardCollection.HoldsWriteLane); AfterAcknowledgement?.Invoke();
             };
             return session;
+        }
+        internal void AssertSaves(int expected) {
+            Assert.Equal(expected, SubmittedSaves);
+            Assert.Equal(expected, AcknowledgedSaves);
         }
         internal Dictionary<string, JToken> RawDocuments(IEnumerable<string> ids) {
             using var session = OpenReadSession(); using var stream = new MemoryStream();
@@ -585,38 +594,63 @@ public sealed class SecondChanceSavedTransactionTests(ITestOutputHelper output) 
         }
     }
 
-    // Initialize parses four in-memory fields. Preserve their exact values and dictionary objects,
-    // including each section's original comparer, without reading or writing the preceding INI file.
-    private sealed class ConfigurationSnapshot {
-        private static readonly FieldInfo SettingsField = Field("s_settings"), SectionsField = Field("s_sections");
-        private static readonly FieldInfo PathField = Field("s_configFilePath"), InitializedField = Field("s_isInitialized");
-        private readonly Dictionary<string, string> _settings = (Dictionary<string, string>)SettingsField.GetValue(null)!;
-        private readonly Dictionary<string, Dictionary<string, string>> _sections
-            = (Dictionary<string, Dictionary<string, string>>)SectionsField.GetValue(null)!;
-        private readonly Dictionary<string, string> _savedSettings;
-        private readonly Dictionary<string, (Dictionary<string, string> Original, Dictionary<string, string> Values)> _savedSections;
-        private readonly string _path = (string)PathField.GetValue(null)!;
-        private readonly bool _initialized = (bool)InitializedField.GetValue(null)!;
-        internal ConfigurationSnapshot() {
-            _savedSettings = new(_settings, _settings.Comparer);
-            _savedSections = new(_sections.Comparer);
-            foreach (var (name, section) in _sections)
-                _savedSections.Add(name, (section, new(section, section.Comparer)));
-        }
-        internal void Restore() {
-            _settings.Clear();
-            foreach (var (key, value) in _savedSettings) _settings.Add(key, value);
-            _sections.Clear();
-            foreach (var (name, saved) in _savedSections) {
-                saved.Original.Clear();
-                foreach (var (key, value) in saved.Values) saved.Original.Add(key, value);
-                _sections.Add(name, saved.Original);
+    // One real Raven SaveChanges emits multiple entity notifications, which cannot count save invocations.
+    // Forward every method/provider/Advanced operation to the real session; intercept only the actual
+    // zero-argument SaveChanges boundary. Its normal return is the complete acknowledgement, before
+    // the production transaction publishes any live state. There is no per-session deduplication.
+    public class ForwardingSession : DispatchProxy {
+        internal IDocumentSession Inner = null!;
+        internal Action Submitted = null!, Acknowledged = null!;
+        protected override object? Invoke(MethodInfo? method, object?[]? args) {
+            Assert.NotNull(method);
+            var save = method.Name == nameof(IDocumentSession.SaveChanges) && method.GetParameters().Length == 0;
+            if (save) Submitted();
+            object? result;
+            try { result = method.Invoke(Inner, args); }
+            catch (TargetInvocationException error) when (error.InnerException is not null) {
+                ExceptionDispatchInfo.Capture(error.InnerException).Throw(); throw;
             }
-            PathField.SetValue(null, _path);
-            InitializedField.SetValue(null, _initialized);
+            if (save) Acknowledged();
+            return result;
         }
-        private static FieldInfo Field(string name)
-            => typeof(ConfigurationManager).GetField(name, BindingFlags.Static | BindingFlags.NonPublic)
-                ?? throw new InvalidOperationException("Configuration snapshot field is unavailable: " + name);
     }
+}
+
+// Initialize parses four in-memory fields. Preserve their exact values and dictionary objects,
+// including each section's original comparer, without reading or writing the preceding INI file.
+internal sealed class ClassicConfigurationSnapshot : IDisposable {
+    private static readonly FieldInfo SettingsField = Field("s_settings"), SectionsField = Field("s_sections");
+    private static readonly FieldInfo PathField = Field("s_configFilePath"), InitializedField = Field("s_isInitialized");
+    private readonly Dictionary<string, string> _settings = (Dictionary<string, string>)SettingsField.GetValue(null)!;
+    private readonly Dictionary<string, Dictionary<string, string>> _sections
+        = (Dictionary<string, Dictionary<string, string>>)SectionsField.GetValue(null)!;
+    private readonly Dictionary<string, string> _savedSettings;
+    private readonly Dictionary<string, (Dictionary<string, string> Original, Dictionary<string, string> Values)> _savedSections;
+    private readonly string _path = (string)PathField.GetValue(null)!;
+    private readonly bool _initialized = (bool)InitializedField.GetValue(null)!;
+    private bool _restored;
+    internal ClassicConfigurationSnapshot() {
+        _savedSettings = new(_settings, _settings.Comparer);
+        _savedSections = new(_sections.Comparer);
+        foreach (var (name, section) in _sections)
+            _savedSections.Add(name, (section, new(section, section.Comparer)));
+    }
+    internal void Restore() {
+        if (_restored) return;
+        _settings.Clear();
+        foreach (var (key, value) in _savedSettings) _settings.Add(key, value);
+        _sections.Clear();
+        foreach (var (name, saved) in _savedSections) {
+            saved.Original.Clear();
+            foreach (var (key, value) in saved.Values) saved.Original.Add(key, value);
+            _sections.Add(name, saved.Original);
+        }
+        PathField.SetValue(null, _path);
+        InitializedField.SetValue(null, _initialized);
+        _restored = true;
+    }
+    public void Dispose() => Restore();
+    private static FieldInfo Field(string name)
+        => typeof(ConfigurationManager).GetField(name, BindingFlags.Static | BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("Configuration snapshot field is unavailable: " + name);
 }
