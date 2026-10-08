@@ -158,7 +158,8 @@ public sealed class CannonGame {
             }
 
             var horizontal = new Vector2(next.X - Origin.X, next.Y - Origin.Y).Length();
-            if (next.Z < GroundZ || horizontal > DistanceBound) {
+            // Landed: coming down below the target's foot (the cannon may stand lower than the targets).
+            if ((v.Z < 0 && next.Z < GroundZ) || horizontal > DistanceBound) {
                 return (false, float.PositiveInfinity, next);
             }
 
