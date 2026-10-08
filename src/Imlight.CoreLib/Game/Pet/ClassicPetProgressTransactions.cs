@@ -85,14 +85,14 @@ internal static class ClassicPetProgressTransactions {
 
     internal static bool TryFinish(Wizard live, ulong petId, string game, string trackName,
         IReadOnlyList<PetStatChange> trackChanges, int points, int wins, out PetProgressReceipt receipt,
-        Random random = null) {
+        Random random = null, Func<bool> contextStillValid = null) {
         receipt = null;
         if (!Usable(live) || live.PetOwnerBehavior is null || game is null || trackChanges is null) return false;
         PetProgressReceipt prepared = null;
         var committed = WizardCollection.CommitCharacterMutation(live.CharId, (session, saved) => {
-            if (!Usable(live) || saved.PetOwnerBehavior is null
+            if (!Usable(live) || saved.PetOwnerBehavior is null || contextStillValid?.Invoke() == false
                 || !WizardInventoryTransactions.TryReadOwnedItem(session, saved, petId, out var pet)
-                || !OwnedPetCanPublish(live, saved, pet)) return false;
+                || !OwnedPetCanPublish(live, saved, pet) || contextStillValid?.Invoke() == false) return false;
             var b = PetProgress.Behavior(pet);
             var cost = PetRules.EnergyCost(b.m_level);
             saved.PetOwnerBehavior.SetEnergy(Math.Max(0, saved.PetOwnerBehavior.Energy - cost));
@@ -113,7 +113,8 @@ internal static class ClassicPetProgressTransactions {
             }
             catch (Exception) { return false; }
             WizardInventoryTransactions.ProtectUnmodifiedRows(session, pet);
-            return true;
+            // CLASSIC: this is a pre-save refusal, not an atomic scene fence across SaveChanges.
+            return contextStillValid?.Invoke() != false;
         }, saved => {
             var pet = WizardInventoryTransactions.PublishCommittedOwnedItem(live, saved, prepared.Pet);
             live.PetOwnerBehavior.PublishCommittedEnergy(saved.PetOwnerBehavior);
@@ -124,15 +125,17 @@ internal static class ClassicPetProgressTransactions {
     }
 
     internal static bool TryFeed(Wizard live, ulong petId, ulong snackId, out PetProgressReceipt receipt,
-        Random random = null) {
+        Random random = null, Func<bool> contextStillValid = null) {
         receipt = null;
         if (!Usable(live) || snackId == 0) return false;
         List<ClientPetSnackItem> snackBag = [];
         PetProgressReceipt prepared = null;
         var committed = WizardCollection.CommitCharacterMutation(live.CharId, (session, saved) => {
-            if (!Usable(live) || !WizardInventoryTransactions.TryReadOwnedItem(session, saved, petId, out var pet)
+            if (!Usable(live) || contextStillValid?.Invoke() == false
+                || !WizardInventoryTransactions.TryReadOwnedItem(session, saved, petId, out var pet)
                 || !OwnedPetCanPublish(live, saved, pet)
-                || !WizardPetSnackTransactions.TryReadOwnedBag(session, saved, out var before)) return false;
+                || !WizardPetSnackTransactions.TryReadOwnedBag(session, saved, out var before)
+                || contextStillValid?.Invoke() == false) return false;
             var selected = before.SingleOrDefault(snack => snack.m_globalID.Full == snackId);
             if (selected is null || CoreObjectFactory.GetCoreTemplate(selected.m_templateID) is not PetSnackItemTemplate template
                 || !WizardPetSnackTransactions.TryStageConsume(session, saved, snackId, out var snack, out snackBag)) return false;
@@ -157,7 +160,7 @@ internal static class ClassicPetProgressTransactions {
             }
             catch (Exception) { return false; }
             WizardInventoryTransactions.ProtectUnmodifiedRows(session, pet);
-            return true;
+            return contextStillValid?.Invoke() != false;
         }, saved => {
             var pet = WizardInventoryTransactions.PublishCommittedOwnedItem(live, saved, prepared.Pet);
             WizardPetSnackTransactions.PublishCommittedBag(live, saved, snackBag);
