@@ -174,6 +174,9 @@ internal static class ClassicSecondChanceTransactions {
                     // All complete original/item/global queries precede the new use document store.
                     SecondChanceUses.Stage(session, charId, day, record, uses);
                     WizardInventoryTransactions.ProtectUnmodifiedRows(session);
+                    // An empty/capacity-refused roll changes only account/use documents. Raven can
+                    // rewrite an unchanged deserialized wizard; preserve its original change vector.
+                    if (appliedGold == 0 && !staged.HasRewards) session.Advanced.IgnoreChangesFor(saved);
                     if (!ContextMatches(live, charId, accountId, zone, isCurrent)) { outcome = ContextLost(state, charId, owner); return false; }
                     receipt = new(quote, used + 1, account.Crowns, gold, appliedGold, staged.Receipt, messages) { NextCost = nextCost };
                     return true; // an admitted empty/full-capacity roll is still a valid paid use
