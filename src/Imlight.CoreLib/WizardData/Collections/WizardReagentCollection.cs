@@ -235,13 +235,17 @@ internal sealed class WizardReagentCollection {
     internal static void RepairDanglingReferences(Wizard loaded, IDocumentSession readSession) {
         var ids = loaded?.AlchemyBehavior?.ReagentItemIds;
         if (ids is null || ids.Count == 0 || loaded.CharId == 0 || readSession is null) return;
-        var present = ReadRows(readSession).Select(row => row.m_globalID.Full).ToHashSet();
+        var read = ReadRows(readSession);
+        var present = read.Select(row => row.m_globalID.Full).ToHashSet();
+        foreach (var row in read) readSession.Advanced.Evict(row);
         var dangling = ids.Where(id => id != 0 && !present.Contains(id)).ToList();
         if (dangling.Count == 0) return;
         WizardCollection.CommitCharacterMutation(loaded.CharId, (session, saved) => {
             var savedIds = saved.AlchemyBehavior?.ReagentItemIds;
             if (savedIds is null) return false;
-            var rows = ReadRows(session).Select(row => row.m_globalID.Full).ToHashSet();
+            var found = ReadRows(session);
+            var rows = found.Select(row => row.m_globalID.Full).ToHashSet();
+            foreach (var row in found) session.Advanced.Evict(row); // read-only: never write a row back
             var keep = savedIds.Where(id => id == 0 || rows.Contains(id)).ToList();
             if (keep.Count == savedIds.Count) return false;
             saved.AlchemyBehavior.ReagentItemIds = keep;

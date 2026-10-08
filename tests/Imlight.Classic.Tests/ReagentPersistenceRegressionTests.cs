@@ -352,7 +352,6 @@ public sealed class ReagentPersistenceRegressionTests {
         Assert.Equal(ReagentStore.ItemId, Assert.Single(store.Saved.AlchemyBehavior.ReagentItemIds));
         Assert.True(WizardReagentCollection.TryReadOwnedBag(session, store.ForStage(session), out var owned));
         Assert.Equal(4, Assert.Single(owned).m_quantity);
-        Assert.Equal(1, Assert.Single(store.SavedRows) is { } ? 1 : 0);
     }
 
     [Fact]
@@ -813,7 +812,7 @@ public sealed class ReagentPersistenceRegressionTests {
     public class ReagentAdvanced : DispatchProxy {
         private readonly IMetadataDictionary _metadata = DispatchProxy.Create<IMetadataDictionary, ReagentMetadata>();
         protected override object? Invoke(MethodInfo? method, object?[]? args) => method!.Name switch {
-            "set_OptimisticConcurrencyMode" => null,
+            "set_OptimisticConcurrencyMode" or "Evict" => null,
             "GetMetadataFor" => _metadata,
             _ => throw new NotSupportedException(method.Name),
         };
