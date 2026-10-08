@@ -14,7 +14,8 @@ using Imlight.CoreLib.WizardData.Collections;
 
 namespace Imlight.CoreLib.Game.Monstrology;
 
-internal sealed class MonstrologyService(SessionActor session) : MessageService(session) {
+// CLASSIC: authored repository injection keeps actor regressions off the lazy player database; production Props uses the default.
+internal sealed class MonstrologyService(SessionActor session, MonstrologyRepository authoredRepository = null) : MessageService(session) {
     private readonly HashSet<string> _announcedExtractions = new();
     // Separate from Classic.OwnedMinionControl. No legacy profile gate; explicit opt-in until stock contract is validated.
     internal static bool Enabled => bool.TryParse(ConfigurationManager.Settings["Classic.Monstrology"].AsString(), out var enabled) && enabled;
@@ -33,7 +34,7 @@ internal sealed class MonstrologyService(SessionActor session) : MessageService(
         var wizard = GetActiveWizard();
         if (!Available || wizard == null || (message.GlobalID != wizard.CharId && message.GlobalID != wizard.GameObjectID)) return;
         SendProgression();
-        var state = MonstrologyRepository.ForPlayers().Read(wizard.CharId);
+        var state = (authoredRepository ?? MonstrologyRepository.ForPlayers()).Read(wizard.CharId);
         Logger.Information("Monstrology tome: wizard {0} level {1}, {2} creatures with Animus",
             Logger.Args(wizard.CharId.ToString(), state.Level.ToString(), state.Animus.Count.ToString()));
         SendToSocket(new WIZARD2_53_PROTOCOL.MSG_REQUESTMONSTERTOME {
@@ -162,7 +163,11 @@ internal sealed class MonstrologyService(SessionActor session) : MessageService(
         var wizard = GetActiveWizard();
         if (!Available || wizard == null || wizard.CharId != message.OwnerId || string.IsNullOrEmpty(message.OperationId)
             || _announcedExtractions.Contains(message.OperationId)) return;
-        var state = MonstrologyRepository.ForPlayers().Read(wizard.CharId);
+        // CLASSIC: late PvE receipts cannot open a result in PvP or the arena, before any ledger read.
+        // Use the existing trusted per-wizard mode; the diagnostic duel directory may retain a departed lobby seat.
+        if (Imlight.CoreLib.Classic.Elixirs.ElixirRules.IsPvpOrUnknownCombat(wizard)
+            || Imlight.CoreLib.Classic.Arena.ClassicArena.IsArenaZone(wizard.Zone)) return;
+        var state = (authoredRepository ?? MonstrologyRepository.ForPlayers()).Read(wizard.CharId);
         if (!state.Extractions.TryGetValue(message.OperationId, out var receipt)) return;
         Logger.Information("Monstrology extraction: wizard {0} creature {1} +{2} Animus, +{3} XP",
             Logger.Args(wizard.CharId.ToString(), receipt.Creature.ToString(), receipt.Animus.ToString(), receipt.Experience.ToString()));
@@ -179,7 +184,7 @@ internal sealed class MonstrologyService(SessionActor session) : MessageService(
     private void SendProgression() {
         var wizard = GetActiveWizard();
         if (!Available || wizard == null) return;
-        var state = MonstrologyRepository.ForPlayers().Read(wizard.CharId);
+        var state = (authoredRepository ?? MonstrologyRepository.ForPlayers()).Read(wizard.CharId);
         wizard.GameStats.m_monsterMagicLevel = checked((byte)state.Level);
         wizard.GameStats.m_monsterMagicXP = state.Experience;
         SendToSocket(new WIZARD2_53_PROTOCOL.MSG_UPDATEMONSTERMAGICXP {

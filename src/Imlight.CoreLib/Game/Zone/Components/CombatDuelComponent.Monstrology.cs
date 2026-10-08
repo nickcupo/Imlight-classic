@@ -10,6 +10,8 @@ using Imcodec.ObjectProperty.TypeCache;
 namespace Imlight.CoreLib.Game.Zone.Components;
 
 internal sealed partial class CombatDuelComponent {
+    // CLASSIC: neither a monster-side slot nor session permission establishes a creature duel.
+    private bool AllowsMonstrologyPve => !_pvp && !_arena && Duel is { m_bPVP: false };
     private readonly MonstrologyPendingExtraction _pendingEssence = new();
     private PendingEssence[] _victoryEssence = [];
     private ulong _extractingOwner;
@@ -24,21 +26,24 @@ internal sealed partial class CombatDuelComponent {
 
     internal Dictionary<CombatDuelSubCircle, int> BeginMonstrologyCast(QueuedCombatAction action) {
         _extractingOwner = 0; _extractingFamily = null; _castDotTargets.Clear();
+        if (!AllowsMonstrologyPve) { DiscardMonstrologyObservations(); return null; }
         if (!MonstrologySessionPolicy.AllowsWizard(action.SpellCaster?._wizard, MonstrologyService.Enabled)
             || action.SpellCaster.IsSummonedMinion || action.Spell == null || action.Spell.m_enchantment == 0
             || CoreObjectFactory.GetCoreTemplate(action.Spell.m_enchantment) is not SpellTemplate enchantment
             || !MonstrologyPendingExtraction.TryFamily(enchantment, out var family)) return null;
         _extractingOwner = action.SpellCaster._wizard.CharId; _extractingFamily = family;
-        return SubCircles.Where(x => x.Occupied && x.OccupiedTeam == CombatTeam.Monster && !x.IsSummonedMinion && x.IsAlive)
+        return SubCircles.Where(x => x.Occupied && x.OccupiedTeam == CombatTeam.Monster && !x.IsWizard && !x.IsSummonedMinion && x.IsAlive)
             .ToDictionary(x => x, x => x.ParticipantGameStats.m_currentHitpoints);
     }
 
     internal void ObserveMonstrologyCast(QueuedCombatAction action, Dictionary<CombatDuelSubCircle, int> before) {
+        if (!AllowsMonstrologyPve) { DiscardMonstrologyObservations(); return; }
         if (before == null) return;
         if (!MonstrologySessionPolicy.AllowsWizard(action.SpellCaster._wizard, MonstrologyService.Enabled)) {
             _extractingOwner = 0; _extractingFamily = null; _castDotTargets.Clear(); return;
         }
         foreach (var (target, health) in before) {
+            if (target.IsWizard || target.IsSummonedMinion || target.OccupiedTeam != CombatTeam.Monster) continue;
             if (CoreObjectFactory.GetCoreTemplate(target.ParticipantObject.m_templateID) is not GameObjectTemplate template
                 || template.m_adjectiveList?.Contains(_extractingFamily) != true) continue;
             var metadata = template.m_behaviors?.OfType<MobMonsterMagicBehaviorTemplate>().SingleOrDefault();
@@ -54,7 +59,8 @@ internal sealed partial class CombatDuelComponent {
     }
 
     internal void RegisterMonstrologyDot(CombatDuelSubCircle target, SpellEffect effect) {
-        if (_extractingOwner == 0 || target.OccupiedTeam != CombatTeam.Monster || target.IsSummonedMinion
+        if (!AllowsMonstrologyPve) { DiscardMonstrologyObservations(); return; }
+        if (_extractingOwner == 0 || target.IsWizard || target.OccupiedTeam != CombatTeam.Monster || target.IsSummonedMinion
             || CoreObjectFactory.GetCoreTemplate(target.ParticipantObject.m_templateID) is not GameObjectTemplate template
             || template.m_adjectiveList?.Contains(_extractingFamily) != true) return;
         var metadata = template.m_behaviors?.OfType<MobMonsterMagicBehaviorTemplate>().SingleOrDefault();
@@ -65,6 +71,10 @@ internal sealed partial class CombatDuelComponent {
         _extractingDots.Add(effect, attribution);
     }
     internal void ObserveMonstrologyDot(CombatDuelSubCircle target, SpellEffect effect, int healthBefore) {
+        if (!AllowsMonstrologyPve) { DiscardMonstrologyObservations(); return; }
+        if (target.IsWizard || target.IsSummonedMinion || target.OccupiedTeam != CombatTeam.Monster) {
+            _extractingDots.Remove(effect); return;
+        }
         if (!_extractingDots.TryGetValue(effect, out var attribution)) return;
         var owner = SubCircles.FirstOrDefault(x => x._wizard?.CharId == attribution.Owner && !x.IsSummonedMinion);
         if (!MonstrologySessionPolicy.AllowsWizard(owner?._wizard, MonstrologyService.Enabled)) {
@@ -78,6 +88,7 @@ internal sealed partial class CombatDuelComponent {
     }
 
     private void FinishMonstrologyDuel(bool victory) {
+        if (!AllowsMonstrologyPve) { DiscardMonstrologyObservations(); return; }
         var owners = SubCircles.Where(x => x.AddedToDuel && !x.IsSummonedMinion && MonstrologySessionPolicy.AllowsWizard(x._wizard, MonstrologyService.Enabled))
             .Select(x => x._wizard.CharId).ToHashSet();
         _victoryEssence = _pendingEssence.Finish(victory, owners);
@@ -86,6 +97,7 @@ internal sealed partial class CombatDuelComponent {
     // CLASSIC: after a won duel, each wizard's Extract Animus hits become Animus and Monstrology XP in their ledger
     // (MonstrologyRewards), and their session shows the result (MonstrologyService.ExtractionCommitted).
     private void AwardMonstrologyExtractions() {
+        if (!AllowsMonstrologyPve) { DiscardMonstrologyObservations(); return; }
         var observations = TakeMonstrologyVictoryObservations();
         if (observations.Length == 0) return;
         int[] thresholds;
@@ -130,9 +142,16 @@ internal sealed partial class CombatDuelComponent {
 
     // Consume once, only after victory. Pending observations are not persistence or XP eligibility.
     internal PendingEssence[] TakeMonstrologyVictoryObservations() {
+        if (!AllowsMonstrologyPve) { DiscardMonstrologyObservations(); return []; }
         var result = _victoryEssence.Where(x => SubCircles.Any(circle => circle._wizard?.CharId == x.Owner
             && MonstrologySessionPolicy.AllowsWizard(circle._wizard, MonstrologyService.Enabled))).ToArray();
         _victoryEssence = [];
         return result;
     }
+    private void DiscardMonstrologyObservations() {
+        _pendingEssence.Finish(false, new HashSet<ulong>());
+        _victoryEssence = [];
+        _extractingDots.Clear(); _castDotTargets.Clear(); _extractingOwner = 0; _extractingFamily = null;
+    }
+
 }

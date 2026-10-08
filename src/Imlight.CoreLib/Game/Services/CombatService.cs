@@ -89,6 +89,7 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
             ? TimeSpan.FromSeconds(seconds) : fallback;
 
     private readonly PostCombatGrace _grace = new(StillSeconds, MoveGraceSeconds); // CLASSIC
+    private bool _publishGraceEffect = true; // CLASSIC: PvP keeps authoritative grace without the PvE native presentation.
 
     private readonly CoreObjectSerializer _effectSerializer = new(
         behaviors: SerializerFlags.None
@@ -225,6 +226,9 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
             });
         }
 
+        // CLASSIC: this is a wizard duel, not a creature reward. Omit the shared native post-combat effect;
+        // its role in the reported empty Animus panel is inferred, while server aggro protection stays unchanged.
+        _publishGraceEffect = false;
         SetNoAggroGrace();
         if (message.Fought) {
             // CLASSIC: the native duel/result UI already shows this; a non-modal notice creates a "!" alert.
@@ -256,6 +260,7 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
         if (HealthAfterDuel(GetActiveWizard()) is { } health) SendToSocket(health);
         PushHelperIdle();
         EquipMount();
+        _publishGraceEffect = true; // CLASSIC: a creature victory retains the known native fade effects.
         SetNoAggroGrace();
 
         ClassicBadges.MobsDefeated(GetActiveWizard(), message.MobTemplateIds, SendToSocket); // CLASSIC: kill badges.
@@ -914,8 +919,14 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
 
     private void PutEffect(string name, DateTime endUtc) {
         var wizard = GetActiveWizard();
-        foreach (var message in PostCombatEffects.Put(wizard, GetActiveGameObject().m_globalID, name, endUtc)) {
-            ZoneBroadcast(message, isSelfless: false);
+        if (_publishGraceEffect) {
+            foreach (var message in PostCombatEffects.Put(wizard, GetActiveGameObject().m_globalID, name, endUtc)) {
+                ZoneBroadcast(message, isSelfless: false);
+            }
+        }
+        else {
+            // CLASSIC: no unpublished NamedEffect in GameEffects: later stat rebuilds/attach must not expose it.
+            wizard.IsInCombatGrace = true;
         }
 
         Timers.StartSingleTimer("NoAggroGraceOver", new COMBAT_106_PROTOCOL.MSG_NOAGGROGRACEOVER(),

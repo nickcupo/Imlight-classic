@@ -15,11 +15,11 @@ internal sealed partial class CombatDuelComponent {
     }
     internal bool AllowsMonstrologyCast(CombatDuelSubCircle caster, Spell card, SpellTemplate template = null)
         => !MonstrologyCastGuard.RequiresPermission(card,template)
-            || CastOwnerPolicy(caster)?.Allows(MonstrologyService.Enabled) == true;
+            || (AllowsMonstrologyPve && CastOwnerPolicy(caster)?.Allows(MonstrologyService.Enabled) == true);
     internal bool RunMonstrologyCast(CombatDuelSubCircle caster, Spell card, SpellTemplate template, System.Action action) {
         var required = MonstrologyCastGuard.RequiresPermission(card,template);
         return MonstrologyCastGuard.Run(required,required ? CastOwnerPolicy(caster) : null,
-            required && MonstrologyService.Enabled,action);
+            required && MonstrologyService.Enabled && AllowsMonstrologyPve,action);
     }
     private bool RunMonstrologyEnchantment(CombatDuelSubCircle caster, int sourceIndex, uint targetIndex, System.Action action) {
         var hand = caster?._combatDeck?.LastGivenHand;
@@ -27,6 +27,6 @@ internal sealed partial class CombatDuelComponent {
         var target = hand != null && targetIndex < hand.Count ? hand[(int)targetIndex] : null;
         var required = MonstrologyCastGuard.RequiresPermission(source) || MonstrologyCastGuard.RequiresPermission(target);
         return MonstrologyCastGuard.Run(required,required ? CastOwnerPolicy(caster) : null,
-            required && MonstrologyService.Enabled,action);
+            required && MonstrologyService.Enabled && AllowsMonstrologyPve,action);
     }
 }
