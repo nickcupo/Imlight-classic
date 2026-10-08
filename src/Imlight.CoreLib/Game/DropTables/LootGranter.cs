@@ -89,7 +89,10 @@ public static class LootGranter {
         // and quest rewards before they are granted and shown.
         results.GoldAmount = Classic.ClassicSettings.Scale(results.GoldAmount, Classic.ClassicSettings.GoldMultiplier);
         results.ExperienceAmount = Classic.ClassicSettings.Scale(results.ExperienceAmount, Classic.ClassicSettings.XpMultiplier);
-        UpdateWizardGold(playerActor, wizard, results.GoldAmount);
+        // CLASSIC: clear the rolled promise first, including when an unacknowledged write throws.
+        var requestedGold = results.GoldAmount;
+        results.GoldAmount = 0;
+        results.GoldAmount = UpdateWizardGold(playerActor, wizard, requestedGold);
         UpdateWizardXP(playerActor, results.ExperienceAmount);
         UpdateWizardTP(playerActor, wizard, results.TrainingPoints);
         UpdateStackRewards(playerActor, wizard, results);   // CLASSIC: one acknowledged gear/card/reagent batch
@@ -112,22 +115,21 @@ public static class LootGranter {
             Reagents = [new DropItemResult { ItemId = templateId.ToString(), ItemName = string.Empty, Quantity = quantity }]
         });
 
-    private static void UpdateWizardGold(IActorRef playerActor, Wizard wizard, int goldDelta) {
-        if (goldDelta == 0) {
-            return;
+    private static int UpdateWizardGold(IActorRef playerActor, Wizard wizard, int goldDelta) {
+        GoldRewardReceipt receipt;
+        try {
+            if (!ClassicGoldRewards.TryGrant(wizard, goldDelta, out receipt, acknowledged => Send(playerActor, acknowledged.Update))) {
+                if (WizardCollection.IsInventorySnapshotUncertain(wizard)) {
+                    throw new InvalidOperationException("Gold reward refused an uncertain wizard snapshot.");
+                }
+                return 0;
+            }
         }
-
-        // Add gold to the wizard. This will save their data, but not inform their game client.
-        wizard.AddGold(goldDelta);
-
-        // Now, inform the game client their gold has been updated.
-        // This only changes the character page. It does not show a popup or anything.
-        // The popup comes from the network LootInfoList.
-        var networkMessage = new WIZARD_12_PROTOCOL.MSG_UPDATEGOLD() {
-            Gold = wizard.GameStats.m_currentGold,
-            MaxGold = wizard.GameStats.m_baseGoldPouch
-        };
-        Send(playerActor, networkMessage);
+        catch {
+            if (WizardCollection.IsInventorySnapshotUncertain(wizard)) Send(playerActor, "Close");
+            throw; // No later reward, automatic retry or refund of a potentially durable write.
+        }
+        return receipt.Acquired;
     }
 
     private static void UpdateWizardXP(IActorRef playerActor, int xpDelta) {
