@@ -30,6 +30,7 @@
     <ServerIntegrationTest Include="SnackPurchasePersistenceTests.cs" />
     <ServerIntegrationTest Include="PaidItemChangePersistenceTests.cs" />
     <ServerIntegrationTest Include="PetProgressPersistenceTests.cs" />
+    <ServerIntegrationTest Include="PetTalentEffectTests.cs" />
     <ServerIntegrationTest Include="PetGameInitializationTests.cs" />
     <ServerIntegrationTest Include="PetGameSessionAdmissionTests.cs" />
     <ServerIntegrationTest Include="TreasureMutationSafetyTests.cs" />

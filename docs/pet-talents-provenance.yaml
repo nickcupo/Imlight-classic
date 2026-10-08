@@ -1,0 +1,99 @@
+# Authored implementation map/provenance only. Native client files and extracts remain private.
+id: passive-pet-talents-october-2010
+profiles: [october-2010-arc1]
+feature: pets.talents
+license_tag: own
+confidence: inferred
+historical_parity_verified: false
+owner_authorization: "2026-10-08: implement documented inferred pet values where sources agree."
+implementation: src/Imlight.CoreLib/Game/Pet/PetTalentPolicy.cs
+sources:
+  - id: owned-2014-pet-definitions
+    source: "Owned 2014 Wizard_1_240 Root.wad: TalentData/Talent-*.xml and GameEffectData/PetTalentEffects.xml"
+    confidence: client
+    retrieved: '2026-10-08'
+  - id: owned-r806919-pet-definitions
+    source: "Owned r806919 Root.wad: TalentData/Talent-*.xml and GameEffectData/PetTalentEffects.xml"
+    confidence: client
+    retrieved: '2026-10-08'
+  - id: empirical-stat-discussion
+    source: "https://www.wizard101central.com/forums/showthread.php?500310-(WIP)-Wizard101-Pet-Talent-Calculator="
+    confidence: corroborated
+    retrieved: '2026-10-08'
+    notes: "Later firsthand formula discussion corroborates stat inputs, weighted sums and damage/resistance arithmetic; it is not dated 2010 evidence."
+  - id: empirical-healing-proposal
+    source: "https://www.wizard101central.com/forums/showthread.php?414785-PetAbility-Healer-Calculation-Formula-Verification-Needed="
+    confidence: unverified
+    retrieved: '2026-10-08'
+    notes: >-
+      The researcher's proposed 1/300 and 1/150 healing divisors were not validated for Healer and disagree with the
+      coefficients shared by both owned clients. They are not certified evidence and are not substituted for native
+      coefficients. The implementation uses the matching native .00006/.00013 fractions under the owner authorization.
+  - id: dated-sprite-pip-counterpart
+    source: "classic-data/spells/life/sprite.yaml; Fandom Sprite_(Spell)?oldid=68651 (2010-05-11) and oldid=8680 (2009-02-27)"
+    confidence: verified
+    covers: [trained_sprite_pips]
+  - id: dated-pixie-pip-counterpart
+    source: "classic-data/spells/life/pixie.yaml; Fandom Pixie?oldid=57914 (2010-01-20) and oldid=4591 (2009-01-22)"
+    confidence: verified
+    covers: [trained_pixie_pips]
+stat_effects:
+  shared_matching_definitions: 82
+  formula: "(primary1 + primary2 + 0.5 * Power) * native_coefficient"
+  percent_units: "Fractions, e.g. .0625 means 6.25%; no per-talent rounding or invented minimum bonus."
+  flat_units: "Native floating bonus retained in receipt; existing integer health/mana aggregator truncates on both add and remove."
+  limits: "Negative/current-over-cap stats are clamped to the derived capacity before evaluation; at most four distinct expressed talents."
+  bindings:
+    damage: {primary: [Strength, Will], coefficients: [0.00005, 0.00010, 0.00015]}
+    accuracy: {primary: [Agility, Intellect], coefficients: [0.00005, 0.00010, 0.00015]}
+    resistance: {primary: [Agility, Strength], coefficients: [0.00008, 0.00016, 0.00024]}
+    health: {primary: [Agility, Will], coefficients: [0.12, 0.16, 0.20, 0.24]}
+    mana: {primary: [Intellect, Will], coefficients: [0.08, 0.12, 0.16, 0.20]}
+    outgoing_healing: {primary: [Strength, Will], coefficients: [0.00006, 0.00013]}
+    incoming_healing: {primary: [Intellect, Agility], coefficients: [0.00006, 0.00013]}
+    power_pips: {primary: [Intellect, Strength], coefficients: [0.00008]}
+  notes: "School-specific damage/accuracy/resistance tiers1..3 and all-school tiers1..2; template school and buffAll are explicit, not parsed from a talent name. Critical/block/pierce/later-feature effects are excluded."
+capacity:
+  shared_matching_talents: 50
+  single_stat_tiers: [25, 40, 50, 65]
+  paired_stat_tiers: "One named stat25 plus the other15/25/40; exact name/stat pair map is in PetTalentPolicy."
+  persistence: "m_maxStats stays the hereditary baseline. Effective caps add only currently expressed admitted capacity talents; repeated reads/rebuilds/hatches cannot compound bonuses."
+cards:
+  provider_and_payload_are_separate: true
+  admitted:
+    - talent: Talent-Spell-Life01
+      spell: "Pet - Sprite"
+      copies: 1
+      school: Life
+      accuracy: 100
+      effects: "Friendly single target:50 immediate heal and300 healing over3rounds."
+      pips: 1
+      confidence: inferred
+    - talent: Talent-Spell-Life02
+      spell: "Pet - Pixie"
+      copies: 1
+      school: Life
+      accuracy: 100
+      effects: "Self heal400. This is not the may-cast Pet - Pixie Life spell."
+      pips: 2
+      confidence: inferred
+  rank_inference: >-
+    The owned2014 decoder exposes no SpellRank for these templates. Current pet ranks1/2 agree with dated trained
+    Sprite/Pixie ranks1/2; retaining the same pet pip costs is an explicit owner-accepted inference, not a claimed
+    direct2014 rank observation. No spell payload or client program bytes are patched.
+  withheld: >-
+    All other talent cards remain withheld by the independent spell-payload admission check until their relevant
+    numeric metadata and ranks have matching support. In particular Stormblade30(2014)/35(r806919), and other
+    changed blade/shield/healing/target spell values, are not silently accepted. Provider name/count agreement alone
+    does not authorize a newer spell payload. Existing pet breed template grants are outside this new talent map.
+transactions:
+  equipment: "Fresh tracked owned row + exact live alias/container/slot match -> detached effect/card preparation -> one reference swap SaveChanges -> publish aliases/owner/receipts."
+  progress: "Fresh owned pet and snack/energy -> growth plus detached native messages/effect receipt -> one SaveChanges -> publish pet/cost and passive receipt."
+  removal: "Subtract old admitted receipt values and remove exact granted card/effect references after acknowledged unequip, replacement or growth."
+  failure: "Refusal/preparation failure leaves old live state intact. Failed/lost save acknowledgement quarantines the old wizard; no prepared effect/card/resource change is published."
+  rebuild: "Retire exact pet-owned references before the normal derived-stat reset, then prepare/admit the exact equipped pet once."
+release_gate: >-
+  Passive capacity/stat talents and the two bounded card grants require the combined server suite and real-client
+  acceptance after deployment. The broader talent pool still contains unsupported/undated talents; this change
+  does not certify full pet-system parity. May-cast trigger timing, probabilities and cooldowns remain a separate
+  implementation gate. Pet-derived capacity display and post-training updates must be checked in the native client.
