@@ -82,7 +82,7 @@ internal sealed class SecondChanceService(SessionActor sessionActor) : MessageSe
                     send(packet);
                 } }, isCurrent, state, owner);
             Logger.Information("Second Chance: wizard {0}, chest {1}, outcome {2}, refusal {3}.",
-                Logger.Args(wizard.CharId, message.Id.Full, result.Status, result.Refusal));
+                Logger.Args(wizard.CharId, message.Id, result.Status, result.Refusal));
             if (isCurrent?.Invoke() == false && !WizardCollection.IsInventorySnapshotUncertain(wizard)) {
                 state.CloseOwned(wizard.CharId, owner);
                 return result with { Status = SecondChanceStatus.ContextLost };
@@ -101,7 +101,7 @@ internal sealed class SecondChanceService(SessionActor sessionActor) : MessageSe
             // No compensation/reroll: the save may have committed. The transaction already quarantined
             // every unknown save/publication outcome under its original lane; pre-save errors also close.
             Logger.Warning("Second Chance: wizard {0}, chest {1}, failed ({2}), uncertain {3}.",
-                Logger.Args(wizard.CharId, message.Id.Full, error.GetType().Name, WizardCollection.IsInventorySnapshotUncertain(wizard)));
+                Logger.Args(wizard.CharId, message.Id, error.GetType().Name, WizardCollection.IsInventorySnapshotUncertain(wizard)));
             state.CloseOwned(wizard.CharId, owner); close();
             return new(SecondChanceStatus.PreparationFailed);
         }
