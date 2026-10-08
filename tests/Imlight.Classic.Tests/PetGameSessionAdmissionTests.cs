@@ -514,6 +514,125 @@ public sealed class PetGameSessionAdmissionTests {
     }
 
     [Theory]
+    [InlineData(true)] [InlineData(false)]
+    public async Task NormalTerminalDancePublishesOneAcknowledgedRewardAndRetainsThePostEndSnack(bool allCorrect) {
+        using var f = await Fixture.Create(); f.AddSnack();
+        var final = await f.PrepareFinalDanceAnswer(allCorrect);
+        var pet = Assert.Single(f.Store.Live.EquipmentBehavior.EquippedItems);
+        var xp = PetProgress.Behavior(pet).m_XP; var energy = f.Store.Saved.PetOwnerBehavior.Energy;
+        f.Store.OnSave = () => {
+            Assert.Equal(xp, PetProgress.Behavior(pet).m_XP); Assert.Equal(energy, f.Store.Live.PetOwnerBehavior.Energy);
+            Assert.Empty(f.Packets); // Preparation cannot publish a result, cost or growth before the save ACK.
+        };
+        await f.Send(new PET_9_PROTOCOL.MSG_PETGAMEDANCE { Moves = final.Answer });
+        var ended = await f.State(); Assert.True(ended.Ended); Assert.Null(ended.Timer); Assert.Null(ended.Current);
+        Assert.Equal(allCorrect ? 5 : 3, ended.Round); Assert.Equal(allCorrect ? 5 : 0, ended.Successes);
+        Assert.Equal(1, f.Store.Saves); Assert.False(f.Instance.IsDisposed);
+        var packets = await f.Drain(); Assert.Equal(4, packets.Length);
+        Assert.Equal(energy - 2, Assert.IsType<PET_9_PROTOCOL.MSG_PETENERGYTICK>(packets[0]).Energy);
+        Assert.Equal(Dance, Assert.IsType<PET_9_PROTOCOL.MSG_PETGAMEEND>(packets[1]).Game.ToString());
+        Assert.Equal(allCorrect ? 8u : 0u, Assert.IsType<WIZARD2_53_PROTOCOL.MSG_GAINPETXP>(packets[2]).XP);
+        Assert.IsType<GAME_5_PROTOCOL.MSG_EQUIPMENTBEHAVIOR_EQUIPITEM>(packets[3]);
+        Assert.Equal(allCorrect ? 5 : 0, f.PreparedEnd!.m_Score);
+        Assert.Equal(allCorrect ? 5u : 0u, f.PreparedEnd.m_wins);
+        Assert.Equal(allCorrect ? 8u : 0u, f.PreparedEnd.m_xpGain);
+        Assert.Equal(allCorrect ? 4u : 0u, Assert.Single(f.PreparedEnd.m_statMods.m_modifications).m_actualChange);
+        Assert.Equal(xp + (allCorrect ? 8u : 0u), PetProgress.Behavior(pet).m_XP);
+        Assert.Equal(PetProgress.Behavior(pet).m_XP, PetProgress.Behavior(Assert.Single(f.Store.Items)).m_XP);
+        Assert.Equal(energy - 2, f.Store.Live.PetOwnerBehavior.Energy); Assert.Equal(energy - 2, f.Store.Saved.PetOwnerBehavior.Energy);
+        await f.Send(new PET_9_PROTOCOL.MSG_PETGAMEDANCE { Moves = final.Answer });
+        await f.Fire(final.Timer); await f.Send(new PET_9_PROTOCOL.MSG_PETGAMEREADY());
+        Assert.Empty(await f.Drain()); Assert.Equal(1, f.Store.Saves);
+        f.Store.OnSave = null;
+        byte[] snackData = [4, ..BitConverter.GetBytes(SnackId)];
+        await f.Send(new PET_9_PROTOCOL.MSG_PETGAMEDATA { Game = Dance, Data = new ByteString(snackData) });
+        var snack = await f.Drain(); Assert.Equal(4, snack.Length); Assert.Equal(2, f.Store.Saves);
+        Assert.IsType<PET_9_PROTOCOL.MSG_PETSNACKUPDATE>(snack[0]);
+        Assert.IsType<PET_9_PROTOCOL.MSG_PETGAMESNACKFEEDSUCCESS>(snack[1]);
+        Assert.IsType<WIZARD2_53_PROTOCOL.MSG_GAINPETXP>(snack[2]);
+        Assert.IsType<GAME_5_PROTOCOL.MSG_EQUIPMENTBEHAVIOR_EQUIPITEM>(snack[3]);
+        Assert.Equal(1, Assert.Single(f.Snacks).m_quantity); Assert.Equal(energy - 2, f.Store.Saved.PetOwnerBehavior.Energy);
+        await f.Send(new PET_9_PROTOCOL.MSG_PETGAMEDATA { Game = Dance, Data = new ByteString(snackData) });
+        Assert.IsType<PET_9_PROTOCOL.MSG_PETGAMESNACKFEEDFAILED>(Assert.Single(await f.Drain())); Assert.Equal(2, f.Store.Saves);
+    }
+
+    [Theory]
+    [InlineData("missing-pet", true)] [InlineData("foreign-pet", false)]
+    [InlineData("empty-end", true)] [InlineData("throw-end", false)]
+    [InlineData("empty-pet", false)] [InlineData("throw-pet", true)]
+    [InlineData("missing-wizard", true)] [InlineData("missing-config", false)]
+    public async Task NormalTerminalDanceRefusalClosesWithoutSavingOrPublishingAndCannotReopen(string failure, bool allCorrect) {
+        using var f = await Fixture.Create(); f.AddSnack();
+        var final = await f.PrepareFinalDanceAnswer(allCorrect);
+        var pet = Assert.Single(f.Store.Live.EquipmentBehavior.EquippedItems);
+        var xp = PetProgress.Behavior(pet).m_XP; var energy = f.Store.Saved.PetOwnerBehavior.Energy;
+        var opened = f.Store.Opened;
+        switch (failure) {
+            case "missing-pet": f.BeforeOpen = () => f.Store.Items.Clear(); break;
+            case "foreign-pet": f.BeforeOpen = () => f.Store.Items[0].m_characterId = f.Store.Saved.CharId + 1; break;
+            case "missing-wizard": f.Store.MissingWizard = true; break;
+            case "missing-config": f.RemoveGameConfiguration(Dance); break;
+            case "empty-end": f.ProgressDependencies.SerializeEnd = _ => default; break;
+            case "throw-end": f.ProgressDependencies.SerializeEnd = _ => throw new InvalidOperationException("Authored END preparation failure"); break;
+            case "empty-pet": f.ProgressDependencies.SerializePet = _ => default; break;
+            case "throw-pet": f.ProgressDependencies.SerializePet = _ => throw new InvalidOperationException("Authored pet preparation failure"); break;
+            default: throw new InvalidOperationException("Unknown authored refusal");
+        }
+        await f.Send(new PET_9_PROTOCOL.MSG_PETGAMEDANCE { Moves = final.Answer });
+        Assert.True(f.Instance.IsDisposed);
+        var closed = await f.State(); Assert.Null(closed.Session); Assert.Null(closed.Timer);
+        Assert.Equal(failure == "missing-config" ? opened : opened + 1, f.Store.Opened);
+        Assert.Equal(0, f.Store.Saves); Assert.Empty(await f.Drain());
+        Assert.False(WizardCollection.IsInventorySnapshotUncertain(f.Store.Live));
+        Assert.Equal(xp, PetProgress.Behavior(pet).m_XP); Assert.Equal(energy, f.Store.Live.PetOwnerBehavior.Energy);
+        Assert.Equal(energy, f.Store.Saved.PetOwnerBehavior.Energy); Assert.Equal(2, Assert.Single(f.Snacks).m_quantity);
+        if (f.Store.Items.Count != 0) Assert.Equal(xp, PetProgress.Behavior(Assert.Single(f.Store.Items)).m_XP);
+        await f.Send(new PET_9_PROTOCOL.MSG_PETGAMEREADY()); await f.Join(Dance); await f.Join(Morph);
+        await f.Fire(final.Timer); await f.Send(new PET_9_PROTOCOL.MSG_PETGAMEDANCE { Moves = final.Answer });
+        byte[] snackData = [4, ..BitConverter.GetBytes(SnackId)];
+        await f.Send(new PET_9_PROTOCOL.MSG_PETGAMEDATA { Game = Dance, Data = new ByteString(snackData) });
+        Assert.Equal(0, f.Store.Saves); Assert.Empty(await f.Drain());
+        var after = await f.State(); Assert.Null(after.Session); Assert.Null(after.Timer); Assert.Null(after.Lobby);
+    }
+
+    [Theory]
+    [InlineData(false)] [InlineData(true)]
+    public async Task NormalTerminalDanceLostAcknowledgementQuarantinesAndClosesWithoutAResultOrRetry(bool durable) {
+        using var f = await Fixture.Create(); var final = await f.PrepareFinalDanceAnswer(allCorrect: true);
+        var pet = Assert.Single(f.Store.Live.EquipmentBehavior.EquippedItems);
+        var xp = PetProgress.Behavior(pet).m_XP; var energy = f.Store.Saved.PetOwnerBehavior.Energy;
+        f.Store.FailSave = true; f.Store.Durable = durable;
+        await Assert.ThrowsAsync<InvalidOperationException>(() => f.Send(new PET_9_PROTOCOL.MSG_PETGAMEDANCE { Moves = final.Answer }));
+        await f.ParentBarrier(); Assert.True(f.Instance.IsDisposed); Assert.True(WizardCollection.IsInventorySnapshotUncertain(f.Store.Live));
+        Assert.Equal(1, f.Store.Saves); Assert.Empty(await f.Drain());
+        Assert.Equal(xp, PetProgress.Behavior(pet).m_XP); Assert.Equal(energy, f.Store.Live.PetOwnerBehavior.Energy);
+        Assert.Equal(xp + (durable ? 8u : 0u), PetProgress.Behavior(Assert.Single(f.Store.Items)).m_XP);
+        Assert.Equal(energy - (durable ? 2 : 0), f.Store.Saved.PetOwnerBehavior.Energy);
+        var closed = await f.State(); Assert.Null(closed.Session); Assert.Null(closed.Timer);
+        await f.Fire(final.Timer); await f.Join(Dance); await f.Send(new PET_9_PROTOCOL.MSG_PETGAMEREADY());
+        Assert.Equal(1, f.Store.Saves); Assert.Empty(await f.Drain());
+    }
+
+    [Theory]
+    [InlineData(false)] [InlineData(true)]
+    public async Task PreterminalQaFinishRefusalPreservesItsGameAndAnyOutstandingDance(bool started) {
+        using var f = await Fixture.Create(); await f.Join(Dance);
+        if (started) { await f.Send(new PET_9_PROTOCOL.MSG_PETGAMEREADY()); await f.Fire((await f.State()).Timer!); }
+        await f.Drain(); var old = await f.State();
+        f.ProgressDependencies.SerializeEnd = _ => default;
+        await f.Send(new PET_9_PROTOCOL.MSG_PETGAMEDATA { Game = Dance, Data = new ByteString(new byte[] { 1 }) });
+        var refused = await f.State(); Assert.Same(old.Session, refused.Session); Assert.Same(old.Timer, refused.Timer);
+        Assert.Equal(old.Current, refused.Current); Assert.False(refused.Ended); Assert.False(f.Instance.IsDisposed);
+        Assert.Equal(0, f.Store.Saves); Assert.Empty(await f.Drain());
+        if (started) {
+            await f.Send(new PET_9_PROTOCOL.MSG_PETGAMEDANCE { Moves = old.Current });
+            Assert.Equal(1, (await f.State()).Round); Assert.NotNull((await f.State()).Timer);
+        } else {
+            await f.Send(new PET_9_PROTOCOL.MSG_PETGAMEREADY()); Assert.True((await f.State()).Started);
+        }
+    }
+
+    [Theory]
     [InlineData("PetGameDrop")] [InlineData("petgamedance")] [InlineData("PetGameMorph")]
     public async Task MismatchedEndingCannotRetireTrainingAndMatchingEndingDoesNotGuessGlobalId(string game) {
         using var f = await Fixture.Create(); await f.Join(Dance);
@@ -700,6 +819,8 @@ public sealed class PetGameSessionAdmissionTests {
         internal readonly ConcurrentQueue<IActorRef> WireSenders = new(), AttachFanout = new();
         internal readonly ConcurrentQueue<(Type Type, IActorRef Sender)> Ingress = new();
         internal List<ClientPetSnackItem> Snacks = [];
+        internal readonly PetProgressDependencies ProgressDependencies = new() { SerializePet = _ => new ByteString(new byte[] { 2 }), MaxEnergy = _ => 50 };
+        internal PetGameEndData? PreparedEnd;
         internal System.Action? BeforeOpen;
         internal bool LoadByDurableIdentity;
         private readonly Dictionary<IDocumentSession, List<ClientPetSnackItem>> _snackRows = [];
@@ -722,6 +843,7 @@ public sealed class PetGameSessionAdmissionTests {
         private readonly List<string> _fullKeys = [];
         private readonly List<string> _morphKeys = [];
         private Fixture() {
+            ProgressDependencies.SerializeEnd = data => { PreparedEnd = data; return new ByteString(new byte[] { 1 }); };
             TerminalClaimFixture.SetRules(ClassicRules.Stock);
             _oldGames = _gamesField.GetValue(null);
             _gamesField.SetValue(null, PetGameConfigs.KioskGames.Values.ToDictionary(game => game, game => new PetGameInfo {
@@ -801,6 +923,20 @@ public sealed class PetGameSessionAdmissionTests {
         }
         internal List<ClientPetSnackItem> SnackRows(IDocumentSession session) => _snackRows[session];
         internal void ReplaceDanceTemplate(CoreTemplate template) => _templates[PetGameObjectCodec.DanceTemplate] = template;
+        internal void RemoveGameConfiguration(string game)
+            => ((Dictionary<string, PetGameInfo>)_gamesField.GetValue(null)!).Remove(game);
+        internal async Task<(string Answer, object Timer)> PrepareFinalDanceAnswer(bool allCorrect) {
+            Store.Live.Account.AuthLevel = AuthLevel.None; // This path must complete without QA debug commands.
+            await Join(Dance); await Send(new PET_9_PROTOCOL.MSG_PETGAMEREADY());
+            var rounds = allCorrect ? DanceGame.Rounds : DanceGame.MaxFailures;
+            for (var i = 0; i < rounds - 1; i++) {
+                await Fire((await State()).Timer!); var issued = await State(); Assert.NotNull(issued.Current);
+                await Send(new PET_9_PROTOCOL.MSG_PETGAMEDANCE { Moves = allCorrect ? issued.Current : "x" });
+            }
+            var timer = (await State()).Timer!; await Fire(timer); var last = await State(); Assert.NotNull(last.Current);
+            await Drain(); Assert.Equal(0, Store.Saves);
+            return (allCorrect ? last.Current : "x", timer);
+        }
         internal async Task CompleteAttach(ZoneAttachContext attach) {
             Attach = attach; Instance.PublishDoorAttach(attach);
             Endpoint.Tell(new SERVICE_101_PROTOCOL.MSG_ATTACHCOMPLETE { AttachGeneration = attach.Generation,
@@ -959,8 +1095,6 @@ public sealed class PetGameSessionAdmissionTests {
         public void Release(ActorBase actor) { }
     }
     private sealed class PetDriver(PetGameService service, Fixture fixture) {
-        private readonly PetProgressDependencies _dependencies = new() { SerializeEnd = _ => new ByteString(new byte[] { 1 }),
-            SerializePet = _ => new ByteString(new byte[] { 2 }), MaxEnergy = _ => 50 };
         private PetAdmissionTimers _timers = null!;
         internal bool Dispatch(object message) {
             // A real runtime restart recreates the sealed service using the original producer and actor ref.
@@ -1005,7 +1139,7 @@ public sealed class PetGameSessionAdmissionTests {
             var oldProgress = WizardProgressionTransactions.TestScope.Value; var oldItems = WizardInventoryTransactions.TestRowsScope.Value;
             var oldReagents = WizardReagentCollection.TestRowsScope.Value; var oldPet = ClassicPetProgressTransactions.TestScope.Value;
             var oldSnacks = WizardPetSnackTransactions.TestRowsScope.Value;
-            fixture.Store.Install(); ClassicPetProgressTransactions.TestScope.Value = _dependencies;
+            fixture.Store.Install(); ClassicPetProgressTransactions.TestScope.Value = fixture.ProgressDependencies;
             WizardCollection.TestStoreScope.Value = new(fixture.Open, fixture.Load);
             WizardPetSnackTransactions.TestRowsScope.Value = fixture.SnackRows;
             return new Restore(() => {

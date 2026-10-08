@@ -342,7 +342,10 @@ internal sealed partial class PetGameService(SessionActor sessionActor) : Messag
     private void Finish(int points, int wins) {
         if (_session is null || _session.Ended) return;
         var wizard = GetActiveWizard();
-        if (wizard is null || !PetGameConfigs.TryGet(_session.Game, out var info)) return;
+        if (wizard is null || !PetGameConfigs.TryGet(_session.Game, out var info)) {
+            CloseFailedTerminalDance();
+            return;
+        }
         var track = info.m_trackChoices?.ElementAtOrDefault(_session.Track);
         var changes = (track?.m_modifications ?? []).Where(m => m is not null)
             .Select(m => new PetStatChange(m.m_name.ToString(), m.m_change)).ToList();
@@ -350,7 +353,7 @@ internal sealed partial class PetGameService(SessionActor sessionActor) : Messag
             // CLASSIC: the fresh pet and energy cost become visible together after one save acknowledgement.
             if (!ClassicPetProgressTransactions.TryFinish(wizard, _session.PetId, _session.Game,
                 track?.m_name.ToString() ?? "", changes, points, wins, out var receipt)) {
-                if (WizardCollection.IsInventorySnapshotUncertain(wizard)) CloseSession();
+                if (!CloseFailedTerminalDance() && WizardCollection.IsInventorySnapshotUncertain(wizard)) CloseSession();
                 return;
             }
             _session.Ended = true;
@@ -362,9 +365,18 @@ internal sealed partial class PetGameService(SessionActor sessionActor) : Messag
             PublishProgress(receipt);
         }
         catch {
-            if (WizardCollection.IsInventorySnapshotUncertain(wizard)) CloseSession();
+            if (!CloseFailedTerminalDance() && WizardCollection.IsInventorySnapshotUncertain(wizard)) CloseSession();
             throw;
         }
+    }
+
+    // CLASSIC: the last answer is already consumed. A refused result has no normal retry path;
+    // retire it before asynchronous session close, without sending an uncommitted END or reward.
+    private bool CloseFailedTerminalDance() {
+        if (_session is not { Started: true, Ended: false, Dance: { IsOver: true } }) return false;
+        RetireGamesForClose();
+        CloseSession();
+        return true;
     }
 
     private void FeedSnack(ulong snackId) {
