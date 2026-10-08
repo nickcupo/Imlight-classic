@@ -98,6 +98,118 @@ public sealed class PetGameSessionAdmissionTests {
     }
 
     [Theory]
+    [InlineData(false)] [InlineData(true)]
+    public async Task CapturedPetMovedIntoBackpackBeforeFreshJoinReadCannotReplaceTheCurrentGame(bool needsInitialization) {
+        using var f = await Fixture.Create(); await f.Join(Dance);
+        await f.Send(new PET_9_PROTOCOL.MSG_PETGAMEREADY()); var old = await f.State(); await f.Drain();
+        if (needsInitialization) PetProgress.Behavior(Assert.Single(f.Store.Items)).m_requiredXP = 0;
+        var alias = Assert.Single(f.Store.Live.EquipmentBehavior.EquippedItems);
+        var before = PetProgress.Behavior(alias).m_requiredXP;
+        var moved = false;
+        // ReceiveJoin has captured the equipped selection before its fresh transaction opens this session.
+        f.BeforeOpen = () => { f.MoveEquippedPetToBackpack(); moved = true; };
+        await f.Join(Dance);
+        Assert.True(moved); Assert.Equal(0, f.Store.Saves);
+        var packets = await f.Drain();
+        Assert.Equal(0, Assert.Single(packets.OfType<PET_9_PROTOCOL.MSG_PETGAMEJOINRSP>()).Success);
+        Assert.DoesNotContain(packets, packet => packet is PET_9_PROTOCOL.MSG_PETGAMEINIT);
+        var after = await f.State(); Assert.Same(old.Session, after.Session); Assert.Same(old.Timer, after.Timer); Assert.True(after.Started);
+        Assert.Same(alias, Assert.Single(f.Store.Live.InventoryBehavior.Items));
+        Assert.Equal(before, PetProgress.Behavior(alias).m_requiredXP);
+        Assert.Equal(needsInitialization ? 0u : before, PetProgress.Behavior(Assert.Single(f.Store.Items)).m_requiredXP);
+        Assert.Equal(PetId, Assert.Single(f.Store.Saved.InventoryBehavior.InventoryItemIds));
+        Assert.Empty(f.Store.Saved.EquipmentBehavior.EquippedItemIds); Assert.Empty(f.Store.Live.EquipmentBehavior.EquippedItems);
+        await f.Fire(old.Timer!); Assert.NotNull((await f.State()).Current);
+    }
+
+    [Theory]
+    [InlineData("saved-missing")] [InlineData("saved-wrong")] [InlineData("saved-duplicate")] [InlineData("live-duplicate")]
+    [InlineData("live-reference-missing")] [InlineData("live-reference-duplicate")]
+    public async Task FreshJoinRequiresOneMatchingPersistedAndLivePetSlot(string invalidSlot) {
+        using var f = await Fixture.Create(); await f.Join(Dance);
+        await f.Send(new PET_9_PROTOCOL.MSG_PETGAMEREADY()); var old = await f.State(); await f.Drain();
+        f.BeforeOpen = () => {
+            switch (invalidSlot) {
+                case "saved-missing": f.Store.Saved.EquipmentBehavior.SlotList = []; break;
+                case "saved-wrong": f.Store.Saved.EquipmentBehavior.SlotList[0].ItemId = PetId + 1; break;
+                case "saved-duplicate": f.Store.Saved.EquipmentBehavior.SlotList = [
+                    ..f.Store.Saved.EquipmentBehavior.SlotList, new EquipmentSlot { ItemId = PetId, SlotType = EquipmentSlotType.Pet }]; break;
+                case "live-duplicate": f.Store.Live.EquipmentBehavior.SlotList = [
+                    ..f.Store.Live.EquipmentBehavior.SlotList, new EquipmentSlot { ItemId = PetId, SlotType = EquipmentSlotType.Pet }]; break;
+                case "live-reference-missing": f.Store.Live.EquipmentBehavior.EquippedItemIds = []; break;
+                case "live-reference-duplicate": f.Store.Live.EquipmentBehavior.EquippedItemIds = [PetId, PetId]; break;
+            }
+        };
+        await f.Join(Dance); Assert.Equal(0, f.Store.Saves);
+        var packets = await f.Drain();
+        Assert.Equal(0, Assert.Single(packets.OfType<PET_9_PROTOCOL.MSG_PETGAMEJOINRSP>()).Success);
+        Assert.DoesNotContain(packets, packet => packet is PET_9_PROTOCOL.MSG_PETGAMEINIT);
+        var after = await f.State(); Assert.Same(old.Session, after.Session); Assert.Same(old.Timer, after.Timer);
+        await f.Fire(old.Timer!); Assert.NotNull((await f.State()).Current);
+    }
+
+    [Theory]
+    [InlineData(false)] [InlineData(true)]
+    public async Task FreshJoinStillRequiresOneOwnedLivePetAlias(bool duplicateAlias) {
+        using var f = await Fixture.Create(); await f.Join(Dance);
+        await f.Send(new PET_9_PROTOCOL.MSG_PETGAMEREADY()); var old = await f.State(); await f.Drain();
+        f.BeforeOpen = () => {
+            var pet = Assert.Single(f.Store.Live.EquipmentBehavior.EquippedItems);
+            if (duplicateAlias) f.Store.Live.EquipmentBehavior.EquippedItems = [pet, TerminalClaimFixture.CloneItem(pet)];
+            else pet.m_characterId = f.Store.Live.CharId + 1;
+        };
+        await f.Join(Dance); Assert.Equal(0, f.Store.Saves);
+        var packets = await f.Drain();
+        Assert.Equal(0, Assert.Single(packets.OfType<PET_9_PROTOCOL.MSG_PETGAMEJOINRSP>()).Success);
+        Assert.DoesNotContain(packets, packet => packet is PET_9_PROTOCOL.MSG_PETGAMEINIT);
+        var after = await f.State(); Assert.Same(old.Session, after.Session); Assert.Same(old.Timer, after.Timer);
+    }
+
+    [Theory]
+    [InlineData("backpack")] [InlineData("bank")]
+    public async Task FreshJoinRefusesCrossCategoryLivePetAliasesMissingFromTheIdLists(string category) {
+        using var f = await Fixture.Create(); await f.Join(Dance);
+        await f.Send(new PET_9_PROTOCOL.MSG_PETGAMEREADY()); var old = await f.State(); await f.Drain();
+        var equipped = Assert.Single(f.Store.Live.EquipmentBehavior.EquippedItems);
+        var duplicate = TerminalClaimFixture.CloneItem(equipped); Assert.NotSame(equipped, duplicate);
+        Assert.Equal(PetId, duplicate.m_globalID.Full);
+        f.BeforeOpen = () => {
+            // Both authoritative references still name only the equipped pet; the stray materialized alias is distinct.
+            Assert.DoesNotContain(PetId, f.Store.Saved.InventoryBehavior.InventoryItemIds);
+            Assert.DoesNotContain(PetId, f.Store.Saved.StorageBehavior.BankItemIds);
+            Assert.DoesNotContain(PetId, f.Store.Live.InventoryBehavior.InventoryItemIds);
+            Assert.DoesNotContain(PetId, f.Store.Live.StorageBehavior.BankItemIds);
+            if (category == "backpack") f.Store.Live.InventoryBehavior.Items = [duplicate];
+            else f.Store.Live.StorageBehavior.Items = [duplicate];
+        };
+        await f.Join(Dance); Assert.Equal(0, f.Store.Saves);
+        var packets = await f.Drain();
+        Assert.Equal(0, Assert.Single(packets.OfType<PET_9_PROTOCOL.MSG_PETGAMEJOINRSP>()).Success);
+        Assert.DoesNotContain(packets, packet => packet is PET_9_PROTOCOL.MSG_PETGAMEINIT);
+        var after = await f.State(); Assert.Same(old.Session, after.Session); Assert.Same(old.Timer, after.Timer); Assert.True(after.Started);
+        Assert.Same(equipped, Assert.Single(f.Store.Live.EquipmentBehavior.EquippedItems));
+        Assert.Same(duplicate, Assert.Single(category == "backpack" ? f.Store.Live.InventoryBehavior.Items : f.Store.Live.StorageBehavior.Items));
+        await f.Fire(old.Timer!); Assert.NotNull((await f.State()).Current);
+    }
+
+    [Theory]
+    [InlineData(false)] [InlineData(true)]
+    public async Task ExactFreshEquippedPetAdmitsJoinAndPublishesOnlyAfterInitializationAcknowledgement(bool needsInitialization) {
+        using var f = await Fixture.Create();
+        var alias = Assert.Single(f.Store.Live.EquipmentBehavior.EquippedItems);
+        if (needsInitialization) PetProgress.Behavior(Assert.Single(f.Store.Items)).m_requiredXP = 0;
+        f.Store.OnSave = () => { Assert.Empty(f.Packets); Assert.Equal(125u, PetProgress.Behavior(alias).m_requiredXP); };
+        await f.Join(Dance); var state = await f.State(); Assert.NotNull(state.Session); Assert.False(state.Started);
+        var packets = await f.Drain(); Assert.Equal(2, packets.Length);
+        Assert.Equal(1, Assert.IsType<PET_9_PROTOCOL.MSG_PETGAMEJOINRSP>(packets[0]).Success);
+        Assert.IsType<PET_9_PROTOCOL.MSG_PETGAMEINIT>(packets[1]);
+        Assert.Equal(needsInitialization ? 1 : 0, f.Store.Saves);
+        Assert.Same(alias, Assert.Single(f.Store.Live.EquipmentBehavior.EquippedItems));
+        Assert.Equal(125u, PetProgress.Behavior(alias).m_requiredXP);
+        Assert.Equal(125u, PetProgress.Behavior(Assert.Single(f.Store.Items)).m_requiredXP);
+    }
+
+    [Theory]
     [InlineData("PetGameDrop")] [InlineData("petgamedance")] [InlineData("")]
     public async Task DataForAnotherOrDifferentlyCasedGameCannotFinishTheCurrentTraining(string game) {
         using var f = await Fixture.Create(); await f.Join(Dance); await f.Drain(); var old = await f.State();
@@ -350,6 +462,7 @@ public sealed class PetGameSessionAdmissionTests {
         internal readonly TerminalClaimFixture Store = new();
         internal readonly ConcurrentQueue<IMessage> Packets = new();
         internal List<ClientPetSnackItem> Snacks = [];
+        internal System.Action? BeforeOpen;
         private readonly Dictionary<IDocumentSession, List<ClientPetSnackItem>> _snackRows = [];
         private readonly ActorSystem _system;
         private IActorRef _service = null!, _endpoint = null!, _socket = null!;
@@ -406,6 +519,7 @@ public sealed class PetGameSessionAdmissionTests {
             Store.Live.PetSnackBehavior.Snacks = Snacks.Select(snack => snack with { }).ToList();
         }
         internal IDocumentSession Open() {
+            var before = BeforeOpen; BeforeOpen = null; before?.Invoke();
             var session = Store.Open(); var working = (TerminalClaimFixture.ClaimSession)(object)session;
             // TerminalClaimFixture intentionally clones only quest/reward fields. This fixture owns the snack rows.
             working.Wizard.PetSnackBehavior = new() { SnackItemIds = [..Store.Saved.PetSnackBehavior.SnackItemIds], Snacks = [] };
@@ -417,6 +531,17 @@ public sealed class PetGameSessionAdmissionTests {
                 Snacks = rows.Select(snack => snack with { }).ToList();
             };
             return session;
+        }
+        internal void MoveEquippedPetToBackpack() {
+            var pet = Assert.Single(Store.Live.EquipmentBehavior.EquippedItems); Assert.Equal(PetId, pet.m_globalID.Full);
+            Store.Saved.EquipmentBehavior.EquippedItemIds = [..Store.Saved.EquipmentBehavior.EquippedItemIds.Where(id => id != PetId)];
+            Store.Saved.EquipmentBehavior.SlotList = [..Store.Saved.EquipmentBehavior.SlotList.Where(slot => slot.SlotType != EquipmentSlotType.Pet)];
+            Store.Saved.InventoryBehavior.InventoryItemIds = [..Store.Saved.InventoryBehavior.InventoryItemIds, PetId];
+            Store.Live.EquipmentBehavior.EquippedItemIds = [..Store.Live.EquipmentBehavior.EquippedItemIds.Where(id => id != PetId)];
+            Store.Live.EquipmentBehavior.SlotList = [..Store.Live.EquipmentBehavior.SlotList.Where(slot => slot.SlotType != EquipmentSlotType.Pet)];
+            Store.Live.EquipmentBehavior.EquippedItems = [];
+            Store.Live.InventoryBehavior.InventoryItemIds = [..Store.Live.InventoryBehavior.InventoryItemIds, PetId];
+            Store.Live.InventoryBehavior.Items = [..Store.Live.InventoryBehavior.Items, pet];
         }
         internal List<ClientPetSnackItem> SnackRows(IDocumentSession session) => _snackRows[session];
         internal static async Task<Fixture> Create() {

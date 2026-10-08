@@ -127,7 +127,7 @@ internal sealed partial class PetGameService(SessionActor sessionActor) : Messag
         int energy;
         // CLASSIC: initialize the fresh owned pet, and publish only an acknowledged change.
         try {
-            if (!ClassicPetProgressTransactions.TryInitialize(wizard, selectedPet?.m_globalID.Full ?? 0, out pet, out energy)) {
+            if (!ClassicPetProgressTransactions.TryInitializeForGame(wizard, selectedPet?.m_globalID.Full ?? 0, out pet, out energy)) {
                 if (WizardCollection.IsInventorySnapshotUncertain(wizard)) { CloseSession(); return; }
                 InformGameClient("Equip a pet to play the pet games.");
                 SendToSocket(new PET_9_PROTOCOL.MSG_PETGAMEJOINRSP { Game = game, Success = 0 });
