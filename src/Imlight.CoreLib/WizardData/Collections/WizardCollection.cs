@@ -250,8 +250,13 @@ public static class WizardCollection {
         if (liveWizard is null || IsInventorySnapshotUncertain(liveWizard)) return false;
         return CommitCharacterMutation(liveWizard.CharId, (_, persisted) => {
             if (IsInventorySnapshotUncertain(liveWizard)) return false;
-            var gold = persisted.GameStats.m_currentGold + delta;
-            if (capToPouch && gold > persisted.GameStats.m_baseGoldPouch) gold = persisted.GameStats.m_baseGoldPouch;
+            // CLASSIC: a capped gain fills only the pouch's headroom; a valid saved balance already above the pouch is
+            // kept, and a debit always applies exactly (ClassicGoldRewards uses the same rule).
+            var stats = persisted.GameStats;
+            if (stats is null || stats.m_currentGold < 0 || (capToPouch && stats.m_baseGoldPouch < 0)) return false;
+            long gold;
+            try { gold = checked(stats.m_currentGold + CappedGoldDelta(stats, delta, capToPouch)); }
+            catch (OverflowException) { return false; }
             // CLASSIC: gold never goes below zero; a debit the saved balance cannot cover changes nothing (fails).
             if (gold < 0 || gold > int.MaxValue) return false;
             persisted.GameStats.m_currentGold = (int) gold;
@@ -259,6 +264,10 @@ public static class WizardCollection {
         }, persisted => liveWizard.GameStats.m_currentGold = persisted.GameStats.m_currentGold,
             openSession, loadWizard, onSaveFailure: _ => MarkInventorySnapshotUncertain(liveWizard));
     }
+
+    // CLASSIC: the part of a requested gold change that a pouch cap accepts. Never lowers a balance above the pouch.
+    internal static long CappedGoldDelta(ServerWizGameStats stats, long delta, bool capToPouch = true)
+        => capToPouch && delta > 0 ? Math.Min(delta, Math.Max(0L, (long) stats.m_baseGoldPouch - stats.m_currentGold)) : delta;
 
     /// <summary>
     /// CLASSIC: spends <paramref name="amount"/> gold only if the saved balance holds it, checked and debited in one

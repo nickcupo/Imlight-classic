@@ -11,6 +11,7 @@ using Akka.Actor;
 using Imcodec.IO;
 using Imcodec.MessageLayer;
 using Imcodec.MessageLayer.Generated;
+using Imcodec.ObjectProperty;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Classic;
 using Imlight.Classic.Rules;
@@ -31,6 +32,130 @@ namespace Imlight.Classic.Tests;
 
 [Collection(nameof(BadgeRulesTests))]
 public sealed class TerminalQuestClaimPersistenceTests {
+    [Theory]
+    [InlineData(600, 500, 30, 600, 0)]
+    [InlineData(500, 500, 30, 500, 0)]
+    [InlineData(490, 500, 30, 500, 10)]
+    [InlineData(50, 0, int.MaxValue, 50, 0)]
+    [InlineData(int.MaxValue, int.MaxValue - 10, int.MaxValue, int.MaxValue, 0)]
+    [InlineData(int.MaxValue - 3, int.MaxValue, int.MaxValue, int.MaxValue, 3)]
+    [InlineData(0, int.MaxValue, int.MaxValue, int.MaxValue, int.MaxValue)]
+    public void TerminalQuestGoldPreservesSavedHoldingsAndAdvertisesOnlyAcknowledgedHeadroom(
+        int before, int pouch, int requested, int balance, int acquired) {
+        using var f = new TerminalClaimFixture(); ConfigureNativeGoldPreparation(f);
+        f.Saved.GameStats.m_currentGold = before; f.Saved.GameStats.m_baseGoldPouch = pouch;
+        f.Reward.GoldAmount = requested;
+        var stats = f.Live.GameStats; var journal = f.Live.QuestBehavior; var published = 0;
+        f.OnSave = () => {
+            Assert.True(WizardCollection.HoldsWriteLane); Assert.Equal(901, stats.m_currentGold);
+            Assert.True(f.Expected.IsGoalActive(TerminalClaimFixture.GoalName)); Assert.Equal(0, published);
+            Assert.Equal(balance, f.Working!.Wizard.GameStats.m_currentGold);
+            Assert.Single(f.Working.Deleted); Assert.Single(f.Working.Receipts);
+            Assert.Equal(balance, Assert.Single(f.Prepared.OfType<WIZARD_12_PROTOCOL.MSG_UPDATEGOLD>()).Gold);
+        };
+        f.AfterCommit = claim => {
+            Assert.True(WizardCollection.HoldsWriteLane); Assert.Equal(1, f.Saves); published++;
+            Assert.Equal(acquired, claim.Receipt.Gold);
+            Assert.True(journal.HasCompletedQuest(TerminalClaimFixture.QuestName));
+        };
+        Assert.Equal(QuestClaimStatus.Committed, f.Claim(out var claim));
+        Assert.Equal(1, f.Saves); Assert.Equal(1, f.Rolls); Assert.Equal(1, published);
+        Assert.Equal(balance, f.Saved.GameStats.m_currentGold); Assert.Equal(pouch, f.Saved.GameStats.m_baseGoldPouch);
+        // A zero gain keeps the existing no-live-write behavior, while its packet reports the fresh wallet.
+        Assert.Equal(acquired == 0 ? 901 : balance, stats.m_currentGold);
+        Assert.Same(stats, f.Live.GameStats); Assert.Same(journal, f.Live.QuestBehavior);
+        Assert.Empty(f.Quests); Assert.Empty(f.Saved.QuestBehavior.CurrentQuestIDs);
+        Assert.True(f.Saved.QuestBehavior.HasCompletedQuest(TerminalClaimFixture.QuestName));
+        Assert.Equal(acquired, claim.Receipt.Gold); Assert.Equal(acquired, Assert.Single(f.Receipts).Value.Gold);
+        Assert.Equal(TerminalClaimFixture.GoalId, Assert.Single(claim.Receipt.CompletedGoalIds));
+        var update = Assert.Single(claim.GoalActions.Select(action => action.Message).OfType<WIZARD_12_PROTOCOL.MSG_UPDATEGOLD>());
+        Assert.Equal(balance, update.Gold); Assert.Equal(pouch, update.MaxGold); Assert.Empty(claim.EndActions);
+        Assert.Equal(acquired == 0 ? Array.Empty<int>() : new[] { acquired }, DecodeGoldPopups(claim.GoalActions));
+        Assert.False(WizardCollection.IsInventorySnapshotUncertain(f.Live));
+        Assert.Equal(QuestClaimStatus.AlreadyClaimed, f.Claim(out var replay)); Assert.Null(replay);
+        Assert.Equal(1, f.Saves); Assert.Equal(1, f.Rolls); Assert.Equal(1, published);
+    }
+
+    [Theory]
+    [InlineData(490, 500, 497, 500, 10, 7, 3)]
+    [InlineData(600, 500, 600, 600, 0, 0, 0)]
+    [InlineData(int.MaxValue - 10, int.MaxValue, int.MaxValue - 3, int.MaxValue, 10, 7, 3)]
+    public void TerminalQuestGoldAllocatesGoalAndEndSourcesAgainstOneFreshWalletInOrder(
+        int before, int pouch, int firstBalance, int finalBalance, int acquired, int firstGold, int secondGold) {
+        using var f = new TerminalClaimFixture(); ConfigureNativeGoldPreparation(f);
+        f.Saved.GameStats.m_currentGold = before; f.Saved.GameStats.m_baseGoldPouch = pouch;
+        f.Goal.m_completeResults.m_results.Add(new ResDropTable { m_tableName = "QA-SECOND-GOAL-REWARD" });
+        f.Template.m_endResults.m_results = [new ResDropTable { m_tableName = "QA-END-REWARD" }];
+        var rolled = new List<string>();
+        f.Dependencies.RollQuestReward = (table, _) => {
+            f.Rolls++; rolled.Add(table);
+            return new() { GoldAmount = table == "QA-GOAL-REWARD" ? 7 : table == "QA-SECOND-GOAL-REWARD" ? 11 : 13 };
+        };
+        var published = 0;
+        f.OnSave = () => {
+            Assert.Equal(0, published); Assert.Equal(901, f.Live.GameStats.m_currentGold);
+            Assert.True(f.Expected.IsGoalActive(TerminalClaimFixture.GoalName));
+            Assert.Equal(finalBalance, f.Working!.Wizard.GameStats.m_currentGold);
+        };
+        f.AfterCommit = claim => { Assert.Equal(1, f.Saves); Assert.True(WizardCollection.HoldsWriteLane); published++; };
+        Assert.Equal(QuestClaimStatus.Committed, f.Claim(out var claim));
+        Assert.Equal(new[] { "QA-GOAL-REWARD", "QA-SECOND-GOAL-REWARD", "QA-END-REWARD" }, rolled);
+        Assert.Equal(1, f.Saves); Assert.Equal(3, f.Rolls); Assert.Equal(1, published);
+        Assert.Equal(finalBalance, f.Saved.GameStats.m_currentGold); Assert.Equal(acquired, claim.Receipt.Gold);
+        Assert.Equal(acquired, Assert.Single(f.Receipts).Value.Gold); Assert.Empty(f.Quests);
+        Assert.True(f.Live.QuestBehavior.HasCompletedQuest(TerminalClaimFixture.QuestName));
+        Assert.Equal(new[] { firstBalance, finalBalance }, claim.GoalActions.Select(action => action.Message)
+            .OfType<WIZARD_12_PROTOCOL.MSG_UPDATEGOLD>().Select(update => update.Gold));
+        Assert.Equal(finalBalance, Assert.Single(claim.EndActions.Select(action => action.Message)
+            .OfType<WIZARD_12_PROTOCOL.MSG_UPDATEGOLD>()).Gold);
+        Assert.Equal(firstGold == 0 ? Array.Empty<int>() : new[] { firstGold, secondGold }, DecodeGoldPopups(claim.GoalActions));
+        Assert.Empty(DecodeGoldPopups(claim.EndActions));
+        Assert.Equal(acquired == 0 ? 901 : finalBalance, f.Live.GameStats.m_currentGold);
+        Assert.Equal(QuestClaimStatus.AlreadyClaimed, f.Claim(out _)); Assert.Equal(1, f.Saves); Assert.Equal(3, f.Rolls);
+    }
+
+    [Theory]
+    [InlineData("update-refused")] [InlineData("update-throws")]
+    [InlineData("loot-empty")] [InlineData("loot-throws")]
+    public void TerminalQuestGoldPreparationFailureCannotSaveOrPublishStagedHeadroom(string failure) {
+        using var f = new TerminalClaimFixture(); ConfigureNativeGoldPreparation(f);
+        f.Saved.GameStats.m_currentGold = 490; f.Reward.GoldAmount = 30; var published = 0;
+        var prepare = f.Dependencies.Prepare;
+        if (failure.StartsWith("update", StringComparison.Ordinal)) f.Dependencies.Prepare = message => {
+            if (message is WIZARD_12_PROTOCOL.MSG_UPDATEGOLD) {
+                if (failure == "update-throws") throw new InvalidOperationException("Authored gold preparation refusal");
+                return false;
+            }
+            return prepare(message);
+        };
+        if (failure == "loot-empty") f.Dependencies.SerializeLoot = (_, _) => new ByteString();
+        if (failure == "loot-throws") f.Dependencies.SerializeLoot = (_, _) => throw new InvalidOperationException("Authored gold loot preparation refusal");
+        f.AfterCommit = _ => published++;
+        Assert.Equal(QuestClaimStatus.Refused, f.Claim(out var claim)); Assert.Null(claim);
+        Assert.Equal(0, f.Saves); Assert.Equal(0, published); Assert.Empty(f.Receipts); Assert.Single(f.Quests);
+        Assert.Equal(490, f.Saved.GameStats.m_currentGold); Assert.Equal(901, f.Live.GameStats.m_currentGold);
+        Assert.True(f.Expected.IsGoalActive(TerminalClaimFixture.GoalName));
+        Assert.False(f.Live.QuestBehavior.HasCompletedQuest(TerminalClaimFixture.QuestName));
+        Assert.False(WizardCollection.IsInventorySnapshotUncertain(f.Live));
+    }
+
+    private static void ConfigureNativeGoldPreparation(TerminalClaimFixture fixture) {
+        fixture.Dependencies.SerializeLoot = (loot, flags) => {
+            fixture.Loot.Add((loot, flags));
+            Assert.True(new ObjectSerializer(Versionable: false).Serialize(loot, flags, out var data));
+            return data;
+        };
+        fixture.Dependencies.Prepare = message => {
+            fixture.Prepared.Add(message); return MessageEncoder.Encode(message).Length > 0;
+        };
+    }
+
+    private static int[] DecodeGoldPopups(IEnumerable<QuestClaimAction> actions)
+        => actions.Select(action => action.Message).OfType<WIZARD_12_PROTOCOL.MSG_LOOT>().Select(packet => {
+            Assert.True(new ObjectSerializer(Versionable: false).Deserialize<LootInfoList>((byte[])packet.LootList, 4, out var loot));
+            return Assert.IsType<GoldLootInfo>(loot.m_goldInfo).m_goldAmount;
+        }).ToArray();
+
     [Fact]
     public void TerminalAcknowledgementProtectsCapturedSideQuestOriginalsButDeletesTheTargetAndStoresTheReceipt() {
         using var f = new TerminalClaimFixture(); f.Reward.GoldAmount = 15;

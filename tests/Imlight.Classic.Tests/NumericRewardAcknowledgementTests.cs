@@ -123,6 +123,96 @@ public sealed class NumericRewardAcknowledgementTests {
     }
 
     [Theory]
+    [InlineData(1L, 1100)]
+    [InlineData(0L, 1100)]
+    [InlineData(-50L, 1050)]
+    [InlineData(-250L, 850)]
+    public void CappedGoldPreservesFreshOverfullHoldingsAndOnlyAppliesTheRequestedDebit(long delta, int expected) {
+        var f = new Fixture(); f.Saved.GameStats.m_currentGold = 1100; f.Saved.GameStats.m_baseGoldPouch = 1000;
+        var live = f.Live(); var stats = live.GameStats;
+        live.GameStats.m_currentGold = 13; live.GameStats.m_baseGoldPouch = 9999;
+        f.OnSave = () => {
+            Assert.True(WizardCollection.HoldsWriteLane); Assert.Equal(expected, f.Working!.Wizard.GameStats.m_currentGold);
+            Assert.Equal(13, live.GameStats.m_currentGold); Assert.Same(stats, live.GameStats);
+        };
+        Assert.True(WizardCollection.ChangeGold(live, delta, true, f.Open, f.Load));
+        Assert.Equal(expected, f.Saved.GameStats.m_currentGold); Assert.Equal(expected, live.GameStats.m_currentGold);
+        Assert.Equal(1000, f.Saved.GameStats.m_baseGoldPouch); Assert.Equal(9999, live.GameStats.m_baseGoldPouch);
+        Assert.Equal(33, f.Saved.GameStats.m_currentMana); Assert.Equal(33, live.GameStats.m_currentMana);
+        Assert.Equal(5, f.Saved.MagicSchoolBehavior.TrainingPoints); Assert.Equal(5, live.MagicSchoolBehavior.TrainingPoints);
+        Assert.Same(stats, live.GameStats); Assert.Equal(1, f.Opened); Assert.Equal(1, f.SaveAttempts);
+        Assert.False(WizardCollection.IsInventorySnapshotUncertain(live));
+    }
+
+    [Theory]
+    [InlineData(990, 1000, long.MaxValue, true, 1000)]
+    [InlineData(int.MaxValue - 1, int.MaxValue, long.MaxValue, true, int.MaxValue)]
+    [InlineData(int.MaxValue, int.MaxValue, 1L, true, int.MaxValue)]
+    [InlineData(int.MaxValue - 1, 0, 1L, false, int.MaxValue)]
+    [InlineData(int.MaxValue, 0, -(long)int.MaxValue, false, 0)]
+    [InlineData(100, -1, 20L, false, 120)]
+    [InlineData(100, -1, -20L, false, 80)]
+    public void GoldLongAndIntegerBoundariesUseFreshHeadroomAndUncappedMovementIgnoresThePouch(
+        int savedGold, int pouch, long delta, bool cap, int expected) {
+        var f = new Fixture(); f.Saved.GameStats.m_currentGold = savedGold; f.Saved.GameStats.m_baseGoldPouch = pouch;
+        var live = f.Live(); var stats = live.GameStats; live.GameStats.m_currentGold = 13;
+        f.OnSave = () => { Assert.Equal(13, live.GameStats.m_currentGold); Assert.Equal(expected, f.Working!.Wizard.GameStats.m_currentGold); };
+        Assert.True(WizardCollection.ChangeGold(live, delta, cap, f.Open, f.Load));
+        Assert.Equal(expected, f.Saved.GameStats.m_currentGold); Assert.Equal(expected, live.GameStats.m_currentGold);
+        Assert.Equal(pouch, f.Saved.GameStats.m_baseGoldPouch); Assert.Same(stats, live.GameStats);
+        Assert.Equal(33, live.GameStats.m_currentMana); Assert.Equal(5, live.MagicSchoolBehavior.TrainingPoints);
+        Assert.Equal(1, f.SaveAttempts); Assert.False(WizardCollection.IsInventorySnapshotUncertain(live));
+    }
+
+    [Theory]
+    [InlineData(-1, 100, 1L, true)]
+    [InlineData(-1, 100, 1L, false)]
+    [InlineData(100, -1, 1L, true)]
+    [InlineData(100, -1, -1L, true)]
+    [InlineData(int.MaxValue, int.MaxValue, 1L, false)]
+    [InlineData(1100, 1000, -1101L, true)]
+    [InlineData(100, 200, long.MaxValue, false)]
+    [InlineData(100, 200, long.MinValue, false)]
+    public void InvalidFreshGoldAuthorityOrUncoveredMovementRefusesWithoutSavingPublishingOrQuarantining(
+        int savedGold, int pouch, long delta, bool cap) {
+        var f = new Fixture(); f.Saved.GameStats.m_currentGold = savedGold; f.Saved.GameStats.m_baseGoldPouch = pouch;
+        var live = f.Live(); var stats = live.GameStats; live.GameStats.m_currentGold = 13;
+        Assert.False(WizardCollection.ChangeGold(live, delta, cap, f.Open, f.Load));
+        Assert.Equal(savedGold, f.Saved.GameStats.m_currentGold); Assert.Equal(savedGold, f.Working!.Wizard.GameStats.m_currentGold);
+        Assert.Equal(13, live.GameStats.m_currentGold); Assert.Equal(pouch, f.Saved.GameStats.m_baseGoldPouch);
+        Assert.Equal(33, live.GameStats.m_currentMana); Assert.Equal(5, live.MagicSchoolBehavior.TrainingPoints);
+        Assert.Same(stats, live.GameStats); Assert.Equal(1, f.Opened); Assert.Equal(0, f.SaveAttempts);
+        Assert.False(WizardCollection.IsInventorySnapshotUncertain(live));
+    }
+
+    [Theory]
+    [InlineData(1L, 1100, false)]
+    [InlineData(1L, 1100, true)]
+    [InlineData(0L, 1100, false)]
+    [InlineData(0L, 1100, true)]
+    [InlineData(-50L, 1050, false)]
+    [InlineData(-50L, 1050, true)]
+    public void CappedOverfullGoldFailedOrLostAcknowledgementKeepsLiveAuthorityAndQuarantinesBeforeLaneRelease(
+        long delta, int expected, bool durable) {
+        var f = new Fixture { FailSave = true, Durable = durable };
+        f.Saved.GameStats.m_currentGold = 1100; f.Saved.GameStats.m_baseGoldPouch = 1000;
+        var live = f.Live(); var stats = live.GameStats; live.GameStats.m_currentGold = 13;
+        var quarantinedBeforeRelease = false;
+        f.OnSave = () => { Assert.Equal(13, live.GameStats.m_currentGold); Assert.True(WizardCollection.HoldsWriteLane); };
+        f.OnDispose = () => {
+            Assert.True(WizardCollection.HoldsWriteLane); Assert.True(WizardCollection.IsInventorySnapshotUncertain(live));
+            quarantinedBeforeRelease = true;
+        };
+        Assert.Throws<InvalidOperationException>(() => WizardCollection.ChangeGold(live, delta, true, f.Open, f.Load));
+        Assert.Equal(durable ? expected : 1100, f.Saved.GameStats.m_currentGold);
+        Assert.Equal(13, live.GameStats.m_currentGold); Assert.Same(stats, live.GameStats);
+        Assert.Equal(33, live.GameStats.m_currentMana); Assert.Equal(5, live.MagicSchoolBehavior.TrainingPoints);
+        Assert.True(quarantinedBeforeRelease); Assert.False(WizardCollection.HoldsWriteLane);
+        Assert.False(WizardCollection.ChangeGold(live, 1, true, f.Open, f.Load));
+        Assert.Equal(1, f.Opened); Assert.Equal(1, f.SaveAttempts);
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public void UncertaintyRaisedDuringTheFreshLoadRefusesInsideTheLaneWithoutChangingTrackedBalances(bool training) {

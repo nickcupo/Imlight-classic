@@ -280,7 +280,7 @@ internal static class HouseCollection {
                 portfolio.DeedIds = portfolio.DeedIds.Where(id => id != deedId).ToList();
                 record.Sold = true; record.SoldAt = DateTime.UtcNow; // Keep deed/item/room documents as inaccessible archives.
                 wizard.InventoryBehavior.InventoryItemIds = wizard.InventoryBehavior.InventoryItemIds.Where(id => id != deedId).ToList();
-                var balance = Math.Min((long)wizard.GameStats.m_baseGoldPouch, (long)wizard.GameStats.m_currentGold + serverCalculatedGold);
+                var balance = (long)wizard.GameStats.m_currentGold + WizardCollection.CappedGoldDelta(wizard.GameStats, serverCalculatedGold); // keeps an over-full wallet
                 if (balance < 0 || balance > int.MaxValue) return false;
                 wizard.GameStats.m_currentGold = (int)balance;
                 result = new(null, record.Copy(), null, [], serverCalculatedGold);
