@@ -31,14 +31,15 @@ internal static class ClassicPetProgressTransactions {
     internal static readonly AsyncLocal<PetProgressDependencies> TestScope = new();
 
     internal static bool TryInitialize(Wizard live, ulong petId, out WizClientObjectItem pet, out int energy)
-        => TryInitialize(live, petId, false, out pet, out energy);
+        => TryInitialize(live, petId, false, null, out pet, out energy);
 
     // CLASSIC: game admission requires the selected pet to remain in the exact fresh Pet slot.
     // The generic owned-pet initializer above still accepts backpack pets.
-    internal static bool TryInitializeForGame(Wizard live, ulong petId, out WizClientObjectItem pet, out int energy)
-        => TryInitialize(live, petId, true, out pet, out energy);
+    internal static bool TryInitializeForGame(Wizard live, ulong petId, out WizClientObjectItem pet, out int energy,
+        Func<bool> contextStillValid = null)
+        => TryInitialize(live, petId, true, contextStillValid, out pet, out energy);
 
-    private static bool TryInitialize(Wizard live, ulong petId, bool requireEquipped,
+    private static bool TryInitialize(Wizard live, ulong petId, bool requireEquipped, Func<bool> contextStillValid,
         out WizClientObjectItem pet, out int energy) {
         pet = null; energy = 0;
         if (!Usable(live)) return false;
@@ -47,13 +48,18 @@ internal static class ClassicPetProgressTransactions {
         var unchanged = false;
         var committed = WizardCollection.CommitCharacterMutation(live.CharId, (session, saved) => {
             if (!Usable(live) || saved.PetOwnerBehavior is null
+                || contextStillValid?.Invoke() == false
                 || (requireEquipped && (!HasExactEquippedPet(saved, petId) || !HasExactEquippedPet(live, petId)))
                 || !WizardInventoryTransactions.TryReadOwnedItem(session, saved, petId, out snapshot)
                 || !OwnedPetCanPublish(live, saved, snapshot)) return false;
             availableEnergy = saved.PetOwnerBehavior.Energy;
-            if (!PetProgress.EnsureInitialized(snapshot)) { unchanged = true; return false; }
+            if (contextStillValid?.Invoke() == false) return false;
+            if (!PetProgress.EnsureInitialized(snapshot)) {
+                unchanged = contextStillValid?.Invoke() != false;
+                return false;
+            }
             WizardInventoryTransactions.ProtectUnmodifiedRows(session, snapshot);
-            return true;
+            return contextStillValid?.Invoke() != false;
         }, saved => published = WizardInventoryTransactions.PublishCommittedOwnedItem(live, saved, snapshot),
             onSaveFailure: _ => WizardCollection.MarkInventorySnapshotUncertain(live));
         if (!committed && !unchanged) return false;

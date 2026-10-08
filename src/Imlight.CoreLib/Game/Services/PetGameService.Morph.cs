@@ -592,6 +592,8 @@ internal sealed partial class PetGameService {
 
     private void RetireGamesForClose() {
         _closing = true;
+        _pendingJoin = null;
+        Stash?.ClearStash(); // CLASSIC: close bypasses publication staging and discards work that could reopen it.
         RetireTraining();
         LeaveMorph();
     }

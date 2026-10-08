@@ -51,6 +51,7 @@ using System.Linq;
 using Akka.Actor;
 using Imcodec.IO;
 using Imcodec.MessageLayer.Generated;
+using Imcodec.MessageLayer;
 using Imcodec.ObjectProperty;
 using Imcodec.ObjectProperty.TypeCache;
 using Imcodec.CoreObject;
@@ -67,7 +68,7 @@ using Imlight.CoreLib.WizardData.Models.Player;
 
 namespace Imlight.CoreLib.Game.Services;
 
-internal sealed partial class PetGameService(SessionActor sessionActor) : MessageService(sessionActor) {
+internal sealed partial class PetGameService(SessionActor sessionActor) : MessageService(sessionActor), IWithUnboundedStash {
 
     private const byte CommandDebugWin = 1;
     private const byte CommandDebugLose = 2;
@@ -91,6 +92,24 @@ internal sealed partial class PetGameService(SessionActor sessionActor) : Messag
 
     private Session _session;
     private bool _closing; // CLASSIC: queued joins cannot recreate a game after graceful shutdown begins.
+    private sealed record PendingJoin(object Token, Session Candidate, PetGameAttachContext Context);
+    private PendingJoin _pendingJoin;
+    public IStash Stash { get; set; }
+
+    protected override void ConfigureReceivers() {
+        Receive<object>(ShouldStashForPublication, _ => Stash.Stash());
+        base.ConfigureReceivers();
+    }
+
+    // CLASSIC: preserve queued training/Morph work while the parent completes one local publication.
+    // Identity and lifecycle messages must still run, so closing cannot wait on the publication result.
+    internal bool ShouldStashForPublication(object message)
+        => _pendingJoin is not null && message is not PetGamePublicationResult
+            and not SERVICE_101_PROTOCOL.MSG_QUERYMESSAGESERVICEIDENTITY
+            and not SERVICE_101_PROTOCOL.MSG_PREDISPOSE and not SERVICE_101_PROTOCOL.MSG_DISPOSE
+            and not Exception and not Status.Failure and not Terminated;
+
+    private new void SendToSocket(IMessage message) => SessionActor.ActorRef.Tell(message, Self);
 
     protected static Props Props(SessionActor parentActor)
         => Akka.Actor.Props.Create(() => new PetGameService(parentActor));
@@ -122,12 +141,24 @@ internal sealed partial class PetGameService(SessionActor sessionActor) : Messag
             return;
         }
 
+        PetGameAttachContext attach = null;
+        PreparedPetGameObject gameObject = null;
+        if (game == PetGameObjectCodec.Dance
+            && (!SessionActor.TryCapturePetGameAttach(wizard, out attach)
+                || !PetGameObjectCodec.TryPrepareDance(attach.World, out gameObject)
+                || !SessionActor.MatchesPetGameAttach(attach))) {
+            Logger.Warning("Pet game {0}: refused, completed attachment or native Dance object could not be prepared.", Logger.Args(game));
+            SendToSocket(new PET_9_PROTOCOL.MSG_PETGAMEJOINRSP { Game = game, Success = 0 });
+            return;
+        }
+
         var selectedPet = EquippedPet(wizard);
         WizClientObjectItem pet;
         int energy;
         // CLASSIC: initialize the fresh owned pet, and publish only an acknowledged change.
         try {
-            if (!ClassicPetProgressTransactions.TryInitializeForGame(wizard, selectedPet?.m_globalID.Full ?? 0, out pet, out energy)) {
+            if (!ClassicPetProgressTransactions.TryInitializeForGame(wizard, selectedPet?.m_globalID.Full ?? 0, out pet, out energy,
+                attach is null ? null : () => SessionActor.MatchesPetGameAttach(attach))) {
                 if (WizardCollection.IsInventorySnapshotUncertain(wizard)) { CloseSession(); return; }
                 InformGameClient("Equip a pet to play the pet games.");
                 SendToSocket(new PET_9_PROTOCOL.MSG_PETGAMEJOINRSP { Game = game, Success = 0 });
@@ -158,10 +189,7 @@ internal sealed partial class PetGameService(SessionActor sessionActor) : Messag
             return;
         }
 
-        // CLASSIC: refusal above preserves the current game; retire it only after fresh admission succeeds.
-        LeaveMorph();
-        RetireTraining();
-        _session = new Session {
+        var candidate = new Session {
             Game = game,
             Track = track,
             PetId = pet.m_globalID,
@@ -169,8 +197,40 @@ internal sealed partial class PetGameService(SessionActor sessionActor) : Messag
         };
         Logger.Information("Pet game {0} track {1}: {2} joins with pet {3} (level {4}, energy {5}).",
             Logger.Args(game, track, wizard.CharId, pet.m_globalID.Full, b.m_level, energy));
+        var init = new PET_9_PROTOCOL.MSG_PETGAMEINIT { Game = game, Data = initData, MinLevel = 0, Track = (byte) track };
+        if (attach is not null) {
+            var token = new object();
+            _pendingJoin = new(token, candidate, attach);
+            SessionActor.ActorRef.Tell(new PetGamePublication(token, attach, gameObject, init), Self);
+            return;
+        }
+        // CLASSIC: other games retain their existing admission; Dance commits after the guarded parent result.
+        LeaveMorph();
+        RetireTraining();
+        _session = candidate;
         SendToSocket(new PET_9_PROTOCOL.MSG_PETGAMEJOINRSP { Game = game, Success = 1 });
-        SendToSocket(new PET_9_PROTOCOL.MSG_PETGAMEINIT { Game = game, Data = initData, MinLevel = 0, Track = (byte) track });
+        SendToSocket(init);
+    }
+
+    [MessageHandler(typeof(PetGamePublicationResult))]
+    private void ReceivePublicationResult(PetGamePublicationResult message) {
+        if (Sender != SessionActor.ActorRef || _pendingJoin is not { } pending
+            || !ReferenceEquals(pending.Token, message.Token)) return;
+        _pendingJoin = null;
+        if (_closing) { Stash.ClearStash(); return; }
+        if (message.Accepted) {
+            LeaveMorph();
+            RetireTraining();
+            _session = pending.Candidate;
+        }
+        else if (!message.ContextValid) {
+            // A changed/disposed scene also invalidates the old binding; normal shutdown retires it.
+            RetireGamesForClose();
+            CloseSession();
+            return;
+        }
+        else SendToSocket(new PET_9_PROTOCOL.MSG_PETGAMEJOINRSP { Game = pending.Candidate.Game, Success = 0 });
+        Stash.UnstashAll();
     }
 
     [MessageHandler(typeof(PET_9_PROTOCOL.MSG_PETGAMEREADY))]

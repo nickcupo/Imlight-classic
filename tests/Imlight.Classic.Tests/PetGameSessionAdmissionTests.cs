@@ -4,6 +4,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
+using System.Buffers.Binary;
 using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
 using Akka.Actor;
@@ -11,7 +12,9 @@ using Imcodec.IO;
 using Imcodec.MessageLayer;
 using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty.TypeCache;
+using Imcodec.ObjectProperty;
 using Imlight.Classic.Pets;
+using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.Game.Pet;
 using Imlight.CoreLib.Game.Services;
 using Imlight.CoreLib.Shared.Networking;
@@ -200,13 +203,245 @@ public sealed class PetGameSessionAdmissionTests {
         if (needsInitialization) PetProgress.Behavior(Assert.Single(f.Store.Items)).m_requiredXP = 0;
         f.Store.OnSave = () => { Assert.Empty(f.Packets); Assert.Equal(125u, PetProgress.Behavior(alias).m_requiredXP); };
         await f.Join(Dance); var state = await f.State(); Assert.NotNull(state.Session); Assert.False(state.Started);
-        var packets = await f.Drain(); Assert.Equal(2, packets.Length);
+        var packets = await f.Drain(); Assert.Equal(3, packets.Length);
         Assert.Equal(1, Assert.IsType<PET_9_PROTOCOL.MSG_PETGAMEJOINRSP>(packets[0]).Success);
-        Assert.IsType<PET_9_PROTOCOL.MSG_PETGAMEINIT>(packets[1]);
+        Assert.IsType<GAME_5_PROTOCOL.MSG_NEWOBJECT>(packets[1]);
+        Assert.IsType<PET_9_PROTOCOL.MSG_PETGAMEINIT>(packets[2]);
         Assert.Equal(needsInitialization ? 1 : 0, f.Store.Saves);
         Assert.Same(alias, Assert.Single(f.Store.Live.EquipmentBehavior.EquippedItems));
         Assert.Equal(125u, PetProgress.Behavior(alias).m_requiredXP);
         Assert.Equal(125u, PetProgress.Behavior(Assert.Single(f.Store.Items)).m_requiredXP);
+    }
+
+    [Fact]
+    public async Task FirstDancePublishesRealNativeMappedLogicBeforeInitAndRepeatsReuseIt() {
+        using var f = await Fixture.Create(); await f.Join(Dance);
+        var first = await f.Drain(); Assert.Equal(3, first.Length);
+        Assert.Equal(1, Assert.IsType<PET_9_PROTOCOL.MSG_PETGAMEJOINRSP>(first[0]).Success);
+        var packet = Assert.IsType<GAME_5_PROTOCOL.MSG_NEWOBJECT>(first[1]);
+        var raw = (byte[])packet.Data;
+        // Independently inspect the native mapped class/template envelope, not only a symmetric codec read.
+        Assert.Equal((byte)115, raw[0]); Assert.Equal((byte)9, raw[1]);
+        Assert.Equal((uint)PetGameObjectCodec.DanceTemplate, BinaryPrimitives.ReadUInt32LittleEndian(raw.AsSpan(2, 4)));
+        var codec = ClassicCoreObjectSerializer.Create(false, SerializerFlags.None);
+        Assert.True(codec.Deserialize<WizClientObjectItem>(raw, 28, out var logic));
+        Assert.NotNull(logic); Assert.NotEqual(0UL, logic.m_globalID.Full);
+        Assert.NotEqual(f.Store.Live.GameObjectID, logic.m_globalID.Full);
+        var behavior = Assert.IsType<ClientPetGameBehavior>(Assert.Single(logic.m_inactiveBehaviors));
+        // BehaviorInstance's name-ID has native flags39 and is omitted by mask28. The inherited template
+        // pointer supplies gameName to220bfe0; preserve the native mapped item/template and class header.
+        Assert.Equal(0u, behavior.m_behaviorTemplateNameID);
+        Assert.Equal(1u, BinaryPrimitives.ReadUInt32LittleEndian(raw.AsSpan(6, 4)));
+        Assert.Equal((byte)0, raw[10]); Assert.Equal((byte)0, raw[11]);
+        Assert.Equal(1483251235u, BinaryPrimitives.ReadUInt32LittleEndian(raw.AsSpan(12, 4)));
+        Assert.Equal(logic.m_globalID.Full, BinaryPrimitives.ReadUInt64LittleEndian(raw.AsSpan(16, 8)));
+        var allocated = CoreObjectFactory.InitializeCoreObjectBehaviors(new WizClientObjectItem(), AuthoredDanceTemplate());
+        Assert.Equal(PetGameObjectCodec.BehaviorNameId, Assert.IsType<ClientPetGameBehavior>(Assert.Single(allocated.m_inactiveBehaviors)).m_behaviorTemplateNameID);
+        var decoded = Assert.IsType<GAME_5_PROTOCOL.MSG_NEWOBJECT>(Assert.Single(MessageEncoder.Decode(MessageEncoder.Encode(packet))!));
+        Assert.Equal(raw, (byte[])decoded.Data);
+        Assert.IsType<PET_9_PROTOCOL.MSG_PETGAMEINIT>(first[2]);
+        foreach (var next in new[] { Dance, "PetGameDrop", Dance, Morph, Dance }) {
+            await f.Join(next); var replay = await f.Drain();
+            Assert.DoesNotContain(replay, item => item is GAME_5_PROTOCOL.MSG_NEWOBJECT or GAME_5_PROTOCOL.MSG_REMOVEOBJECT);
+            Assert.Equal(1, Assert.Single(replay.OfType<PET_9_PROTOCOL.MSG_PETGAMEJOINRSP>()).Success);
+        }
+        await f.Send(new PET_9_PROTOCOL.MSG_PETGAMEENDING { Game = Dance }); await f.Drain();
+        await f.Join(Dance);
+        Assert.DoesNotContain(await f.Drain(), item => item is GAME_5_PROTOCOL.MSG_NEWOBJECT or GAME_5_PROTOCOL.MSG_REMOVEOBJECT);
+        Assert.Equal(0, f.Store.Saves);
+    }
+
+    [Theory]
+    [InlineData("class")] [InlineData("template")] [InlineData("name")]
+    [InlineData("game")] [InlineData("missing")] [InlineData("extra")]
+    public async Task InvalidNativeDanceTemplateRefusesBeforeFreshReadAndPreservesTheStartedGame(string invalid) {
+        using var f = await Fixture.Create(); await f.Join(Dance);
+        await f.Send(new PET_9_PROTOCOL.MSG_PETGAMEREADY()); var old = await f.State(); await f.Drain();
+        var template = AuthoredDanceTemplate(); var behavior = (PetGameBehaviorTemplate)template.m_behaviors[0];
+        switch (invalid) {
+            case "class": f.ReplaceDanceTemplate(new GameObjectTemplate { m_templateID = PetGameObjectCodec.DanceTemplate, m_behaviors = template.m_behaviors }); break;
+            case "template": template.m_templateID = PetGameObjectCodec.DanceTemplate + 1; f.ReplaceDanceTemplate(template); break;
+            case "name": behavior.m_behaviorName = "WrongBehavior"; f.ReplaceDanceTemplate(template); break;
+            case "game": behavior.m_gameName = "PetGameMaze"; f.ReplaceDanceTemplate(template); break;
+            case "missing": template.m_behaviors = []; f.ReplaceDanceTemplate(template); break;
+            case "extra": template.m_behaviors.Add(new RenderBehaviorTemplate { m_behaviorName = "RenderBehavior" }); f.ReplaceDanceTemplate(template); break;
+        }
+        PetProgress.Behavior(Assert.Single(f.Store.Items)).m_requiredXP = 0;
+        var opened = f.Store.Opened; await f.Join(Dance);
+        Assert.Equal(opened, f.Store.Opened); Assert.Equal(0, f.Store.Saves);
+        var packets = await f.Drain(); Assert.Equal(0, Assert.Single(packets.OfType<PET_9_PROTOCOL.MSG_PETGAMEJOINRSP>()).Success);
+        Assert.DoesNotContain(packets, p => p is GAME_5_PROTOCOL.MSG_NEWOBJECT or PET_9_PROTOCOL.MSG_PETGAMEINIT);
+        var after = await f.State(); Assert.Same(old.Session, after.Session); Assert.Same(old.Timer, after.Timer);
+        await f.Fire(old.Timer!); Assert.NotNull((await f.State()).Current);
+    }
+
+    [Theory]
+    [InlineData(false, false)] [InlineData(true, false)] [InlineData(false, true)] [InlineData(true, true)]
+    public async Task ContextReplacementDuringFreshOpenRefusesWithoutAnInitializationSave(bool initialize, bool replaceWizard) {
+        using var f = await Fixture.Create(); await f.Join(Dance);
+        await f.Send(new PET_9_PROTOCOL.MSG_PETGAMEREADY()); var old = await f.State(); await f.Drain();
+        if (initialize) PetProgress.Behavior(Assert.Single(f.Store.Items)).m_requiredXP = 0;
+        f.BeforeOpen = () => {
+            if (replaceWizard) ActiveWizardDirectory.SetWizard(f.Endpoint, f.Store.Reload());
+            else f.Instance.PublishDoorAttach(f.Attach with { Generation = f.Attach.Generation + 1 });
+        };
+        await f.Join(Dance); Assert.Equal(0, f.Store.Saves);
+        var packets = await f.Drain(); Assert.Equal(0, Assert.Single(packets.OfType<PET_9_PROTOCOL.MSG_PETGAMEJOINRSP>()).Success);
+        Assert.DoesNotContain(packets, p => p is GAME_5_PROTOCOL.MSG_NEWOBJECT or PET_9_PROTOCOL.MSG_PETGAMEINIT);
+        var after = await f.State(); Assert.Same(old.Session, after.Session); Assert.Same(old.Timer, after.Timer);
+        ActiveWizardDirectory.SetWizard(f.Endpoint, f.Store.Live); f.Instance.PublishDoorAttach(f.Attach);
+        await f.Fire(old.Timer!); Assert.NotNull((await f.State()).Current);
+    }
+
+    [Fact]
+    public async Task SameWizardCharacterMutationDuringFreshOpenCannotUseTheCapturedAttachment() {
+        using var f = await Fixture.Create(); var character = f.Store.Live.CharId;
+        f.LoadByDurableIdentity = true;
+        PetProgress.Behavior(Assert.Single(f.Store.Items)).m_requiredXP = 0;
+        f.BeforeOpen = () => f.Store.Live.CharId = character + 1;
+        await f.Join(Dance); Assert.Equal(0, f.Store.Saves);
+        var packets = await f.Drain(); Assert.Equal(0, Assert.Single(packets.OfType<PET_9_PROTOCOL.MSG_PETGAMEJOINRSP>()).Success);
+        Assert.DoesNotContain(packets, p => p is GAME_5_PROTOCOL.MSG_NEWOBJECT or PET_9_PROTOCOL.MSG_PETGAMEINIT);
+        Assert.Null((await f.State()).Session); f.Store.Live.CharId = character;
+    }
+
+    [Fact]
+    public async Task AcknowledgedInitializationAfterContextChangesIsKeptButNeverAdmitsNativeSetup() {
+        using var f = await Fixture.Create(); await f.Join(Dance);
+        await f.Send(new PET_9_PROTOCOL.MSG_PETGAMEREADY()); await f.Drain();
+        PetProgress.Behavior(Assert.Single(f.Store.Items)).m_requiredXP = 0;
+        f.Store.OnSave = () => f.Instance.PublishDoorAttach(f.Attach with { Generation = f.Attach.Generation + 1 });
+        await f.Join(Dance); Assert.Equal(1, f.Store.Saves);
+        Assert.Equal(125u, PetProgress.Behavior(Assert.Single(f.Store.Items)).m_requiredXP);
+        Assert.False(WizardCollection.IsInventorySnapshotUncertain(f.Store.Live));
+        Assert.DoesNotContain(await f.Drain(), p => p is GAME_5_PROTOCOL.MSG_NEWOBJECT or PET_9_PROTOCOL.MSG_PETGAMEINIT
+            || p is PET_9_PROTOCOL.MSG_PETGAMEJOINRSP { Success: 1 });
+        var closed = await f.State(); Assert.Null(closed.Session); Assert.Null(closed.Timer);
+        await f.ParentBarrier(); Assert.True(f.Instance.IsDisposed);
+    }
+
+    [Theory]
+    [InlineData(false)] [InlineData(true)]
+    public async Task DanceInitializationLostAcknowledgementQuarantinesAndClosesWithoutPublishingSetup(bool durable) {
+        using var f = await Fixture.Create();
+        var alias = Assert.Single(f.Store.Live.EquipmentBehavior.EquippedItems);
+        PetProgress.Behavior(Assert.Single(f.Store.Items)).m_requiredXP = 0;
+        f.Store.FailSave = true; f.Store.Durable = durable;
+        await Assert.ThrowsAsync<InvalidOperationException>(() => f.Join(Dance));
+        Assert.True(WizardCollection.IsInventorySnapshotUncertain(f.Store.Live)); Assert.Equal(1, f.Store.Saves);
+        Assert.Equal(durable ? 125u : 0u, PetProgress.Behavior(Assert.Single(f.Store.Items)).m_requiredXP);
+        Assert.Equal(125u, PetProgress.Behavior(alias).m_requiredXP);
+        await f.ParentBarrier(); Assert.True(f.Instance.IsDisposed);
+        var packets = await f.Drain();
+        Assert.DoesNotContain(packets, p => p is GAME_5_PROTOCOL.MSG_NEWOBJECT or PET_9_PROTOCOL.MSG_PETGAMEINIT
+            || p is PET_9_PROTOCOL.MSG_PETGAMEJOINRSP { Success: 1 });
+        var closed = await f.State(); Assert.Null(closed.Session); Assert.Null(closed.Timer);
+        await f.Join(Dance); Assert.Equal(1, f.Store.Saves); Assert.Empty(await f.Drain());
+    }
+
+    [Fact]
+    public async Task OldQueuedRoundAndNewReadyWaitForThePublicationResultWithoutSendingOldDataAfterInit() {
+        using var f = await Fixture.Create(); await f.Join(Dance);
+        await f.Send(new PET_9_PROTOCOL.MSG_PETGAMEREADY()); var old = await f.State(); await f.Drain();
+        f.HoldResult = true;
+        await f.BeginSend(new PET_9_PROTOCOL.MSG_PETGAMEJOIN { Game = Dance, Track = "0" });
+        await f.Drain(); await f.State(); Assert.Single(f.HeldResults);
+        var round = f.BeginSend(old.Timer!); var ready = f.BeginSend(new PET_9_PROTOCOL.MSG_PETGAMEREADY());
+        var pending = await f.State(); Assert.Same(old.Session, pending.Session); Assert.Same(old.Timer, pending.Timer);
+        Assert.Empty(await f.Drain()); Assert.False(round.IsCompleted); Assert.False(ready.IsCompleted);
+        await f.ReleaseResults(); Assert.True(await round); Assert.True(await ready);
+        var replaced = await f.State(); Assert.NotSame(old.Session, replaced.Session); Assert.True(replaced.Started);
+        Assert.Null(replaced.Current); Assert.NotSame(old.Timer, replaced.Timer);
+        var packets = await f.Drain(); Assert.Single(packets.OfType<PET_9_PROTOCOL.MSG_PETGAMESTART>());
+        Assert.DoesNotContain(packets, p => p is PET_9_PROTOCOL.MSG_PETGAMEDANCE);
+    }
+
+    [Fact]
+    public async Task CloseBypassesThePendingPublicationAndLateResultCannotReopenTraining() {
+        using var f = await Fixture.Create(); f.HoldResult = true;
+        await f.BeginSend(new PET_9_PROTOCOL.MSG_PETGAMEJOIN { Game = Dance, Track = "0" });
+        await f.Drain(); await f.State(); Assert.Single(f.HeldResults);
+        await f.PreDispose(); Assert.Null((await f.State()).Session);
+        await f.ReleaseResults(); await f.Send(new PET_9_PROTOCOL.MSG_PETGAMEREADY());
+        Assert.Empty(await f.Drain()); Assert.Null((await f.State()).Timer);
+    }
+
+    [Fact]
+    public async Task DuplicateTrustedCompletionReusesLogicAndANewCompletedGenerationPublishesAFreshObject() {
+        using var f = await Fixture.Create(); await f.Join(Dance);
+        var first = Assert.Single((await f.Drain()).OfType<GAME_5_PROTOCOL.MSG_NEWOBJECT>());
+        await f.CompleteAttach(f.Attach); await f.Join(Dance);
+        Assert.DoesNotContain(await f.Drain(), p => p is GAME_5_PROTOCOL.MSG_NEWOBJECT);
+        await f.CompleteAttach(f.Attach with { Generation = f.Attach.Generation + 1 }); await f.Join(Dance);
+        var next = await f.Drain(); Assert.Equal(3, next.Length);
+        Assert.IsType<PET_9_PROTOCOL.MSG_PETGAMEJOINRSP>(next[0]);
+        var created = Assert.IsType<GAME_5_PROTOCOL.MSG_NEWOBJECT>(next[1]);
+        Assert.IsType<PET_9_PROTOCOL.MSG_PETGAMEINIT>(next[2]);
+        Assert.NotEqual((byte[])first.Data, (byte[])created.Data);
+        Assert.DoesNotContain(next, p => p is GAME_5_PROTOCOL.MSG_REMOVEOBJECT);
+    }
+
+    [Fact]
+    public async Task UntrustedAndStaleAttachCompletionsCannotSeedSetupAndTrustedFanoutKeepsItsSender() {
+        using var f = await Fixture.Create(); await f.Join(Dance); await f.Drain();
+        var next = f.Attach with { Generation = f.Attach.Generation + 1 };
+        f.Instance.PublishDoorAttach(next);
+        f.Endpoint.Tell(new SERVICE_101_PROTOCOL.MSG_ATTACHCOMPLETE { AttachGeneration = next.Generation, ZoneActorRef = next.Actor }, f.Service);
+        await f.ParentBarrier(); Assert.False(f.Instance.TryCapturePetGameAttach(f.Store.Live, out _));
+        f.Endpoint.Tell(new SERVICE_101_PROTOCOL.MSG_ATTACHCOMPLETE { AttachGeneration = f.Attach.Generation, ZoneActorRef = f.Attach.Actor }, f.AttachSender);
+        await f.ParentBarrier(); Assert.False(f.Instance.TryCapturePetGameAttach(f.Store.Live, out _));
+        await f.Join(Dance); Assert.Equal(0, Assert.Single((await f.Drain()).OfType<PET_9_PROTOCOL.MSG_PETGAMEJOINRSP>()).Success);
+        await f.CompleteAttach(next);
+        Assert.True(f.Instance.TryCapturePetGameAttach(f.Store.Live, out var captured)); Assert.Equal(next.Generation, captured.Attach.Generation);
+        await f.FanoutBarrier(); Assert.Equal(f.AttachSender, f.AttachFanout.Last());
+        await f.Join(Dance); Assert.Single((await f.Drain()).OfType<GAME_5_PROTOCOL.MSG_NEWOBJECT>());
+    }
+
+    [Fact]
+    public async Task AnUnauthorizedSiblingCannotPublishOrPopulateTheOwnerDanceCache() {
+        using var f = await Fixture.Create();
+        f.Endpoint.Tell(f.PreparedPublication(), f.AttachSender);
+        await f.ParentBarrier(); Assert.Empty(await f.Drain()); Assert.Equal(0, f.Store.Opened);
+        await f.Join(Dance); var first = await f.Drain();
+        Assert.Single(first.OfType<GAME_5_PROTOCOL.MSG_NEWOBJECT>()); Assert.Equal(3, first.Length);
+    }
+
+    [Fact]
+    public async Task ForgedPublicationResultsCannotCommitOrReleaseThePendingStage() {
+        using var f = await Fixture.Create(); f.HoldResult = true;
+        await f.BeginSend(new PET_9_PROTOCOL.MSG_PETGAMEJOIN { Game = Dance, Track = "0" });
+        await f.Drain(); await f.State(); var genuine = Assert.Single(f.HeldResults);
+        f.HoldResult = false;
+        f.Service.Tell(genuine, f.AttachSender); // Correct token, unauthorized sibling sender.
+        f.Service.Tell(genuine with { Token = new object() }, f.Endpoint); // Correct parent, wrong operation.
+        var ready = f.BeginSend(new PET_9_PROTOCOL.MSG_PETGAMEREADY());
+        Assert.Null((await f.State()).Session); Assert.False(ready.IsCompleted); Assert.Empty(await f.Drain());
+        await f.ReleaseResults(); Assert.True(await ready); Assert.True((await f.State()).Started);
+    }
+
+    [Fact]
+    public async Task RealParentNativeIngressRoutesJoinReadyAndResultWithTheParentSender() {
+        using var f = await Fixture.Create();
+        await f.NativeSend(new PET_9_PROTOCOL.MSG_PETGAMEJOIN { Game = Dance, Track = "0" });
+        Assert.NotNull((await f.State()).Session);
+        await f.NativeSend(new PET_9_PROTOCOL.MSG_PETGAMEREADY()); Assert.True((await f.State()).Started);
+        Assert.Contains(f.Ingress, item => item.Type == typeof(PET_9_PROTOCOL.MSG_PETGAMEJOIN) && item.Sender == f.Endpoint);
+        Assert.Contains(f.Ingress, item => item.Type == typeof(PET_9_PROTOCOL.MSG_PETGAMEREADY) && item.Sender == f.Endpoint);
+        Assert.Contains(f.Ingress, item => item.Type == typeof(PetGamePublicationResult) && item.Sender == f.Endpoint);
+        var packets = await f.Drain(); Assert.Equal(4, packets.Length);
+        Assert.IsType<PET_9_PROTOCOL.MSG_PETGAMEJOINRSP>(packets[0]); Assert.IsType<GAME_5_PROTOCOL.MSG_NEWOBJECT>(packets[1]);
+        Assert.IsType<PET_9_PROTOCOL.MSG_PETGAMEINIT>(packets[2]); Assert.IsType<PET_9_PROTOCOL.MSG_PETGAMESTART>(packets[3]);
+        Assert.All(f.WireSenders, sender => Assert.Equal(f.Endpoint, sender));
+    }
+
+    [Fact]
+    public async Task RuntimeRestartOfTheRegisteredServiceReusesTheRetainedParentLogicObject() {
+        using var f = await Fixture.Create(); await f.Join(Dance); await f.Drain();
+        await f.RestartService(); Assert.Null((await f.State()).Session);
+        await f.Join(Dance); var replay = await f.Drain(); Assert.Equal(2, replay.Length);
+        Assert.Equal(1, Assert.IsType<PET_9_PROTOCOL.MSG_PETGAMEJOINRSP>(replay[0]).Success);
+        Assert.IsType<PET_9_PROTOCOL.MSG_PETGAMEINIT>(replay[1]);
+        Assert.DoesNotContain(replay, p => p is GAME_5_PROTOCOL.MSG_NEWOBJECT or GAME_5_PROTOCOL.MSG_REMOVEOBJECT);
     }
 
     [Theory]
@@ -455,23 +690,33 @@ public sealed class PetGameSessionAdmissionTests {
     private sealed record Ready;
     private sealed record Inspect;
     private sealed record Send(object Message);
+    private sealed record RestartPetActor;
     private sealed record State(object? Session, string? Game, bool Started, bool Ended, string? Current, int Round, int Successes,
         object? Timer, object? Lobby, int Side, ulong MorphPet);
 
     private sealed class Fixture : IDisposable {
         internal readonly TerminalClaimFixture Store = new();
         internal readonly ConcurrentQueue<IMessage> Packets = new();
+        internal readonly ConcurrentQueue<IActorRef> WireSenders = new(), AttachFanout = new();
+        internal readonly ConcurrentQueue<(Type Type, IActorRef Sender)> Ingress = new();
         internal List<ClientPetSnackItem> Snacks = [];
         internal System.Action? BeforeOpen;
+        internal bool LoadByDurableIdentity;
         private readonly Dictionary<IDocumentSession, List<ClientPetSnackItem>> _snackRows = [];
         private readonly ActorSystem _system;
+        internal IActorRef Service = null!, Endpoint = null!, AttachSender = null!;
+        internal SessionActor Instance = null!;
+        internal ZoneAttachContext Attach = null!;
+        internal bool HoldResult;
+        internal readonly ConcurrentQueue<PetGamePublicationResult> HeldResults = new();
         private IActorRef _service = null!, _endpoint = null!, _socket = null!;
+        private IActorRef _fanout = null!;
         private readonly FieldInfo _gamesField = typeof(PetGameConfigs).GetField("s_games", Static)!;
         private readonly object? _oldGames, _oldLazyValue, _oldLazyState;
         private readonly object _lazy;
         private readonly FieldInfo _lazyValue, _lazyState;
         private readonly IDictionary<ulong, CoreTemplate> _templates;
-        private readonly CoreTemplate? _oldPet, _oldSnack;
+        private readonly CoreTemplate? _oldPet, _oldSnack, _oldDance;
         private readonly FieldInfo _talents = typeof(PetProgress).GetField("s_talentNames", Static)!;
         private readonly object? _oldTalents;
         private readonly List<string> _fullKeys = [];
@@ -491,6 +736,8 @@ public sealed class PetGameSessionAdmissionTests {
             _templates = (IDictionary<ulong, CoreTemplate>)typeof(CoreObjectFactory).GetField("s_templateCache", Static)!.GetValue(null)!;
             _oldPet = _templates.TryGetValue(PetTemplate, out var pet) ? pet : null;
             _oldSnack = _templates.TryGetValue(SnackTemplate, out var snack) ? snack : null;
+            _oldDance = _templates.TryGetValue(PetGameObjectCodec.DanceTemplate, out var dance) ? dance : null;
+            _templates[PetGameObjectCodec.DanceTemplate] = AuthoredDanceTemplate();
             _oldTalents = _talents.GetValue(null); _talents.SetValue(null, new Dictionary<uint, string>());
             _templates[PetTemplate] = new WizItemTemplate { m_templateID = PetTemplate, m_adjectiveList = ["Pet"], m_school = "Fire",
                 m_behaviors = [new PetItemBehaviorTemplate { m_behaviorName = "PetItemBehavior", m_Levels = [],
@@ -506,6 +753,7 @@ public sealed class PetGameSessionAdmissionTests {
             Store.Live = Store.Reload(); Store.Live.EquipmentBehavior.EquippedItems = [..Store.Items.Select(TerminalClaimFixture.CloneItem)];
             Store.Live.PetSnackBehavior = new() { SnackItemIds = [], Snacks = [] };
             Store.Live.Account = new Account { AuthLevel = AuthLevel.QualityAssurance };
+            Store.Live.GameObject = new WizClientObject { m_templateID = 1, m_inactiveBehaviors = [] };
             _system = ActorSystem.Create("pet-admission-" + Guid.NewGuid().ToString("N"), "akka.actor.provider = local");
         }
         private static List<PetStat> Stats(int amount) => PetRules.StatNames.Select(name => new PetStat { m_name = name,
@@ -532,6 +780,14 @@ public sealed class PetGameSessionAdmissionTests {
             };
             return session;
         }
+        internal Wizard Load(IDocumentSession session, ulong id) {
+            if (!LoadByDurableIdentity) return Store.Load(session, id);
+            // This one race intentionally mutates the live alias after the row key was captured. Keep the
+            // original durable row-key assertion instead of asserting the now-mutated live alias.
+            Assert.True(WizardCollection.HoldsWriteLane); Assert.Equal(Store.Saved.CharId, id);
+            Store.OnLoad?.Invoke();
+            return Store.MissingWizard ? null! : ((TerminalClaimFixture.ClaimSession)(object)session).Wizard;
+        }
         internal void MoveEquippedPetToBackpack() {
             var pet = Assert.Single(Store.Live.EquipmentBehavior.EquippedItems); Assert.Equal(PetId, pet.m_globalID.Full);
             Store.Saved.EquipmentBehavior.EquippedItemIds = [..Store.Saved.EquipmentBehavior.EquippedItemIds.Where(id => id != PetId)];
@@ -544,18 +800,76 @@ public sealed class PetGameSessionAdmissionTests {
             Store.Live.InventoryBehavior.Items = [..Store.Live.InventoryBehavior.Items, pet];
         }
         internal List<ClientPetSnackItem> SnackRows(IDocumentSession session) => _snackRows[session];
+        internal void ReplaceDanceTemplate(CoreTemplate template) => _templates[PetGameObjectCodec.DanceTemplate] = template;
+        internal async Task CompleteAttach(ZoneAttachContext attach) {
+            Attach = attach; Instance.PublishDoorAttach(attach);
+            Endpoint.Tell(new SERVICE_101_PROTOCOL.MSG_ATTACHCOMPLETE { AttachGeneration = attach.Generation,
+                ZoneActorRef = attach.Actor }, AttachSender);
+            await Endpoint.Ask<SessionActor>("Identify", Timeout, TestContext.Current.CancellationToken);
+            await FanoutBarrier();
+        }
+        internal Task<ActorIdentity> FanoutBarrier() => _fanout.Ask<ActorIdentity>(new Identify("fanout"), Timeout, TestContext.Current.CancellationToken);
+        internal PetGamePublication PreparedPublication() {
+            Assert.True(Instance.TryCapturePetGameAttach(Store.Live, out var context));
+            Assert.True(PetGameObjectCodec.TryPrepareDance(context.World, out var gameObject));
+            Assert.True(PetGameConfigs.TryGet(Dance, out var info));
+            Assert.True(PetGameInitializationCodec.TryPrepare(info, out var data));
+            return new(new object(), context, gameObject, new() { Game = Dance, Data = data });
+        }
+        internal async Task NativeSend(IMessage packet) {
+            Endpoint.Tell(new SERVER_100_PROTOCOL.MSG_RECEIVEDPACKET { Packet = packet }, _socket);
+            await ParentBarrier(); await State(); await ParentBarrier(); await State();
+        }
+        internal async Task RestartService() {
+            var services = (ConcurrentDictionary<IActorRef, MessageService>)typeof(SessionActor).GetField("_services", Private)!.GetValue(Instance)!;
+            var before = services[_service];
+            _service.Tell(new RestartPetActor());
+            Assert.True(await _service.Ask<bool>(new Ready(), Timeout, TestContext.Current.CancellationToken));
+            Assert.NotSame(before, services[_service]);
+        }
         internal static async Task<Fixture> Create() {
             var f = new Fixture();
             try {
-                f._socket = f._system.ActorOf(Props.Create(() => new SocketProbe(f.Packets)), "socket");
+                f._socket = f._system.ActorOf(Props.Create(() => new SocketProbe(f.Packets, f.WireSenders)), "socket");
                 f._endpoint = f._system.ActorOf(Props.CreateBy(new SessionProducer(f._socket)), "session");
                 var session = await f._endpoint.Ask<SessionActor>("Identify", Timeout, TestContext.Current.CancellationToken);
+                f.Instance = session; f.Endpoint = f._endpoint;
+                ActiveWizardDirectory.SetWizard(f._endpoint, f.Store.Live);
+                ActiveWizardDirectory.SetGameObject(f._endpoint, f.Store.Live.GameObject);
+                f.AttachSender = f._system.ActorOf(Props.Create(() => new AttachProbeService(session)), "attach");
+                await f.AttachSender.Ask<ActorIdentity>(new Identify("ready"), Timeout, TestContext.Current.CancellationToken);
+                f.Attach = new(f.Store.Live.Zone, f._socket, 1, f.Store.Live.GameObjectID);
+                f._fanout = f._system.ActorOf(Props.Create(() => new AttachFanoutProbeService(session, f.AttachFanout)), "fanout");
+                await f._fanout.Ask<ActorIdentity>(new Identify("ready"), Timeout, TestContext.Current.CancellationToken);
+                var routes = (Dictionary<Type, List<IActorRef>>)typeof(SessionActor).GetField("_dispatchTable", Private)!.GetValue(session)!;
+                routes[typeof(SERVICE_101_PROTOCOL.MSG_ATTACHCOMPLETE)] = [f._fanout];
+                session.PublishDoorAttach(f.Attach);
+                f._endpoint.Tell(new SERVICE_101_PROTOCOL.MSG_ATTACHCOMPLETE {
+                    AttachGeneration = f.Attach.Generation, ZoneActorRef = f.Attach.Actor }, f.AttachSender);
+                await f._endpoint.Ask<SessionActor>("Identify", Timeout, TestContext.Current.CancellationToken);
                 f._service = f._system.ActorOf(Props.CreateBy(new PetProducer(session, f)), "pet");
+                f.Service = f._service;
                 Assert.True(await f._service.Ask<bool>(new Ready(), Timeout, TestContext.Current.CancellationToken));
+                // Keep the real parent's routing and graceful close recipients in this scoped actor fixture.
+                var order = (List<(IActorRef Ref, Type Type)>)typeof(SessionActor).GetField("_serviceOrder", Private)!.GetValue(session)!;
+                order.Add((f._service, typeof(PetGameService)));
+                foreach (var type in MessageHandlerTable.HandlersOf(typeof(PetGameService)).Keys) routes[type] = [f._service];
+                f._endpoint.Tell(new SERVICE_101_PROTOCOL.MSG_GETALLSERVICES());
                 return f;
             } catch { f.Dispose(); throw; }
         }
-        internal Task<bool> Send(object message) => _service.Ask<bool>(new Send(message), Timeout, TestContext.Current.CancellationToken);
+        internal Task<bool> BeginSend(object message) => _service.Ask<bool>(new Send(message), Timeout, TestContext.Current.CancellationToken);
+        internal async Task<bool> Send(object message) {
+            var result = await BeginSend(message);
+            await ParentBarrier();
+            await State(); // A guarded parent result already enqueued before the parent barrier is processed first.
+            return result;
+        }
+        internal async Task ReleaseResults() {
+            HoldResult = false;
+            while (HeldResults.TryDequeue(out var result)) _service.Tell(result, _endpoint);
+            await State();
+        }
         internal Task<bool> Fire(object message) => Send(message);
         internal Task<SERVICE_101_PROTOCOL.MSG_PREDISPOSE> PreDispose()
             => _service.Ask<SERVICE_101_PROTOCOL.MSG_PREDISPOSE>(new Send(new SERVICE_101_PROTOCOL.MSG_PREDISPOSE()),
@@ -565,8 +879,13 @@ public sealed class PetGameSessionAdmissionTests {
             return Send(new PET_9_PROTOCOL.MSG_PETGAMEJOIN { Game = game, Track = "0" });
         }
         internal Task<State> State() => _service.Ask<State>(new Inspect(), Timeout, TestContext.Current.CancellationToken);
+        internal async Task ParentBarrier() {
+            if (Instance.IsDisposed) return;
+            try { await _endpoint.Ask<SessionActor>("Identify", Timeout, TestContext.Current.CancellationToken); }
+            catch (AskTimeoutException) when (Instance.IsDisposed) { } // Closing may win the queued identity request.
+        }
         internal async Task<IMessage[]> Drain() {
-            await _endpoint.Ask<SessionActor>("Identify", Timeout, TestContext.Current.CancellationToken);
+            await ParentBarrier();
             await _socket.Ask<ActorIdentity>(new Identify("drain"), Timeout, TestContext.Current.CancellationToken);
             var result = new List<IMessage>(); while (Packets.TryDequeue(out var packet)) result.Add(packet); return result.ToArray();
         }
@@ -591,6 +910,7 @@ public sealed class PetGameSessionAdmissionTests {
         }
         public void Dispose() {
             _system.Terminate().GetAwaiter().GetResult(); _system.Dispose();
+            ActiveWizardDirectory.Remove(_endpoint);
             // Keep static lobby fixtures bounded to authored keys; no live database or game client is initialized.
             var lobbies = typeof(PetGameService).GetField("s_lobbies", Static)!.GetValue(null)!;
             var remove = lobbies.GetType().GetMethods().Single(m => m.Name == "TryRemove" && m.GetParameters().Length == 2);
@@ -598,13 +918,27 @@ public sealed class PetGameSessionAdmissionTests {
             _gamesField.SetValue(null, _oldGames); _lazyValue.SetValue(_lazy, _oldLazyValue); _lazyState.SetValue(_lazy, _oldLazyState);
             if (_oldPet is null) _templates.Remove(PetTemplate); else _templates[PetTemplate] = _oldPet;
             if (_oldSnack is null) _templates.Remove(SnackTemplate); else _templates[SnackTemplate] = _oldSnack;
+            if (_oldDance is null) _templates.Remove(PetGameObjectCodec.DanceTemplate); else _templates[PetGameObjectCodec.DanceTemplate] = _oldDance;
             _talents.SetValue(null, _oldTalents); Store.Dispose();
         }
     }
 
     private sealed class SocketProbe : ReceiveActor {
-        public SocketProbe(ConcurrentQueue<IMessage> packets) => Receive<IMessage>(packets.Enqueue);
+        public SocketProbe(ConcurrentQueue<IMessage> packets, ConcurrentQueue<IActorRef> senders)
+            => Receive<IMessage>(packet => { senders.Enqueue(Sender); packets.Enqueue(packet); });
     }
+    private sealed class AttachFanoutProbeService(SessionActor parent, ConcurrentQueue<IActorRef> seen) : MessageService(parent) {
+        [MessageHandler(typeof(SERVICE_101_PROTOCOL.MSG_ATTACHCOMPLETE))]
+        private void Completed(SERVICE_101_PROTOCOL.MSG_ATTACHCOMPLETE message) => seen.Enqueue(Sender);
+    }
+    // A real registered AttachService identity without starting a login/timeout or touching a live database.
+    private sealed class AttachProbeService(SessionActor parent) : AttachService(parent) {
+        protected override void PreStart() { }
+    }
+
+    private static WizItemTemplate AuthoredDanceTemplate() => new() { m_templateID = PetGameObjectCodec.DanceTemplate,
+        m_displayName = "", m_behaviors = [new PetGameBehaviorTemplate {
+            m_behaviorName = "PetGameBehavior", m_gameName = Dance }] };
     private sealed class SessionProducer(IActorRef socket) : IIndirectActorProducer {
         public Type ActorType => typeof(SessionActor);
         public ActorBase Produce() => new SessionActor(socket);
@@ -629,6 +963,8 @@ public sealed class PetGameSessionAdmissionTests {
             SerializePet = _ => new ByteString(new byte[] { 2 }), MaxEnergy = _ => 50 };
         private PetAdmissionTimers _timers = null!;
         internal bool Dispatch(object message) {
+            // A real runtime restart recreates the sealed service using the original producer and actor ref.
+            if (message is RestartPetActor) throw new ServiceRetryException("Authored pet service retry");
             var sender = (IActorRef)typeof(ActorBase).GetProperty("Sender", Private | BindingFlags.Public)!.GetValue(service)!;
             try {
                 if (message is Ready) {
@@ -636,12 +972,18 @@ public sealed class PetGameSessionAdmissionTests {
                     _timers = (PetAdmissionTimers)(object)service.Timers; sender.Tell(true); return true;
                 }
                 if (message is Inspect) { sender.Tell(Snapshot()); return true; }
-                if (message is not Send send) return true;
+                var actual = message is Send send ? send.Message : message;
+                fixture.Ingress.Enqueue((actual.GetType(), sender));
+                if (actual is PetGamePublicationResult result && fixture.HoldResult) {
+                    fixture.HeldResults.Enqueue(result); return true;
+                }
+                // The actual service guard is also executed by this fixture's scoped mailbox adapter.
+                if (service.ShouldStashForPublication(actual)) { service.Stash.Stash(); return true; }
                 using var scope = EnterScope();
-                var dispatch = MessageHandlerTable.DispatcherFor(typeof(PetGameService), send.Message.GetType());
-                Assert.NotNull(dispatch); dispatch(service, send.Message);
+                var dispatch = MessageHandlerTable.DispatcherFor(typeof(PetGameService), actual.GetType());
+                Assert.NotNull(dispatch); dispatch(service, actual);
                 // The actual graceful-close handler replies itself, after retiring its session state.
-                if (send.Message is not SERVICE_101_PROTOCOL.MSG_PREDISPOSE) sender.Tell(true);
+                if (message is Send && actual is not SERVICE_101_PROTOCOL.MSG_PREDISPOSE) sender.Tell(true);
             } catch (Exception error) { sender.Tell(new Status.Failure(error)); }
             return true;
         }
@@ -664,7 +1006,7 @@ public sealed class PetGameSessionAdmissionTests {
             var oldReagents = WizardReagentCollection.TestRowsScope.Value; var oldPet = ClassicPetProgressTransactions.TestScope.Value;
             var oldSnacks = WizardPetSnackTransactions.TestRowsScope.Value;
             fixture.Store.Install(); ClassicPetProgressTransactions.TestScope.Value = _dependencies;
-            WizardCollection.TestStoreScope.Value = new(fixture.Open, fixture.Store.Load);
+            WizardCollection.TestStoreScope.Value = new(fixture.Open, fixture.Load);
             WizardPetSnackTransactions.TestRowsScope.Value = fixture.SnackRows;
             return new Restore(() => {
                 WizardCollection.TestStoreScope.Value = oldStore; Imlight.CoreLib.Classic.ClassicQuestClaims.TestScope.Value = oldClaim;
