@@ -116,7 +116,9 @@ public sealed partial class PetGameSessionAdmissionTests {
         f.Store.Live.PreviousZone = "WizardCity/WC_Streets/Interiors/WC_PET_Park";
         f.Store.Live.Zone = PetGameScenes.ZoneFor(Maze, 0);
         await f.CompleteAttach(f.Attach with { Zone = f.Store.Live.Zone, Generation = f.Attach.Generation + 1 });
-        await f.State(); await f.FanoutBarrier();
+        await f.State();
+        await f.ParentBarrier(); // The service's transfer passes through the session before its fanout.
+        await f.FanoutBarrier();
         Assert.True(f.Transfers.TryDequeue(out var back));
         Assert.Equal("WizardCity/WC_Streets/Interiors/WC_PET_Park", back.DestinationZone);
         Assert.Equal("Start", back.DestinationLocation);
@@ -203,6 +205,84 @@ public sealed partial class PetGameSessionAdmissionTests {
         var wind = Body((PET_9_PROTOCOL.MSG_PETGAMEDATA) opening[2]);
         var bound = BitConverter.ToSingle(wind, 9);
         Assert.Equal(Vector2.Distance(new(CannonHome.X, CannonHome.Y), new(reported.X, reported.Y)) + PetMinigameRules.CannonDistanceMargin, bound, 1f);
+    }
+
+    // CLASSIC: the movement handler must wait for the existing summoned-world-pet binding.
+    [Theory]
+    [InlineData(Maze, false)] [InlineData(Maze, true)]
+    [InlineData(Drop, false)] [InlineData(Drop, true)]
+    public async Task PhantomMovementWaitsForTheSummonedPetAndRejectsOtherGlobalIds(string game, bool timed) {
+        using var f = await Fixture.Create();
+        await Arrive(f, game);
+        await f.Send(new PET_9_PROTOCOL.MSG_PETGAMEREADY()); await f.Drain();
+        var session = (await f.State()).Session!;
+        var phantom = session.GetType().GetField("Phantom")!.GetValue(session)!;
+        object? Value(string field) => phantom.GetType().GetField(field)!.GetValue(phantom);
+        var maze = Value("Maze") as MazeGame;
+        var drop = Value("Drop") as DropGame;
+        var pickup = maze?.Pickups.First(p => p.Kind == MazePickupKind.Snack);
+        var at = pickup?.Position ?? DropSpot;
+        var pickups = maze?.Pickups.ToArray();
+        var pieces = Assert.IsType<Dictionary<int, ulong>>(Value("Pieces"));
+        var pieceCount = pieces.Count;
+        Assert.Null(Value("Pet"));
+
+        IMessage Movement(Vector3 position, ulong gid) => timed
+            ? new MOVEBEHAVIOR_15_PROTOCOL.MSG_MB_MOVE_T { GlobalID = gid, LocationX = Wire(position.X),
+                LocationY = Wire(position.Y), LocationZ = Wire(position.Z) }
+            : Move(position, gid);
+
+        void AssertUntouched() {
+            Assert.Null(Value("Pet"));
+            Assert.Equal(pieceCount, pieces.Count);
+            if (maze is not null) {
+                Assert.Equal(pickups, maze.Pickups.ToArray());
+                Assert.Equal(0, maze.Score);
+                Assert.Equal(PetMinigameRules.MazeStartSeconds, maze.TimeLimit);
+                Assert.False(maze.Immune);
+            }
+            if (drop is not null) { Assert.Equal(0, drop.Fullness); Assert.Empty(drop.Falling); }
+        }
+
+        // A completed game attachment can arrive before EquipmentService publishes its world pet.
+        // Neither the eventual world ID, a foreign world ID, the inventory ID nor zero may steer it yet.
+        f.Instance.SummonedPetGlobalId = 0;
+        foreach (var gid in new[] { WorldPet, WorldPet + 1, PetId, 0UL }) {
+            await f.Send(Movement(at, gid));
+            AssertUntouched();
+            Assert.Empty(await f.Drain());
+            Assert.Same(session, (await f.State()).Session);
+        }
+
+        // This is the same binding EquipmentService writes when its existing pet spawn is published.
+        f.Instance.SummonedPetGlobalId = WorldPet;
+        foreach (var gid in new[] { 0UL, WorldPet + 1, PetId }) {
+            await f.Send(Movement(at, gid));
+            AssertUntouched(); Assert.Empty(await f.Drain());
+        }
+        await f.Send(Movement(at, WorldPet));
+        Assert.Equal(at, Assert.IsType<Vector3>(Value("Pet")));
+        var accepted = await f.Drain();
+        if (maze is not null) {
+            var snack = Assert.Single(accepted.OfType<PET_9_PROTOCOL.MSG_PETGAMEMAZE>());
+            Assert.Equal(6, snack.GameCommand); Assert.Equal(1, snack.GameData);
+            Assert.Equal(1, maze.Score);
+            Assert.DoesNotContain(pickup!, maze.Pickups);
+            Assert.Equal(pickups!.Length - 1, maze.Pickups.Count);
+            Assert.Equal(pieceCount - 1, pieces.Count);
+        }
+        else {
+            Assert.NotNull(drop); Assert.Empty(accepted);
+            var output = new List<IMessage>();
+            for (var tick = 0; tick < 60; tick++) {
+                await f.Fire(await Timer(f, "petGameTick"));
+                output.AddRange(await f.Drain());
+            }
+            Assert.Contains(output.OfType<PET_9_PROTOCOL.MSG_PETGAMEDROPOBJECT>(), p => p.GameCommand == 22);
+            Assert.True(drop.Fullness > 0); // Accepted coordinates are actually used to catch the falling food.
+        }
+        Assert.Equal(0, f.Store.Saves);
+        Assert.Same(session, (await f.State()).Session);
     }
 
     [Fact]
