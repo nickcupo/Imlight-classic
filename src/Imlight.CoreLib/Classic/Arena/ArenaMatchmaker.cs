@@ -76,7 +76,7 @@ internal interface IArenaWorld {
     /// <summary>Sends a client message to an online wizard.</summary>
     void Send(ulong charId, IMessage message);
 
-    /// <summary>A chat line to an online wizard.</summary>
+    /// <summary>A diagnostic arena status notice (log only in the production world).</summary>
     void Inform(ulong charId, string text);
     void InformFailure(ulong charId, string text) => Inform(charId, text); // a failure the player must see
 

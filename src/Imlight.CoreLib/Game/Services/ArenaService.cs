@@ -178,7 +178,7 @@ internal sealed class ArenaService(SessionActor sessionActor) : MessageService(s
         }
 
         if (message.Confirm != 0 && GetActiveWizard()?.IsInDuel == true) {
-            InformGameClient("Finish your duel, then press Go to Arena.");
+            InformGameClient("Finish your duel, then press Go to Arena.", isImportant: true);
 
             return;
         }
@@ -240,10 +240,12 @@ internal sealed class ArenaService(SessionActor sessionActor) : MessageService(s
             Imlight.CoreLib.Classic.ClassicBadges.PvpRatingChanged(wizard, outcome.RatingAfter, SendToSocket); // CLASSIC: Sergeant .. Warlord.
         }
         var verdict = outcome.NoContest ? "The match ended without a contest." : outcome.Won ? "You won the match!" : outcome.Fled ? "You fled the match, so it counts as a loss." : "You lost the match.";
-        InformGameClient(outcome.Kind == ArenaKind.Ranked
+        // CLASSIC: MSG_MATCHRESULT and the currency updates above already display the outcome. A duplicate
+        // non-modal server notice becomes another "!" alert in r806919, including after a Practice flee.
+        Logger.Information("Arena result for {0} (log only): {1}", Logger.Args(_charId, outcome.Kind == ArenaKind.Ranked
             ? $"{verdict} Rating {outcome.RatingAfter} ({outcome.RatingAfter - outcome.RatingBefore:+#;-#;0}), rank {outcome.Rank}. "
               + $"+{outcome.Tickets} Arena Tickets."
-            : $"{verdict} (Practice: no rank or tickets.)");
+            : $"{verdict} (Practice: no rank or tickets.)"));
         Timers.StartSingleTimer(RETURN_TIMER, new CLASSIC_FEATURES_PROTOCOL.MSG_ARENARETURN {
             Zone = outcome.HallZone, Location = outcome.HallLocation,
         }, TimeSpan.FromSeconds(Math.Max(0, outcome.ReturnSeconds)));
