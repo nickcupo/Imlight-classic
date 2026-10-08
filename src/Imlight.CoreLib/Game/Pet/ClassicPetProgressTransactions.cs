@@ -30,7 +30,16 @@ internal sealed class PetProgressDependencies {
 internal static class ClassicPetProgressTransactions {
     internal static readonly AsyncLocal<PetProgressDependencies> TestScope = new();
 
-    internal static bool TryInitialize(Wizard live, ulong petId, out WizClientObjectItem pet, out int energy) {
+    internal static bool TryInitialize(Wizard live, ulong petId, out WizClientObjectItem pet, out int energy)
+        => TryInitialize(live, petId, false, out pet, out energy);
+
+    // CLASSIC: game admission requires the selected pet to remain in the exact fresh Pet slot.
+    // The generic owned-pet initializer above still accepts backpack pets.
+    internal static bool TryInitializeForGame(Wizard live, ulong petId, out WizClientObjectItem pet, out int energy)
+        => TryInitialize(live, petId, true, out pet, out energy);
+
+    private static bool TryInitialize(Wizard live, ulong petId, bool requireEquipped,
+        out WizClientObjectItem pet, out int energy) {
         pet = null; energy = 0;
         if (!Usable(live)) return false;
         WizClientObjectItem snapshot = null, published = null;
@@ -38,6 +47,7 @@ internal static class ClassicPetProgressTransactions {
         var unchanged = false;
         var committed = WizardCollection.CommitCharacterMutation(live.CharId, (session, saved) => {
             if (!Usable(live) || saved.PetOwnerBehavior is null
+                || (requireEquipped && (!HasExactEquippedPet(saved, petId) || !HasExactEquippedPet(live, petId)))
                 || !WizardInventoryTransactions.TryReadOwnedItem(session, saved, petId, out snapshot)
                 || !OwnedPetCanPublish(live, saved, snapshot)) return false;
             availableEnergy = saved.PetOwnerBehavior.Energy;
@@ -51,6 +61,20 @@ internal static class ClassicPetProgressTransactions {
         pet = committed ? published : snapshot;
         energy = availableEnergy;
         return true;
+    }
+
+    private static bool HasExactEquippedPet(Wizard wizard, ulong petId) {
+        var equipment = wizard?.EquipmentBehavior;
+        var slots = equipment?.SlotList;
+        return petId != 0 && slots is not null
+            && slots.Count(slot => slot is { SlotType: EquipmentSlotType.Pet }) == 1
+            && slots.Any(slot => slot is { SlotType: EquipmentSlotType.Pet } && slot.ItemId == petId)
+            && equipment.EquippedItemIds?.Count(id => id == petId) == 1
+            && wizard.InventoryBehavior?.InventoryItemIds is { } inventory && !inventory.Contains(petId)
+            && wizard.StorageBehavior?.BankItemIds?.Contains(petId) != true
+            // CLASSIC: materialized aliases can conflict even when their saved ID lists omit this pet.
+            && wizard.InventoryBehavior?.Items?.Any(item => item is not null && item.m_globalID.Full == petId) != true
+            && wizard.StorageBehavior?.Items?.Any(item => item is not null && item.m_globalID.Full == petId) != true;
     }
 
     internal static bool TryFinish(Wizard live, ulong petId, string game, string trackName,
