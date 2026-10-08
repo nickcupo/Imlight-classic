@@ -1,20 +1,26 @@
 // CLASSIC: reward packets and display quantities describe acknowledged saved inventory, never rolled promises.
 using System;
 using System.Collections.Generic;
+using System.Collections.Concurrent;
 using System.Linq;
 using System.Reflection;
 using System.Threading.Channels;
+using System.Threading;
 using System.Threading.Tasks;
 using Akka.Actor;
 using Imcodec.Cryptography;
 using Imcodec.IO;
 using Imcodec.MessageLayer.Generated;
+using Imcodec.MessageLayer;
+using Imcodec.ObjectProperty;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.CoreLib.Game.DropTables;
 using Imlight.CoreLib.Game.Commands;
 using Imlight.CoreLib.Game.Commands.Protocols;
 using Imlight.CoreLib.Game.Services;
 using Imlight.CoreLib.Game.Pet;
+using Imlight.CoreLib.Classic;
+using Imlight.Classic.Settings;
 using Imlight.CoreLib.Shared.Behaviors;
 using Imlight.CoreLib.Shared.Character;
 using Imlight.CoreLib.Shared.Resources;
@@ -386,6 +392,236 @@ public sealed class LootRewardPersistenceTests {
         Assert.Empty(results.Items); Assert.Empty(results.TreasureCards); Assert.Empty(results.Reagents); Assert.Empty(f.Packets);
         Assert.Equal(3, f.Items.Count); Assert.Equal(5, Assert.Single(f.Reagents).m_quantity); Assert.Equal(0, f.SaveAttempts);
     }
+
+    [Fact]
+    public void GoldLootPopupContainsOnlyTheFreshCappedAcknowledgedAmount() {
+        using var f = new GoldFixture(); using var scope = f.Scope(); var live = f.Store.Live();
+        f.Store.Saved.GameStats.m_currentGold = 980; live.GameStats.m_currentGold = 1; live.GameStats.m_baseGoldPouch = 9999;
+        var alias = live.GameStats; var reward = new DropTableResult { GoldAmount = 100 };
+        f.Store.BeforeSave = () => { Assert.Empty(f.Packets); Assert.Equal(1, alias.m_currentGold); };
+        LootGranter.Grant(ActorRefs.NoSender, live, reward, true);
+        Assert.Equal(1, f.Store.SaveAttempts); Assert.Equal(1000, f.Store.Saved.GameStats.m_currentGold);
+        Assert.Same(alias, live.GameStats); Assert.Equal(1000, alias.m_currentGold); Assert.Equal(9999, alias.m_baseGoldPouch);
+        Assert.Equal(20, reward.GoldAmount); var packets = f.Packets.ToArray(); Assert.Equal(2, packets.Length);
+        var update = Assert.IsType<WIZARD_12_PROTOCOL.MSG_UPDATEGOLD>(packets[0]); Assert.Equal(1000, update.Gold); Assert.Equal(1000, update.MaxGold);
+        var decoded = Assert.IsType<WIZARD_12_PROTOCOL.MSG_UPDATEGOLD>(Assert.Single(MessageEncoder.Decode(MessageEncoder.Encode(update))!));
+        Assert.Equal(update.Gold, decoded.Gold); Assert.Equal(update.MaxGold, decoded.MaxGold);
+        Assert.Equal(20, GoldFixture.Popup(Assert.IsType<WIZARD_12_PROTOCOL.MSG_LOOT>(packets[1])).m_goldInfo.m_goldAmount);
+    }
+
+    [Theory]
+    [InlineData(1000, 1000)] [InlineData(1200, 1000)] [InlineData(100, 0)]
+    public void GoldLootAtZeroHeadroomReadsAuthoritativelyWithoutSavingOrTrimmingHoldings(int balance, int pouch) {
+        using var f = new GoldFixture(); using var scope = f.Scope(); f.Store.Saved.GameStats.m_currentGold = balance;
+        f.Store.Saved.GameStats.m_baseGoldPouch = pouch; var live = f.Store.Live(); live.GameStats.m_currentGold = 1;
+        var reward = new DropTableResult { GoldAmount = 20 }; LootGranter.Grant(ActorRefs.NoSender, live, reward, true);
+        Assert.Equal(0, f.Store.SaveAttempts); Assert.Equal(balance, f.Store.Saved.GameStats.m_currentGold); Assert.Equal(1, live.GameStats.m_currentGold);
+        Assert.Equal(0, reward.GoldAmount); var update = Assert.IsType<WIZARD_12_PROTOCOL.MSG_UPDATEGOLD>(Assert.Single(f.Packets));
+        Assert.Equal(balance, update.Gold); Assert.Equal(pouch, update.MaxGold); Assert.False(WizardCollection.IsInventorySnapshotUncertain(live));
+    }
+
+    [Theory]
+    [InlineData("missing")] [InlineData("negative-balance")] [InlineData("negative-pouch")]
+    [InlineData("prepare-refused")] [InlineData("prepare-threw")]
+    public void GoldLootKnownRefusalAdvertisesZeroWithoutUpdateSaveOrQuarantine(string refusal) {
+        using var f = new GoldFixture(); using var scope = f.Scope(); var live = f.Store.Live();
+        switch (refusal) {
+            case "missing": f.Store.RefuseLoad = true; break;
+            case "negative-balance": f.Store.Saved.GameStats.m_currentGold = -1; break;
+            case "negative-pouch": f.Store.Saved.GameStats.m_baseGoldPouch = -1; break;
+            case "prepare-refused": f.Dependencies.Prepare = _ => false; break;
+            case "prepare-threw": f.Dependencies.Prepare = _ => throw new InvalidOperationException("Authored gold preparation fault"); break;
+        }
+        var balance = f.Store.Saved.GameStats.m_currentGold; var reward = new DropTableResult { GoldAmount = 20 };
+        LootGranter.Grant(ActorRefs.NoSender, live, reward, true);
+        Assert.Equal(0, reward.GoldAmount); Assert.Equal(0, f.Store.SaveAttempts); Assert.Equal(balance, f.Store.Saved.GameStats.m_currentGold);
+        Assert.Equal(900, live.GameStats.m_currentGold); Assert.Empty(f.Packets); Assert.False(WizardCollection.IsInventorySnapshotUncertain(live));
+    }
+
+    [Theory]
+    [InlineData(-20, 900, 880, true)] [InlineData(-901, 900, 900, false)]
+    [InlineData(int.MinValue, int.MaxValue, int.MaxValue, false)] [InlineData(-20, 1200, 1180, true)]
+    public void GoldLootRetainsReachableExactDebitsWithoutPouchNormalizationOrPositivePopup(int requested, int before, int expected, bool acknowledged) {
+        using var f = new GoldFixture(); using var scope = f.Scope(); f.Store.Saved.GameStats.m_currentGold = before;
+        var live = f.Store.Live(); var reward = new DropTableResult { GoldAmount = requested };
+        LootGranter.Grant(ActorRefs.NoSender, live, reward, true);
+        Assert.Equal(0, reward.GoldAmount); Assert.Equal(expected, f.Store.Saved.GameStats.m_currentGold);
+        Assert.Equal(expected, live.GameStats.m_currentGold); Assert.Equal(acknowledged ? 1 : 0, f.Store.SaveAttempts);
+        if (acknowledged) Assert.Equal(expected, Assert.IsType<WIZARD_12_PROTOCOL.MSG_UPDATEGOLD>(Assert.Single(f.Packets)).Gold);
+        else Assert.Empty(f.Packets);
+        Assert.False(WizardCollection.IsInventorySnapshotUncertain(live));
+    }
+
+    [Fact]
+    public void GoldLootScalesOnceAndKeepsGoldXpStacksThenPopupOrder() {
+        using var f = new GoldFixture(); using var scope = f.Scope(); f.SetMultiplier("2"); var live = f.Store.Live();
+        var reward = Roll(1); reward.GoldAmount = 20; reward.ExperienceAmount = 1;
+        LootGranter.Grant(ActorRefs.NoSender, live, reward, true);
+        Assert.Equal(40, reward.GoldAmount); Assert.Equal(940, f.Store.Saved.GameStats.m_currentGold);
+        var packets = f.Packets.ToArray(); Assert.Equal(5, packets.Length);
+        Assert.IsType<WIZARD_12_PROTOCOL.MSG_UPDATEGOLD>(packets[0]);
+        Assert.IsType<Imlight.CoreLib.Shared.Packets.CHARACTER_103_PROTOCOL.MSG_GAINXP>(packets[1]);
+        Assert.IsType<WIZARD_12_PROTOCOL.MSG_REAGENTADD>(packets[2]); Assert.IsType<WIZARD2_53_PROTOCOL.MSG_ITEMACQUISITION>(packets[3]);
+        Assert.Equal(40, GoldFixture.Popup(Assert.IsType<WIZARD_12_PROTOCOL.MSG_LOOT>(packets[4])).m_goldInfo.m_goldAmount);
+        Assert.Equal(2, f.Store.SaveAttempts); // Gold and stacks are separate acknowledged writes; XP remains asynchronous.
+    }
+
+    [Theory]
+    [InlineData(false)] [InlineData(true)]
+    public void GoldLootLostAcknowledgementQuarantinesAndStopsBeforeLaterRewardsOrPopup(bool durable) {
+        using var f = new GoldFixture(); using var scope = f.Scope(); var live = f.Store.Live();
+        f.Store.FailSave = true; f.Store.CommitBeforeFailure = durable;
+        var reward = Roll(1); reward.GoldAmount = 20; reward.ExperienceAmount = 1;
+        Assert.Throws<InvalidOperationException>(() => LootGranter.Grant(ActorRefs.NoSender, live, reward, true));
+        Assert.Equal(0, reward.GoldAmount); Assert.Equal(1, f.Store.SaveAttempts); Assert.True(WizardCollection.IsInventorySnapshotUncertain(live));
+        Assert.Equal(durable ? 920 : 900, f.Store.Saved.GameStats.m_currentGold); Assert.Equal(900, live.GameStats.m_currentGold);
+        Assert.Equal("Close", Assert.Single(f.Packets)); Assert.Empty(f.Store.Reagents);
+        f.Packets.Clear(); Assert.Throws<InvalidOperationException>(() => LootGranter.Grant(ActorRefs.NoSender, live, new() { GoldAmount = 20 }, true));
+        Assert.Equal(1, f.Store.SaveAttempts); Assert.Equal("Close", Assert.Single(f.Packets));
+    }
+
+    [Fact]
+    public void GoldLootAcknowledgedSaveWithLostLivePublicationQuarantinesWithoutAdvertisingTheReceipt() {
+        using var f = new GoldFixture(); using var scope = f.Scope(); var live = f.Store.Live(); var alias = live.GameStats;
+        f.Store.BeforeSave = () => live.GameStats = null!;
+        var reward = new DropTableResult { GoldAmount = 20, ExperienceAmount = 1 };
+        Assert.Throws<InvalidOperationException>(() => LootGranter.Grant(ActorRefs.NoSender, live, reward, true));
+        Assert.Equal(920, f.Store.Saved.GameStats.m_currentGold); Assert.Equal(900, alias.m_currentGold); Assert.Equal(0, reward.GoldAmount);
+        Assert.True(WizardCollection.IsInventorySnapshotUncertain(live)); Assert.Equal("Close", Assert.Single(f.Packets));
+        Assert.Equal(1, f.Store.AcknowledgedSaves);
+    }
+
+    [Fact]
+    public void GoldLootUncertaintyRaisedDuringFreshLoadOrPreparationCannotSaveOrReachLaterRewards() {
+        foreach (var duringLoad in new[] { true, false }) {
+            using var f = new GoldFixture(); using var scope = f.Scope(); var live = f.Store.Live();
+            if (duringLoad) f.OnLoad = () => WizardCollection.MarkInventorySnapshotUncertain(live);
+            else f.Dependencies.Prepare = _ => { WizardCollection.MarkInventorySnapshotUncertain(live); return true; };
+            var reward = new DropTableResult { GoldAmount = 20, ExperienceAmount = 1 };
+            Assert.Throws<InvalidOperationException>(() => LootGranter.Grant(ActorRefs.NoSender, live, reward, true));
+            Assert.Equal(0, f.Store.SaveAttempts); Assert.Equal(0, reward.GoldAmount); Assert.Equal(900, f.Store.Saved.GameStats.m_currentGold);
+            Assert.Equal("Close", Assert.Single(f.Packets));
+        }
+    }
+
+    [Fact]
+    public async Task GoldLootConcurrentGrantsShareTheFreshLaneAndOnlyTheRemainingHeadroomAppearsInEachPopup() {
+        using var f = new GoldFixture(); using var scope = f.Scope(); f.Store.Saved.GameStats.m_currentGold = 990;
+        var firstLive = f.Store.Live(); var secondLive = f.Store.Live();
+        using var entered = new ManualResetEventSlim(); using var release = new ManualResetEventSlim(); using var attempted = new ManualResetEventSlim();
+        f.Store.BeforeSave = () => { if (f.Store.SaveAttempts == 1) { entered.Set(); Assert.True(release.Wait(TimeSpan.FromSeconds(5))); } };
+        var first = new DropTableResult { GoldAmount = 8 }; var second = new DropTableResult { GoldAmount = 8 };
+        var a = Task.Run(() => LootGranter.Grant(ActorRefs.NoSender, firstLive, first, true));
+        try {
+            Assert.True(entered.Wait(TimeSpan.FromSeconds(5)));
+            var b = Task.Run(() => { attempted.Set(); LootGranter.Grant(ActorRefs.NoSender, secondLive, second, true); });
+            Assert.True(attempted.Wait(TimeSpan.FromSeconds(5))); release.Set(); await Task.WhenAll(a, b);
+        } finally { release.Set(); }
+        Assert.Equal(1000, f.Store.Saved.GameStats.m_currentGold); Assert.Equal(2, f.Store.SaveAttempts);
+        Assert.Equal(8, first.GoldAmount); Assert.Equal(2, second.GoldAmount);
+        Assert.Equal(new[] { 2, 8 }, f.Packets.OfType<WIZARD_12_PROTOCOL.MSG_LOOT>().Select(packet => GoldFixture.Popup(packet).m_goldInfo.m_goldAmount).Order().ToArray());
+    }
+
+    [Theory]
+    [InlineData(false)] [InlineData(true)]
+    public async Task GoldLootNextSaveWaitsUntilThePriorAuthoritativeUpdateIsEnqueued(bool readOnly) {
+        using var f = new GoldFixture(); using var scope = f.Scope();
+        if (readOnly) f.Store.Saved.GameStats.m_currentGold = 1000;
+        var firstLive = f.Store.Live(); var secondLive = f.Store.Live();
+        using var entered = new ManualResetEventSlim(); using var release = new ManualResetEventSlim(); using var attempted = new ManualResetEventSlim();
+        var sends = 0;
+        f.OnSend = message => {
+            if (message is WIZARD_12_PROTOCOL.MSG_UPDATEGOLD && Interlocked.Increment(ref sends) == 1) {
+                entered.Set(); Assert.True(WizardCollection.HoldsWriteLane);
+                Assert.Equal(readOnly ? 0 : 1, f.Store.SaveAttempts); Assert.True(release.Wait(TimeSpan.FromSeconds(5)));
+            }
+        };
+        f.Store.BeforeSave = () => {
+            if (f.Store.SaveAttempts == (readOnly ? 1 : 2)) Assert.Equal(readOnly ? 1000 : 920,
+                Assert.IsType<WIZARD_12_PROTOCOL.MSG_UPDATEGOLD>(Assert.Single(f.Packets)).Gold);
+        };
+        var a = Task.Run(() => LootGranter.Grant(ActorRefs.NoSender, firstLive, new() { GoldAmount = 20 }, false));
+        try {
+            Assert.True(entered.Wait(TimeSpan.FromSeconds(5)));
+            var b = Task.Run(() => { attempted.Set(); LootGranter.Grant(ActorRefs.NoSender, secondLive, new() { GoldAmount = readOnly ? -20 : 20 }, false); });
+            Assert.True(attempted.Wait(TimeSpan.FromSeconds(5))); release.Set(); await Task.WhenAll(a, b);
+        } finally { release.Set(); }
+        Assert.Equal(readOnly ? 980 : 940, f.Store.Saved.GameStats.m_currentGold); Assert.Equal(readOnly ? 1 : 2, f.Store.SaveAttempts);
+        Assert.Equal(readOnly ? new[] { 1000, 980 } : new[] { 920, 940 }, f.Packets.Cast<WIZARD_12_PROTOCOL.MSG_UPDATEGOLD>().Select(packet => packet.Gold));
+    }
+
+    [Theory]
+    [InlineData(false)] [InlineData(true)]
+    public void GoldLootSynchronousUpdateSendFailureQuarantinesBeforeAnyLaterRewardOrPopup(bool readOnly) {
+        using var f = new GoldFixture(); using var scope = f.Scope();
+        if (readOnly) f.Store.Saved.GameStats.m_currentGold = 1000;
+        var live = f.Store.Live(); var old = live.GameStats.m_currentGold;
+        f.OnSend = message => {
+            if (message is WIZARD_12_PROTOCOL.MSG_UPDATEGOLD) {
+                Assert.True(WizardCollection.HoldsWriteLane); Assert.Equal(readOnly ? 0 : 1, f.Store.SaveAttempts);
+                throw new InvalidOperationException("Authored synchronous update enqueue failure");
+            }
+        };
+        var reward = Roll(1); reward.GoldAmount = 20; reward.ExperienceAmount = 1;
+        Assert.Throws<InvalidOperationException>(() => LootGranter.Grant(ActorRefs.NoSender, live, reward, true));
+        Assert.Equal(0, reward.GoldAmount); Assert.True(WizardCollection.IsInventorySnapshotUncertain(live));
+        Assert.Equal(readOnly ? 1000 : 920, f.Store.Saved.GameStats.m_currentGold);
+        Assert.Equal(readOnly ? old : 920, live.GameStats.m_currentGold);
+        Assert.Equal(readOnly ? 0 : 1, f.Store.AcknowledgedSaves); Assert.Empty(f.Store.Reagents);
+        Assert.Equal("Close", Assert.Single(f.Packets));
+    }
+
+    [Theory]
+    [InlineData(false)] [InlineData(true)]
+    public async Task GoldLootQueuedGrantAfterLostAckCannotSaveAgainOrAdvertiseEitherReward(bool durable) {
+        using var f = new GoldFixture(); using var scope = f.Scope(); var live = f.Store.Live();
+        f.Store.FailSave = true; f.Store.CommitBeforeFailure = durable;
+        using var entered = new ManualResetEventSlim(); using var release = new ManualResetEventSlim(); using var attempted = new ManualResetEventSlim();
+        f.Store.BeforeSave = () => { entered.Set(); Assert.True(release.Wait(TimeSpan.FromSeconds(5))); };
+        var a = Task.Run(() => Assert.Throws<InvalidOperationException>(() => LootGranter.Grant(ActorRefs.NoSender, live, new() { GoldAmount = 20 }, true)));
+        try {
+            Assert.True(entered.Wait(TimeSpan.FromSeconds(5)));
+            var b = Task.Run(() => { attempted.Set(); Assert.Throws<InvalidOperationException>(() => LootGranter.Grant(ActorRefs.NoSender, live, new() { GoldAmount = 20 }, true)); });
+            Assert.True(attempted.Wait(TimeSpan.FromSeconds(5))); release.Set(); await Task.WhenAll(a, b);
+        } finally { release.Set(); }
+        Assert.Equal(1, f.Store.SaveAttempts); Assert.Equal(durable ? 920 : 900, f.Store.Saved.GameStats.m_currentGold);
+        Assert.True(WizardCollection.IsInventorySnapshotUncertain(live)); Assert.Equal(2, f.Packets.Count); Assert.All(f.Packets, packet => Assert.Equal("Close", packet));
+    }
+
+    private sealed class GoldFixture : IDisposable {
+        internal readonly Fixture Store = new(0);
+        internal readonly ConcurrentQueue<object> Packets = new();
+        internal readonly GoldRewardDependencies Dependencies = new();
+        internal System.Action? OnLoad;
+        internal System.Action<object>? OnSend;
+        private readonly ConcurrentDictionary<string, string> _settings;
+        private readonly string? _oldMultiplier;
+        internal GoldFixture() {
+            Store.Saved.GameStats.m_baseGoldPouch = 1000;
+            _settings = (ConcurrentDictionary<string, string>)typeof(ClassicSettingsStore).GetField("_overrides", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(ClassicSettings.Store)!;
+            _oldMultiplier = _settings.TryGetValue(ClassicSettingKeys.GoldMultiplier, out var old) ? old : null;
+            SetMultiplier("1");
+        }
+        internal void SetMultiplier(string value) => _settings[ClassicSettingKeys.GoldMultiplier] = value;
+        internal IDisposable Scope() {
+            var inner = Store.Scope(); var send = LootGranter.TestSendScope.Value;
+            var gold = ClassicGoldRewards.TestScope.Value; var store = WizardCollection.TestStoreScope.Value!;
+            LootGranter.TestSendScope.Value = (_, message) => { OnSend?.Invoke(message); Packets.Enqueue(message); };
+            ClassicGoldRewards.TestScope.Value = Dependencies;
+            WizardCollection.TestStoreScope.Value = new(store.Open, (session, id) => { OnLoad?.Invoke(); return store.Load(session, id); });
+            return new GoldRestore(() => { LootGranter.TestSendScope.Value = send; ClassicGoldRewards.TestScope.Value = gold; inner.Dispose(); });
+        }
+        internal static LootInfoList Popup(WIZARD_12_PROTOCOL.MSG_LOOT packet) {
+            var codec = new ObjectSerializer(Versionable: false);
+            Assert.True(codec.Deserialize<LootInfoList>((byte[])packet.LootList, 4, out var loot)); Assert.NotNull(loot);
+            return loot;
+        }
+        public void Dispose() {
+            if (_oldMultiplier is null) _settings.TryRemove(ClassicSettingKeys.GoldMultiplier, out _);
+            else _settings[ClassicSettingKeys.GoldMultiplier] = _oldMultiplier;
+        }
+    }
+    private sealed class GoldRestore(System.Action restore) : IDisposable { public void Dispose() => restore(); }
 
     private static DropTableResult Roll(int quantity) => new() { Reagents = [Drop(Fixture.Normal, quantity)] };
     private static DropItemResult Drop(ulong template, int quantity) => new() { ItemId = template.ToString(), ItemName = "Reward reagent", Quantity = quantity };
