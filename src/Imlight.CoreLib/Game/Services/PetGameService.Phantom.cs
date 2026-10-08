@@ -138,10 +138,12 @@ internal sealed partial class PetGameService {
         }
 
         var selectedPet = EquippedPet(wizard);
+        var previousTraining = _session;
         WizClientObjectItem pet;
         int energy;
+        IReadOnlyList<IMessage> initializationMessages;
         try {
-            if (!ClassicPetProgressTransactions.TryInitializeForGame(wizard, selectedPet?.m_globalID.Full ?? 0, out pet, out energy,
+            if (!ClassicPetProgressTransactions.TryInitializeForGame(wizard, selectedPet?.m_globalID.Full ?? 0, out pet, out energy, out initializationMessages,
                 () => SessionActor.MatchesPetGameAttach(attach))) {
                 if (WizardCollection.IsInventorySnapshotUncertain(wizard)) { CloseSession(); return; }
                 Refuse("no fresh equipped pet", "Equip a pet to play the pet games.");
@@ -153,6 +155,10 @@ internal sealed partial class PetGameService {
             throw;
         }
 
+        if (!SendInitializationEffects(attach, initializationMessages)) {
+            EnsureTrainingContext(previousTraining);
+            return;
+        }
         var b = PetProgress.Behavior(pet);
         if (b is null || b.m_level == 0) { Refuse("no hatched pet", "Equip a pet to play the pet games."); return; }
         var cost = PetRules.EnergyCost(b.m_level);
@@ -227,11 +233,13 @@ internal sealed partial class PetGameService {
             Abandon("the native logic object could not be prepared"); return;
         }
 
+        var previousTraining = _session;
         WizClientObjectItem pet;
         int energy;
+        IReadOnlyList<IMessage> initializationMessages;
         try {
             // CLASSIC: re-read the fresh equipped pet after the transfer; the kiosk's admission alone is not enough.
-            if (!ClassicPetProgressTransactions.TryInitializeForGame(wizard, pending.PetItem, out pet, out energy,
+            if (!ClassicPetProgressTransactions.TryInitializeForGame(wizard, pending.PetItem, out pet, out energy, out initializationMessages,
                 () => SessionActor.MatchesPetGameAttach(attach)) || pet.m_globalID.Full != pending.PetItem) {
                 if (WizardCollection.IsInventorySnapshotUncertain(wizard)) { CloseSession(); return; }
                 Abandon("the admitted pet is no longer the fresh equipped pet");
@@ -241,6 +249,10 @@ internal sealed partial class PetGameService {
         catch {
             if (WizardCollection.IsInventorySnapshotUncertain(wizard)) CloseSession();
             throw;
+        }
+        if (!SendInitializationEffects(attach, initializationMessages)) {
+            EnsureTrainingContext(previousTraining);
+            return;
         }
         var b = PetProgress.Behavior(pet);
         if (b is null || b.m_level == 0 || energy < PetRules.EnergyCost(b.m_level)) { Abandon("pet level or energy changed"); return; }

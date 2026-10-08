@@ -162,11 +162,13 @@ internal sealed partial class PetGameService(SessionActor sessionActor) : Messag
         }
 
         var selectedPet = EquippedPet(wizard);
+        var previousTraining = _session;
         WizClientObjectItem pet;
         int energy;
+        IReadOnlyList<IMessage> initializationMessages;
         // CLASSIC: initialize the fresh owned pet, and publish only an acknowledged change.
         try {
-            if (!ClassicPetProgressTransactions.TryInitializeForGame(wizard, selectedPet?.m_globalID.Full ?? 0, out pet, out energy,
+            if (!ClassicPetProgressTransactions.TryInitializeForGame(wizard, selectedPet?.m_globalID.Full ?? 0, out pet, out energy, out initializationMessages,
                 attach is null ? null : () => SessionActor.MatchesPetGameAttach(attach))) {
                 if (WizardCollection.IsInventorySnapshotUncertain(wizard)) { CloseSession(); return; }
                 EnsureTrainingContext(_session);
@@ -178,6 +180,10 @@ internal sealed partial class PetGameService(SessionActor sessionActor) : Messag
         catch {
             if (WizardCollection.IsInventorySnapshotUncertain(wizard)) CloseSession();
             throw;
+        }
+        if (!SendInitializationEffects(attach, initializationMessages)) {
+            EnsureTrainingContext(previousTraining);
+            return;
         }
         var b = PetProgress.Behavior(pet);
         _ = int.TryParse(message.Track.ToString(), out var track);
@@ -397,6 +403,23 @@ internal sealed partial class PetGameService(SessionActor sessionActor) : Messag
         if (Sender != SessionActor.ActorRef || _session is not { } current
             || !ReferenceEquals(current, message.Token) || !ReferenceEquals(current.Context, message.Context)) return;
         RetireTraining();
+    }
+
+    // CLASSIC: normalization committed before admission belongs to the captured completed attach,
+    // including an energy refusal. Its committed packet list is its operation token, never a Session.
+    // An obsolete publication refusal therefore cannot retire an existing training game.
+    private bool SendInitializationEffects(PetGameAttachContext context, IReadOnlyList<IMessage> messages) {
+        // Check after the ACK even without a talent transition; raw admission/travel still belongs to this scene.
+        // This is a bounded recheck; the parent independently validates any later contextual output.
+        if (context is not null && !SessionActor.MatchesPetGameAttach(context)) return false;
+        if (messages is null || messages.Count == 0) return true;
+        // Retain the existing sanctioned null-context path; real Dance/Phantom captures remain mandatory.
+        if (context is null) {
+            foreach (var message in messages) SendToSocket(message);
+            return true;
+        }
+        SessionActor.ActorRef.Tell(new PetGameSessionOutput(messages, context, messages), Self);
+        return true;
     }
 
     private bool SendTrainingOutput(Session session, IReadOnlyList<IMessage> messages,

@@ -1,18 +1,28 @@
 // CLASSIC: real pet equipment/growth lanes, authored native fixtures, no private assets or player database.
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
+using System.Numerics;
 using System.Reflection;
+using System.Runtime.CompilerServices;
+using System.Threading.Tasks;
+using Akka.Actor;
 using Imcodec.Cryptography;
 using Imcodec.IO;
+using Imcodec.MessageLayer;
 using Imcodec.MessageLayer.Generated;
+using Imcodec.ObjectProperty;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Classic;
 using Imlight.Classic.Pets;
 using Imlight.CoreLib.Game.Pet;
+using Imlight.CoreLib.Game.Services;
 using Imlight.CoreLib.Game.Spells;
 using Imlight.CoreLib.Shared.Behaviors;
 using Imlight.CoreLib.Shared.Character;
+using Imlight.CoreLib.Shared.Networking;
+using Imlight.CoreLib.Shared.Packets;
 using Imlight.CoreLib.Shared.Resources;
 using Imlight.CoreLib.WizardData.Collections;
 using Imlight.CoreLib.WizardData.Models.Player;
@@ -286,6 +296,405 @@ public sealed class PetTalentEffectTests {
         Assert.False(PetTalentPolicy.IsApprovedGrantedSpell("Pet - Pixie"));
         var caps = f.Talents[PetProgress.TalentId(Fixture.Capacity)]; caps.m_maxStatList[0].m_value = 65;
         Assert.False(PetTalentPolicy.IsCapacityTalent(caps));
+    }
+
+    [Fact]
+    public void GameInitializationReturnsAcknowledgedNativeIdsThatTheNextFeedActuallyRemoves() {
+        using var f = new Fixture(); var live = f.Live();
+        Assert.True(live.InventoryToEquipmentTransfer(Fixture.PetId, out _, out _));
+        var old = Assert.Single(live.GameEffects.Snapshot());
+        PetProgress.Behavior(f.Items[Fixture.PetId]).m_requiredXP = 0;
+        PetTalentRuntime.TestScope.Value.Serialize = null; // Execute the native serializer, not the fixture stub.
+        IReadOnlyList<IMessage> messages = [];
+        f.BeforeSave = () => { Assert.Empty(messages); Assert.Same(old, Assert.Single(live.GameEffects.Snapshot())); };
+        Assert.True(ClassicPetProgressTransactions.TryInitializeForGame(live, Fixture.PetId, out var pet, out _, out messages));
+        Assert.Equal(2, f.Saves); Assert.Same(live.EquipmentBehavior.GetItem(Fixture.PetId), pet);
+        Assert.Equal(2, messages.Count);
+        Assert.Equal(old.m_internalID, Assert.IsType<GAME_5_PROTOCOL.MSG_REMOVEEFFECT>(messages[0]).InternalID);
+        var current = Assert.Single(live.GameEffects.Snapshot()); Assert.NotEqual(old.m_internalID, current.m_internalID);
+        Assert.Equal(current.m_internalID, DecodeNativeAdd(Assert.IsType<GAME_5_PROTOCOL.MSG_ADDEFFECT>(messages[1])).m_internalID);
+        f.BeforeSave = null;
+        Assert.True(ClassicPetProgressTransactions.TryFeed(live, Fixture.PetId, Fixture.SnackId, out var fed));
+        Assert.Equal(current.m_internalID, Assert.Single(fed.Messages.OfType<GAME_5_PROTOCOL.MSG_REMOVEEFFECT>()).InternalID);
+    }
+
+    [Fact]
+    public void UnchangedGameInitializationDoesNotSaveSerializeOrChurnAdmittedStatsCardsOrIds() {
+        using var f = new Fixture(Fixture.Health, Fixture.Pixie); var live = f.Live();
+        Assert.True(live.InventoryToEquipmentTransfer(Fixture.PetId, out _, out _));
+        var effects = live.GameEffects.Snapshot(); var card = Assert.Single(live.SpellbookBehavior.TemporarySpells);
+        PetTalentRuntime.TestScope.Value.Serialize = _ => throw new InvalidOperationException("Unexpected no-op serialization");
+        Assert.True(ClassicPetProgressTransactions.TryInitializeForGame(live, Fixture.PetId, out _, out _, out var messages));
+        Assert.Empty(messages); Assert.Equal(1, f.Saves); Assert.Equal(effects, live.GameEffects.Snapshot());
+        Assert.Same(card, Assert.Single(live.SpellbookBehavior.TemporarySpells)); Assert.Equal(130, live.GameStats.m_baseHitpoints);
+    }
+
+    [Theory]
+    [InlineData(false)] [InlineData(true)]
+    public void FailedOrLostInitializationAckExposesNoTransitionAndKeepsTheAdmittedReceipt(bool durable) {
+        using var f = new Fixture(Fixture.Health, Fixture.Pixie); var live = f.Live();
+        Assert.True(live.InventoryToEquipmentTransfer(Fixture.PetId, out _, out _));
+        var old = live.GameEffects.Snapshot(); var card = Assert.Single(live.SpellbookBehavior.TemporarySpells);
+        PetProgress.Behavior(f.Items[Fixture.PetId]).m_requiredXP = 0;
+        f.Fail = true; f.Durable = durable; IReadOnlyList<IMessage> messages = null;
+        Assert.Throws<InvalidOperationException>(() => ClassicPetProgressTransactions.TryInitializeForGame(
+            live, Fixture.PetId, out _, out _, out messages));
+        Assert.Empty(messages); Assert.Equal(2, f.Saves); Assert.Equal(old, live.GameEffects.Snapshot());
+        Assert.Same(card, Assert.Single(live.SpellbookBehavior.TemporarySpells)); Assert.Equal(130, live.GameStats.m_baseHitpoints);
+        Assert.True(WizardCollection.IsInventorySnapshotUncertain(live));
+        Assert.Equal(durable, PetProgress.Behavior(f.Items[Fixture.PetId]).m_requiredXP != 0);
+    }
+
+    [Theory]
+    [InlineData(false)] [InlineData(true)]
+    public void UnpreparableNativeInitializationTransitionRefusesBeforeSave(bool throws) {
+        using var f = new Fixture(); var live = f.Live();
+        Assert.True(live.InventoryToEquipmentTransfer(Fixture.PetId, out _, out _));
+        var old = Assert.Single(live.GameEffects.Snapshot());
+        PetProgress.Behavior(f.Items[Fixture.PetId]).m_requiredXP = 0;
+        PetTalentRuntime.TestScope.Value.Serialize = _ => throws
+            ? throw new InvalidOperationException("Authored native preparation refusal") : default;
+        Assert.False(ClassicPetProgressTransactions.TryInitializeForGame(live, Fixture.PetId, out _, out _, out var messages));
+        Assert.Empty(messages); Assert.Equal(1, f.Saves); Assert.Same(old, Assert.Single(live.GameEffects.Snapshot()));
+        Assert.Equal(0u, PetProgress.Behavior(f.Items[Fixture.PetId]).m_requiredXP);
+        Assert.False(WizardCollection.IsInventorySnapshotUncertain(live));
+    }
+
+    [Theory]
+    [InlineData(false)] [InlineData(true)]
+    public void InitializationContextRefusalBeforeOrDuringNativePreparationHasNoSaveOrPublication(bool duringPreparation) {
+        using var f = new Fixture(); var live = f.Live();
+        Assert.True(live.InventoryToEquipmentTransfer(Fixture.PetId, out _, out _));
+        var old = Assert.Single(live.GameEffects.Snapshot()); var valid = duringPreparation;
+        PetProgress.Behavior(f.Items[Fixture.PetId]).m_requiredXP = 0;
+        if (duringPreparation) PetTalentRuntime.TestScope.Value.Serialize = _ => { valid = false; return new(new byte[] { 3 }); };
+        Assert.False(ClassicPetProgressTransactions.TryInitializeForGame(live, Fixture.PetId, out _, out _, out var messages, () => valid));
+        Assert.Empty(messages); Assert.Equal(1, f.Saves); Assert.Same(old, Assert.Single(live.GameEffects.Snapshot()));
+        Assert.Equal(0u, PetProgress.Behavior(f.Items[Fixture.PetId]).m_requiredXP);
+    }
+
+    [Theory]
+    [InlineData(false)] [InlineData(true)]
+    public async Task ActualJoinPublishesInitializationEffectIdsBeforeAdmissionEvenWhenEnergyRefuses(bool tooTired) {
+        using var f = new Fixture(); f.Saved.PetOwnerBehavior.SetEnergy(50); var live = f.Live();
+        Assert.True(live.InventoryToEquipmentTransfer(Fixture.PetId, out _, out _));
+        var old = Assert.Single(live.GameEffects.Snapshot());
+        PetProgress.Behavior(f.Items[Fixture.PetId]).m_requiredXP = 0;
+        PetTalentRuntime.TestScope.Value.Serialize = null;
+        if (tooTired) f.Saved.PetOwnerBehavior.SetEnergy(0);
+        using var actor = await NativeInitializerFixture.Create(live);
+        f.BeforeSave = () => { Assert.Empty(actor.Packets); Assert.Same(old, Assert.Single(live.GameEffects.Snapshot())); };
+        await actor.Join(); var packets = await actor.Drain();
+        Assert.Equal(old.m_internalID, Assert.IsType<GAME_5_PROTOCOL.MSG_REMOVEEFFECT>(packets[0]).InternalID);
+        var added = Assert.IsType<GAME_5_PROTOCOL.MSG_ADDEFFECT>(packets[1]);
+        var current = Assert.Single(live.GameEffects.Snapshot());
+        Assert.Equal(current.m_internalID, DecodeNativeAdd(added).m_internalID); Assert.NotEqual(old.m_internalID, current.m_internalID);
+        Assert.Equal(tooTired ? 0 : 1, Assert.Single(packets.OfType<PET_9_PROTOCOL.MSG_PETGAMEJOINRSP>()).Success);
+        Assert.All(actor.WireSenders, sender => Assert.Equal(actor.Endpoint, sender));
+        Assert.Equal(2, f.Saves);
+        if (tooTired) {
+            Assert.Null(await actor.Session());
+            Assert.DoesNotContain(packets, packet => packet is GAME_5_PROTOCOL.MSG_NEWOBJECT or PET_9_PROTOCOL.MSG_PETGAMEINIT);
+        }
+        else {
+            Assert.Equal(5, packets.Length);
+            Assert.IsType<PET_9_PROTOCOL.MSG_PETGAMEJOINRSP>(packets[2]);
+            Assert.IsType<GAME_5_PROTOCOL.MSG_NEWOBJECT>(packets[3]); Assert.IsType<PET_9_PROTOCOL.MSG_PETGAMEINIT>(packets[4]);
+            var session = await actor.Session(); Assert.NotNull(session);
+            // A refused initializer operation is not an existing Session token and cannot retire that game.
+            Assert.True(actor.Instance.TryCapturePetGameAttach(live, out var context));
+            actor.Service.Tell(new PetGameSessionOutputRefused(packets, context), actor.Endpoint);
+            Assert.Same(session, await actor.Session());
+            f.BeforeSave = null; await actor.Join(); var noop = await actor.Drain();
+            Assert.Equal(2, f.Saves); Assert.Same(current, Assert.Single(live.GameEffects.Snapshot()));
+            Assert.DoesNotContain(noop, packet => packet is GAME_5_PROTOCOL.MSG_REMOVEEFFECT or GAME_5_PROTOCOL.MSG_ADDEFFECT);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)] [InlineData(true)]
+    public async Task ActualJoinFailedOrLostInitializationAckSendsNoNativeEffectOrAdmission(bool durable) {
+        using var f = new Fixture(); f.Saved.PetOwnerBehavior.SetEnergy(50); var live = f.Live();
+        Assert.True(live.InventoryToEquipmentTransfer(Fixture.PetId, out _, out _));
+        var old = Assert.Single(live.GameEffects.Snapshot());
+        PetProgress.Behavior(f.Items[Fixture.PetId]).m_requiredXP = 0;
+        PetTalentRuntime.TestScope.Value.Serialize = null; f.Fail = true; f.Durable = durable;
+        using var actor = await NativeInitializerFixture.Create(live);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => actor.Join());
+        await actor.ParentBarrier(); Assert.True(actor.Instance.IsDisposed);
+        Assert.Empty(await actor.Drain()); Assert.Same(old, Assert.Single(live.GameEffects.Snapshot()));
+        Assert.True(WizardCollection.IsInventorySnapshotUncertain(live)); Assert.Equal(2, f.Saves);
+    }
+
+    [Fact]
+    public async Task ActualJoinAcknowledgedNormalizationAfterAttachLossStaysDurableWithoutStaleNativeOutput() {
+        using var f = new Fixture(); f.Saved.PetOwnerBehavior.SetEnergy(50); var live = f.Live();
+        Assert.True(live.InventoryToEquipmentTransfer(Fixture.PetId, out _, out _));
+        PetProgress.Behavior(f.Items[Fixture.PetId]).m_requiredXP = 0;
+        PetTalentRuntime.TestScope.Value.Serialize = null;
+        using var actor = await NativeInitializerFixture.Create(live);
+        f.BeforeSave = () => actor.Instance.PublishDoorAttach(null);
+        await actor.Join(); Assert.Equal(2, f.Saves);
+        Assert.NotEqual(0u, PetProgress.Behavior(f.Items[Fixture.PetId]).m_requiredXP);
+        Assert.NotEqual(0u, PetProgress.Behavior(live.EquipmentBehavior.GetItem(Fixture.PetId)).m_requiredXP);
+        Assert.Empty(await actor.Drain()); Assert.Null(await actor.Session()); Assert.False(actor.Instance.IsDisposed);
+    }
+
+    [Fact]
+    public async Task ActualPhantomKioskPublishesAcknowledgedEffectIdsBeforeJoinAndTeleport() {
+        using var f = new Fixture(); f.Saved.PetOwnerBehavior.SetEnergy(50); var live = f.Live();
+        Assert.True(live.InventoryToEquipmentTransfer(Fixture.PetId, out _, out _));
+        var old = Assert.Single(live.GameEffects.Snapshot());
+        PetProgress.Behavior(f.Items[Fixture.PetId]).m_requiredXP = 0;
+        PetTalentRuntime.TestScope.Value.Serialize = null;
+        using var actor = await NativeInitializerFixture.Create(live);
+        f.BeforeSave = () => { Assert.Empty(actor.Output); Assert.Same(old, Assert.Single(live.GameEffects.Snapshot())); };
+        await actor.Join(PetGameObjectCodec.Cannon); await actor.Drain();
+        var output = actor.Output.ToArray(); Assert.Equal(4, output.Length);
+        Assert.Equal(old.m_internalID, Assert.IsType<GAME_5_PROTOCOL.MSG_REMOVEEFFECT>(output[0]).InternalID);
+        Assert.Equal(Assert.Single(live.GameEffects.Snapshot()).m_internalID,
+            DecodeNativeAdd(Assert.IsType<GAME_5_PROTOCOL.MSG_ADDEFFECT>(output[1])).m_internalID);
+        Assert.Equal(1, Assert.IsType<PET_9_PROTOCOL.MSG_PETGAMEJOINRSP>(output[2]).Success);
+        var transfer = Assert.IsType<ZONE_102_PROTOCOL.MSG_ZONETRANSFER>(output[3]);
+        Assert.Equal(PetGameScenes.ZoneFor(PetGameObjectCodec.Cannon, 0), transfer.DestinationZone);
+        Assert.True(transfer.IsPrivate); Assert.Equal("PlayerStart", transfer.DestinationLocation);
+        Assert.Equal(2, f.Saves); Assert.Null(await actor.Session());
+    }
+
+    [Fact]
+    public async Task ActualPhantomArrivalPublishesItsFreshInitializationEffectIdsBeforeLogicAndInit() {
+        using var f = new Fixture(); f.Saved.PetOwnerBehavior.SetEnergy(50); var live = f.Live();
+        Assert.True(live.InventoryToEquipmentTransfer(Fixture.PetId, out _, out _));
+        var old = Assert.Single(live.GameEffects.Snapshot()); PetTalentRuntime.TestScope.Value.Serialize = null;
+        using var actor = await NativeInitializerFixture.Create(live);
+        await actor.Join(PetGameObjectCodec.Cannon); await actor.Drain(); actor.ClearOutput();
+        Assert.Equal(1, f.Saves); // The kiosk read was unchanged; normalization is fresh on arrival.
+        PetProgress.Behavior(f.Items[Fixture.PetId]).m_requiredXP = 0;
+        f.BeforeSave = () => { Assert.Empty(actor.Output); Assert.Same(old, Assert.Single(live.GameEffects.Snapshot())); };
+        await actor.Arrive(PetGameObjectCodec.Cannon); var packets = await actor.Drain();
+        Assert.Equal(4, packets.Length);
+        Assert.Equal(old.m_internalID, Assert.IsType<GAME_5_PROTOCOL.MSG_REMOVEEFFECT>(packets[0]).InternalID);
+        Assert.Equal(Assert.Single(live.GameEffects.Snapshot()).m_internalID,
+            DecodeNativeAdd(Assert.IsType<GAME_5_PROTOCOL.MSG_ADDEFFECT>(packets[1])).m_internalID);
+        Assert.IsType<GAME_5_PROTOCOL.MSG_NEWOBJECT>(packets[2]);
+        Assert.Equal(PetGameObjectCodec.Cannon, Assert.IsType<PET_9_PROTOCOL.MSG_PETGAMEINIT>(packets[3]).Game.ToString());
+        Assert.DoesNotContain(packets, packet => packet is PET_9_PROTOCOL.MSG_PETGAMEJOINRSP);
+        Assert.NotNull(await actor.Session()); Assert.Equal(2, f.Saves);
+        Assert.All(actor.WireSenders, sender => Assert.Equal(actor.Endpoint, sender));
+    }
+
+    [Theory]
+    [InlineData(false, true)] [InlineData(true, true)]
+    [InlineData(false, false)] [InlineData(true, false)]
+    public async Task ActualPhantomNormalizationAfterSaveAttachLossEmitsNoEffectsAdmissionOrTravel(bool arrival, bool talentEffects) {
+        using var f = new Fixture(); f.Saved.PetOwnerBehavior.SetEnergy(50); var live = f.Live();
+        Assert.True(live.InventoryToEquipmentTransfer(Fixture.PetId, out _, out _));
+        PetTalentRuntime.TestScope.Value.Serialize = null;
+        using var actor = await NativeInitializerFixture.Create(live);
+        actor.TalentsEnabled = talentEffects; // Empty transitions must still enforce the post-ACK admission guard.
+        if (arrival) { await actor.Join(PetGameObjectCodec.Cannon); await actor.Drain(); actor.ClearOutput(); }
+        PetProgress.Behavior(f.Items[Fixture.PetId]).m_requiredXP = 0;
+        f.BeforeSave = () => actor.Instance.PublishDoorAttach(null);
+        if (arrival) await actor.Arrive(PetGameObjectCodec.Cannon);
+        else await actor.Join(PetGameObjectCodec.Cannon);
+        Assert.Equal(2, f.Saves); Assert.NotEqual(0u, PetProgress.Behavior(f.Items[Fixture.PetId]).m_requiredXP);
+        Assert.Empty(await actor.Drain()); Assert.Empty(actor.Output); Assert.Null(await actor.Session());
+        Assert.False(actor.Instance.IsDisposed);
+        Assert.False(PetGameTransfers.TryConsume(live.Account.AccountId, live.CharId,
+            PetGameScenes.ZoneFor(PetGameObjectCodec.Cannon, 0), DateTime.UtcNow, out _));
+    }
+
+    private static GameEffectBase DecodeNativeAdd(GAME_5_PROTOCOL.MSG_ADDEFFECT packet) {
+        Assert.True(new ObjectSerializer(Behaviors: SerializerFlags.None).Deserialize<GameEffectBase>((byte[])packet.EffectData,
+            PropertyFlags.Prop_Transmit | PropertyFlags.Prop_AuthorityTransmit, out var effect));
+        Assert.NotNull(effect); return effect;
+    }
+
+    // CLASSIC: real registered producer, completed attach, parent authority and socket sink. Only the
+    // mailbox adapter installs this test's in-memory persistence/native fixtures for each dispatch.
+    private sealed class NativeInitializerFixture : IDisposable {
+        private const BindingFlags Private = BindingFlags.Instance | BindingFlags.NonPublic;
+        private const BindingFlags Static = BindingFlags.Static | BindingFlags.NonPublic;
+        private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(5);
+        private const string Dance = "PetGameDance";
+        private readonly ActorSystem _system;
+        private readonly Wizard _live;
+        private readonly ClassicRules _rules;
+        private readonly Func<IReadOnlySet<string>> _oldOwnerFeatures;
+        internal bool TalentsEnabled = true;
+        private readonly PetTalentDependencies _talents = PetTalentRuntime.TestScope.Value;
+        private readonly PetProgressDependencies _progress = ClassicPetProgressTransactions.TestScope.Value;
+        private readonly WizardCollection.TestStore _store = WizardCollection.TestStoreScope.Value;
+        private readonly Func<IDocumentSession, List<WizClientObjectItem>> _rows = WizardInventoryTransactions.TestRowsScope.Value;
+        private readonly Func<IDocumentSession, List<ClientPetSnackItem>> _snacks = WizardPetSnackTransactions.TestRowsScope.Value;
+        internal readonly ConcurrentQueue<IMessage> Packets = new();
+        // Native socket frames and trusted internal travel share this probe recipient, preserving parent send order.
+        internal readonly ConcurrentQueue<object> Output = new();
+        internal readonly ConcurrentQueue<IActorRef> WireSenders = new();
+        internal IActorRef Endpoint, Service;
+        internal SessionActor Instance;
+        private IActorRef _socket, _attachSender;
+        private ZoneAttachContext _attach;
+        private readonly FieldInfo _games = typeof(PetGameConfigs).GetField("s_games", Static)!;
+        private readonly object _oldGames, _lazy, _oldValue, _oldState;
+        private readonly FieldInfo _value, _state;
+        private sealed record Ready;
+        private sealed record Inspect;
+        private sealed record Send(object Message);
+        private sealed record Snapshot(object Session);
+        private NativeInitializerFixture(Wizard live) {
+            _live = live; live.Zone = "QA/PetInitializer/" + Guid.NewGuid().ToString("N");
+            _rules = ClassicRuntime.Rules; _oldOwnerFeatures = _rules.OwnerExtraFeatures;
+            // Enable game admission only in this new actor fixture; preserve other talent/profile tests.
+            _rules.OwnerExtraFeatures = () => {
+                var features = new HashSet<string>(_oldOwnerFeatures()) { ClassicFeatures.PetsLeveling };
+                if (TalentsEnabled) features.Add(ClassicFeatures.PetsTalents);
+                else features.Remove(ClassicFeatures.PetsTalents);
+                return features;
+            };
+            live.Account = new Account { AuthLevel = AuthLevel.None };
+            typeof(Account).GetProperty(nameof(Account.AccountId))!.SetValue(live.Account, 811010UL);
+            live.GameObject = new WizClientObject { m_templateID = 1, m_inactiveBehaviors = [] };
+            _oldGames = _games.GetValue(null);
+            _games.SetValue(null, PetGameConfigs.KioskGames.Values.ToDictionary(game => game, game => new PetGameInfo {
+                m_name = game, m_energyCosts = [], m_gameIcon = "", m_trackIcons = [], m_trackToolTips = [],
+                m_trackChoices = [new PetStatModificationSet { m_name = "AuthoredTrack", m_scene = "AuthoredScene",
+                    m_gameScoreFactor = [], m_modifications = [new() { m_name = "Agility", m_change = 4 }] }] }, StringComparer.Ordinal));
+            _lazy = typeof(PetGameConfigs).BaseType!.GetField("s_instance", Static)!.GetValue(null)!;
+            _value = _lazy.GetType().GetField("_value", Private)!; _state = _lazy.GetType().GetField("_state", Private)!;
+            _oldValue = _value.GetValue(_lazy); _oldState = _state.GetValue(_lazy);
+            _value.SetValue(_lazy, RuntimeHelpers.GetUninitializedObject(typeof(PetGameConfigs))); _state.SetValue(_lazy, null);
+            var cache = (IDictionary<ulong, CoreTemplate>)typeof(CoreObjectFactory).GetField("s_templateCache", Static)!.GetValue(null)!;
+            // The outer Fixture owns and restores the entire template cache.
+            foreach (var (game, id) in PetGameObjectCodec.LogicTemplates)
+                cache[id] = new WizItemTemplate { m_templateID = id, m_displayName = "", m_behaviors = [new PetGameBehaviorTemplate {
+                    m_behaviorName = "PetGameBehavior", m_gameName = game }] };
+            _system = ActorSystem.Create("pet-initializer-" + Guid.NewGuid().ToString("N"), "akka.actor.provider = local");
+        }
+        internal static async Task<NativeInitializerFixture> Create(Wizard live) {
+            var f = new NativeInitializerFixture(live);
+            try {
+                f._socket = f._system.ActorOf(Props.Create(() => new SocketProbe(f)), "socket");
+                f.Endpoint = f._system.ActorOf(Props.CreateBy(new ParentProducer(f._socket)), "parent");
+                f.Instance = await f.Endpoint.Ask<SessionActor>("Identify", Timeout, TestContext.Current.CancellationToken);
+                ActiveWizardDirectory.SetWizard(f.Endpoint, live); ActiveWizardDirectory.SetGameObject(f.Endpoint, live.GameObject);
+                f._attachSender = f._system.ActorOf(Props.Create(() => new AttachProbe(f.Instance)), "attach");
+                await f._attachSender.Ask<ActorIdentity>(new Identify("ready"), Timeout, TestContext.Current.CancellationToken);
+                var fanout = f._system.ActorOf(Props.Create(() => new AttachFanout(f.Instance)), "fanout");
+                await fanout.Ask<ActorIdentity>(new Identify("ready"), Timeout, TestContext.Current.CancellationToken);
+                var routes = (Dictionary<Type, List<IActorRef>>)typeof(SessionActor).GetField("_dispatchTable", Private)!.GetValue(f.Instance)!;
+                routes[typeof(SERVICE_101_PROTOCOL.MSG_ATTACHCOMPLETE)] = [fanout];
+                f._attach = new ZoneAttachContext(live.Zone, f._socket, 1, live.GameObjectID);
+                f.Instance.PublishDoorAttach(f._attach);
+                f.Endpoint.Tell(new SERVICE_101_PROTOCOL.MSG_ATTACHCOMPLETE { AttachGeneration = f._attach.Generation,
+                    ZoneActorRef = f._attach.Actor }, f._attachSender);
+                await f.ParentBarrier(); Assert.True(f.Instance.TryCapturePetGameAttach(live, out _));
+                f.Service = f._system.ActorOf(Props.CreateBy(new PetProducer(f)), "pet");
+                Assert.True(await f.Service.Ask<bool>(new Ready(), Timeout, TestContext.Current.CancellationToken));
+                var order = (List<(IActorRef Ref, Type Type)>)typeof(SessionActor).GetField("_serviceOrder", Private)!.GetValue(f.Instance)!;
+                order.Add((f.Service, typeof(PetGameService)));
+                foreach (var type in MessageHandlerTable.HandlersOf(typeof(PetGameService)).Keys)
+                    routes[type] = type == typeof(SERVICE_101_PROTOCOL.MSG_ATTACHCOMPLETE) ? [fanout, f.Service] : [f.Service];
+                routes[typeof(ZONE_102_PROTOCOL.MSG_ZONETRANSFER)] = [f._socket];
+                f.Endpoint.Tell(new SERVICE_101_PROTOCOL.MSG_GETALLSERVICES());
+                return f;
+            } catch { f.Dispose(); throw; }
+        }
+        internal async Task Join(string game = Dance) {
+            await Service.Ask<bool>(new Send(new PET_9_PROTOCOL.MSG_PETGAMEJOIN { Game = game, Track = "0" }),
+                Timeout, TestContext.Current.CancellationToken);
+            await ParentBarrier(); await Session(); await ParentBarrier();
+        }
+        internal async Task Arrive(string game) {
+            _live.PreviousZone = _live.Zone; _live.Zone = PetGameScenes.ZoneFor(game, 0);
+            _attach = _attach with { Zone = _live.Zone, Generation = _attach.Generation + 1 };
+            Instance.PublishDoorAttach(_attach);
+            Endpoint.Tell(new SERVICE_101_PROTOCOL.MSG_ATTACHCOMPLETE { AttachGeneration = _attach.Generation,
+                ZoneActorRef = _attach.Actor }, _attachSender);
+            await ParentBarrier(); await Session(); await ParentBarrier(); await Session();
+        }
+        internal void ClearOutput() { while (Output.TryDequeue(out _)) { } }
+        // The same authored scene shape used by existing phantom admission tests; no game assets are read.
+        private static PetGameScene AuthoredScene(string game, int track) => game == PetGameObjectCodec.Cannon
+            ? new(game, track, PetGameScenes.ZoneFor(game, track), PetGameObjectCodec.CannonTemplate, Vector3.Zero,
+                new Dictionary<string, Vector3> { ["Home"] = Vector3.Zero, ["PlayerStart"] = new(800, 0, 0) },
+                [new(1000, 0, 0)], null, PetGameScenes.CannonTargetTemplate) : null;
+        internal async Task<object> Session() => (await Service.Ask<Snapshot>(new Inspect(), Timeout,
+            TestContext.Current.CancellationToken)).Session;
+        internal async Task ParentBarrier() {
+            if (Instance is null || Instance.IsDisposed) return;
+            try { await Endpoint.Ask<SessionActor>("Identify", Timeout, TestContext.Current.CancellationToken); }
+            catch (AskTimeoutException) when (Instance.IsDisposed) { }
+        }
+        internal async Task<IMessage[]> Drain() {
+            await ParentBarrier();
+            await _socket.Ask<ActorIdentity>(new Identify("drain"), Timeout, TestContext.Current.CancellationToken);
+            var packets = new List<IMessage>(); while (Packets.TryDequeue(out var packet)) packets.Add(packet);
+            return packets.ToArray();
+        }
+        private IDisposable EnterScope() {
+            var oldTalents = PetTalentRuntime.TestScope.Value; var oldProgress = ClassicPetProgressTransactions.TestScope.Value;
+            var oldStore = WizardCollection.TestStoreScope.Value; var oldRows = WizardInventoryTransactions.TestRowsScope.Value;
+            var oldSnacks = WizardPetSnackTransactions.TestRowsScope.Value; var oldScenes = PetGameScenes.TestScope.Value;
+            PetGameScenes.TestScope.Value = AuthoredScene;
+            PetTalentRuntime.TestScope.Value = _talents; ClassicPetProgressTransactions.TestScope.Value = _progress;
+            WizardCollection.TestStoreScope.Value = _store; WizardInventoryTransactions.TestRowsScope.Value = _rows;
+            WizardPetSnackTransactions.TestRowsScope.Value = _snacks;
+            return new Restore(() => { PetTalentRuntime.TestScope.Value = oldTalents; ClassicPetProgressTransactions.TestScope.Value = oldProgress;
+                WizardCollection.TestStoreScope.Value = oldStore; WizardInventoryTransactions.TestRowsScope.Value = oldRows;
+                WizardPetSnackTransactions.TestRowsScope.Value = oldSnacks; PetGameScenes.TestScope.Value = oldScenes; });
+        }
+        private sealed class SocketProbe : ReceiveActor {
+            public SocketProbe(NativeInitializerFixture fixture) {
+                Receive<ZONE_102_PROTOCOL.MSG_ZONETRANSFER>(transfer => fixture.Output.Enqueue(transfer));
+                Receive<IMessage>(packet => { fixture.WireSenders.Enqueue(Sender); fixture.Packets.Enqueue(packet); fixture.Output.Enqueue(packet); });
+            }
+        }
+        private sealed class AttachProbe(SessionActor parent) : AttachService(parent) { protected override void PreStart() { } }
+        private sealed class AttachFanout(SessionActor parent) : MessageService(parent) {
+            [MessageHandler(typeof(SERVICE_101_PROTOCOL.MSG_ATTACHCOMPLETE))]
+            private void Completed(SERVICE_101_PROTOCOL.MSG_ATTACHCOMPLETE message) { }
+        }
+        private sealed class ParentProducer(IActorRef socket) : IIndirectActorProducer {
+            public Type ActorType => typeof(SessionActor);
+            public ActorBase Produce() => new SessionActor(socket);
+            public void Release(ActorBase actor) { }
+        }
+        private sealed class PetProducer(NativeInitializerFixture fixture) : IIndirectActorProducer {
+            public Type ActorType => typeof(PetGameService);
+            public ActorBase Produce() {
+                var service = new PetGameService(fixture.Instance);
+                typeof(MessageService).GetField("_cachedWizard", Private)!.SetValue(service, fixture._live);
+                typeof(MessageService).GetField("_cachedWizardGameObject", Private)!.SetValue(service, fixture._live.GameObject);
+                var driver = new Driver(service, fixture);
+                typeof(ActorBase).GetMethod("Become", Private, null, [typeof(Receive)], null)!.Invoke(service, [new Receive(driver.Dispatch)]);
+                return service;
+            }
+            public void Release(ActorBase actor) { }
+        }
+        private sealed class Driver(PetGameService service, NativeInitializerFixture fixture) {
+            internal bool Dispatch(object message) {
+                var sender = (IActorRef)typeof(ActorBase).GetProperty("Sender", Private | BindingFlags.Public)!.GetValue(service)!;
+                try {
+                    if (message is Ready) { sender.Tell(true); return true; }
+                    if (message is Inspect) { sender.Tell(new Snapshot(typeof(PetGameService).GetField("_session", Private)!.GetValue(service))); return true; }
+                    var actual = message is Send send ? send.Message : message;
+                    if (service.ShouldStashForPublication(actual)) { service.Stash.Stash(); return true; }
+                    using var scope = fixture.EnterScope();
+                    var dispatch = MessageHandlerTable.DispatcherFor(typeof(PetGameService), actual.GetType());
+                    Assert.NotNull(dispatch); dispatch(service, actual);
+                    if (message is Send) sender.Tell(true);
+                } catch (Exception error) { sender.Tell(new Status.Failure(error)); }
+                return true;
+            }
+        }
+        private sealed class Restore(Action restore) : IDisposable { public void Dispose() => restore(); }
+        public void Dispose() {
+            _system.Terminate().GetAwaiter().GetResult(); _system.Dispose();
+            if (Endpoint is not null) ActiveWizardDirectory.Remove(Endpoint);
+            PetGameTransfers.Cancel(_live.CharId); _rules.OwnerExtraFeatures = _oldOwnerFeatures;
+            _games.SetValue(null, _oldGames); _value.SetValue(_lazy, _oldValue); _state.SetValue(_lazy, _oldState);
+        }
     }
 
     private sealed class Fixture : IDisposable {
