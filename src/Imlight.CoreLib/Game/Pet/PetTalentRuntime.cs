@@ -13,6 +13,7 @@ using Imcodec.ObjectProperty;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Classic;
 using Imlight.Classic.Pets;
+using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.Classic.Elixirs;
 using Imlight.CoreLib.Game.Effects;
 using Imlight.CoreLib.Game.Spells;
@@ -118,7 +119,8 @@ internal static class PetTalentRuntime {
         foreach (var entry in receipt.Effects) {
             ByteString data;
             if (TestScope.Value?.Serialize is { } serialize) data = serialize(entry.Effect);
-            else if (!new ObjectSerializer(Behaviors: SerializerFlags.None).Serialize(entry.Effect,
+            // CLASSIC: use the same compact native effect envelope as EquipmentService.
+            else if (!ClassicCoreObjectSerializer.Create(false, SerializerFlags.None).Serialize(entry.Effect,
                 PropertyFlags.Prop_Transmit | PropertyFlags.Prop_AuthorityTransmit, out data))
                 throw new InvalidOperationException("Could not prepare the passive pet effect payload.");
             if (data.Length == 0) throw new InvalidOperationException("Empty passive pet effect payload.");

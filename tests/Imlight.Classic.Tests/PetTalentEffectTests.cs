@@ -8,6 +8,7 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
 using Akka.Actor;
+using Imcodec.CoreObject;
 using Imcodec.Cryptography;
 using Imcodec.IO;
 using Imcodec.MessageLayer;
@@ -16,6 +17,7 @@ using Imcodec.ObjectProperty;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Classic;
 using Imlight.Classic.Pets;
+using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.Game.Pet;
 using Imlight.CoreLib.Game.Services;
 using Imlight.CoreLib.Game.Spells;
@@ -300,7 +302,7 @@ public sealed class PetTalentEffectTests {
 
     [Fact]
     public void GameInitializationReturnsAcknowledgedNativeIdsThatTheNextFeedActuallyRemoves() {
-        using var f = new Fixture(); var live = f.Live();
+        using var f = InitializedFixture(); var live = f.Live();
         Assert.True(live.InventoryToEquipmentTransfer(Fixture.PetId, out _, out _));
         var old = Assert.Single(live.GameEffects.Snapshot());
         PetProgress.Behavior(f.Items[Fixture.PetId]).m_requiredXP = 0;
@@ -320,7 +322,7 @@ public sealed class PetTalentEffectTests {
 
     [Fact]
     public void UnchangedGameInitializationDoesNotSaveSerializeOrChurnAdmittedStatsCardsOrIds() {
-        using var f = new Fixture(Fixture.Health, Fixture.Pixie); var live = f.Live();
+        using var f = InitializedFixture(Fixture.Health, Fixture.Pixie); var live = f.Live();
         Assert.True(live.InventoryToEquipmentTransfer(Fixture.PetId, out _, out _));
         var effects = live.GameEffects.Snapshot(); var card = Assert.Single(live.SpellbookBehavior.TemporarySpells);
         PetTalentRuntime.TestScope.Value.Serialize = _ => throw new InvalidOperationException("Unexpected no-op serialization");
@@ -332,7 +334,7 @@ public sealed class PetTalentEffectTests {
     [Theory]
     [InlineData(false)] [InlineData(true)]
     public void FailedOrLostInitializationAckExposesNoTransitionAndKeepsTheAdmittedReceipt(bool durable) {
-        using var f = new Fixture(Fixture.Health, Fixture.Pixie); var live = f.Live();
+        using var f = InitializedFixture(Fixture.Health, Fixture.Pixie); var live = f.Live();
         Assert.True(live.InventoryToEquipmentTransfer(Fixture.PetId, out _, out _));
         var old = live.GameEffects.Snapshot(); var card = Assert.Single(live.SpellbookBehavior.TemporarySpells);
         PetProgress.Behavior(f.Items[Fixture.PetId]).m_requiredXP = 0;
@@ -348,7 +350,7 @@ public sealed class PetTalentEffectTests {
     [Theory]
     [InlineData(false)] [InlineData(true)]
     public void UnpreparableNativeInitializationTransitionRefusesBeforeSave(bool throws) {
-        using var f = new Fixture(); var live = f.Live();
+        using var f = InitializedFixture(); var live = f.Live();
         Assert.True(live.InventoryToEquipmentTransfer(Fixture.PetId, out _, out _));
         var old = Assert.Single(live.GameEffects.Snapshot());
         PetProgress.Behavior(f.Items[Fixture.PetId]).m_requiredXP = 0;
@@ -363,7 +365,7 @@ public sealed class PetTalentEffectTests {
     [Theory]
     [InlineData(false)] [InlineData(true)]
     public void InitializationContextRefusalBeforeOrDuringNativePreparationHasNoSaveOrPublication(bool duringPreparation) {
-        using var f = new Fixture(); var live = f.Live();
+        using var f = InitializedFixture(); var live = f.Live();
         Assert.True(live.InventoryToEquipmentTransfer(Fixture.PetId, out _, out _));
         var old = Assert.Single(live.GameEffects.Snapshot()); var valid = duringPreparation;
         PetProgress.Behavior(f.Items[Fixture.PetId]).m_requiredXP = 0;
@@ -376,7 +378,7 @@ public sealed class PetTalentEffectTests {
     [Theory]
     [InlineData(false)] [InlineData(true)]
     public async Task ActualJoinPublishesInitializationEffectIdsBeforeAdmissionEvenWhenEnergyRefuses(bool tooTired) {
-        using var f = new Fixture(); f.Saved.PetOwnerBehavior.SetEnergy(50); var live = f.Live();
+        using var f = InitializedFixture(); f.Saved.PetOwnerBehavior.SetEnergy(50); var live = f.Live();
         Assert.True(live.InventoryToEquipmentTransfer(Fixture.PetId, out _, out _));
         var old = Assert.Single(live.GameEffects.Snapshot());
         PetProgress.Behavior(f.Items[Fixture.PetId]).m_requiredXP = 0;
@@ -414,7 +416,7 @@ public sealed class PetTalentEffectTests {
     [Theory]
     [InlineData(false)] [InlineData(true)]
     public async Task ActualJoinFailedOrLostInitializationAckSendsNoNativeEffectOrAdmission(bool durable) {
-        using var f = new Fixture(); f.Saved.PetOwnerBehavior.SetEnergy(50); var live = f.Live();
+        using var f = InitializedFixture(); f.Saved.PetOwnerBehavior.SetEnergy(50); var live = f.Live();
         Assert.True(live.InventoryToEquipmentTransfer(Fixture.PetId, out _, out _));
         var old = Assert.Single(live.GameEffects.Snapshot());
         PetProgress.Behavior(f.Items[Fixture.PetId]).m_requiredXP = 0;
@@ -428,7 +430,7 @@ public sealed class PetTalentEffectTests {
 
     [Fact]
     public async Task ActualJoinAcknowledgedNormalizationAfterAttachLossStaysDurableWithoutStaleNativeOutput() {
-        using var f = new Fixture(); f.Saved.PetOwnerBehavior.SetEnergy(50); var live = f.Live();
+        using var f = InitializedFixture(); f.Saved.PetOwnerBehavior.SetEnergy(50); var live = f.Live();
         Assert.True(live.InventoryToEquipmentTransfer(Fixture.PetId, out _, out _));
         PetProgress.Behavior(f.Items[Fixture.PetId]).m_requiredXP = 0;
         PetTalentRuntime.TestScope.Value.Serialize = null;
@@ -442,7 +444,7 @@ public sealed class PetTalentEffectTests {
 
     [Fact]
     public async Task ActualPhantomKioskPublishesAcknowledgedEffectIdsBeforeJoinAndTeleport() {
-        using var f = new Fixture(); f.Saved.PetOwnerBehavior.SetEnergy(50); var live = f.Live();
+        using var f = InitializedFixture(); f.Saved.PetOwnerBehavior.SetEnergy(50); var live = f.Live();
         Assert.True(live.InventoryToEquipmentTransfer(Fixture.PetId, out _, out _));
         var old = Assert.Single(live.GameEffects.Snapshot());
         PetProgress.Behavior(f.Items[Fixture.PetId]).m_requiredXP = 0;
@@ -463,7 +465,7 @@ public sealed class PetTalentEffectTests {
 
     [Fact]
     public async Task ActualPhantomArrivalPublishesItsFreshInitializationEffectIdsBeforeLogicAndInit() {
-        using var f = new Fixture(); f.Saved.PetOwnerBehavior.SetEnergy(50); var live = f.Live();
+        using var f = InitializedFixture(); f.Saved.PetOwnerBehavior.SetEnergy(50); var live = f.Live();
         Assert.True(live.InventoryToEquipmentTransfer(Fixture.PetId, out _, out _));
         var old = Assert.Single(live.GameEffects.Snapshot()); PetTalentRuntime.TestScope.Value.Serialize = null;
         using var actor = await NativeInitializerFixture.Create(live);
@@ -487,7 +489,7 @@ public sealed class PetTalentEffectTests {
     [InlineData(false, true)] [InlineData(true, true)]
     [InlineData(false, false)] [InlineData(true, false)]
     public async Task ActualPhantomNormalizationAfterSaveAttachLossEmitsNoEffectsAdmissionOrTravel(bool arrival, bool talentEffects) {
-        using var f = new Fixture(); f.Saved.PetOwnerBehavior.SetEnergy(50); var live = f.Live();
+        using var f = InitializedFixture(); f.Saved.PetOwnerBehavior.SetEnergy(50); var live = f.Live();
         Assert.True(live.InventoryToEquipmentTransfer(Fixture.PetId, out _, out _));
         PetTalentRuntime.TestScope.Value.Serialize = null;
         using var actor = await NativeInitializerFixture.Create(live);
@@ -504,10 +506,22 @@ public sealed class PetTalentEffectTests {
             PetGameScenes.ZoneFor(PetGameObjectCodec.Cannon, 0), DateTime.UtcNow, out _));
     }
 
+    // These admission regressions start from fully initialized authoritative rows. Existing fixtures
+    // intentionally also cover legacy rating normalization; do not change their saved shapes globally.
+    private static Fixture InitializedFixture(params string[] expressed) {
+        var fixture = new Fixture(expressed);
+        PetProgress.EnsureInitialized(fixture.Items[Fixture.PetId]);
+        return fixture;
+    }
+
     private static GameEffectBase DecodeNativeAdd(GAME_5_PROTOCOL.MSG_ADDEFFECT packet) {
-        Assert.True(new ObjectSerializer(Behaviors: SerializerFlags.None).Deserialize<GameEffectBase>((byte[])packet.EffectData,
+        var raw = (byte[])packet.EffectData;
+        // Independently assert the normal native effect header used by EquipmentService, not only a codec roundtrip.
+        Assert.True(raw.Length >= 6); Assert.Equal((byte)0, raw[0]); Assert.Equal((byte)0, raw[1]);
+        Assert.Equal(new WizStatisticEffect().GetHash(), System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(raw.AsSpan(2, 4)));
+        Assert.True(new CoreObjectSerializer(versionable: false, behaviors: SerializerFlags.None).Deserialize<GameEffectBase>(raw,
             PropertyFlags.Prop_Transmit | PropertyFlags.Prop_AuthorityTransmit, out var effect));
-        Assert.NotNull(effect); return effect;
+        return Assert.IsType<WizStatisticEffect>(effect);
     }
 
     // CLASSIC: real registered producer, completed attach, parent authority and socket sink. Only the
