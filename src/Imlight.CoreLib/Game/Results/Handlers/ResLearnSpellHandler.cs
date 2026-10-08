@@ -71,6 +71,8 @@ internal sealed class ResLearnSpellHandler : BaseResultHandler<ResLearnSpell> {
         context.GetPlayerRef().Tell(new WIZARD_12_PROTOCOL.MSG_ADDSPELLTOBOOK {
             SpellID = (int) Result.m_templateID,
         });
+        var player = context.GetPlayerRef();
+        Imlight.CoreLib.Classic.ClassicBadges.SpellsChanged(wizard, message => player.Tell(message)); // CLASSIC
 
         return true;
     }
@@ -83,6 +85,9 @@ internal sealed class ResLearnSpellHandler : BaseResultHandler<ResLearnSpell> {
                 foreach (var message in receipt.Messages) player.Tell(message);
             }, expectedAccountId: expectedAccountId);
         if (WizardCollection.IsInventorySnapshotUncertain(wizard)) { player.Tell("Close"); return false; }
+        if (status != SpellbookMutationStatus.Refused) {
+            Imlight.CoreLib.Classic.ClassicBadges.SpellsChanged(wizard, message => player.Tell(message)); // CLASSIC
+        }
         return status != SpellbookMutationStatus.Refused;
     }
 

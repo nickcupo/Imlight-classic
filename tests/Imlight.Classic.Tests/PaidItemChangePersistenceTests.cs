@@ -82,6 +82,55 @@ public sealed class PaidItemChangePersistenceTests {
     }
 
     [Fact]
+    public void StitchKeepsTheStatsItemTakesTheLookAndColorsAndDestroysTheOther() {
+        const ulong Look = 817499; const uint LookTemplate = 900001;
+        var f = new Fixture();
+        f.Saved.InventoryBehavior.InventoryItemIds.Add(Look);
+        f.Rows["original/look"] = new() { m_globalID = Look, m_permID = Look, m_characterId = Fixture.Owner, m_templateID = LookTemplate,
+            m_primaryColor = 4, m_secondaryColor = 5, m_pattern = 6, m_inactiveBehaviors = [] };
+        var look = new WizItemTemplate { m_templateID = LookTemplate, m_adjectiveList = ["Hat"] };
+        using var scope = f.Scope(); var live = f.Live();
+        WizItemTemplate Templates(ulong id) => id == LookTemplate ? look : f.Template;
+        Assert.True(ClassicPaidItemChanges.Stitch(live, Fixture.Id, Look, out var receipt, out _, Templates));
+        Assert.Equal(Fixture.Id, receipt.Item.m_globalID.Full);
+        Assert.Equal((ulong) LookTemplate, f.Stored.m_displayID.Full);
+        Assert.Equal((ulong) Fixture.TemplateId, f.Stored.m_templateID.Full);          // stats and name stay
+        Assert.Equal((4, 5, 6), (f.Stored.m_primaryColor, f.Stored.m_secondaryColor, f.Stored.m_pattern));
+        Assert.False(f.Rows.ContainsKey("original/look"));
+        Assert.Equal(new[] { Fixture.Id }, f.Saved.InventoryBehavior.InventoryItemIds);
+        Assert.Equal(new[] { Fixture.Id }, live.InventoryBehavior.InventoryItemIds);
+        Assert.Equal((ulong) LookTemplate, live.InventoryBehavior.GetItem(Fixture.Id).m_displayID.Full);
+        Assert.Equal(1, f.SaveAttempts);
+    }
+
+    [Theory]
+    [InlineData("Robe")]       // another slot
+    [InlineData("Weapon")]     // not clothing
+    public void StitchRefusesItemsOfDifferentOrNonClothingSlots(string lookSlot) {
+        const ulong Look = 817499; const uint LookTemplate = 900001;
+        var f = new Fixture();
+        if (lookSlot == "Weapon") f.Template = f.Template with { m_adjectiveList = ["Weapon"] };
+        f.Saved.InventoryBehavior.InventoryItemIds.Add(Look);
+        f.Rows["original/look"] = new() { m_globalID = Look, m_permID = Look, m_characterId = Fixture.Owner, m_templateID = LookTemplate, m_inactiveBehaviors = [] };
+        var look = new WizItemTemplate { m_templateID = LookTemplate, m_adjectiveList = [lookSlot] };
+        using var scope = f.Scope(); var live = f.Live();
+        Assert.False(ClassicPaidItemChanges.Stitch(live, Fixture.Id, Look, out _, out _, id => id == LookTemplate ? look : f.Template));
+        Assert.Equal(0, f.SaveAttempts);
+        Assert.True(f.Rows.ContainsKey("original/look"));
+    }
+
+    [Fact]
+    public void StitchRefusesAWornItem() {
+        const ulong Look = 817499; const uint LookTemplate = 900001;
+        var f = new Fixture(equipped: true);
+        f.Saved.InventoryBehavior.InventoryItemIds.Add(Look);
+        f.Rows["original/look"] = new() { m_globalID = Look, m_permID = Look, m_characterId = Fixture.Owner, m_templateID = LookTemplate, m_inactiveBehaviors = [] };
+        using var scope = f.Scope(); var live = f.Live();
+        Assert.False(ClassicPaidItemChanges.Stitch(live, Fixture.Id, Look, out _, out _, _ => f.Template));
+        Assert.Equal(0, f.SaveAttempts);
+    }
+
+    [Fact]
     public void DyePreservesWornDeckSpellbookAliasAndEveryUnrelatedBehaviorAndLocationList() {
         var f = new Fixture(equipped: true);
         f.Stored.m_inactiveBehaviors = [new DeckBehavior { m_spellList = [new SpellData { m_templateID = 77, m_quantity = 2 }] },
@@ -396,9 +445,15 @@ public sealed class PaidItemChangePersistenceTests {
         internal ItemAdvanced Advanced => (ItemAdvanced)(object)_advanced;
         protected override object? Invoke(MethodInfo? method, object?[]? args) => method!.Name switch {
             "get_Advanced" => _advanced, "SaveChanges" => SaveNow(), "Dispose" => null,
+            "Delete" when args?.Length == 1 && args[0] is WizClientObjectItem item => DeleteRow(item),
             _ => throw new NotSupportedException(method.Name),
         };
         private object? SaveNow() { Save(); return null; }
+        private object? DeleteRow(WizClientObjectItem item) {
+            var key = Rows.Single(pair => ReferenceEquals(pair.Value, item)).Key;
+            Rows.Remove(key); Deleted.Add(key); return null;
+        }
+        internal readonly List<string> Deleted = [];
     }
 
     public class ItemAdvanced : DispatchProxy {

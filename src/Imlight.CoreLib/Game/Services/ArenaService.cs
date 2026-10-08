@@ -236,6 +236,9 @@ internal sealed class ArenaService(SessionActor sessionActor) : MessageService(s
         SendToSocket(ArenaMessages.ArenaPoints(wizard.GameStats.m_currentArenaPoints));
         SendToSocket(ArenaMessages.PvpCurrency(wizard.GameStats.m_currentPvPCurrency));
         SendToSocket(outcome.Result);
+        if (outcome.Kind == ArenaKind.Ranked && !outcome.NoContest) {
+            Imlight.CoreLib.Classic.ClassicBadges.PvpRatingChanged(wizard, outcome.RatingAfter, SendToSocket); // CLASSIC: Sergeant .. Warlord.
+        }
         var verdict = outcome.NoContest ? "The match ended without a contest." : outcome.Won ? "You won the match!" : outcome.Fled ? "You fled the match, so it counts as a loss." : "You lost the match.";
         InformGameClient(outcome.Kind == ArenaKind.Ranked
             ? $"{verdict} Rating {outcome.RatingAfter} ({outcome.RatingAfter - outcome.RatingBefore:+#;-#;0}), rank {outcome.Rank}. "
