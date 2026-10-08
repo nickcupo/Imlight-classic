@@ -339,19 +339,36 @@ public sealed class ReagentPersistenceRegressionTests {
     }
 
     [Fact]
-    public void LegacyDanglingReferencesAreDroppedOnLoadAndTheBagThenValidates() {
-        var store = new ReagentStore(4);
-        store.Saved.AlchemyBehavior.ReagentItemIds.Add(ReagentStore.ItemId + 99); // row deleted before the atomic bag
+    public void OwnedBagHydrationDropsAReferenceWithNoRowAndKeepsTheRest() {
+        var store = new ReagentStore(2);
         using var scope = store.Scope();
-        var live = store.Live();
-        live.AlchemyBehavior.ReagentItemIds = [.. store.Saved.AlchemyBehavior.ReagentItemIds];
         using var session = store.Open();
-        Assert.False(WizardReagentCollection.TryReadOwnedBag(session, store.ForStage(session), out _));
-        WizardReagentCollection.RepairDanglingReferences(live, session);
-        Assert.Equal(ReagentStore.ItemId, Assert.Single(live.AlchemyBehavior.ReagentItemIds));
-        Assert.Equal(ReagentStore.ItemId, Assert.Single(store.Saved.AlchemyBehavior.ReagentItemIds));
-        Assert.True(WizardReagentCollection.TryReadOwnedBag(session, store.ForStage(session), out var owned));
-        Assert.Equal(4, Assert.Single(owned).m_quantity);
+        var saved = store.ForStage(session);
+        const ulong dangling = ReagentStore.ItemId + 77;
+        saved.AlchemyBehavior.ReagentItemIds = [dangling, ReagentStore.ItemId];
+        Assert.False(WizardReagentCollection.TryReadOwnedBag(session, saved, out _)); // write paths stay strict
+        Assert.True(WizardReagentCollection.TryReadOwnedBagForLoad(session, saved, out var owned, out var dropped));
+        Assert.Equal(dangling, Assert.Single(dropped));
+        Assert.Equal(ReagentStore.ItemId, Assert.Single(owned).m_globalID.Full);
+        Assert.Equal(2, Assert.Single(owned).m_quantity);
+        Assert.Equal(new[] { ReagentStore.ItemId }, saved.AlchemyBehavior.ReagentItemIds);
+        Assert.Single(ReagentStore.Session(session).Rows);
+        Assert.Equal(0, store.SaveAttempts);
+        Assert.Equal(0, store.Deleted);
+    }
+
+    [Fact]
+    public void DropMissingReferencesSavesOnlyTheRowLessReferenceAndIsANoOpOtherwise() {
+        var store = new ReagentStore(2);
+        const ulong dangling = ReagentStore.ItemId + 77;
+        store.Saved.AlchemyBehavior.ReagentItemIds = [dangling, ReagentStore.ItemId];
+        using var scope = store.Scope();
+        Assert.True(WizardReagentCollection.DropMissingReferences(ReagentStore.Char));
+        Assert.Equal(new[] { ReagentStore.ItemId }, store.Saved.AlchemyBehavior.ReagentItemIds);
+        Assert.Equal(2, Assert.Single(store.SavedRows).m_quantity);
+        Assert.Equal(1, store.SaveAttempts); Assert.Equal(0, store.Deleted);
+        Assert.False(WizardReagentCollection.DropMissingReferences(ReagentStore.Char));
+        Assert.Equal(1, store.SaveAttempts);
     }
 
     [Fact]
@@ -812,7 +829,7 @@ public sealed class ReagentPersistenceRegressionTests {
     public class ReagentAdvanced : DispatchProxy {
         private readonly IMetadataDictionary _metadata = DispatchProxy.Create<IMetadataDictionary, ReagentMetadata>();
         protected override object? Invoke(MethodInfo? method, object?[]? args) => method!.Name switch {
-            "set_OptimisticConcurrencyMode" or "Evict" => null,
+            "set_OptimisticConcurrencyMode" => null,
             "GetMetadataFor" => _metadata,
             _ => throw new NotSupportedException(method.Name),
         };

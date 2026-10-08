@@ -902,9 +902,12 @@ public static class WizardCollection {
     }
 
     private static Wizard LoadWizard(Wizard wizard) {
-        using var session = s_store.OpenSession();
-        WizardReagentCollection.RepairDanglingReferences(wizard, session); // CLASSIC: legacy dangling reagent ids
-        return HydrateLoadedWizard(wizard, session);
+        var before = wizard.AlchemyBehavior?.ReagentItemIds?.Count ?? 0;
+        Wizard loaded;
+        using (var session = s_store.OpenSession()) loaded = HydrateLoadedWizard(wizard, session);
+        // CLASSIC: save the drop of row-less reagent references found while loading (WizardReagentCollection).
+        if ((loaded.AlchemyBehavior?.ReagentItemIds?.Count ?? 0) < before) WizardReagentCollection.DropMissingReferences(loaded.CharId);
+        return loaded;
     }
 
     // CLASSIC: retain the production loading path while allowing an isolated real-session regression.
@@ -955,8 +958,12 @@ public static class WizardCollection {
 
         // CLASSIC: reagent rows live in a separate collection too. Restore only this wizard's exact
         // saved references; orphan rows and existing counts are retained without adopting or rewriting them.
-        if (!WizardReagentCollection.TryReadOwnedBag(session, wizard, out var reagents))
+        if (!WizardReagentCollection.TryReadOwnedBagForLoad(session, wizard, out var reagents, out var droppedReagentIds))
             throw new InvalidOperationException("Saved reagent bag contains ambiguous or missing owned rows.");
+        if (droppedReagentIds.Count > 0) {
+            Logger.Warning("Wizard {0}: loading without {1} saved reagent reference(s) that have no row: {2}",
+                Logger.Args(wizard.CharId, droppedReagentIds.Count, string.Join(",", droppedReagentIds)));
+        }
         wizard.AlchemyBehavior ??= new();
         wizard.AlchemyBehavior.Reagents = reagents;
 
