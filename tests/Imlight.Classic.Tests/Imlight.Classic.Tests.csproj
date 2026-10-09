@@ -51,6 +51,7 @@
     <ServerIntegrationTest Include="ClassicDialogCameraTests.cs" />
     <ServerIntegrationTest Include="ClassicLaterObjectsTests.cs" />
     <ServerIntegrationTest Include="CrownShopCatalogTests.cs" />
+    <ServerIntegrationTest Include="HenchmenTests.cs" />
     <ServerIntegrationTest Include="GoldenBattleTests.cs" />
     <ServerIntegrationTest Include="QuestOfferOrderTests.cs" />
     <ServerIntegrationTest Include="ClassicZoneWadsTests.cs" />

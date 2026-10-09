@@ -103,6 +103,10 @@ public class CombatDuelSubCircle {
     internal CombatParticipant CombatParticipant { get; private set; }
     internal bool AddedToDuel { get; set;}
     internal bool IsSummonedMinion { get; private set; }
+    // CLASSIC: a henchman hired from the Crown Shop is a summoned minion of its buyer that plays a wizard's deck at
+    // this level (the shop item's "Level N") with the ally brain. 0: not a henchman.
+    internal int HenchmanLevel { get; private set; }
+    internal bool IsHenchman => IsSummonedMinion && HenchmanLevel > 0;
     private CoreObject _minionOwnerObject;
     private CombatTeam _minionTeam = CombatTeam.Player;
     private CombatElixirEntryReceipt _pendingElixirReceipt;
@@ -243,6 +247,7 @@ public class CombatDuelSubCircle {
         ParticipantActor = actor;
         ParticipantObject = participantObject;
         IsSummonedMinion = isSummonedMinion;
+        HenchmanLevel = 0; // CLASSIC
         _minionOwnerObject = null;
         _minionTeam = CombatTeam.Player;
         if (isSummonedMinion && ClassicRuntime.IsActive) CaptureMinionOwner(minionOwnerSubCircle);
@@ -401,8 +406,25 @@ public class CombatDuelSubCircle {
         CombatParticipant = null;
         AddedToDuel = false;
         IsSummonedMinion = false;
+        HenchmanLevel = 0; // CLASSIC
         _minionOwnerObject = null;
         _minionTeam = CombatTeam.Player;
+    }
+
+    /// <summary>
+    /// CLASSIC: this summoned minion is a hired henchman of <paramref name="level"/>: it plays <paramref name="deck"/>
+    /// (a wizard's deck for its school and level) instead of its creature template's (T2-T4 have none), and the duel
+    /// picks its moves with the ally brain. An empty deck keeps the creature deck.
+    /// </summary>
+    internal void BecomeHenchman(int level, IReadOnlyList<SpellData> deck) {
+        if (!IsSummonedMinion || level <= 0) return;
+        HenchmanLevel = level;
+        if (deck is { Count: > 0 }) {
+            var spellData = deck.Select(spell => new CombatDeckSpellData {
+                TemplateId = spell.m_templateID, Quantity = spell.m_quantity,
+            }).ToList();
+            _combatDeck = new CombatDeck(spellData, [], PLAYER_HAND_SIZE, _duelActor?.StreamFor(CombatRng.DeckStream(SlotIndex)));
+        }
     }
 
     internal Hand DrawHand() {

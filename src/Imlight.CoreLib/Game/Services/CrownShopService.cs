@@ -29,7 +29,10 @@
  * before a purchase; the balance re-sent afterwards) follows Revive101's
  * feat/crown-shop branch (Phill030). A henchman is bought only during a duel;
  * it is paid when asked for and refunded unless the duel confirms it joined
- * (MSG_HENCHMANHIRED) within 15 s.
+ * (MSG_HENCHMANHIRED) within 15 s. CLASSIC (2026-10-09): the shop lists the
+ * client's own henchman items ("Level 20 Fire Henchman", ObjectData/Elixirs),
+ * whose ElixirBehavior's ResSummonHenchman names the wizard that joins; a
+ * refusal shows the client's own Error_Henchmen* text.
  *
  * Created by: Nick with Claude Code (claude-opus-5-5), after Phill030's upstream service
  * Version: KALI 1.0
@@ -75,7 +78,8 @@ internal class CrownShopService(SessionActor sessionActor) : MessageService(sess
 
     private PendingHire _pendingHire;
 
-    private sealed record PendingHire(WIZARD_12_PROTOCOL.MSG_PCS_PURCHASE_REQUEST Request, CrownShopEntry Item, bool PayWithGold);
+    private sealed record PendingHire(WIZARD_12_PROTOCOL.MSG_PCS_PURCHASE_REQUEST Request, CrownShopEntry Item, bool PayWithGold,
+        uint CreatureTid);
 
     // CLASSIC: delayed shop notifications cannot replace CombatService's current trusted mode.
     [MessageHandler(typeof(COMBAT_106_PROTOCOL.MSG_ACTORADDEDTODUEL))]
@@ -193,6 +197,28 @@ internal class CrownShopService(SessionActor sessionActor) : MessageService(sess
             return;
         }
 
+        // CLASSIC: a henchman item carries an ElixirBehavior too, so it is handled before the elixir path. Any
+        // PurchaseElixirEquipNow is accepted: a henchman is always used at once.
+        if (item.Category == CrownShopCategories.Henchmen) {
+            if (HenchmanCreature(item.Template) is not { } creature) {
+                Fail(message, "the henchman item names no henchman");
+                return;
+            }
+            if (!TryPay(wizard, item, payWithGold)) {
+                Fail(message, "cannot afford it");
+                return;
+            }
+            // Paid now; the duel confirms the henchman joined (ReceiveHenchmanHired) or the payment is refunded, also
+            // when no answer comes (the duel ended first).
+            _pendingHire = new PendingHire(message, item, payWithGold, creature);
+            Timers.StartSingleTimer(HireTimeoutKey, new HireTimedOut(_pendingHire), HireTimeout);
+            TellOtherServices(new COMBAT_106_PROTOCOL.MSG_HIREHENCHMAN {
+                CreatureTid = creature, Level = HenchmanRules.Level(item),
+            });
+
+            return;
+        }
+
         // CLASSIC: native Use Now maps to PurchaseElixirEquipNow=1 (r806919
         // 0x140a61bb0 -> same +0x52c choice -> 0x140a5f08f -> 0x14217e450).
         // Save Later is 0 and is outside the dated immediately-active purchase policy.
@@ -263,20 +289,6 @@ internal class CrownShopService(SessionActor sessionActor) : MessageService(sess
             return;
         }
 
-        if (item.Category == CrownShopCategories.Henchmen) {
-            if (!TryPay(wizard, item, payWithGold)) {
-                Fail(message, "cannot afford it");
-                return;
-            }
-            // Paid now; the duel confirms the henchman joined (ReceiveHenchmanHired) or the payment is refunded, also
-            // when no answer comes (the duel ended first).
-            _pendingHire = new PendingHire(message, item, payWithGold);
-            Timers.StartSingleTimer(HireTimeoutKey, new HireTimedOut(_pendingHire), HireTimeout);
-            TellOtherServices(new COMBAT_106_PROTOCOL.MSG_HIREHENCHMAN { CreatureTid = (uint) item.Template });
-
-            return;
-        }
-
         // CLASSIC: payment, initialized item, rental expiry and saved backpack reference are one
         // acknowledged transaction. A lost acknowledgement is never a reason to refund or repeat it.
         var prepared = WizardInventoryTransactions.Prepare(wizard,
@@ -316,7 +328,7 @@ internal class CrownShopService(SessionActor sessionActor) : MessageService(sess
     [MessageHandler(typeof(COMBAT_106_PROTOCOL.MSG_HENCHMANHIRED))]
     private void ReceiveHenchmanHired(COMBAT_106_PROTOCOL.MSG_HENCHMANHIRED message) {
         var pending = _pendingHire;
-        if (pending is null || pending.Item.Template != message.CreatureTid || GetActiveWizard() is not { } wizard) {
+        if (pending is null || pending.CreatureTid != message.CreatureTid || GetActiveWizard() is not { } wizard) {
             return;
         }
 
@@ -324,7 +336,11 @@ internal class CrownShopService(SessionActor sessionActor) : MessageService(sess
         Timers.Cancel(HireTimeoutKey);
         if (!message.Success) {
             Refund(wizard, pending.Item, pending.PayWithGold);
-            Fail(pending.Request, "henchmen are hired during a duel with a free place on your side");
+            Fail(pending.Request, $"the duel refused the henchman ({message.Refusal})");
+            // CLASSIC: the client's own text for the reason (Error_Henchmen*), as a short notice.
+            if (HenchmanRules.ClientText(message.Refusal) is { } text) {
+                SendToSocket(ClassicChat.Line(text));
+            }
 
             return;
         }
@@ -406,9 +422,8 @@ internal class CrownShopService(SessionActor sessionActor) : MessageService(sess
     /// <summary>
     /// CLASSIC: the catalog as the r806919 client can show it (owner client log 2026-10-04 03:12, Crown Shop open).
     /// <list type="bullet">
-    /// <item>Henchmen are left out: the client's PermanentShop rejects every henchman template ("templateID N not
-    /// found"; it lists items, and a henchman is a creature), and the client has no other way to hire one (no henchman
-    /// message in its protocol), so an offered henchman could never be seen or bought.</item>
+    /// <item>Henchmen are offered as the client's own henchman items (the creature templates listed before were
+    /// rejected: "templateID N not found"). A creature template still listed is left out.</item>
     /// <item>A gold-only item (the 2009 1-day mount rentals) gets a Crowns price: the client drops a row without one
     /// ("Invalid Crowns Price Recieved!"). It is the gold price / 10, rounded up: the ratio of every 2009 rental sold
     /// for both (7-day Enchanted Broom 1,000 Crowns or 10,000 gold). The gold price stays as 2009 had it.</item>
@@ -416,8 +431,33 @@ internal class CrownShopService(SessionActor sessionActor) : MessageService(sess
     /// </summary>
     internal static IEnumerable<CrownShopEntry> ForClient(IEnumerable<CrownShopEntry> offered)
         => offered
-            .Where(item => item.Category != CrownShopCategories.Henchmen)
+            .Where(item => item.Category != CrownShopCategories.Henchmen || IsHenchmanItem(item.Template))
             .Select(item => item.Crowns <= 0 && item.Gold > 0 ? item with { Crowns = (item.Gold + 9) / 10 } : item);
+
+    /// <summary>
+    /// CLASSIC: the henchman a Crown Shop henchman item summons: its ElixirBehavior's equip action ResSummonHenchman
+    /// (r806919 ObjectData/Elixirs/Henchman-T2-Fire.xml: m_templateID 191184, Eldon Dragonbloom). Null when the
+    /// template is not such an item.
+    /// </summary>
+    internal static uint? HenchmanCreature(ulong itemTemplate)
+        => itemTemplate < (1UL << 32) && CoreObjectFactory.GetCoreTemplate((uint) itemTemplate) is WizItemTemplate item
+            ? HenchmanCreature(item) : null;
+
+    internal static uint? HenchmanCreature(WizItemTemplate item)
+        => item?.m_behaviors?.OfType<ElixirBehaviorTemplate>()
+            .SelectMany(elixir => elixir.m_equipActionList?.m_results ?? [])
+            .OfType<ResSummonHenchman>()
+            .Select(summon => (uint) summon.m_templateID)
+            .FirstOrDefault(tid => tid != 0) is { } tid and not 0 ? tid : null;
+
+    private static bool IsHenchmanItem(ulong template) {
+        try {
+            return HenchmanCreature(template) is not null;
+        }
+        catch (Exception) {
+            return false; // no templates loaded (a test without the client data)
+        }
+    }
 
     // Catalog feature flags alone never authorize an unverified elixir or its price.
     internal static IEnumerable<CrownShopEntry> ForProfile(IEnumerable<CrownShopEntry> offered, ClassicRules rules)
