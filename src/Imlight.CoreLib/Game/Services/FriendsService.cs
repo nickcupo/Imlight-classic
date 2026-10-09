@@ -211,6 +211,7 @@ internal class FriendsService(SessionActor sessionActor) : MessageService(sessio
 
         SendBuddyListEnd(wizard);
         InformBuddiesOfStatusChange(true);
+        Classic.QuestBuddyNotices.Login(Context.System, charId); // CLASSIC: which quest each online friend is on
     }
 
     [MessageHandler(typeof(GAME_5_PROTOCOL.MSG_BUDDYSTATS))]
