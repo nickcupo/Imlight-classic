@@ -111,4 +111,40 @@ public sealed class PublicAccessTests {
         Assert.Equal("203.0.113.9", PublicAccess.FirstIPv4([IPAddress.Parse("2001:db8::1"), IPAddress.Loopback, IPAddress.Parse("203.0.113.9")]));
         Assert.Null(PublicAccess.FirstIPv4([IPAddress.Parse("2001:db8::1")]));
     }
+    [Fact]
+    public void ALauncherUsesThePublicHostWhenItSaysSoOrSignedInThroughTheTunnel() {
+        const string host = "play.example.com", wan = "203.0.113.9";
+        Assert.True(PublicAccess.LauncherUsesPublicHost("play.example.com", false, host, wan));
+        Assert.True(PublicAccess.LauncherUsesPublicHost(" PLAY.Example.com. ", false, host, wan));
+        Assert.True(PublicAccess.LauncherUsesPublicHost("203.0.113.9", false, host, wan));
+        Assert.False(PublicAccess.LauncherUsesPublicHost("10.50.0.75", true, host, wan)); // it said: the LAN address
+        Assert.False(PublicAccess.LauncherUsesPublicHost("203.0.113.9", true, host, null));
+        // An older launcher that does not say: the public sign-in means the public host (friend builds).
+        Assert.True(PublicAccess.LauncherUsesPublicHost(null, true, host, wan));
+        Assert.False(PublicAccess.LauncherUsesPublicHost("", false, host, wan));
+    }
+
+    [Fact]
+    public void AHairpinnedLanMachineIsRememberedFromItsLoginUntilAnotherLoginSaysOtherwise() {
+        var clients = new HairpinClients();
+        clients.LauncherKey(7, "key-public", usesPublicHost: true);
+        Assert.False(clients.UsesPublicHost("192.168.1.86"));
+        // The game login validates that key from the LAN machine (the router kept its LAN address).
+        Assert.True(clients.Validated(7, "key-public", "::ffff:192.168.1.86", out var nowPublic));
+        Assert.True(nowPublic);
+        Assert.True(clients.UsesPublicHost("192.168.1.86"));
+        Assert.False(clients.Validated(7, "key-public", "192.168.1.86", out _)); // no change, no second log line
+        Assert.False(clients.UsesPublicHost("192.168.1.20"));                    // other machines keep the address rule
+        // A newer sign-in from a launcher set to the LAN address, or an in-client login with its own key, clears it.
+        clients.LauncherKey(7, "key-lan", usesPublicHost: false);
+        Assert.True(clients.Validated(7, "key-lan", "192.168.1.86", out nowPublic));
+        Assert.False(nowPublic);
+        Assert.False(clients.UsesPublicHost("192.168.1.86"));
+        // Another account's key never counts, and a stale key no longer does.
+        clients.LauncherKey(8, "key-8", usesPublicHost: true);
+        Assert.False(clients.Validated(7, "key-8", "192.168.1.86", out _));
+        Assert.False(clients.Validated(7, "key-public", "192.168.1.86", out _));
+        Assert.False(clients.Validated(8, "key-8", "not an address", out _));
+        Assert.False(clients.UsesPublicHost(null));
+    }
 }

@@ -30,7 +30,10 @@
  *  - whether a request came through a proxy at all (the admin pages refuse it);
  *  - the address the game is told to connect to after login and on every
  *    server transfer: the configured (private) GameServerIP for clients on
- *    the private networks, the public IPv4 for everyone else.
+ *    the private networks, the public IPv4 for everyone else;
+ *  - whether a launcher uses the public host (a LAN machine whose game comes
+ *    back through the router's hairpin NAT keeps its LAN source address, so
+ *    its address alone would get it the private one; HairpinClients).
  *
  * NOTE:
  * Every switch is off by default; with nothing configured, behaviour is
@@ -38,7 +41,7 @@
  *
  * Created by: Nick with Claude Code (claude-opus-5-5)
  * Version: KALI 1.0
- * Last Updated: 10/08/2026
+ * Last Updated: 10/09/2026
  */
 
 using System;
@@ -153,6 +156,25 @@ public static class PublicAccess {
         return publicIp;
     }
 
+    /// <summary>
+    /// CLASSIC (go-live, hairpin): whether a launcher that signed in connects its game to the public host. A launcher
+    /// that says which server it uses (<paramref name="launcherServer"/>, a host name or IP) uses the public host when
+    /// that names <paramref name="publicHost"/> or <paramref name="publicIp"/>. An older launcher that does not say
+    /// is taken to use it when it signed in through the public HTTPS address (<paramref name="viaPublicLogin"/>): the
+    /// friend builds pair the public sign-in with the public game host, the owner's LAN launcher signs in on 12090.
+    /// </summary>
+    public static bool LauncherUsesPublicHost(string? launcherServer, bool viaPublicLogin, string? publicHost, string? publicIp) {
+        var server = launcherServer?.Trim().TrimEnd('.');
+        if (string.IsNullOrEmpty(server)) return viaPublicLogin;
+        if (!string.IsNullOrEmpty(publicHost)
+                && string.Equals(server, publicHost.Trim().TrimEnd('.'), StringComparison.OrdinalIgnoreCase)) {
+            return true;
+        }
+
+        return !string.IsNullOrEmpty(publicIp) && TryParse(server, out var ip) && TryParse(publicIp, out var wan)
+               && Normalize(ip) == Normalize(wan);
+    }
+
     /// <summary>"http://10.50.0.75:12369/V_r1" with host "203.0.113.9" -> "http://203.0.113.9:12369/V_r1". Unchanged
     /// when the URL is not absolute http(s) or the host is not an IP address.</summary>
     public static string? WithHost(string? url, string? host) {
@@ -175,6 +197,9 @@ public static class PublicAccess {
 
         return null;
     }
+
+    /// <summary>An address in one spelling ("::ffff:192.168.1.5" and "[192.168.1.5]" are "192.168.1.5"), or null.</summary>
+    public static string? NormalizeAddress(string? text) => TryParse(text, out var ip) ? Normalize(ip) : null;
 
     private static bool TryParse(string? text, out IPAddress address) {
         address = IPAddress.None;

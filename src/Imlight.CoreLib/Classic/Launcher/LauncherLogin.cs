@@ -29,6 +29,8 @@
  *   {"user":"name","token":"..."}               a "remember me" token from an earlier login
  *   + "remember":true                           also issue a token (30 days)
  *   {"user":"name","token":"...","forget":true} drop that token
+ *   + "server":"play.example.com"               CLASSIC (go-live): the game host the launcher
+ *                                               connects to (PublicGameAddress, hairpin)
  *
  *   -> {"ok":true,"userId":"123","user":"name","sessionKey":"...","token":"..."}
  *   -> {"ok":false,"error":"bad-login"|"locked"|"busy"|"bad-request"}
@@ -45,7 +47,7 @@
  *
  * Created by: Nick with Claude Code (claude-opus-5-5)
  * Version: KALI 1.0
- * Last Updated: 10/01/2026
+ * Last Updated: 10/09/2026
  */
 
 #nullable enable
@@ -132,7 +134,8 @@ internal sealed class LauncherLogin {
 
     private static readonly Lazy<LauncherLogin> s_shared = new(() => new LauncherLogin(new RavenLauncherAccounts(),
         () => ConfigurationManager.Settings["Classic.AnyPasswordLogin"].AsBool(false),
-        throttle: Imlight.CoreLib.Auth.SecuritySettings.Logins.Value));
+        throttle: Imlight.CoreLib.Auth.SecuritySettings.Logins.Value,
+        signedIn: Imlight.CoreLib.Classic.PublicGameAddress.LauncherSignedIn));
 
     internal static LauncherLogin Shared => s_shared.Value;
 
@@ -142,13 +145,18 @@ internal sealed class LauncherLogin {
     private readonly ConcurrentDictionary<string, Queue<DateTime>> _failures = new(StringComparer.Ordinal);
     // CLASSIC: per-account lockouts shared with the in-client login (Auth/SecuritySettings.Logins).
     private readonly Imlight.Classic.Net.LoginThrottle? _throttle;
+    // CLASSIC (go-live): told (account, session key, the launcher's game host or null, signed in through the public
+    // HTTPS address) after each sign-in, so a LAN machine using the public host gets the public game address.
+    private readonly Action<ulong, string, string?, bool>? _signedIn;
 
     internal LauncherLogin(ILauncherAccounts accounts, Func<bool> anyPassword, Func<DateTime>? clock = null,
-                           Imlight.Classic.Net.LoginThrottle? throttle = null) {
+                           Imlight.Classic.Net.LoginThrottle? throttle = null,
+                           Action<ulong, string, string?, bool>? signedIn = null) {
         _accounts = accounts;
         _anyPassword = anyPassword;
         _clock = clock ?? (() => DateTime.UtcNow);
         _throttle = throttle;
+        _signedIn = signedIn;
     }
 
     /// <summary>Answers one request body from <paramref name="remote"/> (an address, for the failure limit).</summary>
@@ -157,7 +165,7 @@ internal sealed class LauncherLogin {
     /// for lockouts and logs) and this is loopback: the visitor's game may connect over IPv4 while its HTTPS login came
     /// over IPv6, so the key stays unbound there (LoginKeyPolicy.SameClient) instead of failing every attach.</param>
     internal string Handle(string body, string remote, string? keyAddress = null) {
-        string user, password, token;
+        string user, password, token, server;
         bool remember, forget;
         try {
             using var doc = JsonDocument.Parse(body);
@@ -167,11 +175,13 @@ internal sealed class LauncherLogin {
             token = Text(root, "token");
             remember = Flag(root, "remember");
             forget = Flag(root, "forget");
+            server = Text(root, "server").Trim();
         } catch (Exception ex) when (ex is JsonException or InvalidOperationException or KeyNotFoundException) {
             return Error("bad-request");
         }
 
-        if (user.Length is 0 or > 64 || password.Length > 256 || token.Length > 128 || (password.Length == 0 && token.Length == 0)) {
+        if (user.Length is 0 or > 64 || password.Length > 256 || token.Length > 128 || server.Length > 255
+            || (password.Length == 0 && token.Length == 0)) {
             return Error("bad-request");
         }
 
@@ -218,6 +228,7 @@ internal sealed class LauncherLogin {
         _throttle?.Success(user);
         var sessionKey = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
         _accounts.StoreSessionKey(accountId, sessionKey, keyAddress ?? remote);
+        _signedIn?.Invoke(accountId, sessionKey, server.Length > 0 ? server : null, keyAddress is not null);
         string? newToken = null;
         if (remember && tokenHash is null) {
             newToken = Convert.ToHexString(RandomNumberGenerator.GetBytes(24)).ToLowerInvariant();
