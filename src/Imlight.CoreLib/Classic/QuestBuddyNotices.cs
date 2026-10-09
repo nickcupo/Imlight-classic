@@ -115,6 +115,9 @@ internal static class QuestBuddyNotices {
         }
     }
 
+    /// <summary>Test seam: quest titles without the quest database (tests must not start SpiralDB).</summary>
+    internal static Func<string, string?>? TitlesForTests { get; set; }
+
     /// <summary>Test seam: where notices go instead of a session (viewer, friend, text).</summary>
     internal static Action<ulong, ulong, string>? SinkForTests { get; set; }
 
@@ -170,7 +173,7 @@ internal static class QuestBuddyNotices {
             return;
         }
 
-        var (relation, text) = Describe(viewer, friend, SamePlace(viewerOnline, friendOnline));
+        var (relation, text) = Describe(viewer, friend, SameZone(viewerOnline, friendOnline));
         var signature = QuestBuddies.Signature(relation);
         var key = (viewer.CharId, friend.CharId);
         var now = DateTime.UtcNow;
@@ -209,6 +212,10 @@ internal static class QuestBuddyNotices {
 
     /// <summary>A quest as players see it: its title, else its internal name.</summary>
     internal static string QuestTitle(string questName) {
+        if (TitlesForTests is { } titles) {
+            return titles(questName) ?? questName;
+        }
+
         try {
             var title = QuestTemplateCollection.GetQuestByName(questName)?.m_questTitle;
             var english = string.IsNullOrEmpty(title) ? "" : Locale.GetEnglishName(title);
@@ -267,6 +274,10 @@ internal static class QuestBuddyNotices {
             return false;
         }
     }
+
+    // The line leaves out where the friend is when they are in the same zone (any copy of it).
+    private static bool SameZone(OnlinePlayer? a, OnlinePlayer? b)
+        => a is not null && b is not null && string.Equals(a.CurrentZone, b.CurrentZone, StringComparison.OrdinalIgnoreCase);
 
     private static bool SamePlace(OnlinePlayer? a, OnlinePlayer? b)
         => a is not null && b is not null && string.Equals(a.CurrentZone, b.CurrentZone, StringComparison.OrdinalIgnoreCase)

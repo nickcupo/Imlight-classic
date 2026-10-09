@@ -166,6 +166,7 @@ public sealed class QuestBuddyTests {
         QuestBuddyNotices.ClearForTests();
         QuestChains.Use([Quest("WC-MAIN-C01-001", true), Quest("WC-MAIN-C01-002", true, Complete("WC-MAIN-C01-001"))]);
         QuestBuddyNotices.SinkForTests = (viewer, about, text) => { lock (sent) sent.Add((viewer, about, text)); };
+        QuestBuddyNotices.TitlesForTests = quest => quest == "WC-MAIN-C01-002" ? "Second Quest" : null;
         const ulong alice = 9_880_001, bob = 9_880_002, stranger = 9_880_003;
         var refs = new List<IActorRef>();
         try {
@@ -177,7 +178,7 @@ public sealed class QuestBuddyTests {
             QuestBuddyNotices.Login(system, alice);
 
             Assert.Equal(2, sent.Count);
-            Assert.Contains(sent, s => s.Viewer == bob && s.About == alice && s.Text.StartsWith("[Quest] Same quest chain, 1 quest ahead of you"));
+            Assert.Contains(sent, s => s.Viewer == bob && s.About == alice && s.Text == "[Quest] Same quest chain, 1 quest ahead of you: Second Quest.");
             Assert.Contains(sent, s => s.Viewer == alice && s.About == bob && s.Text.StartsWith("[Quest] Same quest chain, 1 quest behind you"));
             Assert.DoesNotContain(sent, s => s.Viewer == stranger || s.About == stranger);
 
@@ -195,6 +196,7 @@ public sealed class QuestBuddyTests {
         }
         finally {
             QuestBuddyNotices.SinkForTests = null;
+            QuestBuddyNotices.TitlesForTests = null;
             QuestBuddyNotices.ClearForTests();
             QuestChains.ClearForTests();
             foreach (var r in refs) ActiveWizardDirectory.Remove(r);
