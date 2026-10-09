@@ -237,7 +237,7 @@ public sealed class FriendPortalTests {
     }
 
     [Theory]
-    [InlineData(11, false)] [InlineData(12, true)] [InlineData(128, true)] [InlineData(129, false)]
+    [InlineData(5, false)] [InlineData(6, true)] [InlineData(12, true)] [InlineData(128, true)] [InlineData(129, false)]
     public void SignupEnforcesTheLauncherCompatiblePasswordBounds(int length, bool valid) {
         var password = new string('x', length);
         Assert.Equal(valid, FriendPortalBackend.ValidateSignup(Element(new { username = "friend", password, passwordConfirm = password }), out _, out _) is null);

@@ -384,7 +384,8 @@ internal sealed class FriendPortalBackend {
         username = FriendPortal.Text(body, "username"); password = FriendPortal.Text(body, "password");
         if (username is not { Length: >= 3 and <= 24 } || username.Any(c => !(c is >= 'a' and <= 'z' or >= '0' and <= '9' or '_' or '-')))
             return "Use a username of 3–24 lowercase letters, numbers, underscores or hyphens.";
-        if (password is not { Length: >= 12 and <= 128 } || password.Any(char.IsControl)) return "Use a password of 12–128 characters without control characters.";
+        // CLASSIC: owner ruling 2026-10-09, game passwords need at least 6 characters (was 12).
+        if (password is not { Length: >= 6 and <= 128 } || password.Any(char.IsControl)) return "Use a password of 6–128 characters without control characters.";
         if (!string.Equals(password, FriendPortal.Text(body, "passwordConfirm"), StringComparison.Ordinal)) return "The passwords do not match.";
         return null;
     }
