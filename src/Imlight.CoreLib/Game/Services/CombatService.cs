@@ -114,7 +114,10 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
     [MessageHandler(typeof(COMBAT_106_PROTOCOL.MSG_HIREHENCHMAN))]
     private void ReceiveHireHenchman(COMBAT_106_PROTOCOL.MSG_HIREHENCHMAN message) {
         if (_currentDuelActor is null) {
-            SessionActor.ActorRef.Tell(new COMBAT_106_PROTOCOL.MSG_HENCHMANHIRED { CreatureTid = message.CreatureTid, Success = false });
+            SessionActor.ActorRef.Tell(new COMBAT_106_PROTOCOL.MSG_HENCHMANHIRED {
+                CreatureTid = message.CreatureTid, Success = false,
+                Refusal = Imlight.Classic.Rules.HenchmanRefusal.NotInCombat,
+            });
 
             return;
         }
@@ -122,6 +125,14 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
         message.Actor = SessionActor.ActorRef;
         _currentDuelActor.Tell(message, SessionActor.ActorRef);
     }
+
+    // CLASSIC: the client's henchman Dismiss button (GUI_DismissHenchmen, "Crowns will not be refunded") sends
+    // MSG_DISMISS_SUMMON with the henchman's sub-circle; the duel checks that it is this player's henchman.
+    [MessageHandler(typeof(DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_DISMISS_SUMMON))]
+    private void ReceiveDismissSummon(DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_DISMISS_SUMMON message)
+        => _currentDuelActor?.Tell(new COMBAT_106_PROTOCOL.MSG_DISMISSHENCHMAN {
+            Actor = SessionActor.ActorRef, SubCircle = (int) message.Subcircle,
+        }, SessionActor.ActorRef);
 
     [MessageHandler(typeof(COMBAT_106_PROTOCOL.MSG_ACTORADDEDTODUEL))]
     private void RecieveDuelAdd(COMBAT_106_PROTOCOL.MSG_ACTORADDEDTODUEL message) {

@@ -252,7 +252,7 @@ public sealed class RobustnessFixesTests {
     // --- 6. Crown Shop rows the r806919 client can show ------------------------------------------------------------
 
     [Fact]
-    public void TheClientCatalogDropsHenchmenAndPricesGoldOnlyRentalsInCrowns() {
+    public void TheClientCatalogDropsHenchmanCreatureTemplatesAndPricesGoldOnlyRentalsInCrowns() { // CLASSIC: items are kept (HenchmenTests)
         CrownShopEntry Entry(string name, ulong template, string category, int crowns, int gold, int? days = null)
             => new(name, template, category, crowns, gold, days, 1, category == CrownShopCategories.Henchmen, null);
         var offered = new[] {
