@@ -106,6 +106,7 @@ public static class ClassicStartup {
             var classicDataRoot = Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(profilesPath));
             Arena.ClassicArenaGearTemplates.Initialize(classicDataRoot, profile.Id); // CLASSIC: dated October item effects.
             ClassicMountTemplates.Initialize(classicDataRoot, profile.Id); // CLASSIC: October 1 Day mount price and speed.
+            ClassicSpellAnimations.Initialize(classicDataRoot, profile.Id); // CLASSIC: the 2014 spell animations' stage lengths.
             if (rules.IsRestricted) {
                 var accuracyTablePath = profile.Rules.AccuracyTable is { } table && classicDataRoot is not null
                     ? Path.Combine(classicDataRoot, table)
