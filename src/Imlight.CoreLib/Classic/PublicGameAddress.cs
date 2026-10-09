@@ -34,12 +34,16 @@
  * [Game Server] PrivateClientNetworks  CIDRs whose clients get GameServerIP
  *   (e.g. 192.168.1.0/24,10.50.0.0/24); empty = every private address.
  *
+ * A LAN machine whose launcher uses the public host comes back through the
+ * router's hairpin NAT with its LAN address; it gets the public address too
+ * once its game login validates a key from such a launcher (HairpinClients).
+ *
  * NOTE:
  * A failed lookup keeps the last good address; with none, the configured one.
  *
  * Created by: Nick with Claude Code (claude-opus-5-5)
  * Version: KALI 1.0
- * Last Updated: 10/08/2026
+ * Last Updated: 10/09/2026
  */
 
 #nullable enable
@@ -74,9 +78,34 @@ internal static class PublicGameAddress {
 
     internal static bool Enabled => s_host.Value is not null;
 
+    // CLASSIC (go-live, hairpin): LAN machines whose launcher uses the public host.
+    private static readonly HairpinClients s_hairpin = new();
+
+    /// <summary>A launcher sign-in gave <paramref name="accountId"/> <paramref name="sessionKey"/>; the launcher said
+    /// it uses <paramref name="launcherServer"/> (null for an older launcher), and signed in through the public
+    /// HTTPS address when <paramref name="viaPublicLogin"/>.</summary>
+    internal static void LauncherSignedIn(ulong accountId, string sessionKey, string? launcherServer, bool viaPublicLogin) {
+        if (!Enabled) return;
+        s_hairpin.LauncherKey(accountId, sessionKey,
+            PublicAccess.LauncherUsesPublicHost(launcherServer, viaPublicLogin, s_host.Value, Current()));
+    }
+
+    /// <summary>A game login from <paramref name="clientAddress"/> validated <paramref name="sessionKey"/>.</summary>
+    internal static void LoginValidated(ulong accountId, string? sessionKey, string? clientAddress) {
+        if (!Enabled) return;
+        if (s_hairpin.Validated(accountId, sessionKey, clientAddress, out var nowPublic)
+                && PublicAccess.IsPrivate(clientAddress)) {
+            Logger.Information(nowPublic
+                    ? "Public game address: {0} uses {1} through the router (hairpin); it gets the public address."
+                    : "Public game address: {0} no longer uses {1}; it gets the address for its network.",
+                Logger.Args(clientAddress, s_host.Value));
+        }
+    }
+
     /// <summary>The IP to give a client at <paramref name="clientAddress"/> in place of <paramref name="configuredIp"/>.</summary>
     internal static string For(string configuredIp, string? clientAddress) {
         if (!Enabled) return configuredIp;
+        if (s_hairpin.UsesPublicHost(clientAddress) && Current() is { } wan) return wan;
         return PublicAccess.Advertise(configuredIp, clientAddress, Current(), s_networks.Value);
     }
 

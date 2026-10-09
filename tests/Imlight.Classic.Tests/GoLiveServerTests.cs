@@ -92,6 +92,26 @@ public sealed class GoLiveServerTests {
     }
 
     [Fact]
+    public void ASignInReportsTheLaunchersGameHostAndWhetherItCameThroughTheTunnel() {
+        var accounts = new Accounts();
+        var seen = new List<(ulong Account, string Key, string? Server, bool ViaTunnel)>();
+        var login = new LauncherLogin(accounts, () => false, signedIn: (a, k, s, t) => seen.Add((a, k, s, t)));
+        var answer = JsonDocument.Parse(login.Handle(
+            "{\"user\":\"ada\",\"password\":\"wand-of-oak\",\"server\":\" play.example.com \"}", "203.0.113.9", "127.0.0.1")).RootElement;
+        Assert.True(answer.GetProperty("ok").GetBoolean());
+        Assert.Equal((42UL, answer.GetProperty("sessionKey").GetString()!, "play.example.com", true), seen[0]);
+        // An older launcher on the LAN port says nothing about its host.
+        login.Handle("{\"user\":\"ada\",\"password\":\"wand-of-oak\"}", "192.168.1.20");
+        Assert.Equal((42UL, (string?) null, false), (seen[1].Account, seen[1].Server, seen[1].ViaTunnel));
+        // A failed sign-in reports nothing; an absurd host is refused.
+        login.Handle("{\"user\":\"ada\",\"password\":\"wrong\"}", "192.168.1.20");
+        Assert.Equal("bad-request", JsonDocument.Parse(login.Handle(
+                "{\"user\":\"ada\",\"password\":\"wand-of-oak\",\"server\":\"" + new string('a', 300) + "\"}", "192.168.1.20"))
+            .RootElement.GetProperty("error").GetString());
+        Assert.Equal(2, seen.Count);
+    }
+
+    [Fact]
     public void TheAdminPageAnswersOnlyThePrivateNetworksAndNeverATunnel() {
         string? None(string _) => null;
         Assert.True(AdminDashboard.AdminAllowed(IPAddress.Parse("192.168.1.20"), None));
