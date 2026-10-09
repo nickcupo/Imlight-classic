@@ -151,6 +151,11 @@ internal sealed partial class AmbientZone {
             return;
         }
 
+        // CLASSIC (2026-10-09): a player with ambient companions has a group; strangers do not offer (AmbientCompanionGroup).
+        if (notice.PlayerCharIds.Any(AmbientGroups.HasGroup)) {
+            return;
+        }
+
         var now = DateTime.UtcNow;
         var seenFor = now - _helpMemory.Seen(notice.SigilId, now);
         var quiet = _helpMemory.AnyQuiet(notice.PlayerCharIds, now);
