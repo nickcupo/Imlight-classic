@@ -23,7 +23,8 @@
  * CLASSIC (group questing, 2026-10-09): the quest buddy relation (same quest,
  * same chain ahead/behind, different), its chain graph built from quest
  * prerequisites, when a notice goes out, that only friends hear, and which
- * goals are shared inside an instance.
+ * goals are shared inside an instance, and that a friend in a gauntlet
+ * cannot be teleported to.
  *
  * Created by: Nick with Claude Code (claude-opus-5-5)
  * Version: KALI 1.0
@@ -217,6 +218,16 @@ public sealed class QuestBuddyTests {
         Assert.False(InstanceGoalSharing.SamePlace(tower, 77, 0, "WizardCity/WC_Hub", 77, 0)); // another zone of it
         Assert.False(InstanceGoalSharing.SamePlace("WizardCity/WC_Hub", 0, 0, "WizardCity/WC_Hub", 0, 0)); // the open world
         Assert.False(InstanceGoalSharing.SamePlace("Housing/Dorm", 77, 5, "Housing/Dorm", 77, 5)); // a house
+    }
+
+    [Fact]
+    public void AFriendInAGauntletCannotBeTeleportedTo() {
+        // Golem Tower is a gauntlet in the built-in table and in every profile's reset rules.
+        Assert.True(FriendRules.TargetInGauntlet(true, "WizardCity/WC_Streets/WC_Golem_Tower/WC_Golem_Tower_3"));
+        Assert.False(FriendRules.TargetInGauntlet(false, "WizardCity/WC_Streets/WC_Golem_Tower/WC_Golem_Tower_3"));
+        Assert.False(FriendRules.TargetInGauntlet(true, "WizardCity/WC_Hub"));
+        Assert.False(FriendRules.TargetInGauntlet(true, null));
+        Assert.Equal("Your friend is busy right now.", FriendRules.GauntletBusyMessage); // the client's Teleportation_Gauntlet
     }
 
     private static Wizard Online(ActorSystem system, List<IActorRef> refs, ulong charId, string quest, string zone) {
