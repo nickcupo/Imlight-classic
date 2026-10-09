@@ -86,6 +86,7 @@ public class GameServiceFactory : ServiceFactory {
         typeof(ClassicCinematicService), // CLASSIC
         typeof(BadgeService), // CLASSIC
         typeof(RideService), // CLASSIC: the Great Spyre lift and the Oasis boat rides.
+        typeof(AmbientGroupService), // CLASSIC (2026-10-09): group invites, Leave Group and group chat with ambient wizards.
     ];
 
     public static Props Props() 
