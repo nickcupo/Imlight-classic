@@ -62,11 +62,13 @@ internal class CommandAmbientProtocol : CommandProtocol {
         var me = Context.Character.CharId;
         var here = Context.Character.Location;
         var mine = AmbientWizards.All.Where(w => AmbientGroups.LeaderOf(w.CharId) == me).ToList();
-        InformSenderClient(mine.Count == 0 ? $"No ambient companions (grouping {(AmbientGroups.Settings.Enabled ? "on" : "off")})."
+        var text = mine.Count == 0 ? $"No ambient companions (grouping {(AmbientGroups.Settings.Enabled ? "on" : "off")})."
             : string.Join("; ", mine.Select(w => $"{w.Name} L{w.Wizard.MagicSchoolBehavior.Level} {w.Identity.School} {w.Activity} "
                 + (string.Equals(w.Zone, Context.Character.Zone, StringComparison.OrdinalIgnoreCase)
                     ? $"{(int) MathF.Sqrt((w.Position.X - here.X) * (w.Position.X - here.X) + (w.Position.Y - here.Y) * (w.Position.Y - here.Y))}"
-                    : w.Present ? w.Zone : "away"))));
+                    : w.Present ? w.Zone : "away")));
+        Imlight.Common.Logger.Information("[QA] .ambient group for {0}: {1}", Imlight.Common.Logger.Args(me, text));
+        InformSenderClient(text);
     }
 
     [Command("call")]

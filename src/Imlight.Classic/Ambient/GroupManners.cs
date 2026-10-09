@@ -38,8 +38,8 @@
  *     direct ask (by name, a whisper, the client's group invite) is
  *     answered more often and more often with a yes.
  *   - Ending it: "bye" (and the like) always; "thanks" only out of a
- *     fight and after a few minutes together (a "ty" for a heal is not a
- *     goodbye) (ParseDismiss, ThanksEnds).
+ *     fight, after a few minutes together and outside a dungeon (a "ty"
+ *     for a heal or a boss is not a goodbye) (ParseDismiss, ThanksEnds).
  *   - How long a companion stays (StayFor), and the few fixed waits.
  *   - Size: up to four in a group, real players included (OpenSlots).
  * Nothing here lowers any creature's strength: companions are ordinary
@@ -160,7 +160,7 @@ public static class GroupManners {
     private const RegexOptions Options = RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled;
 
     private static readonly Regex[] s_calls = [
-        new(@"\b(lfg|lfm|lf\s*(group|grp|team|help|ppl|people|more|\d))\b|\blooking\s+for\s+(a\s+)?(group|grp|team|help|ppl|people|players|helpers?)\b", Options),
+        new(@"\b(lfg|lfm|lf\s*(\d+\s*m|\d|group|grp|team|help|ppl|people|more))\b|\blooking\s+for\s+(a\s+)?(group|grp|team|help|ppl|people|players|helpers?)\b", Options),
         new(@"\b(anyone|anybody|any1|someone|somebody|who|ppl|people|guys|u\s+guys|you\s+guys)\b.{0,30}?\b(wanna|want|wants|want2|help|helps|come|join|group|team|quest|do|run|kill|beat|defeat|fight|go)\b", Options),
         new(@"\b(need|needs|needing|want|wanna)\s+(some\s+|a\s+|more\s+)?(help|hand|backup|group|grp|team|people|ppl|helpers?|partners?)\b", Options),
         new(@"\b(wanna|want\s+to|want2|wan\s+to|u\s+want\s+to|do\s+(you|u)\s+want\s+to|would\s+(you|u)\s+like\s+to)\s+(group|grp|team|team\s+up|quest|join|come|duo|help|do)\b", Options),
@@ -178,6 +178,11 @@ public static class GroupManners {
 
     private static readonly Regex s_target = new(
         @"\b(?:do|with|for|at|in|kill|beat|defeat|fight|run|to|on|vs|against)\s+(?:the\s+)?(?<t>[a-z0-9' ]{3,40}?)\s*(?:[?!.,]|$|\b(?:pls|plz|please|with\s+me|w\s+me|anyone|any1|someone|together|now|rn|asap)\b)",
+        Options);
+
+    // "lfg jotun", "lf2m hall of kings": the target right after the lfg.
+    private static readonly Regex s_lfgTarget = new(
+        @"\b(?:lfg|lfm|lf\d?m?)\s+(?:for\s+)?(?:the\s+)?(?<t>[a-z0-9' ]{2,40}?)\s*(?:[?!.,]|$|\b(?:pls|plz|please|anyone|any1|now|rn|asap)\b)",
         Options);
 
     private static readonly Regex s_leadingFiller = new(
@@ -217,7 +222,8 @@ public static class GroupManners {
     /// <summary>What the call is about, as typed ("jotun", "hall of kings"), or null.</summary>
     public static string? Target(string text, string? myFirstName = null) {
         string? found = null;
-        foreach (Match match in s_target.Matches(text.ToLowerInvariant())) {
+        var lower = text.ToLowerInvariant();
+        foreach (Match match in s_lfgTarget.Matches(lower).Concat(s_target.Matches(lower))) {
             var t = Regex.Replace(match.Groups["t"].Value, @"\s+", " ").Trim().Trim('\'');
             string before;
             do {
@@ -253,8 +259,12 @@ public static class GroupManners {
         return s_thanks.IsMatch(text) ? DismissKind.Thanks : DismissKind.None;
     }
 
-    /// <summary>A "thanks" ends the group: out of a fight and after <see cref="ThanksAfter"/> together.</summary>
-    public static bool ThanksEnds(bool inDuel, TimeSpan together) => !inDuel && together >= ThanksAfter;
+    /// <summary>
+    /// A "thanks" ends the group: out of a fight, after <see cref="ThanksAfter"/> together, and not inside a dungeon (a
+    /// "ty" after a boss in a dungeon is not a goodbye; the run goes on).
+    /// </summary>
+    public static bool ThanksEnds(bool inDuel, TimeSpan together, bool inDungeon = false)
+        => !inDuel && !inDungeon && together >= ThanksAfter;
 
     /// <summary>Places left for companions: a group of <paramref name="maxSize"/> holds the real players first.</summary>
     public static int OpenSlots(int realPlayers, int companions, int maxSize)

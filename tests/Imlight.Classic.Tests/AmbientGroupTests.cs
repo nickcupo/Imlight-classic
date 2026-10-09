@@ -97,7 +97,9 @@ public sealed class AmbientGroupTests {
     [InlineData("anyone want to do Jotun?", "jotun")]
     [InlineData("need help with Kraken", "kraken")]
     [InlineData("LF group for Hall of Kings", "hall of kings")]
-    [InlineData("lfg hall of kings", null)]
+    [InlineData("lfg hall of kings", "hall of kings")]
+    [InlineData("lf2m jotun", "jotun")]
+    [InlineData("lfg krokotopia pls", "krokotopia")]
     [InlineData("wanna group?", null)]
     [InlineData("group?", null)]
     [InlineData("anyone wanna come with me to do the jotun quest", "jotun")]
@@ -154,6 +156,7 @@ public sealed class AmbientGroupTests {
         Assert.False(GroupManners.ThanksEnds(inDuel: true, TimeSpan.FromMinutes(30)));
         Assert.False(GroupManners.ThanksEnds(inDuel: false, TimeSpan.FromMinutes(1)));
         Assert.True(GroupManners.ThanksEnds(inDuel: false, GroupManners.ThanksAfter));
+        Assert.False(GroupManners.ThanksEnds(inDuel: false, TimeSpan.FromMinutes(30), inDungeon: true));
     }
 
     // ---- answers --------------------------------------------------------------------------------

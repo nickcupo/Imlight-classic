@@ -246,6 +246,16 @@ internal static class AmbientGroups {
                     if (!string.IsNullOrEmpty(goal.m_destinationZone)) {
                         Add(AmbientKnowledge.ZoneName(goal.m_destinationZone), level, goal.m_destinationZone);
                     }
+
+                    // The creature a goal counts ("Jotun": a bounty's tally names it) and the place the quest helper
+                    // shows ("Hall of Kings").
+                    if (goal.m_tallyCounter?.m_descriptor2 is { Length: > 0 } counted) {
+                        Add(Locale.GetEnglishName(counted.ToString()), level, goal.m_destinationZone ?? zone);
+                    }
+
+                    if (goal.m_locationName is { Length: > 0 } place) {
+                        Add(Locale.GetEnglishName(place.ToString()), level, goal.m_destinationZone ?? zone);
+                    }
                 }
             }
         }

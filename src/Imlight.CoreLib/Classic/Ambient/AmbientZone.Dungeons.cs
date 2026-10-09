@@ -322,6 +322,7 @@ internal sealed partial class AmbientZone {
     private void OnHelperBack(AmbientHelperBack back) {
         var wizard = back.Wizard;
         wizard.Driver = null;
+        wizard.Zone = _zone; // CLASSIC (2026-10-09): it was the dungeon's; its Say and status go by its zone again
         wizard.Activity = AmbientActivity.Arriving;
         wizard.DuelSigil = 0;
         wizard.Wizard.IsInDuel = false;

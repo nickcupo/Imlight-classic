@@ -49,8 +49,9 @@
  *     group channel (AmbientChatBrain, the word filter, a human answer
  *     time), and "u there?" when the player stands still ten minutes.
  *   - Leaving: on the player's "bye" (all, or the one named), "thanks" out
- *     of a fight after a few minutes together, the client's Leave Group or
- *     its removal from the group, when the player logs off (30 s), stays
+ *     of a fight after a few minutes together (not inside a dungeon), the
+ *     client's Leave Group or its removal from the group, when the player
+ *     logs off (30 s), stays
  *     away (15 minutes still), or its own time is up (StayFor; never in a
  *     fight, and in a dungeon only once out or 20 minutes over): "gotta go,
  *     dinner". It goes back to its home street (in place when it is there).
@@ -523,7 +524,9 @@ internal sealed class AmbientCompanionGroup : ReceiveActor, IWithTimers {
         companion.Far = distance > DungeonManners.FarDistance ? companion.Far ?? now : null;
         if ((companion.Unreachable is { } stuck && now - stuck >= DungeonManners.StuckLimit)
             || (companion.Far is { } far && now - far >= DungeonManners.FarLimit)) {
-            // As a player teleports to a friend it lost: at most every two minutes, else it gives up.
+            // As a player teleports to a friend it lost (at most every two minutes); between, it waits where it is, and
+            // gives up only after a long while of not getting back to the player.
+            var since = new[] { companion.Unreachable, companion.Far }.Where(t => t is not null).Min() ?? now;
             if (now - companion.LastPort >= GroupManners.PortEvery) {
                 Logger.Information("Ambient wizard {Name} teleports to {Leader} (lost them).", Logger.Args(wizard.Name, _leader));
                 companion.LastPort = now;
@@ -533,7 +536,7 @@ internal sealed class AmbientCompanionGroup : ReceiveActor, IWithTimers {
                 RemoveFromZone(companion);
                 Transfer(companion, zone, instance, leader.Location);
             }
-            else {
+            else if (now - since >= GroupManners.WaitOutside) {
                 GoHome(companion, DungeonLines.Leave);
             }
 
@@ -542,14 +545,21 @@ internal sealed class AmbientCompanionGroup : ReceiveActor, IWithTimers {
 
         var goal = wizard.Moving ? wizard.Route.Count > 0 ? wizard.Route.Last() : wizard.Target ?? wizard.Position : wizard.Position;
         if (!DungeonManners.ShouldWalk(new System.Numerics.Vector2(goal.X, goal.Y), spot2)) {
+            companion.Unreachable = null;
             return;
         }
 
         if (WalkTo(companion, spot) || WalkTo(companion, leader.Location)) {
             companion.Unreachable = null;
         }
-        else {
-            companion.Unreachable ??= now;
+        else if (distance > DungeonManners.FollowSlack * 2) {
+            if (companion.Unreachable is null) {
+                Logger.Debug("Ambient wizard {Name}: no walk from ({X:0},{Y:0},{Z:0}) to {Leader} at ({LX:0},{LY:0},{LZ:0}) in {Zone} (grid {Grid}).",
+                    Logger.Args(wizard.Name, wizard.Position.X, wizard.Position.Y, wizard.Position.Z, _leader, leader.Location.X,
+                        leader.Location.Y, leader.Location.Z, companion.ZonePath, Nav(companion) is null ? "loading" : "loaded"));
+            }
+
+            companion.Unreachable ??= now; // (a few steps away with no route, as on a sigil's raised pad: close enough)
         }
     }
 
@@ -1024,7 +1034,8 @@ internal sealed class AmbientCompanionGroup : ReceiveActor, IWithTimers {
         var dismiss = GroupManners.ParseDismiss(text);
         var inDuel = ActiveWizardDirectory.TryGetByCharId(_leader, out var me) && me.IsInDuel;
         var together = _companions.Count == 0 ? TimeSpan.Zero : now - _companions.Min(c => c.Joined);
-        if (dismiss == DismissKind.Bye || (dismiss == DismissKind.Thanks && GroupManners.ThanksEnds(inDuel, together))) {
+        var inDungeon = OnlinePlayerCollection.GetOnlinePlayer(_leader) is { InstanceOwnerId: not 0 };
+        if (dismiss == DismissKind.Bye || (dismiss == DismissKind.Thanks && GroupManners.ThanksEnds(inDuel, together, inDungeon))) {
             var going = named.Count > 0 ? named : [.. _companions];
             Logger.Information("Ambient group of {Leader}: \"{Text}\": {Count} companion(s) leave.", Logger.Args(_leader, text, going.Count));
             var i = 0;
@@ -1070,8 +1081,9 @@ internal sealed class AmbientCompanionGroup : ReceiveActor, IWithTimers {
         _nextTalk = now.AddMinutes(4 + _rng.Next(5));
         var talker = _companions.Where(c => c.Present && c.Wizard.Activity == AmbientActivity.Grouped && Persona(c).Channel != ChatChannel.Menu)
             .OrderBy(_ => _rng.Next()).FirstOrDefault();
-        if (talker is null || AmbientChatBrain.Idle(ChatFor(talker), talker.Wizard.Turn++) is not { } line) {
-            return;
+        if (talker is null || AmbientChatBrain.Idle(ChatFor(talker), talker.Wizard.Turn++) is not { } line
+            || GroupManners.ParseCall(line).Kind != RecruitKind.None || System.Text.RegularExpressions.Regex.IsMatch(line, @"\blf", System.Text.RegularExpressions.RegexOptions.IgnoreCase)) {
+            return; // (a street line looking for a group is not for someone already in one)
         }
 
         Say(talker.Wizard, ChatStyle.Apply(line, Persona(talker), _rng, ChatWordFilter.Current), Voice.Near, styledAlready: true);

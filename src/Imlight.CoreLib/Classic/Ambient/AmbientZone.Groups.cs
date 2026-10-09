@@ -239,7 +239,8 @@ internal sealed partial class AmbientZone {
                 w.Until = DateTime.UtcNow + back + TimeSpan.FromSeconds(5);
                 Timers.StartSingleTimer($"brb-{w.CharId}", new Later(w, b => {
                     _answering.Remove(b);
-                    if (!FreeToGroup(b) || OnlinePlayerCollection.GetOnlinePlayer(leader) is null
+                    // Back at the keyboard: the player is still here (else the moment passed; a stranger does not chase them).
+                    if (!FreeToGroup(b) || !ActiveWizardDirectory.TryGetByCharId(leader, out var still) || !Near(b, still)
                         || GroupManners.OpenSlots(1, AmbientGroups.CompanionCount(leader), AmbientGroups.Settings.MaxSize) <= 0) {
                         return;
                     }
@@ -325,6 +326,7 @@ internal sealed partial class AmbientZone {
             Leave(wizard);
         }
 
+        wizard.Zone = _zone; // its chat and status go by this zone again once it is back
         wizard.Activity = AmbientActivity.Arriving;
         Timers.StartSingleTimer($"enter-{wizard.CharId}", new Enter(wizard.CharId), back.After > TimeSpan.Zero ? back.After : TimeSpan.FromSeconds(3));
     }
