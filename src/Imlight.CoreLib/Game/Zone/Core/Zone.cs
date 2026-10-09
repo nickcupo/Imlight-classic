@@ -712,6 +712,107 @@ public class Zone : ReceiveProtocolDispatcher, IWithTimers {
 
     internal ushort ReserveMobileId() => GenerateReservedObjectIdentifier();
 
+    // CLASSIC: the reserved mobile ids (1..RESERVED_MOBILE_ID_MAX) of the zone's own objects were never given back.
+    // Every mob that died (and every combat minion and summoned pet) kept its id after its actor stopped, so a zone
+    // with steady combat used up all 3276 and stopped spawning ("all IDs in use"; Unicorn Way on live, 2026-10-09,
+    // after ~12 h of ambient wizards fighting). An entity now reserves its id under its own actor and gives it back
+    // when it stops; the id becomes free again after the same short cooldown a player's id has (ReleaseObjectIdentifier),
+    // so a new object's MSG_NEWOBJECT never races the old one's MSG_DELETEOBJECT on the client. Entity actors call these
+    // from their own threads (as ReserveMobileId always did), so all of it is under _mobileIdLock and needs no timer.
+    private static readonly long s_reservedReleaseDelayTicks = 2 * Stopwatch.Frequency;
+    private readonly Dictionary<IActorRef, ushort> _reservedByOwner = [];
+    private readonly Dictionary<ushort, long> _reservedReleaseDue = [];
+    private int _reservedInUse;
+    private int _reservedWarnedPercent;
+
+    internal static ushort ReservedMobileIdMax => RESERVED_MOBILE_ID_MAX;
+
+    /// <summary>CLASSIC: reserves a mobile id for an entity actor; the same id again if that actor already has one.</summary>
+    internal ushort ReserveMobileId(IActorRef owner) {
+        lock (_mobileIdLock) {
+            if (owner is not null && _reservedByOwner.TryGetValue(owner, out var existing)) {
+                return existing;
+            }
+
+            var mobileId = GenerateReservedObjectIdentifier();
+            if (owner is not null) {
+                _reservedByOwner[owner] = mobileId;
+            }
+
+            return mobileId;
+        }
+    }
+
+    /// <summary>CLASSIC: an entity actor stopped; its reserved mobile id is free again after the cooldown.</summary>
+    internal void ReleaseReservedMobileId(IActorRef owner) {
+        lock (_mobileIdLock) {
+            if (owner is null || !_reservedByOwner.Remove(owner, out var mobileId)) {
+                return;
+            }
+
+            _reservedReleaseDue[mobileId] = Stopwatch.GetTimestamp() + s_reservedReleaseDelayTicks;
+        }
+    }
+
+    /// <summary>CLASSIC: reserved mobile ids held now, cooling down ones included (tests and the sanity log read it).</summary>
+    internal int ReservedMobileIdsInUse {
+        get {
+            lock (_mobileIdLock) {
+                FreeDueReservedIds();
+                return _reservedInUse;
+            }
+        }
+    }
+
+    /// <summary>CLASSIC: entity actors holding a reserved mobile id now.</summary>
+    internal int ReservedMobileIdOwners {
+        get {
+            lock (_mobileIdLock) {
+                return _reservedByOwner.Count;
+            }
+        }
+    }
+
+    // CLASSIC: frees the reserved ids whose cooldown is over. Caller holds _mobileIdLock.
+    private void FreeDueReservedIds(bool all = false) {
+        if (_reservedReleaseDue.Count == 0) {
+            return;
+        }
+
+        var now = Stopwatch.GetTimestamp();
+        List<ushort> due = null;
+        foreach (var (mobileId, at) in _reservedReleaseDue) {
+            if (all || at <= now) {
+                (due ??= []).Add(mobileId);
+            }
+        }
+
+        if (due is null) {
+            return;
+        }
+
+        foreach (var mobileId in due) {
+            _reservedReleaseDue.Remove(mobileId);
+            if (_mobileIdMap.Remove(mobileId)) {
+                _reservedInUse--;
+            }
+        }
+    }
+
+    // CLASSIC: a warning as the reserved pool fills (50, 75, 90 %), so a leak shows long before spawns stop.
+    private void WarnReservedPoolFill() {
+        var percent = _reservedInUse * 100 / RESERVED_MOBILE_ID_MAX;
+        var step = percent >= 90 ? 90 : percent >= 75 ? 75 : percent >= 50 ? 50 : 0;
+        if (step > _reservedWarnedPercent) {
+            _reservedWarnedPercent = step;
+            Logger.Warning("Zone {Zone}: {InUse} of {Max} reserved mobile ids in use ({Owners} objects hold one, {Cooling} cooling down).",
+                Logger.Args(ZonePath, _reservedInUse, RESERVED_MOBILE_ID_MAX, _reservedByOwner.Count, _reservedReleaseDue.Count));
+        }
+        else if (step < _reservedWarnedPercent) {
+            _reservedWarnedPercent = step;
+        }
+    }
+
     private bool IsMobileIdInUse(ushort mobileId) {
         lock (_mobileIdLock) {
             return _mobileIdMap.Contains(mobileId);
@@ -720,15 +821,30 @@ public class Zone : ReceiveProtocolDispatcher, IWithTimers {
 
     private ushort GenerateReservedObjectIdentifier() {
         lock (_mobileIdLock) {
+            FreeDueReservedIds(); // CLASSIC
+
             // Find first available ID in reserved range.
             for (ushort i = 1; i <= RESERVED_MOBILE_ID_MAX; i++) {
                 if (!_mobileIdMap.Contains(i)) {
                     _mobileIdMap.Add(i);
+                    _reservedInUse++; // CLASSIC
+                    WarnReservedPoolFill(); // CLASSIC
                     return i;
                 }
             }
 
-            throw new InvalidOperationException("Failed to generate a reserved mobile ID - all IDs in use.");
+            // CLASSIC: rather than fail, take the ids still cooling down (a burst of deaths and spawns).
+            if (_reservedReleaseDue.Count > 0) {
+                FreeDueReservedIds(all: true);
+                for (ushort i = 1; i <= RESERVED_MOBILE_ID_MAX; i++) {
+                    if (_mobileIdMap.Add(i)) {
+                        _reservedInUse++;
+                        return i;
+                    }
+                }
+            }
+
+            throw new InvalidOperationException($"Failed to generate a reserved mobile ID - all IDs in use ({_reservedByOwner.Count} objects hold one)."); // CLASSIC: with the holder count.
         }
     }
 
@@ -746,7 +862,11 @@ public class Zone : ReceiveProtocolDispatcher, IWithTimers {
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_RELEASEMOBILEID))]
     private void ReceiveReleaseMobileId(ZONE_102_PROTOCOL.MSG_RELEASEMOBILEID message) {
         lock (_mobileIdLock) {
-            _mobileIdMap.Remove(message.MobileId);
+            // CLASSIC: keep the reserved count right (a test zone hands a player a reserved id).
+            if (_mobileIdMap.Remove(message.MobileId) && message.MobileId is > 0 and <= RESERVED_MOBILE_ID_MAX) {
+                _reservedInUse--;
+            }
+            _reservedReleaseDue.Remove(message.MobileId);
         }
     }
 

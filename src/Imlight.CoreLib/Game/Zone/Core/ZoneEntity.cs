@@ -359,7 +359,20 @@ public class ZoneEntity(
     // CLASSIC: a creature that is gone is no longer read by duels.
     protected override void PostStop() {
         Classic.CreatureStatsDirectory.Remove(Self);
+        // CLASSIC: give the zone back this object's reserved mobile id (Zone.ReleaseReservedMobileId). A restart keeps
+        // the actor, the object and its id, so only a real stop gives it back.
+        if (!_restarting) {
+            Zone?.ReleaseReservedMobileId(Self);
+        }
         base.PostStop();
+    }
+
+    // CLASSIC: see PostStop.
+    private bool _restarting;
+
+    protected override void PreRestart(Exception reason, object message) {
+        _restarting = true;
+        base.PreRestart(reason, message);
     }
 
     /// <summary>
@@ -444,7 +457,7 @@ public class ZoneEntity(
 
     private ushort ReserveMobileId() {
         try {
-            return Zone.ReserveMobileId();
+            return Zone.ReserveMobileId(Self); // CLASSIC: held under this actor and given back when it stops.
         } catch (Exception e) {
             Logger.Error("Failed to get mobile ID from zone: {Reason}", Logger.Args(e.Message));
 
