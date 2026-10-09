@@ -90,6 +90,11 @@ internal class SpellCinematics : RootDirectoryResourceSingleton<SpellCinematics>
     /// <param name="name">The name of the spell.</param>
     /// <returns>The <see cref="CinematicTemplate"/> of the spell. </returns>
     internal static CinematicTemplate GetCinematicTemplate(string name) {
+        // CLASSIC: the profile's players see the 2014 client's cinematic; time the cast from its stages.
+        if (Imlight.CoreLib.Classic.ClassicSpellAnimations.TryGet(name, out var older)) {
+            return older;
+        }
+
         if (s_cinematicTemplates.TryGetValue(name, out var cinematicTemplate)) {
             return cinematicTemplate;
         }
