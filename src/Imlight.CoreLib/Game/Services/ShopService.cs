@@ -446,6 +446,59 @@ internal class ShopService(SessionActor sessionActor) : MessageService(sessionAc
         ResummonIfEquippedPet(wizard, receipt.Item);
     }
 
+    // CLASSIC: Eloise Merryweather's stitch (InteractSeamstressComponent): Crowns are spent first and refunded if the
+    // item change does not save; the stats item keeps its id and is re-sent with its new appearance.
+    [MessageHandler(typeof(WIZARD_12_PROTOCOL.MSG_STITCHITEMS))]
+    private void ReceiveStitchItems(WIZARD_12_PROTOCOL.MSG_STITCHITEMS message) {
+        try { HandleStitchItems(message); }
+        catch {
+            if (WizardCollection.IsInventorySnapshotUncertain(GetActiveWizard())) CloseSession();
+            throw;
+        }
+    }
+
+    private void HandleStitchItems(WIZARD_12_PROTOCOL.MSG_STITCHITEMS message) {
+        var wizard = GetActiveWizard();
+        if (wizard is null) return;
+        if (WizardCollection.IsInventorySnapshotUncertain(wizard)) { CloseSession(); return; }
+        void Refuse(string why) {
+            Logger.Warning("Rejected stitch of {0} onto {1} for {2}: {3}.",
+                Logger.Args(message.StatsID, message.DisplayID, wizard.CharId, why));
+            SendToSocket(new WIZARD_12_PROTOCOL.MSG_STITCHITEMSCONFIRM { Failure = 1, WebFailure = 0, Credits = wizard.Account?.Crowns ?? 0 });
+        }
+
+        if (!ClassicRuntime.Rules.IsFeatureEnabled(ClassicFeatures.Seamstress)) {
+            ClassicGate.RefuseFeature(ClassicFeatures.Seamstress, wizard.CharId, InformGameClient);
+            Refuse("seamstress closed");
+            return;
+        }
+        if (ServiceProximity.FindNear<InteractSeamstressComponent>(wizard, message.GlobalID, GetZoneObject) is null) {
+            Refuse("not by the seamstress");
+            return;
+        }
+        if (wizard.Account is not { } account || !ClassicCrowns.TrySpend(account, InteractSeamstressComponent.StitchCrowns)) {
+            Refuse("not enough Crowns");
+            return;
+        }
+        if (!ClassicPaidItemChanges.Stitch(wizard, message.StatsID, message.DisplayID, out var receipt, out _)) {
+            ClassicCrowns.Add(account, InteractSeamstressComponent.StitchCrowns);
+            if (WizardCollection.IsInventorySnapshotUncertain(wizard)) { CloseSession(); return; }
+            Refuse("items not stitchable");
+            return;
+        }
+
+        Logger.Information("[SEAMSTRESS] {0} stitched {1} onto {2} for {3} Crowns.",
+            Logger.Args(wizard.CharId, message.DisplayID, message.StatsID, InteractSeamstressComponent.StitchCrowns));
+        SendToSocket(new GAME_5_PROTOCOL.MSG_INVENTORYBEHAVIOR_REMOVEITEM { GlobalID = wizard.GameObjectID, ItemID = message.DisplayID });
+        SendToSocket(new GAME_5_PROTOCOL.MSG_INVENTORYBEHAVIOR_REMOVEITEM { GlobalID = wizard.GameObjectID, ItemID = message.StatsID });
+        if (new CoreObjectSerializer(behaviors: SerializerFlags.None).Serialize(receipt.Item,
+                (uint) (PropertyFlags.Prop_Transmit | PropertyFlags.Prop_AuthorityTransmit), out var data)) {
+            SendToSocket(new GAME_5_PROTOCOL.MSG_INVENTORYBEHAVIOR_ADDITEM { GlobalID = wizard.GameObjectID, SerializedItem = data });
+        }
+        SendToSocket(new WIZARD_12_PROTOCOL.MSG_STITCHITEMSCONFIRM { Failure = 0, WebFailure = 0, Credits = account.Crowns });
+        SendToSocket(ClassicCrowns.BalanceMessage(account, wizard.CharId));
+    }
+
     [MessageHandler(typeof(WIZARD_12_PROTOCOL.MSG_PETRENAMEREQUEST))]
     private void ReceivePetRenameRequest(WIZARD_12_PROTOCOL.MSG_PETRENAMEREQUEST message) {
         try { HandlePetRenameRequest(message); }

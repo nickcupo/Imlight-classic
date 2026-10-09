@@ -85,6 +85,7 @@ public class GameServiceFactory : ServiceFactory {
         typeof(TreasureShopService),
         typeof(ClassicCinematicService), // CLASSIC
         typeof(BadgeService), // CLASSIC
+        typeof(RideService), // CLASSIC: the Great Spyre lift and the Oasis boat rides.
     ];
 
     public static Props Props() 

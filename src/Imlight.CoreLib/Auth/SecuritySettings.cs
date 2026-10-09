@@ -85,6 +85,21 @@ internal static class SecuritySettings {
         TimeSpan.FromSeconds(Int("Game Server.SessionKeyValidityTime", 300)),
         Bool("Game Server.SessionKeyBindIp", true)));
 
+    /// <summary>
+    /// CLASSIC (go-live): the login port's own message bucket. [Advanced] LoginSessionTokenBucketMax,
+    /// LoginSessionTokenBucketPerSecond and LoginSessionTokenBucketFailedAcquisitionLimit apply to connections on
+    /// [Login Server] LoginServerPort only (the game port keeps SessionTokenBucket*, which the client's movement
+    /// needs). Unset or 0 Max: null, the shared bucket as before.
+    /// </summary>
+    internal static (int Max, int PerSecond, byte Limit)? LoginBucketFor(int localPort)
+        => LoginBucket(localPort, Int("Login Server.LoginServerPort", 12000), Int("Advanced.LoginSessionTokenBucketMax", 0),
+            Int("Advanced.LoginSessionTokenBucketPerSecond", 0), Int("Advanced.LoginSessionTokenBucketFailedAcquisitionLimit", 0));
+
+    internal static (int Max, int PerSecond, byte Limit)? LoginBucket(int localPort, int loginPort, int max, int perSecond, int limit) {
+        if (localPort <= 0 || localPort != loginPort || max <= 0) return null;
+        return (max, perSecond > 0 ? perSecond : Math.Max(1, max / 3), (byte) Math.Clamp(limit > 0 ? limit : 5, 1, 255));
+    }
+
     /// <summary>Failed logins: per account and per address, with doubling lockouts.</summary>
     internal static readonly Lazy<LoginThrottle> Logins = new(() => new LoginThrottle(new LoginThrottleOptions {
         AccountFailures = Int("Login Server.AccountFailuresBeforeLockout", 5),

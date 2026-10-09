@@ -58,7 +58,7 @@ internal static class FriendPortal {
                 Json(response, 403, new { error = "This request is not allowed." }); return;
             }
             var token = request.Cookies[CookieName]?.Value;
-            var address = request.RemoteEndPoint?.Address.ToString() ?? "unknown";
+            var address = ClientAddress(request); // CLASSIC (go-live): the visitor behind the local tunnel
             switch (path, method) {
                 case ("/friends", "GET"):
                     response.StatusCode = 302; response.RedirectLocation = "/friends/"; response.Close(); break;
@@ -133,9 +133,18 @@ internal static class FriendPortal {
     }
 
     private static void Register(HttpListenerContext context, FriendPortalBackend backend) {
-        var result = backend.Register(ReadBody(context.Request), context.Request.RemoteEndPoint?.Address.ToString() ?? "unknown");
+        var result = backend.Register(ReadBody(context.Request), ClientAddress(context.Request));
         if (result.Status == 201) Json(context.Response, 201, new { username = result.Username });
         else Json(context.Response, result.Status, new { error = result.Error });
+    }
+
+    /// <summary>
+    /// CLASSIC (go-live): the address for rate limits. A loopback peer (the Cloudflare tunnel in this container) may
+    /// name its visitor in [Classic] TrustedProxyHeader; access control still uses the peer (AllowsAddress).
+    /// </summary>
+    internal static string ClientAddress(HttpListenerRequest request) {
+        var header = Setting("Classic.TrustedProxyHeader");
+        return PublicAccess.ClientAddress(request.RemoteEndPoint?.Address, header is null ? null : request.Headers[header]);
     }
 
     private static bool KnownPath(string path) => path is "/friends" or "/friends/" or "/friends/spiral.png"
@@ -375,7 +384,8 @@ internal sealed class FriendPortalBackend {
         username = FriendPortal.Text(body, "username"); password = FriendPortal.Text(body, "password");
         if (username is not { Length: >= 3 and <= 24 } || username.Any(c => !(c is >= 'a' and <= 'z' or >= '0' and <= '9' or '_' or '-')))
             return "Use a username of 3–24 lowercase letters, numbers, underscores or hyphens.";
-        if (password is not { Length: >= 12 and <= 128 } || password.Any(char.IsControl)) return "Use a password of 12–128 characters without control characters.";
+        // CLASSIC: owner ruling 2026-10-09, game passwords need at least 6 characters (was 12).
+        if (password is not { Length: >= 6 and <= 128 } || password.Any(char.IsControl)) return "Use a password of 6–128 characters without control characters.";
         if (!string.Equals(password, FriendPortal.Text(body, "passwordConfirm"), StringComparison.Ordinal)) return "The passwords do not match.";
         return null;
     }

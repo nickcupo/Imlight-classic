@@ -174,6 +174,9 @@ internal static class UserValidator {
         matchedAccount.LastLoginMachineId = validateMessage.MachineID;
         matchedAccount.LastLoginTime = DateTime.UtcNow;
         matchedAccount.LastLoginIp = sessionActor.Ip;
+        // CLASSIC (go-live): a key from a launcher that uses the public host marks this address for the public
+        // game address (a LAN machine coming back through the router's hairpin NAT).
+        Imlight.CoreLib.Classic.PublicGameAddress.LoginValidated(matchedAccount.AccountId, sessionKey, address);
 
         details._account = matchedAccount;
         details._sessionKey = sessionKey;

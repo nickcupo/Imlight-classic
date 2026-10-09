@@ -43,9 +43,9 @@ public sealed class CrownShopCatalogTests {
         var rules = ClassicDataFixture.RealRules("october-2010-arc1");
         var offered = Imlight.CoreLib.Game.Services.CrownShopService.ForProfile(Real().Offered(rules.IsFeatureEnabled, rules.Profile.Id).Values, rules).ToArray();
         var elixirs = offered.Where(i => i.Category == CrownShopCategories.Elixirs).OrderBy(i => i.Template).ToArray();
-        Assert.Equal(10, elixirs.Length);
-        Assert.Equal(new[] { 200, 350, 200, 350, 225, 375, 150, 225, 100, 175 }, elixirs.Select(i => i.Crowns));
-        Assert.Equal(Enumerable.Range(191099, 10).Select(i => (ulong)i), elixirs.Select(i => i.Template));
+        Assert.Equal(16, elixirs.Length); // CLASSIC: the ten generic products and six school Battle elixirs (2026-10-08)
+        Assert.Equal(new[] { 200, 350, 200, 350, 225, 375, 150, 225, 100, 175, 300, 300, 300, 300, 300, 300 }, elixirs.Select(i => i.Crowns));
+        Assert.Equal(Enumerable.Range(191099, 10).Concat(Enumerable.Range(191117, 6)).Select(i => (ulong)i), elixirs.Select(i => i.Template));
         Assert.All(elixirs, i => Assert.Equal(0, i.Gold));
         var mastery = offered.Where(i => i.Template >= 468162 && i.Template <= 468168).ToArray();
         Assert.Equal(7, mastery.Length);
@@ -85,7 +85,7 @@ public sealed class CrownShopCatalogTests {
         Assert.Contains(category.m_ID, tab.m_categoryIDs);
         Assert.True(category.m_forceDisallowMultipleBuy);
         Assert.False(category.m_isGroupElixirsCategory);
-        Assert.Equal(10, data.m_items.Count);
+        Assert.Equal(16, data.m_items.Count);
         Assert.All(data.m_items, item => Assert.StartsWith($"{category.m_ID}:", item.m_displayPriority));
     }
 

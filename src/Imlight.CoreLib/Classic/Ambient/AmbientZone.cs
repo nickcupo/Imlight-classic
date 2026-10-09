@@ -709,6 +709,13 @@ internal sealed partial class AmbientZone : ReceiveActor, IWithTimers {
             return; // CLASSIC (2026-10-04): off doorways, not on another wizard (AmbientZone.Manners.cs)
         }
 
+        // CLASSIC (2026-10-08): no place to go (a hub with few NPCs and named spots, as Grizzleheim's four, every one
+        // taken or out of reach): a stroll over open ground instead. Before, such a wizard stood on for good (the owner's
+        // "standing around"; on the rig two Grizzleheim wizards moved 2 units in two minutes).
+        if (roll < 0.85 && WalkSomewhereNear(wizard)) {
+            return;
+        }
+
         // Stay a while, turning now and then.
         StandAWhile(wizard, now);
     }
@@ -767,6 +774,7 @@ internal sealed partial class AmbientZone : ReceiveActor, IWithTimers {
         wizard.Target = wizard.Route.Dequeue();
         wizard.Activity = activity;
         wizard.Moving = true;
+        wizard.Stands = 0;
         return true;
     }
 

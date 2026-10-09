@@ -30,6 +30,7 @@
     <ServerIntegrationTest Include="SnackPurchasePersistenceTests.cs" />
     <ServerIntegrationTest Include="PaidItemChangePersistenceTests.cs" />
     <ServerIntegrationTest Include="PetProgressPersistenceTests.cs" />
+    <ServerIntegrationTest Include="PetTalentEffectTests.cs" />
     <ServerIntegrationTest Include="PetGameInitializationTests.cs" />
     <ServerIntegrationTest Include="PetGameSessionAdmissionTests.cs" />
     <ServerIntegrationTest Include="TreasureMutationSafetyTests.cs" />
@@ -37,6 +38,7 @@
     <ServerIntegrationTest Include="BazaarTransactionPersistenceTests.cs" />
     <ServerIntegrationTest Include="BazaarNativeProtocolTests.cs" />
     <ServerIntegrationTest Include="BazaarInventorySafetyTests.cs" />
+    <ServerIntegrationTest Include="BazaarShelfServerTests.cs" />
     <ServerIntegrationTest Include="ClassicCinematicTests.cs" />
     <ServerIntegrationTest Include="ClassicDeckRegressionTests.cs" />
     <ServerIntegrationTest Include="StarterDeckPersistenceTests.cs" />
@@ -108,6 +110,7 @@
     <ServerIntegrationTest Include="ArenaShopSnapshotTests.cs" />
     <ServerIntegrationTest Include="ClassicCoreObjectSerializationTests.cs" />
     <ServerIntegrationTest Include="FriendPortalTests.cs" />
+    <ServerIntegrationTest Include="GoLiveServerTests.cs" />
     <ServerIntegrationTest Include="AccountRegistrationRaceTests.cs" />
     <ServerIntegrationTest Include="AccountHighestLevelTests.cs" />
     <ServerIntegrationTest Include="EvermoreWaveReplayTests.cs" />

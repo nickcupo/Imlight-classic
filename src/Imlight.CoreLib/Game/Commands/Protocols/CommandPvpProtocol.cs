@@ -52,7 +52,7 @@ internal class CommandPvpProtocol : CommandProtocol {
     [Command("status")]
     private void StatusCommand() {
         if (!ClassicPvp.Enabled) {
-            InformSenderClient("Open PvP is off on this server.");
+            InformSenderClient("Open PvP is off on this server.", isImportant: true);
 
             return;
         }
@@ -60,7 +60,7 @@ internal class CommandPvpProtocol : CommandProtocol {
         var circles = ClassicPvp.CirclesIn(Context.Character.Zone);
         InformSenderClient(circles.Count == 0
             ? $"No duel circle is open here. Walk into one of the {ClassicPvp.Config!.Circles.Length} circles in the Arena to start one."
-            : string.Join("; ", circles.Select(c => $"{c.Tag}: {c.Phase}, {c.Side0} v {c.Side1}, {c.Ready} ready")));
+            : string.Join("; ", circles.Select(c => $"{c.Tag}: {c.Phase}, {c.Side0} v {c.Side1}, {c.Ready} ready")), isImportant: true);
     }
 
 }

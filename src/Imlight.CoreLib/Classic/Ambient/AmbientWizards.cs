@@ -119,6 +119,8 @@ internal sealed class AmbientWizard {
     public DateTime PauseUntil { get; set; }
     public DateTime Until { get; set; }
     public bool Moving { get; set; }
+    /// <summary>CLASSIC (2026-10-08): how many times running it found no walk and stood (AmbientZone.StandAWhile).</summary>
+    public int Stands { get; set; }
     public ulong DuelSigil { get; set; }
     public ulong FollowCharId { get; set; }
     public int Turn { get; set; }

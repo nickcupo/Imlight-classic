@@ -36,6 +36,21 @@ public sealed class MobStatsTests {
     }
 
     [Fact]
+    public void ReviewedCreaturesHaveTheirDatedHealthAndOctoberOnlyValuesStayOctober() {
+        var path = Path.Combine(ClassicDataFixture.Root, "progression", "mob-stats-2009.yaml");
+        var late = MobStatsLoader.Load(path, "late-2009");
+        var october = MobStatsLoader.Load(path, "october-2010-arc1");
+        Assert.Equal(4500, late.HealthOf(126737));      // Andor Bristleback, pre-July Dragonspyre
+        Assert.Equal(3200, late.HealthOf(126487));      // Flamebringer (oldid 17558; the 7,000 was a bad edit)
+        Assert.Equal(1265, october.HealthOf(191088));   // Fire Shrieker, Briskbreeze Tower
+        Assert.Null(late.HealthOf(82143));              // Ngozi: the cutoff page's 3,600 is not used
+        Assert.Equal(3400, october.HealthOf(82143));    // corrected 2010-06-18
+        Assert.Equal(4100, october.HealthOf(173169));   // Rogue Fire Elemental, 2010-09-10
+        Assert.Null(Real().HealthOf(173169));           // no profile: profile-only entries are skipped
+        Assert.Null(october.HealthOf(126502));          // Evil Trickster keeps its template (owner check)
+    }
+
+    [Fact]
     public void AnUnknownSchoolIsRejected() {
         var dir = Directory.CreateTempSubdirectory("w101c-mobstats-");
         try {

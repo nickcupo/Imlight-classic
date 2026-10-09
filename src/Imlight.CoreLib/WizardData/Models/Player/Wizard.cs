@@ -486,6 +486,10 @@ public class Wizard {
             return false;
         }
 
+        // CLASSIC: prepare and publish an October pet swap through one acknowledged, freshly owned write.
+        if (slot.SlotType == EquipmentSlotType.Pet && Imlight.CoreLib.Game.Pet.PetTalentRuntime.Enabled)
+            return Imlight.CoreLib.Game.Pet.ClassicPetEquipmentTransactions.Equip(this, itemId, out equipEffects, out unequipEffects);
+
         // Remove the item from the inventory.
         if (!InventoryBehavior.RemoveItem(inventoryItem)) {
             Logger.Warning("Tried to equip item with global id {0} that does not exist in player inventory.", Logger.Args(itemId));
@@ -553,6 +557,10 @@ public class Wizard {
         var item = EquipmentBehavior.EquippedItems.FirstOrDefault(i => i.m_globalID == itemId);
         var template = ItemHelper.GetItemTemplate(item);
         var slot = ItemHelper.GetItemSlot(template);
+
+        // CLASSIC: retire a pet's admitted passive receipt only after its exact saved Pet-slot move succeeds.
+        if (slot?.SlotType == EquipmentSlotType.Pet && Imlight.CoreLib.Game.Pet.PetTalentRuntime.Enabled)
+            return Imlight.CoreLib.Game.Pet.ClassicPetEquipmentTransactions.Unequip(this, itemId, out unequipEffects);
 
         // Remove the item from the equipment.
         var unequipResult = EquipmentBehavior.UnequipItem(itemId);
