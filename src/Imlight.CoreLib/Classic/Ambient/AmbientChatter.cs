@@ -249,7 +249,7 @@ internal sealed class AmbientChatter {
                 Schedule(wizard, state, now, more, after, followUp: true);
             }
 
-            if (AmbientChatBrain.IsOpenCall(text) && then is null) {
+            if (AmbientChatBrain.IsOpenCall(text) && then is null && state.Persona.Channel != ChatChannel.Menu) {
                 state.AskedAt = now + after;
             }
         }
