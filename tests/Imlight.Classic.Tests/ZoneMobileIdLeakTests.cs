@@ -148,6 +148,62 @@ public sealed class ZoneMobileIdLeakTests : IDisposable {
         }
     }
 
+    [Fact]
+    public async Task ZoneTransfersNobodyAddsGiveTheirIdsBackAndAPlayerIsReleasedByTheIdItWasAddedWith() {
+        using var system = ActorSystem.Create("zone-mobileid-transfers", "akka.actor.provider = local");
+        var window = Zone.TransferClaimWindow;
+        Zone.TransferClaimWindow = TimeSpan.FromMilliseconds(300);
+        try {
+            var (zoneRef, zone) = await StartZone(system);
+            var ct = TestContext.Current.CancellationToken;
+
+            // A same-zone teleport, a session that left mid-transfer, a companion whose transfer timed out on its side:
+            // a transfer answer nobody follows with an ADDPLAYER.
+            for (var i = 0; i < 200; i++) {
+                var rsp = await zoneRef.Ask<ZONE_102_PROTOCOL.MSG_ZONETRANSFERRSP>(Transfer(), Timeout, ct);
+                Assert.Equal(0u, rsp.ErrorCode);
+            }
+            Assert.Equal(200, zone.PlayerMobileIdsInUse);
+            await Task.Delay(TimeSpan.FromMilliseconds(500), ct);
+            Assert.Equal(0, zone.PlayerMobileIdsInUse);
+
+            // Two players added: claimed ids outlive the window.
+            var first = system.ActorOf(Props.Create(() => new Sink()));
+            var second = system.ActorOf(Props.Create(() => new Sink()));
+            var firstId = (await zoneRef.Ask<ZONE_102_PROTOCOL.MSG_ZONETRANSFERRSP>(Transfer(), Timeout, ct)).MobileId;
+            var secondId = (await zoneRef.Ask<ZONE_102_PROTOCOL.MSG_ZONETRANSFERRSP>(Transfer(), Timeout, ct)).MobileId;
+            await zoneRef.Ask<ZONE_102_PROTOCOL.MSG_ADDPLAYERRSP>(Add(first, 1UL, firstId), Timeout, ct);
+            await zoneRef.Ask<ZONE_102_PROTOCOL.MSG_ADDPLAYERRSP>(Add(second, 2UL, secondId), Timeout, ct);
+            await Task.Delay(TimeSpan.FromMilliseconds(500), ct);
+            Assert.Equal(2, zone.PlayerMobileIdsInUse);
+
+            // The first leaves with a REMOVEPLAYER that names the second's id (its object already carries its next
+            // zone's id): its own id is given back, the second keeps its id.
+            await zoneRef.Ask<ZONE_102_PROTOCOL.MSG_REMOVEPLAYERRSP>(new ZONE_102_PROTOCOL.MSG_REMOVEPLAYER {
+                PlayerActor = first, GlobalId = 1UL, MobileId = secondId,
+            }, Timeout, ct);
+            await Task.Delay(TimeSpan.FromSeconds(2.3), ct);
+            Assert.Equal(1, zone.PlayerMobileIdsInUse);
+            var next = (await zoneRef.Ask<ZONE_102_PROTOCOL.MSG_ZONETRANSFERRSP>(Transfer(), Timeout, ct)).MobileId;
+            Assert.NotEqual(secondId, next);
+        } finally {
+            Zone.TransferClaimWindow = window;
+            await system.Terminate();
+        }
+    }
+
+    private static ZONE_102_PROTOCOL.MSG_ZONETRANSFER Transfer() => new() {
+        DestinationZone = "WizardCity/WC_Streets/WC_Unicorn", DestinationLocation = "1,2,3,0",
+    };
+
+    private static ZONE_102_PROTOCOL.MSG_ADDPLAYER Add(IActorRef player, ulong globalId, ushort mobileId) => new() {
+        PlayerActor = player, PlayerObject = new CoreObject { m_globalID = globalId, m_nMobileID = mobileId },
+    };
+
+    private sealed class Sink : ReceiveActor {
+        public Sink() => ReceiveAny(_ => { });
+    }
+
     private static async Task<(IActorRef, Zone)> StartZone(ActorSystem system) {
         var zoneRef = system.ActorOf(Props.Create(() => new ZoneHarness()));
         var box = await zoneRef.Ask<ZoneBox>(new GetZone(), Timeout, TestContext.Current.CancellationToken);
@@ -164,10 +220,19 @@ public sealed class ZoneMobileIdLeakTests : IDisposable {
         public ZoneHarness() : base("WizardCity/WC_Streets/WC_Unicorn", 1) {
             Timers.CancelAll();
             SetField(typeof(Zone), this, "_isLoading", false);
+            foreach (var name in new[] { "_objectSupervisor", "_playerSupervisor", "_volumeSupervisor", "_triggerSupervisor",
+                         "_pathSupervisor", "_sigilSupervisor" }) {
+                SetField(typeof(Zone), this, name, ActorRefs.Nobody);
+            }
         }
 
         [MessageHandler(typeof(GetZone))]
         private void Get(GetZone _) => Sender.Tell(new ZoneBox(this));
+
+        // Zone's own handler is private, so the table of this subclass does not see it (production zones are Zone).
+        [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_RELEASEMOBILEID))]
+        private void Release(ZONE_102_PROTOCOL.MSG_RELEASEMOBILEID message)
+            => MessageHandlerTable.DispatcherFor(typeof(Zone), message.GetType())!(this, message);
     }
 
     // A zone object with no components: only the load handshake and the mobile id.

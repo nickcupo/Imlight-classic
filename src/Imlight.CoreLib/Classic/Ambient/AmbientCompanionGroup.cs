@@ -146,6 +146,9 @@ internal sealed class AmbientCompanionGroup : ReceiveActor, IWithTimers {
         public AmbientSigilNotice SigilComing { get; set; }
         public SigilGroup Sigil { get; set; }
         public bool Defeated { get; set; }
+        // CLASSIC: the zone told MSG_ADDPLAYER whose answer has not come yet (see CancelAdd).
+        public IActorRef AddingTo { get; set; }
+        public ushort AddingMobileId { get; set; }
         public string Key => KeyOf(ZonePath, Instance);
     }
 
@@ -651,6 +654,7 @@ internal sealed class AmbientCompanionGroup : ReceiveActor, IWithTimers {
         }
 
         if (rsp.ErrorCode != 0 || rsp.ZoneActorRef is null) {
+            CancelAdd(companion); // CLASSIC: a timed-out add takes the companion (and its mobile id) back out
             companion.Transferring = false;
             companion.Failures++;
             Logger.Warning("Ambient wizard {Name} could not follow {Leader} into {Zone} ({Error}).",
@@ -691,8 +695,30 @@ internal sealed class AmbientCompanionGroup : ReceiveActor, IWithTimers {
         gameObject.m_orientation = character.Orientation;
         character.GameObject = gameObject;
         ActiveWizardDirectory.SetGameObject(wizard.Endpoint, gameObject);
+        CancelAdd(companion); // CLASSIC: an earlier add still unanswered
+        companion.AddingTo = rsp.ZoneActorRef;
+        companion.AddingMobileId = rsp.MobileId;
         rsp.ZoneActorRef.Tell(new ZONE_102_PROTOCOL.MSG_ADDPLAYER {
             PlayerActor = wizard.Endpoint, PlayerObject = gameObject, Wizard = character, ActualWizardName = wizard.Name,
+        }, wizard.Endpoint);
+    }
+
+    /// <summary>
+    /// CLASSIC: a companion sent home or elsewhere between its MSG_ADDPLAYER and the answer was never removed: the zone
+    /// added it after the group had let it go, so it stood there as a ghost and its mobile id was never given back
+    /// (Zone keeps an added player's id until its REMOVEPLAYER). The REMOVEPLAYER follows the ADDPLAYER from this actor,
+    /// so the zone always sees the add first.
+    /// </summary>
+    private void CancelAdd(Companion companion) {
+        if (companion.AddingTo is not { } zone) {
+            return;
+        }
+
+        var wizard = companion.Wizard;
+        companion.AddingTo = null;
+        zone.Tell(new ZONE_102_PROTOCOL.MSG_REMOVEPLAYER {
+            PlayerActor = wizard.Endpoint, GlobalId = wizard.Wizard.GameObjectID,
+            MobileId = companion.AddingMobileId, IsPlayerStillConnected = false,
         }, wizard.Endpoint);
     }
 
@@ -700,6 +726,8 @@ internal sealed class AmbientCompanionGroup : ReceiveActor, IWithTimers {
         if (companion.Present || !companion.Transferring) {
             return; // the zone and its player supervisor each answer MSG_ADDPLAYER
         }
+
+        companion.AddingTo = null; // CLASSIC: answered; RemoveFromZone takes it out from here on
 
         companion.Present = true;
         companion.Transferring = false;
@@ -749,6 +777,7 @@ internal sealed class AmbientCompanionGroup : ReceiveActor, IWithTimers {
         var wizard = companion.Wizard;
         companion.Transferring = false;
         if (!companion.Present) {
+            CancelAdd(companion); // CLASSIC
             return;
         }
 
@@ -771,6 +800,7 @@ internal sealed class AmbientCompanionGroup : ReceiveActor, IWithTimers {
         var zone = companion.ZoneActor;
         companion.Transferring = false;
         if (!companion.Present || zone is null) {
+            CancelAdd(companion); // CLASSIC
             return;
         }
 
