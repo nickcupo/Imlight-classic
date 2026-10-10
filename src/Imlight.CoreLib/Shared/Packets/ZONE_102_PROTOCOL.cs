@@ -983,6 +983,19 @@ public class ZONE_102_PROTOCOL : IServerProtocol {
 
     }
 
+    /// <summary>
+    /// CLASSIC: sent by a ResInitiateCombat that found no creature in range, so every scripted-only boss in the zone
+    /// fights the wizard when he comes near (ScriptedAggro).
+    /// </summary>
+    public sealed class MSG_ARMSCRIPTEDCOMBAT : IServerMessage {
+
+        public byte MessageOrder { get; } = 142;
+        public byte ServiceID { get; } = 102;
+
+        public CoreObject PlayerGameObject;
+
+    }
+
     public sealed class MSG_QUERYNEARESTDUELTARGET : IServerMessage {
 
         public byte MessageOrder { get; } = 57;
