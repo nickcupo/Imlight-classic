@@ -33,20 +33,21 @@ internal static class ClassicPetProgressTransactions {
     internal static readonly AsyncLocal<PetProgressDependencies> TestScope = new();
 
     internal static bool TryInitialize(Wizard live, ulong petId, out WizClientObjectItem pet, out int energy)
-        => TryInitialize(live, petId, false, null, out pet, out energy);
+        => TryInitialize(live, petId, false, null, out pet, out energy, out _);
 
     // CLASSIC: game admission requires the selected pet to remain in the exact fresh Pet slot.
+    // Callers must publish the acknowledged native effect transition, even if admission later refuses.
     // The generic owned-pet initializer above still accepts backpack pets.
     internal static bool TryInitializeForGame(Wizard live, ulong petId, out WizClientObjectItem pet, out int energy,
-        Func<bool> contextStillValid = null)
-        => TryInitialize(live, petId, true, contextStillValid, out pet, out energy);
+        out IReadOnlyList<IMessage> messages, Func<bool> contextStillValid = null)
+        => TryInitialize(live, petId, true, contextStillValid, out pet, out energy, out messages);
 
     private static bool TryInitialize(Wizard live, ulong petId, bool requireEquipped, Func<bool> contextStillValid,
-        out WizClientObjectItem pet, out int energy) {
-        pet = null; energy = 0;
+        out WizClientObjectItem pet, out int energy, out IReadOnlyList<IMessage> messages) {
+        pet = null; energy = 0; messages = [];
         if (!Usable(live)) return false;
         WizClientObjectItem snapshot = null, published = null;
-        PetTalentReceipt talentReceipt = null;
+        PetTalentTransition talents = null;
         var availableEnergy = 0;
         var unchanged = false;
         var committed = WizardCollection.CommitCharacterMutation(live.CharId, (session, saved) => {
@@ -62,17 +63,22 @@ internal static class ClassicPetProgressTransactions {
                 return false;
             }
             WizardInventoryTransactions.ProtectUnmodifiedRows(session, snapshot);
-            talentReceipt = PetTalentRuntime.Prepare(live, snapshot);
+            // CLASSIC: prepare native old-ID removal/new-ID addition before saving, like feeding.
+            // A payload failure must not commit progress that cannot be published to the client.
+            try { talents = PetTalentRuntime.PrepareTransition(live, snapshot); }
+            catch (Exception) { return false; }
             return contextStillValid?.Invoke() != false;
         }, saved => {
             published = WizardInventoryTransactions.PublishCommittedOwnedItem(live, saved, snapshot);
-            PetTalentRuntime.Publish(live, published, talentReceipt);
+            PetTalentRuntime.Publish(live, published, talents?.Receipt);
         },
             onSaveFailure: _ => WizardCollection.MarkInventorySnapshotUncertain(live));
         if (!committed && !unchanged) return false;
         // No mutation is published for an unchanged authoritative read, and no needless save is issued.
         pet = committed ? published : snapshot;
         energy = availableEnergy;
+        // CLASSIC: false, unchanged and failed/lost ACK paths expose no native publication.
+        messages = committed ? talents?.Messages ?? [] : [];
         return true;
     }
 

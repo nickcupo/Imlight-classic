@@ -117,7 +117,8 @@ internal abstract class ZoneEntitySupervisor(Core.Zone zone) : ReceiveProtocolDi
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_ZONEBROADCAST))]
     public virtual void ReceiveZoneBroadcast(ZONE_102_PROTOCOL.MSG_ZONEBROADCAST message) {
         foreach (var entity in EntityActors) {
-            if (entity is null) {
+            // CLASSIC: exclusions are trusted internal actor identities, never names or a native packet field.
+            if (entity is null || message.ExcludedRecipients?.Contains(entity) == true) {
                 continue;
             }
 
