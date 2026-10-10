@@ -146,7 +146,7 @@ public sealed class AmbientHatchBazaarTests {
     [Fact]
     public void HatchLinesNameThePetAndStage() {
         var line = AmbientPets.Line(AmbientPets.Talk.Offer, 0, "Fire Elf", PetRules.Adult);
-        Assert.Equal("anyone want to hatch? my fire elf is adult", line);
+        Assert.Equal("anyone wanna hatch? my fire elf is adult", line);
         Assert.DoesNotContain("{", AmbientPets.Line(AmbientPets.Talk.Answer, 3, "Imp", PetRules.Ancient));
         Assert.Equal("Fire Elf", AmbientPets.NameOf(100408));
     }

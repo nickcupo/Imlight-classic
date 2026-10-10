@@ -22,7 +22,8 @@
  * PURPOSE:
  * CLASSIC: what the friends list lets a client do (security audit 2026-10-04).
  *   Teleport to a player (MSG_GOTOPLAYER): only to a friend (2009: "Teleport to Friend" on the friends list), never
- *     to oneself, never out of a duel and never into a minigame. A friend's dungeon run or dorm is still reached
+ *     to oneself, never out of a duel, never into a minigame and never into a gauntlet (Quests oldid 21718 and
+ *     113449). A friend's dungeon run or dorm is still reached
  *     through the existing instance rules (Classic.GroupInstances).
  *   Stats (MSG_BUDDYSTATS): oneself, a friend, or a wizard in the same zone (the client asks when a wizard is
  *     selected); anyone else is refused, and the lookups are rate-limited per session.
@@ -30,7 +31,7 @@
  *
  * Created by: Nick with Claude Code (claude-opus-5-5)
  * Version: KALI 1.0
- * Last Updated: 10/04/2026
+ * Last Updated: 10/09/2026
  */
 
 #nullable enable
@@ -63,6 +64,16 @@ internal static class FriendRules {
 
         return GoToPlayerRefusal.None;
     }
+
+    /// <summary>The client's own words when the friend is in a gauntlet (Teleportation_Gauntlet).</summary>
+    internal const string GauntletBusyMessage = "Your friend is busy right now.";
+
+    /// <summary>
+    /// CLASSIC: true when a friend in <paramref name="zone"/> is in a gauntlet of the active profile (Golem Tower,
+    /// Briskbreeze Tower, the gauntlet rooms of classic-data/rules/instance-resets-2009.yaml) and cannot be teleported to.
+    /// </summary>
+    internal static bool TargetInGauntlet(bool classic, string? zone)
+        => classic && Imlight.Classic.Travel.InstanceGroups.GroupOf(zone) is { Kind: Imlight.Classic.Rules.InstanceKind.Gauntlet };
 
     internal static bool MayViewStats(ulong self, ulong target, Relationship? relationship, bool targetInSameZone)
         => target == self || IsFriend(relationship) || targetInSameZone;

@@ -211,6 +211,7 @@ internal class FriendsService(SessionActor sessionActor) : MessageService(sessio
 
         SendBuddyListEnd(wizard);
         InformBuddiesOfStatusChange(true);
+        Classic.QuestBuddyNotices.Login(Context.System, charId); // CLASSIC: which quest each online friend is on
     }
 
     [MessageHandler(typeof(GAME_5_PROTOCOL.MSG_BUDDYSTATS))]
@@ -682,6 +683,18 @@ internal class FriendsService(SessionActor sessionActor) : MessageService(sessio
                     .Where(p => p.HousingDeedId == housingDeed),
                 p => p.CurrentZone, p => p.InstanceOwnerId, zone, instanceOwner), onlinePlayer.ZoneHardLimit)) {
             InformGameClient(GroupInstances.FullInstanceMessage, true);
+
+            return;
+        }
+
+        // CLASSIC (group questing audit 2026-10-09): a wizard in a gauntlet cannot be teleported to (Fandom Quests
+        // oldid 21718, 2009-06-20, and oldid 113449, 2010-10-12: "A player in a Gauntlet cannot be teleported to";
+        // more than one wizard enters a gauntlet only through its sigil). A full one-wizard gauntlet room still answers
+        // "Your friend is in a full instance" above (Take It by Storm oldid 41949). The words are the client's own
+        // (Teleportation_Gauntlet).
+        if (FriendRules.TargetInGauntlet(ClassicRuntime.IsActive, zone)) {
+            Logger.Information("{0} teleport to character {1} refused: in a gauntlet ({2}).", Logger.Args(me.CharId, targetID, zone));
+            InformGameClient(FriendRules.GauntletBusyMessage, true);
 
             return;
         }

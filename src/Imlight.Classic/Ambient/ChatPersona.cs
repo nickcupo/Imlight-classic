@@ -37,6 +37,15 @@
  *     checked 2026-10-04: "u", "r", "ur", "omg", "kk", "lag" and nearly all
  *     misspellings are NOT in it, so the wizards never use them). A styled
  *     line the filter refuses falls back to the plain template.
+ *   - CLASSIC (2026-10-10, owner: "rework the chat completely of the
+ *     friendly wizards so its more natural"): a temperament (Kind: shy,
+ *     chatty, bossy, show-off, new player, parent) that sets what it
+ *     talks about and how it answers (AmbientChatBrain.Plan), its own
+ *     laugh for every "lol" and its own yes word; shy ones trail off
+ *     ("...", "um"), bossy ones drop smileys, show-offs add a laugh;
+ *     neat typists end questions with "?"; kids drop a leading "i" and
+ *     type "your" for "you're". Number words from two to twenty, "bed",
+ *     "cant" and "ugly" are not in the dictionary either.
  *   - Timing: a reply waits for reading the line, a thinking pause and the
  *     typing (length / speed), 1.5 to 25 seconds; quick words ("lol",
  *     "ty") come fast.
@@ -48,7 +57,7 @@
  *
  * Created by: Nick with Claude Code (claude-opus-5-5)
  * Version: KALI 1.0
- * Last Updated: 10/04/2026
+ * Last Updated: 10/10/2026
  */
 
 using System;
@@ -65,6 +74,14 @@ public enum ChatChannel { Menu, Dictionary, Open }
 /// <summary>How a wizard spells.</summary>
 public enum ChatSpelling { Neat, Casual, Sloppy, Excited }
 
+/// <summary>
+/// CLASSIC (2026-10-10, owner: "rework the chat completely of the friendly wizards so its more natural"): the kind of
+/// player a wizard is, which sets what it talks about and how it answers. Shy ones say little and miss lines; chatty ones
+/// talk about anything and wander off topic; bossy ones tell people what to do and answer short; show-offs brag; new
+/// players ask; parents talk about their kids and get lost.
+/// </summary>
+public enum ChatTemperament { Shy, Chatty, Bossy, ShowOff, Newbie, Parent }
+
 /// <summary>How one ambient wizard chats (see the file header).</summary>
 /// <param name="Seed">The identity's seed.</param>
 /// <param name="Temper">How much it talks.</param>
@@ -73,10 +90,13 @@ public enum ChatSpelling { Neat, Casual, Sloppy, Excited }
 /// <param name="Spelling">Its spelling.</param>
 /// <param name="CharsPerSecond">Typing speed.</param>
 /// <param name="ThinkSeconds">The usual pause before it starts typing.</param>
-/// <param name="Laugh">"lol", "haha", "hehe", "lolz" or "heh".</param>
+/// <param name="Laugh">"lol", "haha", "hehe", "lolz", "heh" or "xd".</param>
 /// <param name="Smiley">":)", ":D", ":P" or null.</param>
+/// <param name="Kind">Its temperament (CLASSIC 2026-10-10).</param>
+/// <param name="YesWord">How it types a yes ("ya", "yea", "yeah", "yep", "yup", "ok").</param>
 public sealed record ChatPersona(int Seed, AmbientTemper Temper, bool Grownup, ChatChannel Channel, ChatSpelling Spelling,
-                                 double CharsPerSecond, double ThinkSeconds, string Laugh, string? Smiley) {
+                                 double CharsPerSecond, double ThinkSeconds, string Laugh, string? Smiley,
+                                 ChatTemperament Kind = ChatTemperament.Chatty, string YesWord = "yeah") {
 
     /// <summary>True when the wizard may type a level as a number (open chat; see ChatWordFilter).</summary>
     public bool Numbers => Channel == ChatChannel.Open;
@@ -84,11 +104,11 @@ public sealed record ChatPersona(int Seed, AmbientTemper Temper, bool Grownup, C
     /// <summary>The persona of the wizard with <paramref name="identity"/>; the same identity gives the same persona.</summary>
     public static ChatPersona For(AmbientIdentity identity) {
         ArgumentNullException.ThrowIfNull(identity);
-        return For(identity.Seed, identity.Temper);
+        return For(identity.Seed, identity.Temper, identity.Level);
     }
 
-    /// <summary>The persona for a seed and temper.</summary>
-    public static ChatPersona For(int seed, AmbientTemper temper) {
+    /// <summary>The persona for a seed and temper (<paramref name="level"/> 0: not known).</summary>
+    public static ChatPersona For(int seed, AmbientTemper temper, int level = 0) {
         var rng = new Random(unchecked(seed * 7919 + 0x5EED));
         var grownup = rng.NextDouble() < 0.2;
         ChatChannel channel;
@@ -108,10 +128,39 @@ public sealed record ChatPersona(int Seed, AmbientTemper Temper, bool Grownup, C
             speed = 2.2 + rng.NextDouble() * 2.3;
         }
 
-        string[] laughs = ["lol", "lol", "lol", "haha", "hehe", "lolz", "heh"];
+        string[] laughs = ["lol", "lol", "lol", "haha", "hehe", "lolz", "heh", "xd"];
         string?[] smileys = [":)", ":)", ":D", ":P", null, null];
-        return new ChatPersona(seed, temper, grownup, channel, spelling, Math.Round(speed, 2), 0.8 + rng.NextDouble() * 1.6,
-            laughs[rng.Next(laughs.Length)], smileys[rng.Next(smileys.Length)]);
+        var think = 0.8 + rng.NextDouble() * 1.6;
+        var laugh = laughs[rng.Next(laughs.Length)];
+        if (spelling == ChatSpelling.Neat && laugh is "xd" or "lolz") {
+            laugh = "haha"; // a neat typist does not type "Xd"
+        }
+
+        var smiley = smileys[rng.Next(smileys.Length)];
+
+        // CLASSIC (2026-10-10): temperament and habits, drawn after the older draws so a wizard keeps its old voice.
+        var kind = grownup ? ChatTemperament.Parent : Temperament(temper, level, rng.NextDouble(), rng.NextDouble());
+        string[] yes = grownup ? ["yes", "sure", "yeah", "ok"] : ["ya", "yea", "yeah", "yeah", "yep", "yup", "ok"];
+        var yesWord = yes[rng.Next(yes.Length)];
+        if (kind == ChatTemperament.Shy) {
+            smiley = rng.NextDouble() < 0.5 ? smiley : null;
+            think += 0.8; // shy ones wait before they type
+        }
+
+        return new ChatPersona(seed, temper, grownup, channel, spelling, Math.Round(speed, 2), think, laugh, smiley, kind, yesWord);
+    }
+
+    /// <summary>A kid's temperament from its temper, its level (new players are low) and two rolls in [0, 1).</summary>
+    public static ChatTemperament Temperament(AmbientTemper temper, int level, double newRoll, double roll) {
+        if (level is > 0 and <= 5 && newRoll < 0.55) {
+            return ChatTemperament.Newbie;
+        }
+
+        return temper switch {
+            AmbientTemper.Quiet => roll < 0.7 ? ChatTemperament.Shy : roll < 0.85 ? ChatTemperament.Chatty : ChatTemperament.ShowOff,
+            AmbientTemper.Chatty => roll < 0.45 ? ChatTemperament.Chatty : roll < 0.7 ? ChatTemperament.ShowOff : ChatTemperament.Bossy,
+            _ => roll < 0.35 ? ChatTemperament.Chatty : roll < 0.6 ? ChatTemperament.Shy : roll < 0.8 ? ChatTemperament.ShowOff : ChatTemperament.Bossy,
+        };
     }
 
 }
@@ -121,7 +170,8 @@ public static class ChatStyle {
 
     private const RegexOptions Options = RegexOptions.IgnoreCase | RegexOptions.CultureInvariant;
 
-    // Swaps a sloppy typist makes, every result a dictionary word (checked against r806919's WhiteListBase).
+    // Swaps a sloppy typist makes, every result a dictionary word (checked against r806919's WhiteListBase; CLASSIC
+    // 2026-10-10: "your" for "you're" and "its" for "it's" are the misspellings kids really made and the filter shows).
     private static readonly (Regex From, string[] To)[] s_swaps = [
         (new(@"\bi don'?t know\b", Options), ["idk", "dunno"]),
         (new(@"\bdon'?t know\b", Options), ["dunno"]),
@@ -137,8 +187,8 @@ public static class ChatStyle {
         (new(@"\bthank you\b", Options), ["ty", "thx"]),
         (new(@"\bthanks\b", Options), ["thx", "ty", "thanx"]),
         (new(@"\bplease\b", Options), ["plz", "pls"]),
-        (new(@"\bokay\b", Options), ["ok"]),
-        (new(@"\bprobably\b", Options), ["prob"]),
+        (new(@"\bokay\b", Options), ["ok", "k"]),
+        (new(@"\bprobably\b", Options), ["prob", "prolly"]),
         (new(@"\bbecause\b", Options), ["cuz", "cause"]),
         (new(@"\blet me\b", Options), ["lemme"]),
         (new(@"\bseriously\b", Options), ["srsly"]),
@@ -147,9 +197,36 @@ public static class ChatStyle {
         (new(@"\byes\b", Options), ["yeah", "yep", "ya"]),
         (new(@"\bcool\b", Options), ["cool", "kewl"]),
         (new(@"\btheir\b", Options), ["thier"]),
+        (new(@"\byou're\b", Options), ["your"]),
+        (new(@"\bsorry\b", Options), ["sry"]),
+        (new(@"\bby the way\b", Options), ["btw"]),
+        (new(@"\bjust kidding\b", Options), ["jk"]),
     ];
 
-    private static readonly Regex s_apostrophe = new(@"\b(i'm|don't|that's|what's|it's|let's|i'll|didn't|doesn't|isn't|won't|couldn't|wouldn't|shouldn't|wasn't|haven't|aren't)\b", Options);
+    // Drawn-out words, each a dictionary word ("soooo", "nooo", "awww" are in the list; "sooo", "hiii" are not).
+    private static readonly (Regex From, string[] To)[] s_stretch = [
+        (new(@"\bso\b", Options), ["soooo"]),
+        (new(@"\bno\b", Options), ["nooo", "noooo"]),
+        (new(@"\baw\b", Options), ["aww", "awww"]),
+    ];
+
+    private static readonly Regex s_apostrophe = new(@"\b(i'm|don't|that's|what's|it's|let's|i'll|didn't|doesn't|isn't|won't|wasn't|aren't)\b", Options);
+
+    private static readonly Regex s_lol = new(@"\blol\b", Options);
+
+    private static readonly Regex s_leadingYes = new(@"^(yeah|ya|yea|yep|yup)\b", Options);
+
+    /// <summary>
+    /// Every word a style can put into a line that the template did not have (swaps, stretched words, laughs, yes words,
+    /// fillers), for the vocabulary tests: each must be a client dictionary word.
+    /// </summary>
+    public static IReadOnlyCollection<string> StyleWords { get; } = new SortedSet<string>(StringComparer.Ordinal) {
+        "idk", "dunno", "wanna", "gonna", "gtg", "gotta", "kinda", "brb", "ttyl", "np", "nvm", "ty", "thx", "thanx", "plz", "pls",
+        "ok", "k", "prob", "prolly", "cuz", "cause", "lemme", "srsly", "lvl", "wiz", "yeah", "yep", "ya", "cool", "kewl", "thier",
+        "your", "sry", "btw", "jk", "soooo", "nooo", "noooo", "aww", "awww", "lol", "haha", "hehe", "lolz", "heh", "xd", "yea",
+        "yup", "yes", "sure", "um", "dont", "thats", "whats", "its", "lets", "ill", "didnt", "doesnt", "isnt", "wont", "wasnt",
+        "arent", "im", "i", "I",
+    };
 
     /// <summary>
     /// <paramref name="template"/> (already filled) as the persona types it, or the template itself when the styled line
@@ -169,6 +246,7 @@ public static class ChatStyle {
             ChatSpelling.Sloppy => Sloppy(template, persona, rng),
             _ => Excited(template, persona, rng),
         };
+        line = Habits(line, persona, rng);
         line = Regex.Replace(line, " {2,}", " ").Trim();
         if (line.Length == 0 || line.Length > 80 || !AmbientChatBrain.IsClean(line)) {
             return template;
@@ -177,12 +255,67 @@ public static class ChatStyle {
         return filter is null || filter.Passes(line, persona.Numbers) ? line : template;
     }
 
+    // CLASSIC (2026-10-10): the same person's habits every time: its own laugh for "lol", its own yes, and its temperament.
+    private static string Habits(string line, ChatPersona persona, Random rng) {
+        if (persona.Spelling != ChatSpelling.Neat) {
+            if (persona.Laugh != "lol") {
+                line = s_lol.Replace(line, persona.Laugh);
+            }
+
+            line = s_leadingYes.Replace(line, persona.YesWord);
+        }
+
+        var words = line.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length;
+        switch (persona.Kind) {
+            case ChatTemperament.Shy:
+                line = line.Replace("!!", "").TrimEnd('!');
+                if (words >= 3 && rng.NextDouble() < 0.2 && !line.StartsWith("um", StringComparison.OrdinalIgnoreCase)) {
+                    line = (persona.Spelling == ChatSpelling.Neat ? "Um, " + char.ToLowerInvariant(line[0]) + line[1..] : "um " + line);
+                }
+                else if (words >= 2 && rng.NextDouble() < 0.15 && !line.EndsWith('?') && !Regex.IsMatch(line, @"(:\)|:D|:P)$")) {
+                    line = line.TrimEnd('.') + "...";
+                }
+
+                break;
+            case ChatTemperament.Bossy:
+                line = Regex.Replace(line, @"\s*(:\)|:D|:P)$", "");
+                break;
+            case ChatTemperament.ShowOff:
+                if (persona.Spelling != ChatSpelling.Neat && words >= 3 && rng.NextDouble() < 0.12
+                    && !line.Contains(persona.Laugh, StringComparison.Ordinal)) {
+                    line += " " + persona.Laugh;
+                }
+
+                break;
+        }
+
+        return line;
+    }
+
+    // CLASSIC (2026-10-10): a line that asks something, for its "?" ("what school are you." read like a robot).
+    private static readonly Regex s_question = new(
+        @"^((ok|okay|k|so|um|and|but|hey|sure)\s+)?(what|whats|what's|where|wheres|where's|how|who|which|why|is|are|can|could|does|do|did|will|anyone|anybody|wanna|want|need|you|r)\b",
+        Options);
+
+    private static readonly HashSet<string> s_interjections = new(StringComparer.OrdinalIgnoreCase) {
+        "lol", "lolz", "haha", "hehe", "heh", "xd", "rofl", "ok", "k", "gg", "ty", "thx", "np", "yw", "hmm", "um", "meh", "ugh", "brb",
+        "afk", "gtg", "ya", "yea", "yep", "yup", "nah", "oh", "ooh", "aw", "aww", "awww", "nvm", "sup", "yo", "idk", "same",
+    };
+
+    /// <summary>True when <paramref name="line"/> reads as a question.</summary>
+    public static bool Asks(string line) => s_question.IsMatch(line ?? "");
+
     private static string Neat(string text) {
         var line = Regex.Replace(text, @"\bi\b", "I");
         line = Regex.Replace(line, @"\bi'(m|ll|ve|d)\b", "I'$1");
         line = char.ToUpperInvariant(line[0]) + line[1..];
+        var bare = line.TrimEnd('.', '!', '?');
+        if (s_interjections.Contains(bare) || bare.Split(' ').All(w => s_interjections.Contains(w))) {
+            return line; // "Lol", "Ok": nobody punctuates those
+        }
+
         if (!".!?)".Contains(line[^1]) && !line.EndsWith(":D", StringComparison.Ordinal) && !line.EndsWith(":P", StringComparison.Ordinal)) {
-            line += line.Split(' ').Length <= 2 ? "!" : ".";
+            line += Asks(text) ? "?" : line.Split(' ').Length <= 2 ? "!" : ".";
         }
 
         return line;
@@ -209,9 +342,20 @@ public static class ChatStyle {
             }
         }
 
+        foreach (var (from, to) in s_stretch) {
+            if (rng.NextDouble() < 0.15) {
+                line = from.Replace(line, _ => to[rng.Next(to.Length)], 1);
+            }
+        }
+
         line = line.Replace(",", "").TrimEnd('.');
         if (rng.NextDouble() < 0.4) {
             line = line.TrimEnd('!', '?').TrimEnd();
+        }
+
+        // Kids dropped the "i" at the start: "need gold", "got a new hat".
+        if (rng.NextDouble() < 0.2 && Regex.IsMatch(line, @"^i (need|got|have|want|keep|just|finally|cant|can't|wish|lost|beat|hate|love)\b")) {
+            line = line[2..];
         }
 
         if (rng.NextDouble() < 0.12 && !line.Contains(persona.Laugh, StringComparison.Ordinal) && line.Length < 50) {
@@ -231,12 +375,17 @@ public static class ChatStyle {
         if (line.EndsWith('!')) {
             line += rng.NextDouble() < 0.5 ? "!" : "!!";
         }
-        else if (!line.EndsWith('?') && rng.NextDouble() < 0.5) {
+        else if (Asks(line) && !line.EndsWith('?')) {
+            line += rng.NextDouble() < 0.5 ? "?" : "??";
+        }
+        else if (!line.EndsWith('?') && rng.NextDouble() < 0.5 && !s_interjections.Contains(line)) {
             line += "!!";
         }
 
-        if (rng.NextDouble() < 0.25) {
-            line = Regex.Replace(line, @"\bso\b", "soooo");
+        foreach (var (from, to) in s_stretch) {
+            if (rng.NextDouble() < 0.3) {
+                line = from.Replace(line, _ => to[rng.Next(to.Length)], 1);
+            }
         }
 
         if (persona.Smiley is { } smiley && rng.NextDouble() < 0.3 && !line.Contains(':')) {
