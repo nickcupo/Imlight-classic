@@ -266,4 +266,16 @@ internal sealed class CLASSIC_FEATURES_PROTOCOL : IServerProtocol {
         public byte ServiceID { get; } = 110;
         public ulong CharacterId;
     }
+
+    /// <summary>
+    /// CLASSIC: a wizard who logged back in to a held duel seat is ready for the duel (their client reported
+    /// MSG_CLIENTZONED, or the duel's own wait ran out). Never on the wire.
+    /// </summary>
+    public sealed class MSG_REJOINCLIENTREADY : IServerMessage {
+        public byte MessageOrder { get; } = 19;
+        public byte ServiceID { get; } = 110;
+        public ulong CharacterId;
+        /// <summary>True when the wizard's client said it entered the zone (MSG_CLIENTZONED).</summary>
+        public bool Zoned;
+    }
 }

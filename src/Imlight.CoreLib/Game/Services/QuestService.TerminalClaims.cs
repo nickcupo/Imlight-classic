@@ -28,7 +28,11 @@ internal partial class QuestService {
         }
         if (status is QuestClaimStatus.Legacy or QuestClaimStatus.NonTerminal) return false;
         if (status != QuestClaimStatus.Committed) {
-            if (WizardCollection.IsInventorySnapshotUncertain(wizard)) CloseSession();
+            if (WizardCollection.IsInventorySnapshotUncertain(wizard)) { CloseSession(); return true; }
+            // CLASSIC: already claimed (or the saved goal is no longer open): no rewards again, but the client is told
+            // what the saved journal says if this session never showed it.
+            ResyncQuestJournalAfterNoWrite(wizard, QuestMutationStatus.Unchanged,
+                $"the final goal of {quest?.QuestName} ({status})");
             return true; // Receipt replay/refusal must never reach old saves, rolls or result handlers.
         }
         // A separate idempotent ACK-only reconciliation; never a nested claim reward/start save.

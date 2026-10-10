@@ -111,6 +111,15 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
         MinionHelperHub.Shared.UnbindSession(_helperAccountId, SessionActor.ActorRef); // CLASSIC: Minion Helper.
     }
 
+    // CLASSIC: the real client's "I am in the zone" (MSG_CLIENTZONED, after every zone entry). A duel holding a seat for
+    // this wizard (they logged back in mid-fight) sends them the fight after it (ClientZoneSignals, RejoinTiming).
+    [MessageHandler(typeof(WIZARD2_53_PROTOCOL.MSG_CLIENTZONED))]
+    private void ReceiveClientZoned(WIZARD2_53_PROTOCOL.MSG_CLIENTZONED message) {
+        if (GetActiveWizard() is { CharId: > 0 } wizard) {
+            ClientZoneSignals.Zoned(wizard.CharId, SessionActor.ActorRef);
+        }
+    }
+
     // CLASSIC: the Crown Shop's henchman hire goes to the duel this player is in; outside a duel it fails at once.
     [MessageHandler(typeof(COMBAT_106_PROTOCOL.MSG_HIREHENCHMAN))]
     private void ReceiveHireHenchman(COMBAT_106_PROTOCOL.MSG_HIREHENCHMAN message) {
