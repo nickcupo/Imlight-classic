@@ -181,7 +181,7 @@ public sealed class MonstrologyCastGuardTests : IDisposable {
         PvpContext(context);
         var action=new QueuedCombatAction {SpellCaster=_owner,SelectedTarget=_target,Spell=Card(DamageId,ExtractId)};
         Assert.Null(_duel.BeginMonstrologyCast(action));
-        Invoke(_duel,"FinishMonstrologyDuel",true);
+        Invoke(_duel,"FinishMonstrologyDuel",true,null!);
         Assert.Empty(_duel.TakeMonstrologyVictoryObservations());
         Field("_victoryEssence").SetValue(_duel,new[]{new PendingEssence(42,99,35085,2)});
         Assert.Empty(_duel.TakeMonstrologyVictoryObservations());
@@ -195,7 +195,7 @@ public sealed class MonstrologyCastGuardTests : IDisposable {
         var before=_duel.BeginMonstrologyCast(action);
         Assert.NotNull(before); Assert.Empty(before);
         _duel.ObserveMonstrologyCast(action,before);
-        Invoke(_duel,"FinishMonstrologyDuel",true);
+        Invoke(_duel,"FinishMonstrologyDuel",true,null!);
         Assert.Empty(_duel.TakeMonstrologyVictoryObservations());
     }
     [Fact]
@@ -244,7 +244,7 @@ public sealed class MonstrologyCastGuardTests : IDisposable {
         _duel.ObserveMonstrologyCast(action,before!);
         _target.ParticipantGameStats.m_currentHitpoints=0;
         _duel.ObserveMonstrologyDot(_target,dot,50);
-        Invoke(_duel,"FinishMonstrologyDuel",true);
+        Invoke(_duel,"FinishMonstrologyDuel",true,null!);
         var earned=Assert.Single(_duel.TakeMonstrologyVictoryObservations());
         Assert.Equal(42ul,earned.Owner); Assert.Equal(35085u,earned.Creature); Assert.Equal(2,earned.Animus);
         Assert.Empty(_duel.TakeMonstrologyVictoryObservations());
