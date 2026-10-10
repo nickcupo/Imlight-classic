@@ -23,6 +23,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using Imlight.Common;
+using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.WizardData.Models.World;
 using Imcodec.ObjectProperty.TypeCache;
 using Newtonsoft.Json;
@@ -145,6 +146,8 @@ public static partial class SpiralDB {
                 npcSpellInventories, npcDropTables, treasureCardInventories, questTemplates, questTemplatesByName,
                 zoneData);
             ApplyProfileDisabledQuests(questTemplatesByName); // CLASSIC: the profile's disabled_quests (SpiralDB.Overlay.cs).
+            // CLASSIC: all overlays have landed; validate every helper target before mutating or publishing the new store.
+            ClassicPuzzleHelpers.ApplyQuestHelpers(questTemplatesByName);
             questTemplates = RebuildQuestList(questTemplates, questTemplatesByName);
 
             // Atomically swap.
@@ -173,6 +176,10 @@ public static partial class SpiralDB {
                     s_treasureCardInventories.Count,
                     s_questTemplates.Count,
                     s_zoneData.Count));
+        }
+        catch (PuzzleHelperApplicationException ex) { // CLASSIC: only the new policy's rejection must fail boot, never publish a partial override.
+            Logger.Error("Puzzle helper policy could not be applied: {0}", Logger.Args(ex.Message));
+            throw;
         }
         catch (Exception ex) {
             Logger.Error("Failed to load SpiralDB: {0}", Logger.Args(ex.Message));
