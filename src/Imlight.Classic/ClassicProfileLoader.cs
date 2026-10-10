@@ -64,7 +64,7 @@ public static class ClassicProfileLoader {
     internal static readonly FrozenSet<string> s_worldUnlockKeys = FrozenSet.Create(StringComparer.Ordinal, "any_of", "source", "notes");
     private static readonly FrozenSet<string> s_ruleKeys = FrozenSet.Create(StringComparer.Ordinal,
         "accuracy_table", "xp_table", "player_health", "mob_rewards", "badges", "quest_cards", "treasure_prices", "mob_stats", "crown_shop", "later_objects", "creature_decks", "power_pips_from_rank", "dragonspyre_difficulty", "tutorial",
-        "teleport_stones", "potions", "second_chance", "boss_cheats", "instance_resets");
+        "teleport_stones", "potions", "second_chance", "boss_cheats", "instance_resets", "puzzle_helpers");
 
     /// <summary>
     /// Loads the profile <paramref name="id"/> from <paramref name="profilesDir"/>, following its extends chain.
@@ -409,7 +409,7 @@ public static class ClassicProfileLoader {
                 case "potions": // CLASSIC
                     _ = diagnostics.ReadString(entry.Value, path);
                     break;
-                case "second_chance" or "boss_cheats" or "instance_resets": // CLASSIC: null switches off an inherited file (arc1-2009h1, before Oct 2009)
+                case "second_chance" or "boss_cheats" or "instance_resets" or "puzzle_helpers": // CLASSIC: null switches off an inherited file (arc1-2009h1, before Oct 2009)
                     if (entry.Value is not YNull) {
                         _ = diagnostics.ReadString(entry.Value, path);
                     }
@@ -474,6 +474,7 @@ public static class ClassicProfileLoader {
                 SecondChance = ScalarOf(rules, "second_chance"), // CLASSIC
                 BossCheats = ScalarOf(rules, "boss_cheats"), // CLASSIC
                 InstanceResets = ScalarOf(rules, "instance_resets"), // CLASSIC
+                PuzzleHelpers = ScalarOf(rules, "puzzle_helpers"), // CLASSIC
                 PowerPipsFromRank = ScalarOf(rules, "power_pips_from_rank"),
                 DragonspyreDifficulty = ScalarOf(rules, "dragonspyre_difficulty"),
                 Tutorial = ScalarOf(rules, "tutorial"),

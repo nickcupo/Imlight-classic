@@ -69,6 +69,7 @@ public static class ClassicProgression {
     private static volatile PotionRules? s_potions; // CLASSIC
     private static volatile SecondChanceRules? s_secondChance; // CLASSIC
     private static volatile BossCheats s_bossCheats = BossCheats.Empty; // CLASSIC
+    private static volatile PuzzleHelpers s_puzzleHelpers = PuzzleHelpers.Empty; // CLASSIC
 
     /// <summary>
     /// The profile's XP table, or null for the client's curve.
@@ -135,6 +136,9 @@ public static class ClassicProgression {
     /// </summary>
     public static BossCheats BossCheats => s_bossCheats;
 
+    /// <summary>CLASSIC: October-only puzzle answers and goal-arrow policy; other profiles always receive Empty.</summary>
+    public static PuzzleHelpers PuzzleHelpers => s_puzzleHelpers;
+
     /// <summary>CLASSIC: test hook.</summary>
     internal static void UseBossCheatsForTests(BossCheats? cheats) => s_bossCheats = cheats ?? BossCheats.Empty;
 
@@ -151,6 +155,13 @@ public static class ClassicProgression {
     /// <param name="classicDataRoot">The classic-data directory.</param>
     /// <exception cref="ClassicDataException">A named table exists but is invalid.</exception>
     public static void Initialize(ClassicProfile profile, string classicDataRoot) {
+        // CLASSIC: unlike optional legacy tables, a configured puzzle policy must exist and validate at startup.
+        s_puzzleHelpers = PuzzleHelpersLoader.LoadForProfile(profile, classicDataRoot);
+        if (s_puzzleHelpers.AppliesTo(profile.Id)) {
+            Logger.Information("Classic puzzle helpers {Table}: {Zones} zones, {Quests} quests.",
+                Logger.Args(s_puzzleHelpers.Id, s_puzzleHelpers.Zones.Length, s_puzzleHelpers.QuestHelpers.Length));
+        }
+
         if (profile.Rules.XpTable is { } xp && File.Exists(Path.Combine(classicDataRoot, xp))) {
             s_xpTable = XpTableLoader.Load(Path.Combine(classicDataRoot, xp));
             Logger.Information("Classic XP table {Table}: levels 1-{MaxLevel}, {Total} XP to reach level {MaxLevel}.",
