@@ -125,23 +125,21 @@ public static class AmbientPets {
 
     // ---- what they say -------------------------------------------------------------------------
 
+    // CLASSIC (2026-10-10): shorter and plainer, dictionary words only (no "lf"; "can't" keeps its apostrophe).
     private static readonly string[] s_offers = [
-        "anyone want to hatch? my {pet} is {stage}", "looking for a hatch partner, {stage} {pet}",
-        "hatch with my {pet}? its {stage}", "lf hatch! {stage} {pet}", "who wants to hatch with a {pet}",
+        "anyone wanna hatch? my {pet} is {stage}", "hatch with me? {stage} {pet}", "who wants to hatch with a {pet}",
+        "{stage} {pet}, anyone wanna hatch", "anyone hatch? i have a {pet}",
     ];
 
-    private static readonly string[] s_answers = [
-        "sure! hop on a hatching spot", "ok, meet me at the hatching spots", "yes! go stand on a hatch circle",
-        "sure, my {pet} can hatch", "ok lets hatch",
-    ];
+    private static readonly string[] s_answers = ["sure", "ok come to the hatch spots", "me", "sure what pet", "ok lets hatch"];
 
-    private static readonly string[] s_joined = ["hi! lets hatch", "ok im here", "my {pet} is ready", "hatching time"];
+    private static readonly string[] s_joined = ["ok im here", "hi", "my {pet} is ready", "ok go"];
 
-    private static readonly string[] s_done = ["yay, good luck with the egg!", "thanks for the hatch!", "cant wait to see the baby", "ty!"];
+    private static readonly string[] s_done = ["ty!", "ty for the hatch", "can't wait to see the egg", "yay ty"];
 
-    private static readonly string[] s_gone = ["sorry, gotta go", "nvm, maybe later", "brb, gotta go"];
+    private static readonly string[] s_gone = ["sorry gtg", "nvm maybe later", "brb... actually gtg"];
 
-    private static readonly string[] s_busy = ["sorry my pet already hatched today", "my pet is too young to hatch, sorry"];
+    private static readonly string[] s_busy = ["sorry my pet already hatched today", "my pet is too young lol sorry"];
 
     /// <summary>Kinds of hatch talk.</summary>
     public enum Talk { Offer, Answer, Joined, Done, Gone, Busy }

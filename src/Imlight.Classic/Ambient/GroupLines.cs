@@ -25,6 +25,8 @@
  * street lines (AmbientLines, DungeonLines), plain dictionary words only
  * (the zone filters every line through the client's chat dictionary as
  * well, ChatStyle.Apply). Nothing the player typed is put into a line.
+ * Rewritten 2026-10-10 with the street lines (no "u", "ur", "r", "gl",
+ * no digits: the 2009 dictionary hid them).
  * A wizard with menu chat only (ChatChannel.Menu) uses the client's own
  * menu phrases (Root.wad QuickChat, r806919): "Yes!", "Let me help you
  * with that quest", "Sorry, I'm in another group", "Sorry but I cannot
@@ -36,7 +38,7 @@
  *
  * Created by: Nick with Claude Code (claude-opus-5-5)
  * Version: KALI 1.0
- * Last Updated: 10/09/2026
+ * Last Updated: 10/10/2026
  */
 
 using System.Collections.Immutable;
@@ -47,66 +49,58 @@ namespace Imlight.Classic.Ambient;
 public static class GroupLines {
 
     /// <summary>Yes to a call or invite.</summary>
-    public static readonly ImmutableArray<string> Yes = [
-        "sure!", "sure, ill come", "ok ill help", "yea i need that too", "sure lets go", "ok!", "i can help", "yes!", "ill come",
-        "sure, i need to do that too", "ok, lead the way", "sure, im bored lol",
-    ];
+    public static readonly ImmutableArray<string> Yes = ["sure", "ok", "sure ill come", "k", "ya i need that too", "ok lets go", "sure im bored anyway", "ok where", "me", "ok wait for me"];
 
     /// <summary>Yes, after a moment away.</summary>
-    public static readonly ImmutableArray<string> Brb = ["brb 1 sec", "sure, brb", "one sec", "hold on, brb", "ok brb real quick"];
+    public static readonly ImmutableArray<string> Brb = ["brb", "sure brb", "one sec", "hold on", "ok brb real quick", "wait one sec"];
 
     /// <summary>Back from the "brb" and coming.</summary>
-    public static readonly ImmutableArray<string> Back = ["back", "ok back, lets go", "back! still need help?", "im back"];
+    public static readonly ImmutableArray<string> Back = ["back", "ok back", "back, still need help?", "im back", "ok lets go"];
 
     /// <summary>No thanks.</summary>
-    public static readonly ImmutableArray<string> Decline = [
-        "no thx", "sorry im busy", "maybe later", "sorry, cant right now", "nah sorry", "im questing sorry", "not right now",
-    ];
+    public static readonly ImmutableArray<string> Decline = ["no thx", "busy", "maybe later", "nah", "doing my own quest", "not now", "no sorry"];
 
     /// <summary>No: it did that one long ago.</summary>
-    public static readonly ImmutableArray<string> Done = ["i already did that one", "already beat it sorry", "did that already, sorry"];
+    public static readonly ImmutableArray<string> Done = ["i already did that one", "did it already", "already beat it"];
 
     /// <summary>No: its level is too low.</summary>
-    public static readonly ImmutableArray<string> TooLow = ["im too low for that lol", "my level is too low sorry", "too hard for me"];
+    public static readonly ImmutableArray<string> TooLow = ["im too low lol", "too hard for me", "my level is too low"];
 
     /// <summary>The group filled up before it got there.</summary>
-    public static readonly ImmutableArray<string> Full = ["aw ur full", "oh u already have a group", "oh nvm ur full"];
+    public static readonly ImmutableArray<string> Full = ["oh your full", "aw full", "nvm you have a group"];
 
     /// <summary>Its answer to the player's goodbye.</summary>
-    public static readonly ImmutableArray<string> ByeBack = ["bye!", "cya!", "ty for the group!", "np, bye", "thx, gl!", "bye bye", "gg, cya"];
+    public static readonly ImmutableArray<string> ByeBack = ["bye", "cya", "ty for the group", "k bye", "thx bye", "bye bye", "gg cya"];
 
     /// <summary>Its answer to a thanks that does not end the group.</summary>
-    public static readonly ImmutableArray<string> ThanksBack = ["np", "np!", "anytime", "ur welcome"];
+    public static readonly ImmutableArray<string> ThanksBack = ["np", "np!", "yw", "sure"];
 
     /// <summary>Leaving on its own: its time is up.</summary>
-    public static readonly ImmutableArray<string> OwnLeave = [
-        "gotta go, dinner", "sorry gtg, my mom needs the computer", "i have to go, ty for the group!", "gtg, bedtime",
-        "sorry i have to go now", "brb... actually gtg", "gtg, ty!",
-    ];
+    public static readonly ImmutableArray<string> OwnLeave = ["gotta go dinner", "sorry gtg my mom needs the computer", "gtg ty for the group", "gtg bedtime", "sorry have to go now", "brb... actually gtg", "gtg ty"];
 
     /// <summary>Defeated: off to heal, back in a while.</summary>
-    public static readonly ImmutableArray<string> Defeated = ["oops lol brb", "aw i died, brb", "sorry guys, brb"];
+    public static readonly ImmutableArray<string> Defeated = ["oops brb", "aw i lost brb", "sorry guys brb"];
 
     /// <summary>Back after being defeated.</summary>
-    public static readonly ImmutableArray<string> BackAfterDefeat = ["back!", "ok im back", "back, sorry"];
+    public static readonly ImmutableArray<string> BackAfterDefeat = ["back", "ok back", "back sorry"];
 
     /// <summary>The player stands still a long while.</summary>
-    public static readonly ImmutableArray<string> AfkAsk = ["u there?", "hello?", "r u afk?"];
+    public static readonly ImmutableArray<string> AfkAsk = ["hello?", "you there?", "are you afk?", "hello??"];
 
     /// <summary>The player stayed away: the group goes.</summary>
-    public static readonly ImmutableArray<string> AfkLeave = ["ok i think ur afk, bye", "gtg, bye", "ok im going, bye"];
+    public static readonly ImmutableArray<string> AfkLeave = ["ok i think your afk, bye", "gtg bye", "ok im going, bye"];
 
     /// <summary>A new zone with the player.</summary>
-    public static readonly ImmutableArray<string> NewZone = ["where to now?", "lead the way", "ok where next?", "lets go"];
+    public static readonly ImmutableArray<string> NewZone = ["where now", "lead the way", "ok where next", "lets go", "now what"];
 
     /// <summary>It cannot go where the player went (a house, a full dungeon).</summary>
-    public static readonly ImmutableArray<string> WaitOutside = ["ill wait out here", "ill wait here", "cant come in there, ill wait"];
+    public static readonly ImmutableArray<string> WaitOutside = ["ill wait out here", "ill wait here", "can't go in there, ill wait"];
 
     /// <summary>Waited long enough outside.</summary>
-    public static readonly ImmutableArray<string> WaitedTooLong = ["ok i have to go, bye", "gtg, gl!"];
+    public static readonly ImmutableArray<string> WaitedTooLong = ["ok i have to go, bye", "gtg"];
 
     /// <summary>A quick word after a won battle with the player.</summary>
-    public static readonly ImmutableArray<string> AfterWin = ["gg", "nice", "ez", "gg!", "that was close lol", "nice one"];
+    public static readonly ImmutableArray<string> AfterWin = ["gg", "nice", "easy", "gg!", "that was close lol", "nice one"];
 
     /// <summary>Menu-chat yes (r806919 QuickChat).</summary>
     public static readonly ImmutableArray<string> MenuYes = ["Yes!", "Let me help you with that quest"];

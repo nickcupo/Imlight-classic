@@ -230,7 +230,10 @@ internal sealed partial class AmbientZone {
         helper.Activity = AmbientActivity.Idle;
         helper.Until = now + HelpOffers.AnswerWindow; // it watches the duel while it waits for the answer
         var facts = AmbientKnowledge.Facts(player);
-        var line = AmbientChatBrain.HelpOffer(ChatFor(helper, player, facts), helper.Turn++);
+        // CLASSIC (2026-10-10): typed the helper's own way; a menu-chat wizard uses the menu's own phrase.
+        var persona = ChatPersona.For(helper.Identity);
+        var line = persona.Channel == ChatChannel.Menu ? AmbientChatBrain.MenuHelpOffer
+            : ChatStyle.Apply(AmbientChatBrain.HelpOffer(ChatFor(helper, player, facts), helper.Turn++), persona, _rng, ChatWordFilter.Current);
         if (helper.FriendOf(player) is null || !AmbientChat.Whisper(helper, player, line)) {
             AmbientChat.Say(helper, line);
         }
