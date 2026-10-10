@@ -260,11 +260,14 @@ internal class AttachService(SessionActor sessionActor) : MessageService(session
 
         // Add the player to the online player collection.
         // I don't know why this is normally blocking. Put it on a background thread.
+        var questBuddySystem = Context.System; // CLASSIC: for the quest buddy notice after the row is in
+        var questBuddyCharId = _wizard.CharId;
         Task.Run(() => AddPlayerToOnlineCollection(_wizard,
                                                    _wizard.Zone,
                                                    _wizard.ZoneDisplayName,
                                                    "Centaur",
-                                                   SessionActor.ActorRef));
+                                                   SessionActor.ActorRef))
+            .ContinueWith(_ => Classic.QuestBuddyNotices.Arrived(questBuddySystem, questBuddyCharId), TaskScheduler.Default);
 
         TellOtherServices(new SERVICE_101_PROTOCOL.MSG_ATTACHCOMPLETE { AttachGeneration = addPlayerResponse.AttachGeneration, ZoneActorRef = addPlayerResponse.ZoneActorRef });
 
