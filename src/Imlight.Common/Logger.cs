@@ -44,6 +44,8 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Runtime.CompilerServices;
+using System.Text;
+using System.Threading.Tasks;
 using Serilog;
 using Serilog.Context;
 using Serilog.Core;
@@ -205,30 +207,72 @@ public class Logger {
         // If the calling space is too long, trim it.
         callingSpace = GetConsistentSpacedName(callingSpace);
 
-        // Push all properties into the context, including the calling space.
-        LogContext.PushProperty("CallingSpace", callingSpace);
-        var seen = new HashSet<object?>();
-        foreach (var value in values) {
-            if (seen.Add(value)) {
-                // Check if value is a class. If it is, serialize it as json.
-                if (value is not string and not ValueType) {
-                    if (value is null) {
-                        LogContext.PushProperty( "Unknown", "null", true);
-                    }
-                    else if (value is IEnumerable<object> enumerable) {
-                        LogContext.PushProperty(value.GetType().Name, string.Join(", ", enumerable), true);
-                    }
-                    else {
-                        LogContext.PushProperty(value.GetType().Name, value, true);
-                    }
-                }
-                else {
-                    LogContext.PushProperty(value.GetType().Name, value);
-                }
+        // CLASSIC: exception/actor graphs can contain unfinished Task<T> objects. Destructuring them calls
+        // Task.Result and can deadlock session supervision before it closes the socket or releases its slot.
+        // Preserve ordinary scalar formatting; use bounded diagnostics for exceptions and status only for tasks.
+        var safeValues = new object[values.Length];
+        for (var i = 0; i < values.Length; i++) safeValues[i] = SafeLogValue(values[i]);
+        var scopes = new List<IDisposable>(safeValues.Length + 1);
+        try {
+            scopes.Add(LogContext.PushProperty("CallingSpace", callingSpace));
+            for (var i = 0; i < safeValues.Length; i++) {
+                var propertyName = values[i]?.GetType().Name ?? "Unknown";
+                // Never reflect arbitrary reference objects into ambient context. Exceptions and tasks are already
+                // scalar summaries; the other arguments retain Serilog's ordinary non-destructured formatting.
+                scopes.Add(LogContext.PushProperty(propertyName, safeValues[i], destructureObjects: false));
             }
-        }
 
-        Log.Write(logLevel, message, values);
+            Log.Write(logLevel, message, safeValues);
+        }
+        finally {
+            // CLASSIC: every push belongs to this event, not subsequent actor messages on the same context.
+            for (var i = scopes.Count - 1; i >= 0; i--) scopes[i].Dispose();
+        }
+    }
+
+    private static object SafeLogValue(object value) => value switch {
+        Exception exception => ExceptionDiagnostic(exception),
+        Task task => $"{task.GetType().Name}(Id={task.Id}, Status={task.Status})",
+        _ => value,
+    };
+
+    private static string ExceptionDiagnostic(Exception exception) {
+        const int maxCharacters = 8192;
+        const int maxExceptions = 8;
+        var text = new StringBuilder();
+        var pending = new Queue<Exception>();
+        var seen = new HashSet<Exception>(ReferenceEqualityComparer.Instance);
+        pending.Enqueue(exception);
+        var count = 0;
+        while (pending.Count > 0 && count < maxExceptions && text.Length < maxCharacters) {
+            var current = pending.Dequeue();
+            if (!seen.Add(current)) continue;
+            if (count++ > 0) Append("\n ---> ");
+            Append(current.GetType().FullName ?? current.GetType().Name);
+            // Read only the standard exception diagnostic fields. Never inspect Data or subtype properties
+            // (ActorRef, Task, Result, etc.), and never call an arbitrary exception's ToString override.
+            try { Append(": " + current.Message); } catch (Exception) { Append(": (message unavailable)"); }
+            try {
+                if (current.StackTrace is { } stack) { Append("\n"); Append(stack); }
+            }
+            catch (Exception) { Append("\n(stack unavailable)"); }
+            if (current is AggregateException aggregate) {
+                for (var i = 0; i < aggregate.InnerExceptions.Count && i < maxExceptions; i++)
+                    pending.Enqueue(aggregate.InnerExceptions[i]);
+            }
+            else if (current.InnerException is { } inner) pending.Enqueue(inner);
+        }
+        if (pending.Count > 0 || text.Length == maxCharacters) {
+            const string suffix = "\n(diagnostic truncated)";
+            if (text.Length > maxCharacters - suffix.Length) text.Length = maxCharacters - suffix.Length;
+            text.Append(suffix);
+        }
+        return text.ToString();
+
+        void Append(string value) {
+            var available = maxCharacters - text.Length;
+            if (available > 0) text.Append(value, 0, Math.Min(value.Length, available));
+        }
     }
 
     private static LogEventLevel GetLogLevel(string logLevelString) {
