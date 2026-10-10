@@ -724,6 +724,7 @@ public class Zone : ReceiveProtocolDispatcher, IWithTimers {
     private readonly Dictionary<ushort, long> _reservedReleaseDue = [];
     private int _reservedInUse;
     private int _reservedWarnedPercent;
+    private long _reservedHandedOut;
 
     internal static ushort ReservedMobileIdMax => RESERVED_MOBILE_ID_MAX;
 
@@ -801,6 +802,12 @@ public class Zone : ReceiveProtocolDispatcher, IWithTimers {
 
     // CLASSIC: a warning as the reserved pool fills (50, 75, 90 %), so a leak shows long before spawns stop.
     private void WarnReservedPoolFill() {
+        // CLASSIC: a sanity line every 500 ids handed out: in use stays flat while handed out grows.
+        if (++_reservedHandedOut % 500 == 0) {
+            Logger.Information("Zone {Zone}: {HandedOut} reserved mobile ids handed out so far, {InUse} of {Max} in use ({Owners} objects hold one).",
+                Logger.Args(ZonePath, _reservedHandedOut, _reservedInUse, RESERVED_MOBILE_ID_MAX, _reservedByOwner.Count));
+        }
+
         var percent = _reservedInUse * 100 / RESERVED_MOBILE_ID_MAX;
         var step = percent >= 90 ? 90 : percent >= 75 ? 75 : percent >= 50 ? 50 : 0;
         if (step > _reservedWarnedPercent) {
