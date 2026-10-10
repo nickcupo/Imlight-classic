@@ -15,6 +15,7 @@
     <ServerIntegrationTest Include="AmbientNavDataTests.cs" />
     <ServerIntegrationTest Include="LostLieutenantServerTests.cs" />
     <ServerIntegrationTest Include="PuzzleHelpersServerTests.cs" />
+    <ServerIntegrationTest Include="QuestFinderPresentationTests.cs" />
     <ServerIntegrationTest Include="ArcFinalReviewTests.cs" />
     <ServerIntegrationTest Include="EnhancedProtocolTests.cs" />
     <ServerIntegrationTest Include="ExcludedEnemyDespawnTests.cs" />

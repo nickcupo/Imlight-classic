@@ -21,6 +21,7 @@ using System.Collections.Generic;
 using System.Linq;
 using Newtonsoft.Json;
 using Imlight.Classic;
+using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.WizardData.Implementations;
 using Imlight.CoreLib.Shared.Character;
 using Imlight.CoreLib.Game.Combat;
@@ -304,7 +305,9 @@ public class ServerWizGameStats : IClientTypeProvider<WizGameStats> {
             m_gardeningXP = m_gardeningXP,
             m_invisibleToFriends = m_invisibleToFriends,
             m_showItemLock = m_showItemLock,
-            m_questFinderEnabled = m_questFinderEnabled,
+            // CLASSIC: r806919 creates the post-2010 Finder card only when this native flag is true.
+            // Mask the October presentation, preserving saved preferences and ordinary held-quest helpers.
+            m_questFinderEnabled = m_questFinderEnabled && !(ClassicRuntime.IsInitialized && ClassicOctoberRules.Active),
             m_buddyListLimit = m_buddyListLimit,
             m_dontAllowFriendFinderCodes = m_dontAllowFriendFinderCodes,
             m_shadowMagicUnlocked = m_shadowMagicUnlocked,
