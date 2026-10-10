@@ -176,6 +176,7 @@ public class ServerWizGameStats : IClientTypeProvider<WizGameStats> {
     // ctor
     public ServerWizGameStats(MagicSchool magicSchool, int level) {
         MagicSchool = magicSchool;
+        m_schoolID = (uint)magicSchool; // CLASSIC: new/ambient wizards use this authoritative constructor school before any database reload.
         Level = level;
 
         m_baseGoldPouch = ConfigurationManager.Settings["Character.BaseGoldPouch"].AsInt();
@@ -196,6 +197,8 @@ public class ServerWizGameStats : IClientTypeProvider<WizGameStats> {
     /// <returns></returns>
     public WizGameStats GetCombatGameStats() {
         var stats = new WizGameStats() { // CLASSIC: was `return new WizGameStats() {`; see the block after it.
+            // CLASSIC: retain the authoritative school hash in the native combat stats snapshot as well as the participant.
+            m_schoolID = m_schoolID,
             m_baseHitpoints = m_baseHitpoints,
             m_currentHitpoints = m_currentHitpoints,
             m_baseMana = m_baseMana,

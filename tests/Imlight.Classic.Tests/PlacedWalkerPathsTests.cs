@@ -32,6 +32,7 @@ using System.Collections.Generic;
 using System.Linq;
 using Imcodec.Math;
 using Imcodec.ObjectProperty.TypeCache;
+using Imlight.Classic.Ambient;
 using Imlight.CoreLib.Game.Zone.Core;
 using Xunit;
 
@@ -80,6 +81,60 @@ public sealed class PlacedWalkerPathsTests {
 
         Assert.Equal(2UL, PlacedWalkerPaths.Nearest(nodes, new Vector3(90, 30, 0)).m_id.Full);
         Assert.Equal(1UL, PlacedWalkerPaths.Nearest(nodes, new Vector3(-400, 5, 0)).m_id.Full);
+    }
+
+
+    // ---- the first walk to the path (2026-10-08) ----------------------------------------------------------------
+
+    private static readonly float[,] s_identity = { { 1, 0, 0 }, { 0, 1, 0 }, { 0, 0, 1 } };
+
+    private static NavGrid Room(params NavObstacle[] walls) {
+        var (a, b, c, d) = (new System.Numerics.Vector3(0, 0, 0), new System.Numerics.Vector3(2000, 0, 0),
+            new System.Numerics.Vector3(2000, 2000, 0), new System.Numerics.Vector3(0, 2000, 0));
+        return NavGrid.Build([new NavTriangle(a, b, c), new NavTriangle(a, c, d)], walls);
+    }
+
+    private static NavObstacle Wall(float cx, float cy, float sx, float sy)
+        => NavObstacle.Box(new System.Numerics.Vector3(cx, cy, 150), s_identity, new System.Numerics.Vector3(sx, sy, 300));
+
+    [Fact]
+    public void AClearFirstWalkIsOneStraightLeg() {
+        var node = Node(7, 1700, 1000);
+        var legs = PlacedWalkerPaths.ApproachLegs(Room(), new Vector3(300, 1000, 0), node, out var how);
+
+        Assert.Equal(PlacedWalkerPaths.Approach.Straight, how);
+        Assert.Same(node, Assert.Single(legs));
+    }
+
+    [Fact]
+    public void AFirstWalkAcrossAWallGoesRoundItAndEndsAtTheNode() {
+        var wall = Wall(1000, 900, 100, 1600);
+        var grid = Room(wall);
+        var node = Node(7, 1700, 1000);
+        var legs = PlacedWalkerPaths.ApproachLegs(grid, new Vector3(300, 1000, 0), node, out var how);
+
+        Assert.Equal(PlacedWalkerPaths.Approach.Routed, how);
+        Assert.True(legs.Count >= 2);
+        Assert.Same(node, legs[^1]);
+        Assert.True(legs.Max(leg => leg.m_location.Y) > 1700 - 1); // round the open end of the wall
+        var at = new System.Numerics.Vector3(300, 1000, 0);
+        foreach (var leg in legs.Take(legs.Count - 1)) {
+            var next = new System.Numerics.Vector3(leg.m_location.X, leg.m_location.Y, leg.m_location.Z);
+            Assert.True(grid.SegmentClear(at, next), $"leg {at} -> {next} crosses the wall");
+            Assert.InRange(leg.m_direction, 0f, 2 * System.MathF.PI);
+            at = next;
+        }
+    }
+
+    [Fact]
+    public void WithoutAGridOrARouteTheWalkStaysTheOldStraightLine() {
+        var node = Node(7, 1700, 1000);
+        Assert.Same(node, Assert.Single(PlacedWalkerPaths.ApproachLegs(null, new Vector3(300, 1000, 0), node, out var none)));
+        Assert.Equal(PlacedWalkerPaths.Approach.NoGrid, none);
+
+        var closed = Room(Wall(1000, 1000, 80, 2400)); // the room cut in two
+        Assert.Same(node, Assert.Single(PlacedWalkerPaths.ApproachLegs(closed, new Vector3(300, 1000, 0), node, out var cut)));
+        Assert.Equal(PlacedWalkerPaths.Approach.NoRoute, cut);
     }
 
 }

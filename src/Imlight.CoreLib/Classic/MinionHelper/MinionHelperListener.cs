@@ -44,6 +44,16 @@
  * USAGE EXAMPLE:
  * MinionHelperListener.StartOnce();   // GameServer start-up; [Classic] MinionHelperPort
  *
+ * CLASSIC (go-live, docs/runbooks/go-live.md):
+ *   [Classic] LauncherProxyPort = 12091     a second listener on 127.0.0.1 only, for the
+ *       Cloudflare tunnel in this container: POST /launcher/login and nothing else.
+ *   [Classic] TrustedProxyHeader = CF-Connecting-IP   the visitor's address on that
+ *       listener (lockouts and logs); only ever read from a loopback peer.
+ *   [Classic] PublicHttpDownloadsOnly = true   on this (port-forwarded) port, a client
+ *       outside the private networks gets only GET /classic/... and /launcher/...:
+ *       the password login is refused ("https-required") and the helper is closed.
+ *   All three are off by default.
+ *
  * NOTE:
  * Plain TCP for a home LAN. The token is the only secret; it is checked on
  * every connection, and every order is re-checked by the duel.
@@ -283,10 +293,51 @@ internal static class MinionHelperListener {
         }
 
         Logger.Information("Minion Helper listening on port {0}.", Logger.Args(port));
-        _ = Task.Run(() => AcceptLoop(listener));
+        _ = Task.Run(() => AcceptLoop(listener, viaProxy: false));
+        StartProxyListener();
     }
 
-    private static async Task AcceptLoop(TcpListener listener) {
+    /// <summary>CLASSIC (go-live): [Classic] LauncherProxyPort, or 0 (off).</summary>
+    internal static int ProxyPort {
+        get {
+            var value = ConfigurationManager.GetSetting("Classic.LauncherProxyPort");
+            return int.TryParse(value?.Trim(), out var port) && port is > 0 and < 65536 ? port : 0;
+        }
+    }
+
+    /// <summary>CLASSIC (go-live): the header naming the visitor behind the local tunnel, or null.</summary>
+    internal static string TrustedProxyHeader
+        => ConfigurationManager.GetSetting("Classic.TrustedProxyHeader")?.Trim() is { Length: > 0 } name ? name : null;
+
+    private static readonly Lazy<bool> s_downloadsOnly = new(() => Imlight.CoreLib.Auth.SecuritySettings.Bool("Classic.PublicHttpDownloadsOnly", false));
+
+    /// <summary>CLASSIC (go-live): the loopback-only listener the tunnel connects to.</summary>
+    private static void StartProxyListener() {
+        var port = ProxyPort;
+        if (port == 0) return;
+        try {
+            var listener = new TcpListener(IPAddress.Loopback, port);
+            listener.Start();
+            Logger.Information("Launcher login for the tunnel listening on 127.0.0.1:{0} (header {1}).",
+                Logger.Args(port, TrustedProxyHeader ?? "none"));
+            _ = Task.Run(() => AcceptLoop(listener, viaProxy: true));
+        } catch (Exception ex) {
+            Logger.Error("Launcher login for the tunnel could not listen on 127.0.0.1:{0}: {1}", Logger.Args(port, ex.Message));
+        }
+    }
+
+    /// <summary>What one connection may use (go-live). Pure, for tests.</summary>
+    internal enum Exposure { Full, DownloadsOnly, ProxyLogin }
+
+    internal static Exposure ExposureFor(bool viaProxy, IPAddress peer, bool downloadsOnly)
+        => viaProxy ? Exposure.ProxyLogin
+            : downloadsOnly && !Imlight.Classic.Net.PublicAccess.IsPrivate(peer) ? Exposure.DownloadsOnly : Exposure.Full;
+
+    /// <summary>Whether a GET path is one an outside client may fetch on the downloads-only port.</summary>
+    internal static bool PublicDownloadPath(string path)
+        => path.StartsWith(ClientPatchFiles.Prefix, StringComparison.Ordinal) || path.StartsWith("/launcher/", StringComparison.Ordinal);
+
+    private static async Task AcceptLoop(TcpListener listener, bool viaProxy) {
         while (true) {
             TcpClient client;
             try {
@@ -316,7 +367,7 @@ internal static class MinionHelperListener {
             s_perAddress.AddOrUpdate(address, 1, (_, n) => n + 1);
             _ = Task.Run(async () => {
                 try {
-                    await Serve(client);
+                    await Serve(client, viaProxy);
                 } finally {
                     Interlocked.Decrement(ref s_open);
                     if (s_perAddress.AddOrUpdate(address, 0, (_, n) => n - 1) <= 0) {
@@ -333,11 +384,13 @@ internal static class MinionHelperListener {
     private static long s_refused;
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, int> s_perAddress = new(StringComparer.Ordinal);
 
-    private static async Task Serve(TcpClient client) {
+    private static async Task Serve(TcpClient client, bool viaProxy) {
         using var _ = client;
         client.NoDelay = true;
         var stream = client.GetStream();
         var remote = client.Client.RemoteEndPoint?.ToString();
+        var peer = (client.Client.RemoteEndPoint as IPEndPoint)?.Address;
+        var exposure = ExposureFor(viaProxy, peer, s_downloadsOnly.Value); // CLASSIC (go-live)
         var outbox = Channel.CreateBounded<string>(new BoundedChannelOptions(512) { FullMode = BoundedChannelFullMode.DropOldest });
         var session = new MinionHelperSession(line => outbox.Writer.TryWrite(line), MinionHelperHub.Shared, MinionHelperPairing.Shared,
             Imlight.Classic.Net.GameSessionKeys.NormalizeAddress((client.Client.RemoteEndPoint as System.Net.IPEndPoint)?.Address.ToString()));
@@ -347,9 +400,15 @@ internal static class MinionHelperListener {
             var filled = await ReadSomeAsync(stream, head, 0);
             if (filled == 0) return;
             if (filled >= 4 && head[0] == 'G' && head[1] == 'E' && head[2] == 'T' && head[3] == ' ') {
-                await ServeHttp(stream, head, filled, session, outbox);
+                if (exposure == Exposure.ProxyLogin) {
+                    await Respond(stream, "404 Not Found", "text/plain", "Not found"u8.ToArray());
+                } else {
+                    await ServeHttp(stream, head, filled, session, outbox, exposure);
+                }
             } else if (filled >= 5 && head[0] == 'P' && head[1] == 'O' && head[2] == 'S' && head[3] == 'T' && head[4] == ' ') {
-                await ServePost(stream, head, filled, (client.Client.RemoteEndPoint as IPEndPoint)?.Address.ToString() ?? "?");
+                await ServePost(stream, head, filled, peer, exposure);
+            } else if (exposure != Exposure.Full) {
+                return; // CLASSIC (go-live): no helper line protocol from outside or through the tunnel
             } else if (!EnhancedGameplaySettings.Enabled) {
                 return; // the port is open for the client patches only
             } else {
@@ -399,7 +458,8 @@ internal static class MinionHelperListener {
         }
     }
 
-    private static async Task ServeHttp(NetworkStream stream, byte[] buffer, int filled, MinionHelperSession session, Channel<string> outbox) {
+    private static async Task ServeHttp(NetworkStream stream, byte[] buffer, int filled, MinionHelperSession session, Channel<string> outbox,
+                                        Exposure exposure = Exposure.Full) {
         int end;
         while ((end = IndexOf(buffer, filled, "\r\n\r\n"u8)) < 0) {
             if (filled == buffer.Length) return;
@@ -415,6 +475,12 @@ internal static class MinionHelperListener {
         foreach (var line in lines.Skip(1)) {
             var colon = line.IndexOf(':');
             if (colon > 0) headers[line[..colon].Trim()] = line[(colon + 1)..].Trim();
+        }
+
+        if (exposure == Exposure.DownloadsOnly && !PublicDownloadPath(path)) {
+            // CLASSIC (go-live): the helper page and its socket stay on the home network.
+            await Respond(stream, "404 Not Found", "text/plain", "Not found"u8.ToArray());
+            return;
         }
 
         if (path.StartsWith(ClientPatchFiles.Prefix, StringComparison.Ordinal)) {
@@ -462,7 +528,7 @@ internal static class MinionHelperListener {
     }
 
     /// <summary>CLASSIC: POST /launcher/login (Classic/Launcher/LauncherLogin.cs); a small JSON body.</summary>
-    private static async Task ServePost(NetworkStream stream, byte[] buffer, int filled, string address) {
+    private static async Task ServePost(NetworkStream stream, byte[] buffer, int filled, IPAddress peer, Exposure exposure) {
         int end;
         while ((end = IndexOf(buffer, filled, "\r\n\r\n"u8)) < 0) {
             if (filled == buffer.Length) return;
@@ -475,9 +541,12 @@ internal static class MinionHelperListener {
         var parts = lines[0].Split(' ');
         var path = parts.Length > 1 ? parts[1].Split('?')[0] : "/";
         var length = -1;
+        var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (var line in lines.Skip(1)) {
             var colon = line.IndexOf(':');
-            if (colon > 0 && line[..colon].Trim().Equals("Content-Length", StringComparison.OrdinalIgnoreCase)
+            if (colon <= 0) continue;
+            headers[line[..colon].Trim()] = line[(colon + 1)..].Trim();
+            if (line[..colon].Trim().Equals("Content-Length", StringComparison.OrdinalIgnoreCase)
                 && int.TryParse(line[(colon + 1)..].Trim(), out var parsed)) length = parsed;
         }
 
@@ -485,6 +554,16 @@ internal static class MinionHelperListener {
             await Respond(stream, "404 Not Found", "text/plain", "Not found"u8.ToArray());
             return;
         }
+
+        // CLASSIC (go-live): passwords cross the internet only over HTTPS (the tunnel's listener).
+        if (exposure == Exposure.DownloadsOnly) {
+            Logger.Information("Launcher: plain-HTTP login from {0} refused (outside the home network; use HTTPS)",
+                Logger.Args(Imlight.Classic.Net.PublicAccess.ClientAddress(peer, null)));
+            await Respond(stream, "403 Forbidden", "application/json", "{\"ok\":false,\"error\":\"https-required\"}"u8.ToArray());
+            return;
+        }
+
+        var (address, keyAddress) = LoginAddresses(exposure, peer, headers);
 
         var bodyStart = end + 4;
         if (length is < 0 or > 4096 || bodyStart + length > buffer.Length) {
@@ -499,8 +578,32 @@ internal static class MinionHelperListener {
         }
 
         var body = Encoding.UTF8.GetString(buffer, bodyStart, length);
-        var answer = await Task.Run(() => Launcher.LauncherLogin.Shared.Handle(body, address));
+        string answer;
+        try {
+            answer = await Task.Run(() => Launcher.LauncherLogin.Shared.Handle(body, address, keyAddress));
+        } catch (Exception ex) {
+            // CLASSIC: a failing login must say so in the log (it used to drop the connection silently).
+            // Exception messages can include account input or database connection details.
+            Logger.Error("Launcher login failed with {0}", Logger.Args(ex.GetType().Name));
+            await Respond(stream, "500 Internal Server Error", "application/json", "{\"ok\":false,\"error\":\"server-error\"}"u8.ToArray());
+            return;
+        }
+
         await Respond(stream, "200 OK", "application/json", Encoding.UTF8.GetBytes(answer));
+    }
+
+    /// <summary>
+    /// CLASSIC (go-live): (the address for lockouts and logs, the address the session key is bound to). Through the
+    /// tunnel: the visitor named by the trusted header, and the loopback peer (the key stays unbound, see
+    /// LauncherLogin.Handle). Directly: the peer for both, as before.
+    /// </summary>
+    internal static (string Address, string KeyAddress) LoginAddresses(Exposure exposure, IPAddress peer,
+                                                                        IReadOnlyDictionary<string, string> headers) {
+        var direct = peer is null ? "?" : (peer.IsIPv4MappedToIPv6 ? peer.MapToIPv4() : peer).ToString();
+        if (exposure != Exposure.ProxyLogin) return (direct, null);
+        var header = TrustedProxyHeader;
+        var visitor = header is not null && headers.TryGetValue(header, out var value) ? value : null;
+        return (Imlight.Classic.Net.PublicAccess.ClientAddress(peer, visitor), direct);
     }
 
     /// <summary>CLASSIC: what KingsIsle's own launcher fetches from us (LauncherPatchServer, LauncherNewsPage).</summary>

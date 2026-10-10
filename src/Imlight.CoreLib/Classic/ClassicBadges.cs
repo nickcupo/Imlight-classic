@@ -56,8 +56,10 @@ using Imcodec.Cryptography;
 using Imcodec.MessageLayer;
 using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty.TypeCache;
+using Imlight.Classic;
 using Imlight.Classic.Rules;
 using Imlight.Common;
+using Imlight.CoreLib.Shared.Behaviors;
 using Imlight.CoreLib.Shared.Resources;
 using Imlight.CoreLib.WizardData.Collections;
 using Imlight.CoreLib.WizardData.Models.Player;
@@ -86,6 +88,11 @@ internal static class ClassicBadges {
     /// The profile's badges; tests replace them.
     /// </summary>
     internal static Func<BadgeRules?> Rules { get; set; } = () => ClassicProgression.Badges;
+
+    /// <summary>
+    /// CLASSIC: the Ranked arena's ranks (classic-data/pvp); tests replace them.
+    /// </summary>
+    internal static Func<IReadOnlyList<Imlight.Classic.Pvp.ArenaRank>?> ArenaRanks { get; set; } = () => Arena.ClassicArena.Config?.Ranks;
 
     /// <summary>
     /// The id the client uses for a badge (MSG_BADGES.BadgeNameID, MSG_SELECT_BADGE.BadgeNameID).
@@ -205,16 +212,59 @@ internal static class ClassicBadges {
         AwardEarned(wizard, badges, send);
     }
 
+    /// <summary>
+    /// CLASSIC: a Ranked result (or attach): awards the PvP rank badges <paramref name="rating"/> reaches. A rank badge,
+    /// once earned, stays earned.
+    /// </summary>
+    internal static void PvpRatingChanged(Wizard wizard, int rating, Action<IMessage> send) {
+        if (Rules() is not { } rules || wizard?.QuestBehavior is null || rules.PvpRankBadges.IsEmpty) {
+            return;
+        }
+
+        Reevaluate(wizard, rules.PvpRankBadges, view => new WizardBadgeProgress(view, wizard, rating), send);
+    }
+
+    /// <summary>
+    /// CLASSIC: a spell was learned (or attach): awards the learn-every-spell-of-your-school badge it completes.
+    /// </summary>
+    internal static void SpellsChanged(Wizard wizard, Action<IMessage> send) {
+        if (Rules() is not { } rules || wizard?.QuestBehavior is null || wizard.SpellbookBehavior is null
+                || rules.SchoolSpellBadges.IsEmpty) {
+            return;
+        }
+
+        Reevaluate(wizard, rules.SchoolSpellBadges, view => new WizardBadgeProgress(view, wizard), send);
+    }
+
+    private static void Reevaluate(Wizard wizard, IEnumerable<Badge> candidates, Func<Wizard, IBadgeProgress> progressFor,
+        Action<IMessage> send) {
+        var selected = candidates.Where(badge => !Has(wizard, badge)).ToArray();
+        if (selected.Length == 0 || !selected.Any(badge => BadgeRules.IsEarned(badge, progressFor(wizard)))) {
+            return; // CLASSIC: no write when nothing new is earned (the common case on attach).
+        }
+
+        if (UsesSavedRegistry) {
+            AwardSavedRegistry(wizard, selected, [], send, progressFor);
+            return;
+        }
+        var progress = progressFor(wizard);
+        foreach (var badge in selected) {
+            if (TryStageAward(wizard, badge, progress) is not { } award) continue;
+            Persist(wizard);
+            PublishQuestCompleted(wizard, [award], send);
+        }
+    }
+
     // CLASSIC: counters and the badges they earn share one fresh registry ACK. The existing rule-test Persist
     // hook remains explicit; production never sends or changes live registry before this selected transaction.
     private static void AwardSavedRegistry(Wizard live, IEnumerable<Badge> candidates,
-        IReadOnlyList<string> increments, Action<IMessage> send) {
+        IReadOnlyList<string> increments, Action<IMessage> send, Func<Wizard, IBadgeProgress>? progressFor = null) {
         var selected = candidates.ToArray();
         var awards = new List<PreparedQuestBadgeAward>();
         WizardQuestTransactions.TryChangeRegistry(live, journal => {
             foreach (var key in increments) journal.Registry.AddOrUpdate(key, 1UL, (_, count) => count + 1);
             var savedView = new Wizard { QuestBehavior = journal };
-            var progress = new WizardBadgeProgress(savedView);
+            var progress = progressFor?.Invoke(savedView) ?? new WizardBadgeProgress(savedView);
             foreach (var badge in selected) {
                 if (TryStageAward(savedView, badge, progress) is { } award) awards.Add(award);
             }
@@ -288,7 +338,30 @@ internal static class ClassicBadges {
         })];
     }
 
-    private sealed class WizardBadgeProgress(Wizard wizard) : IBadgeProgress {
+    // CLASSIC: wizard holds the (saved) quest registry; live supplies the spellbook and school; rating the Ranked rating.
+    private sealed class WizardBadgeProgress(Wizard wizard, Wizard? live = null, int? rating = null) : IBadgeProgress {
+
+        public bool ReachedPvpRank(string rank)
+            => rating is { } value && ArenaRanks() is { } ranks
+                && ranks.Any(r => r.Name == rank)
+                && value >= Imlight.Classic.Pvp.ArenaRules.MinRatingOf(rank, ranks);
+
+        public string? PrimarySchool => ((live ?? wizard).MagicSchoolBehavior?.MagicSchool is { } school and not MagicSchool.None
+                ? school : (live ?? wizard).SpellbookBehavior?.PrimarySchool) switch {
+            MagicSchool.Fire => "fire", MagicSchool.Ice => "ice", MagicSchool.Storm => "storm", MagicSchool.Myth => "myth",
+            MagicSchool.Life => "life", MagicSchool.Death => "death", MagicSchool.Balance => "balance",
+            _ => null,
+        };
+
+        public bool IsSpellAvailable(string spellId)
+            => ClassicRuntime.IsInitialized && ClassicRuntime.IsActive
+                && ClassicSpellTemplates.Records.FirstOrDefault(r => r.Id == spellId) is { ClientTemplate: not null } record
+                && record.IsInProfile(ClassicRuntime.Rules.Profile.Id);
+
+        public bool KnowsSpell(string spellId)
+            => ClassicSpellTemplates.Records.FirstOrDefault(r => r.Id == spellId)?.ClientTemplate is { } path
+                && CoreObjectFactory.TryGetTemplateIdByPath(path) is { } id
+                && (live ?? wizard).SpellbookBehavior?.HasSpell((uint) id) == true;
 
         public bool HasCompletedQuest(string quest) => wizard.QuestBehavior.HasCompletedQuest(quest);
 

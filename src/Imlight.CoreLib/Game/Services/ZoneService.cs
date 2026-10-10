@@ -931,8 +931,10 @@ internal partial class ZoneService(SessionActor sessionActor) : MessageService(s
         // Send MSG_SERVERTRANSFER to redirect the client to the new game server.
         // CLASSIC: a fresh single-use proof per transfer (SessionID, Key/FallbackKey; Imlight.Classic.Net.GameSessionKeys).
         var transferKey = Auth.SecuritySettings.GameKeys.Value.IssueTransfer(account.AccountId, SessionActor.RemoteIp);
+        // CLASSIC (go-live): a friend outside the home network is told the public address.
+        var advertised = Imlight.CoreLib.Classic.PublicGameAddress.For(keyRsp.IP, SessionActor.RemoteIp);
         var serverTransfer = new GAME_5_PROTOCOL.MSG_SERVERTRANSFER {
-            IP = keyRsp.IP,
+            IP = advertised,
             TCPPort = keyRsp.Port,
             UDPPort = keyRsp.Port,
             Key = transferKey.Key,
@@ -947,7 +949,7 @@ internal partial class ZoneService(SessionActor sessionActor) : MessageService(s
             SessionID = transferKey.SessionId, // CLASSIC: the client echoes it in MSG_ATTACH (the proof)
             TargetPlayerID = wizard.CharId,
             TransitionID = 1,
-            FallbackIP = keyRsp.IP,
+            FallbackIP = advertised,
             FallbackTCPPort = keyRsp.Port,
             FallbackUDPPort = keyRsp.Port,
             FallbackZone = wizard.Zone,
@@ -1068,8 +1070,10 @@ internal partial class ZoneService(SessionActor sessionActor) : MessageService(s
         // CLASSIC: a fresh single-use proof per transfer: the client echoes SessionID in its MSG_ATTACH (its LoginKey
         // comes out empty), and Key/FallbackKey serve a client that sends it (Imlight.Classic.Net.GameSessionKeys).
         var transferKey = Auth.SecuritySettings.GameKeys.Value.IssueTransfer(account.AccountId, SessionActor.RemoteIp);
+        // CLASSIC (go-live): a friend outside the home network is told the public address.
+        var advertisedIp = Imlight.CoreLib.Classic.PublicGameAddress.For(character.GameServerIp, SessionActor.RemoteIp);
         var serverTransfer = new GAME_5_PROTOCOL.MSG_SERVERTRANSFER() {
-            IP = character.GameServerIp,
+            IP = advertisedIp,
             TCPPort = character.GameServerPort,
             UDPPort = character.GameServerPort,
             Key = transferKey.Key,
@@ -1083,7 +1087,7 @@ internal partial class ZoneService(SessionActor sessionActor) : MessageService(s
             SessionID = transferKey.SessionId, // CLASSIC: the client echoes it in MSG_ATTACH (the proof)
             TargetPlayerID = character.CharId,
             TransitionID = 1,
-            FallbackIP = character.GameServerIp,
+            FallbackIP = advertisedIp,
             FallbackTCPPort = character.GameServerPort,
             FallbackUDPPort = character.GameServerPort,
             FallbackZone = character.Zone,

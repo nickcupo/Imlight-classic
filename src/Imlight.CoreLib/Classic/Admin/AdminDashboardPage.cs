@@ -121,10 +121,10 @@ button.danger { background:var(--bad); }
     <form id="friendAccountForm">
       <div class="friend-fields">
         <div><label for="friendUsername">Username</label><input id="friendUsername" name="username" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" minlength="3" maxlength="24" pattern="[a-z0-9_\-]{3,24}" aria-describedby="friendUsernameHint" required><span id="friendUsernameHint" class="muted">3–24 lowercase letters, numbers, underscores or hyphens.</span></div>
-        <div><label for="friendPassword">Game password</label><input id="friendPassword" name="password" type="password" autocomplete="new-password" minlength="12" maxlength="128" aria-describedby="friendPasswordHint" required></div>
-        <div><label for="friendPasswordConfirm">Confirm game password</label><input id="friendPasswordConfirm" name="passwordConfirm" type="password" autocomplete="new-password" minlength="12" maxlength="128" required></div>
+        <div><label for="friendPassword">Game password</label><input id="friendPassword" name="password" type="password" autocomplete="new-password" minlength="6" maxlength="128" aria-describedby="friendPasswordHint" required></div>
+        <div><label for="friendPasswordConfirm">Confirm game password</label><input id="friendPasswordConfirm" name="passwordConfirm" type="password" autocomplete="new-password" minlength="6" maxlength="128" required></div>
       </div>
-      <p id="friendPasswordHint" class="muted">12–128 characters. Use a separate password from shared site access.</p>
+      <p id="friendPasswordHint" class="muted">6–128 characters. Use a separate password from shared site access.</p>
       <div class="row"><button id="friendCreateBtn" type="submit">Create account</button><a href="/friends/" target="_blank" rel="noopener">Open friend page</a></div>
     </form>
     <p id="friendAccountStatus" class="muted" role="status" aria-live="polite"></p>

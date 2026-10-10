@@ -51,8 +51,24 @@ internal class CommandAmbientProtocol : CommandProtocol {
         var zone = Context.Character.Zone;
         var wizards = AmbientWizards.All.Where(w => string.Equals(w.Zone, zone, StringComparison.OrdinalIgnoreCase)).ToList();
         InformSenderClient(wizards.Count == 0 ? "No ambient wizard in this zone."
-            : string.Join("; ", wizards.Select(w => $"{w.Name} L{w.Wizard.MagicSchoolBehavior.Level} {w.Identity.School} {w.Activity} "
+            : string.Join("; ", wizards.Select(w => $"{w.Name} L{w.Wizard.MagicSchoolBehavior.Level} {w.Identity.School} {w.Activity}{(w.Stands > 1 ? $" stood{w.Stands}" : "")} "
                 + $"{(int) MathF.Sqrt((w.Position.X - here.X) * (w.Position.X - here.X) + (w.Position.Y - here.Y) * (w.Position.Y - here.Y))}")));
+    }
+
+    // CLASSIC (2026-10-09): your ambient companions (AmbientCompanionGroup): who, level, school, what they do, where.
+    [Command("group")]
+    [AuthRequired(AuthLevel.QualityAssurance)]
+    private void GroupCommand() {
+        var me = Context.Character.CharId;
+        var here = Context.Character.Location;
+        var mine = AmbientWizards.All.Where(w => AmbientGroups.LeaderOf(w.CharId) == me).ToList();
+        var text = mine.Count == 0 ? $"No ambient companions (grouping {(AmbientGroups.Settings.Enabled ? "on" : "off")})."
+            : string.Join("; ", mine.Select(w => $"{w.Name} L{w.Wizard.MagicSchoolBehavior.Level} {w.Identity.School} {w.Activity} "
+                + (string.Equals(w.Zone, Context.Character.Zone, StringComparison.OrdinalIgnoreCase)
+                    ? $"{(int) MathF.Sqrt((w.Position.X - here.X) * (w.Position.X - here.X) + (w.Position.Y - here.Y) * (w.Position.Y - here.Y))}"
+                    : w.Present ? w.Zone : "away")));
+        Imlight.Common.Logger.Information("[QA] .ambient group for {0}: {1}", Imlight.Common.Logger.Args(me, text));
+        InformSenderClient(text);
     }
 
     [Command("call")]

@@ -85,6 +85,7 @@ internal sealed partial class PetGameService(SessionActor sessionActor) : Messag
         public bool Started;
         public bool Ended;
         public bool Fed;
+        public PhantomState Phantom; // CLASSIC: Cannon, Gobbler Drop and Maze, played in their own phantom zone.
 
     }
 
@@ -133,6 +134,12 @@ internal sealed partial class PetGameService(SessionActor sessionActor) : Messag
             Logger.Information("Pet game {0}: refused (pets off or not a 2010 game).", Logger.Args(game));
             SendToSocket(new PET_9_PROTOCOL.MSG_PETGAMEJOINRSP { Game = game, Success = 0 });
 
+            return;
+        }
+
+        // CLASSIC: Cannon, Gobbler Drop and Maze are admitted here and played in their own phantom zone.
+        if (PetGameScenes.IsPhantomGame(game)) {
+            JoinPhantom(message, game, wizard, info);
             return;
         }
 
@@ -232,6 +239,11 @@ internal sealed partial class PetGameService(SessionActor sessionActor) : Messag
             // only a former game whose own binding is invalid; keep a later completed attachment usable.
             EnsureTrainingContext(_session);
         }
+        else if (pending.Candidate.Phantom is { } phantom) {
+            // CLASSIC: a phantom game whose setup the parent refused cannot be played here; go back to the kiosk.
+            Logger.Warning("Pet game {0}: the logic object was refused; sending the wizard back.", Logger.Args(pending.Candidate.Game));
+            SendHome(phantom.Origin);
+        }
         else SendToSocket(new PET_9_PROTOCOL.MSG_PETGAMEJOINRSP { Game = pending.Candidate.Game, Success = 0 });
         Stash.UnstashAll();
     }
@@ -245,6 +257,10 @@ internal sealed partial class PetGameService(SessionActor sessionActor) : Messag
         }
 
         session.Started = true;
+        if (session.Phantom is not null) {
+            StartPhantom(session);
+            return;
+        }
         if (!SendTrainingOutput(session, [new PET_9_PROTOCOL.MSG_PETGAMESTART { Game = session.Game, Data = "" }])) return;
         if (session.Dance is not null) {
             Timers.StartSingleTimer("petDanceRound", new SendNextRound(session, session.Dance.Round), s_roundDelay);
@@ -308,6 +324,12 @@ internal sealed partial class PetGameService(SessionActor sessionActor) : Messag
             return;
         }
 
+        if (_session.Phantom?.Scene is not null && string.Equals(_session.Game, PetGameObjectCodec.Cannon, StringComparison.Ordinal)
+            && data[0] is CannonReady or CannonFire) {
+            ReceiveCannonCommand(_session, data);
+            return;
+        }
+
         switch (data[0]) {
             case CommandFeedSnack when data.Length >= 9:
                 FeedSnack(BitConverter.ToUInt64(data, 1));
@@ -319,6 +341,15 @@ internal sealed partial class PetGameService(SessionActor sessionActor) : Messag
                     break;
                 }
 
+                if (_session.Phantom is { } phantom) {
+                    // CLASSIC: a QA end of a phantom game still ends its clock and sends the wizard back later.
+                    var ended = _session;
+                    Timers.Cancel(PhantomTick); Timers.Cancel(PhantomIdle); Timers.Cancel(PhantomTarget);
+                    phantom.Over = true;
+                    Finish(data[0] == CommandDebugWin ? PetRules.FullGamePoints : 0, data[0] == CommandDebugWin ? PetRules.FullGamePoints : 0);
+                    if (ReferenceEquals(_session, ended) && ended.Ended) Timers.StartSingleTimer(PhantomReturn, new PhantomReturnMessage(ended), ReturnWait);
+                    break;
+                }
                 Finish(data[0] == CommandDebugWin ? PetRules.FullGamePoints : 0, data[0] == CommandDebugWin ? 1 : 0);
                 break;
             default:
@@ -338,12 +369,17 @@ internal sealed partial class PetGameService(SessionActor sessionActor) : Messag
         if (_session is null || !string.Equals(game, _session.Game, StringComparison.Ordinal)) return;
         Logger.Information("Pet game {0}: closed by the client ({1}).",
             Logger.Args(_session.Game, _session.Ended ? "after the end" : "quit early, no energy taken"));
+        if (_session.Phantom is not null) {
+            LeavePhantom(_session); // CLASSIC: back to the kiosk.
+            return;
+        }
         RetireTraining();
     }
 
     // CLASSIC: use the same retirement for client close and successful replacement, with no reward or charge.
     private void RetireTraining() {
         Timers.Cancel("petDanceRound");
+        foreach (var key in (string[]) [PhantomTick, PhantomTarget, PhantomFinish, PhantomReturn, PhantomIdle]) Timers.Cancel(key);
         _session = null;
     }
 
@@ -425,7 +461,8 @@ internal sealed partial class PetGameService(SessionActor sessionActor) : Messag
     // CLASSIC: the last answer is already consumed. A refused result has no normal retry path;
     // retire it before asynchronous session close, without sending an uncommitted END or reward.
     private bool CloseFailedTerminalDance() {
-        if (_session is not { Started: true, Ended: false, Dance: { IsOver: true } }) return false;
+        if (_session is not { Started: true, Ended: false } terminal
+            || !(terminal.Dance is { IsOver: true } || terminal.Phantom is { Over: true })) return false;
         RetireGamesForClose();
         CloseSession();
         return true;

@@ -454,6 +454,7 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
         PassHeldSeats();
         // CLASSIC: ambient wizards in the duel pick their cards a few seconds in.
         ScheduleAmbientTurns();
+        ScheduleHenchmanTurns(); // CLASSIC: hired henchmen too
 
         // Tutorial duels flush queued card grants and re-script the golems before planning.
         _tutorialDirector.OnPlanningPhaseBegin();
@@ -529,6 +530,11 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
         // Tutorial duels script the golems' moves server-side; drop their own AI moves so a pass cannot
         // overwrite the scripted attack. Player moves still flow through normally.
         if (_tutorialDirector.IsActive && caster.OccupiedTeam == CombatTeam.Monster) {
+            return;
+        }
+
+        // CLASSIC: a henchman's moves come from the ally brain (ReceiveHenchmanTurn), never from its creature AI.
+        if (caster.IsHenchman && !_choosingHenchmanMove) {
             return;
         }
 
@@ -989,7 +995,8 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
         circle._duelActor.ForgetOwnedMinion(circle, identity);
     }
 
-    private void SpawnAndAssignMinion(uint creatureTid, CombatDuelSubCircle caster, bool controllableSummon = false) {
+    // CLASSIC: returns the minion's slot (null when none joined), so a hired henchman can be set up after it joins.
+    private CombatDuelSubCircle SpawnAndAssignMinion(uint creatureTid, CombatDuelSubCircle caster, bool controllableSummon = false) {
         // CLASSIC: PvP minions occupy their caster's physical half, which the creature AI uses for enemy targets.
         // PvE summons retain the existing player-half selection.
         var slot = _pvp && caster.SlotIndex < 4
@@ -999,7 +1006,7 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
             Logger.Information("Duel {0} | minion summon (tid {1}) skipped, no free summon-team slot.",
                 Logger.Args(Duel.m_duelID.Full, creatureTid));
 
-            return;
+            return null;
         }
 
         var template = CoreObjectFactory.GetCoreTemplate(creatureTid);
@@ -1007,7 +1014,7 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
             Logger.Warning("Duel {0} | minion summon: no template for creature tid {1}.",
                 Logger.Args(Duel.m_duelID.Full, creatureTid));
 
-            return;
+            return null;
         }
 
         var centre = Entity.ActiveGameObject?.m_location ?? (caster?.ParticipantObject?.m_location ?? default);
@@ -1021,7 +1028,7 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
 
         var minionActor = Entity.SpawnCombatMinionActor(minionObj, template);
         if (minionActor is null) {
-            return;
+            return null;
         }
 
         try {
@@ -1035,11 +1042,13 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
             slot.RemoveParticipant();
             minionActor.Tell(PoisonPill.Instance);
 
-            return;
+            return null;
         }
 
         Logger.Information("Duel {0} | summoned minion tid {1} into summon-team slot {2} (caught up next round).",
             Logger.Args(Duel.m_duelID.Full, creatureTid, slot.SlotIndex));
+
+        return slot;
     }
 
     private void AddParticipant(CoreObject participantObject, IActorRef participantActor) {
@@ -1619,7 +1628,10 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
         return (byte) upFirst.SlotIndex;
     }
 
-    private void AddWaitingCombatParticipants() => EnactActionOnSubCircles(circle => {
+    private void AddWaitingCombatParticipants() => EnactActionOnSubCircles(AddCircleToCombat);
+
+    // CLASSIC: one circle's MSG_COMBATADD, so a henchman hired during card selection joins the round it was hired in.
+    private void AddCircleToCombat(CombatDuelSubCircle circle) {
         if (circle.AddedToDuel || !circle.Occupied) {
             return;
         }
@@ -1644,7 +1656,7 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
 
         circle.AddedToDuel = true;
         Duel.m_flatParticipantList.Add(participant);
-    });
+    }
 
     private void DoPipGain() => EnactActionOnSubCircles(circle => {
         if (!circle.AddedToDuel || !circle.IsAlive) {
@@ -1674,20 +1686,6 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
     [MessageHandler(typeof(COMBAT_106_PROTOCOL.MSG_CHEATINSTANTCINEMATICS))]
     private void ReceiveCheatInstantCinematics(COMBAT_106_PROTOCOL.MSG_CHEATINSTANTCINEMATICS message)
         => CheatInstantCinematics = message.Enabled;
-
-    // CLASSIC: a henchman hired from the Crown Shop during this duel joins the buyer's side (October 2009: henchmen
-    // "can only be purchased during a duel" and "behave similarly to your Minion"). The buyer is told whether it joined.
-    [MessageHandler(typeof(COMBAT_106_PROTOCOL.MSG_HIREHENCHMAN))]
-    private void ReceiveHireHenchman(COMBAT_106_PROTOCOL.MSG_HIREHENCHMAN message) {
-        var buyer = SubCircles.FirstOrDefault(x => x.ParticipantActor == message.Actor);
-        var joined = _isActive && buyer is { IsAlive: true } && GetAvailableSubCircleTeamPlayer() is not null
-            && CoreObjectFactory.GetCoreTemplate(message.CreatureTid) is not null;
-        if (joined) {
-            SpawnAndAssignMinion(message.CreatureTid, buyer);
-        }
-
-        message.Actor?.Tell(new COMBAT_106_PROTOCOL.MSG_HENCHMANHIRED { CreatureTid = message.CreatureTid, Success = joined });
-    }
 
     [MessageHandler(typeof(COMBAT_106_PROTOCOL.MSG_CHEATNOFIZZLE))]
     private void ReceiveCheatNoFizzle(COMBAT_106_PROTOCOL.MSG_CHEATNOFIZZLE message) {

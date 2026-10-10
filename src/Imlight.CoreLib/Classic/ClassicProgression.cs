@@ -189,7 +189,7 @@ public static class ClassicProgression {
         }
 
         if (profile.Rules.MobStats is { } mobStats && File.Exists(Path.Combine(classicDataRoot, mobStats))) {
-            s_mobStats = MobStatsLoader.Load(Path.Combine(classicDataRoot, mobStats));
+            s_mobStats = MobStatsLoader.Load(Path.Combine(classicDataRoot, mobStats), profile.Id); // CLASSIC: per-profile dated entries
             Logger.Information("Classic mob stats {Table}: dated health for {Count} creature templates; others keep template health.",
                 Logger.Args(s_mobStats.Id, s_mobStats.HealthByTemplate.Count));
         }
