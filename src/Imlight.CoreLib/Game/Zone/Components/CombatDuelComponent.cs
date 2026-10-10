@@ -188,6 +188,11 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
     public override void OnPlayerJoin(CoreObject playerObj, IActorRef playerActor, Wizard playerWizard) {
         // CLASSIC: a wizard of an arena match arrives: their seat (or their held seat after a drop).
         if (_arena) {
+            // CLASSIC: a held seat is taken once the client is in the zone (ReceiveRejoinClientReady).
+            if (QueueRejoin(playerObj, playerActor, playerWizard)) {
+                return;
+            }
+
             if (!(_isActive && TryRejoin(playerObj, playerActor, playerWizard))
                 && (!ElixirService.PreparesCombatSnapshots
                     || SubCircles?.Any(circle => circle is { Occupied: true, Disconnected: true }
@@ -202,8 +207,9 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
             return;
         }
 
-        // CLASSIC: a wizard who dropped mid-fight and logged back in takes their held seat again.
-        if (TryRejoin(playerObj, playerActor, playerWizard)) {
+        // CLASSIC: a wizard who dropped mid-fight and logged back in takes their held seat again, once their client is
+        // in the zone (CombatDuelComponent.Rejoin.cs, Imlight.Classic.Rules.RejoinTiming).
+        if (QueueRejoin(playerObj, playerActor, playerWizard)) {
             return;
         }
 
@@ -219,6 +225,7 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
 
     // CLASSIC: forget a player who leaves the zone, so the same object coming back in range counts as an enter again.
     public override void OnPlayerLeave(IActorRef playerActor, ulong id) {
+        ForgetPendingRejoins(playerActor); // CLASSIC: gone again before taking a held seat; it stays held
         foreach (var key in _entitiesInRange.Where(x => x.Value.Equals(playerActor)).Select(x => x.Key).ToList()) {
             _entitiesInRange.Remove(key);
         }
@@ -709,6 +716,10 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
         }
 
         ActiveDuels.Remove(SigilId);
+        foreach (var charId in _pendingRejoins.Keys.ToList()) {
+            DropPendingRejoin(charId); // CLASSIC: nobody waits for a seat in a duel that is gone
+        }
+
         _waitingForRejoin = false;
         _isActive = false;
         _ownedMinionControl.Clear();
