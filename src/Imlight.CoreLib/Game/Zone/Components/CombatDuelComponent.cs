@@ -34,6 +34,10 @@
  * Start at the `CombatResolver` class and work your way down.
  * Tutorial duels are scripted by the `TutorialDuelDirector` in that namespace.
  * Combat positions are determined by sigil templates, with specific subcircle positions.
+ * CLASSIC: OWNER RULING 2026-10-10, "take the rewards away": a wizard defeated during a battle their side still wins
+ * gets no rewards from it (no XP, gold, Crowns, drops, reagents or quest kill credit) and is still sent home with low
+ * health. Wizards standing at the end keep everything. [Classic] DefeatedGetNoRewards (on); see
+ * DefeatedWithoutRewards. PvE only: PvP and the arena keep their own rules.
  * 
  * TODO:
  * - Implementation of creature stunning functionality
@@ -42,7 +46,7 @@
  * 
  * Created by: Jooty
  * Version: KALI 1.0
- * Last Updated: 10/01/2026
+ * Last Updated: 10/10/2026
  */
 
 using System;
@@ -1709,7 +1713,11 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
         var playersWin = AliveAndInDuelCreatureCount <= 0;
         var creaturesWin = AliveAndInDuelPlayerCount <= 0;
 
-        FinishMonstrologyDuel(playersWin);
+        // CLASSIC: who was down when the fight ended, taken before anything (a defeated wizard's session sets 1 health
+        // once it hears of the defeat). Owner ruling 2026-10-10: they get no rewards from a fight their side wins.
+        var unrewarded = DefeatedWithoutRewards();
+
+        FinishMonstrologyDuel(playersWin, unrewarded);
         AwardMonstrologyExtractions(); // CLASSIC: Animus and Monstrology XP for the winners' extractions
 
         // A queued tutorial card grant must not leak into the next duel on this sigil.
@@ -1723,7 +1731,7 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
         RemovePlayersFromDuel();
 
         if (playersWin) {
-            PlayerWin();
+            PlayerWin(unrewarded);
         }
         else if (creaturesWin) {
             CreatureWin();
@@ -1748,7 +1756,31 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
         NotifyAmbientWizards(active: false); // CLASSIC
     }
 
-    private void PlayerWin() {
+    /// <summary>
+    /// CLASSIC: [Classic] DefeatedGetNoRewards (owner ruling 2026-10-10, "take the rewards away"). The player-side
+    /// circles down (0 health) when the fight ends. Their side may still win, but they get nothing from it: no
+    /// MSG_COMBATWIN, so no XP, gold, Crowns, drops, reagents, Treasure Cards, kill badges, Second Chance chest or
+    /// quest kill credit (CombatService and QuestService hand all of those out on that message), and no Monstrology
+    /// extraction. They are still sent home as defeated (RemovePlayersFromDuel). A wizard healed back up before the
+    /// end (a direct heal revives in this game, March 2009) is standing and keeps every reward. Empty when the switch
+    /// is off or without a classic profile. PvP never gets here (PvpEndDuel has its own rules).
+    /// </summary>
+    private HashSet<CombatDuelSubCircle> DefeatedWithoutRewards() {
+        var defeated = new HashSet<CombatDuelSubCircle>();
+        if (!ClassicRuntime.IsActive || !ClassicSettings.DefeatedGetNoRewards) {
+            return defeated;
+        }
+
+        foreach (var circle in SubCircles) {
+            if (circle is { Occupied: true, OccupiedTeam: CombatTeam.Player } && !circle.IsAlive) {
+                defeated.Add(circle);
+            }
+        }
+
+        return defeated;
+    }
+
+    private void PlayerWin(HashSet<CombatDuelSubCircle> unrewarded) {
         Logger.Debug("Duel {0} | Duel ended. Players win.", Logger.Args(Duel.m_duelID.Full));
 
         Duel.m_duelPhase = kDuelPhase.kPhase_Victory;
@@ -1782,6 +1814,14 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
             }
 
             circle.ParticipantActor.Tell(combatVictoryMsg);
+
+            // CLASSIC: defeated during the fight: no rewards and no kill credit (DefeatedWithoutRewards).
+            if (unrewarded.Contains(circle)) {
+                Logger.Debug("Duel {0} | Slot {1} | Defeated before the win: no rewards.",
+                    Logger.Args(Duel.m_duelID.Full, circle.SlotIndex));
+
+                return;
+            }
 
             var victoryMsg = new COMBAT_106_PROTOCOL.MSG_COMBATWIN() {
                 UsedPips = circle._usedPipsForExperienceGain,

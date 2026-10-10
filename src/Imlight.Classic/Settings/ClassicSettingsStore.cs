@@ -100,6 +100,7 @@ public static class ClassicSettingKeys {
     public const string PetPavilion = "PetPavilion";
     public const string MovementGuard = "MovementGuard";
     public const string MovementMaxSpeed = "MovementMaxSpeed";
+    public const string DefeatedGetNoRewards = "DefeatedGetNoRewards"; // CLASSIC: owner ruling 2026-10-10
 
 }
 
@@ -167,6 +168,11 @@ public sealed class ClassicSettingsStore {
         new(ClassicSettingKeys.MovementMaxSpeed, ClassicSettingKind.Int, "1500", "Security",
             "Fastest movement the guard allows, in units per second (2009 run speed is about 600), with a 3 second "
             + "catch-up after a lag spike.", 600, 20000),
+        // CLASSIC: owner ruling 2026-10-10, "take the rewards away".
+        new(ClassicSettingKeys.DefeatedGetNoRewards, ClassicSettingKind.Bool, "true", "Combat",
+            "A wizard defeated in a fight their side still wins gets nothing from it: no XP, gold, Crowns, drops, "
+            + "reagents or quest kill credit (owner ruling 2026-10-10). They still wake in the Commons. A wizard healed "
+            + "back up before the end counts as standing. Arena and PvP keep their own rules."),
     ];
 
     private static readonly IReadOnlyDictionary<string, ClassicSettingDefinition> s_byKey =
