@@ -127,6 +127,7 @@
     <ServerIntegrationTest Include="HouseAcknowledgementTests.cs" />
     <ServerIntegrationTest Include="ArenaAmbientActorTransportTests.cs" />
     <ServerIntegrationTest Include="ActorLoggingTests.cs" />
+    <ServerIntegrationTest Include="LoggerFaultTests.cs" />
     <ServerIntegrationTest Include="HousingAtticTests.cs" />
     <ServerIntegrationTest Include="ElixirTests.cs" />
     <ServerIntegrationTest Include="ElixirServiceTests.cs" />
