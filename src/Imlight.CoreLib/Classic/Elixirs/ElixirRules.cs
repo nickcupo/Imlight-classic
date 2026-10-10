@@ -36,6 +36,13 @@ internal static class ElixirRules {
             !inCombat ? 1 : pvp ? 3 : 2);
     }
 
+    // CLASSIC: result services read the same trusted mode used by elixir benefits.
+    // A detached held PvP seat stays PvP; only the existing release/victory transition clears it.
+    internal static bool IsPvpOrUnknownCombat(Wizard wizard) {
+        var state = wizard is not null && s_combat.TryGetValue(wizard, out var context) ? Volatile.Read(ref context.State) : 0;
+        return state == 3 || wizard is { IsInDuel: true } && state != 2;
+    }
+
     internal static bool CanActivate(Wizard wizard, ElixirDefinition definition) {
         if (wizard is null || definition?.Valid != true) return false;
         var state = s_combat.TryGetValue(wizard, out var context) ? Volatile.Read(ref context.State) : 0;

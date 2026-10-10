@@ -85,8 +85,8 @@ public sealed class PvpNoticeRegressionTests : IDisposable {
             service.Tell(new CLASSIC_FEATURES_PROTOCOL.MSG_PVPRELEASE { Won = won, Fought = fought });
             await Processed(service);
             var packets = await sink.Ask<object[]>(new Snapshot(), Timeout, TestContext.Current.CancellationToken);
-            var grace = Assert.IsType<ZONE_102_PROTOCOL.MSG_ZONEBROADCAST>(Assert.Single(packets));
-            Assert.IsType<GAME_5_PROTOCOL.MSG_ADDEFFECT>(grace.Message);
+            // CLASSIC: PvP retains server grace without publishing the shared PvE native effect.
+            Assert.Empty(packets);
             Assert.False(wizard.IsInDuel);
             Assert.True(wizard.IsInCombatGrace);
             Assert.DoesNotContain(packets, packet => packet is EXTENDEDBASE_2_PROTOCOL.MSG_SERVERMESSAGE);
