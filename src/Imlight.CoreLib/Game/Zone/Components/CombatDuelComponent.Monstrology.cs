@@ -77,8 +77,10 @@ internal sealed partial class CombatDuelComponent {
         if (healthAfter <= 0 || effect.m_numRounds <= 1) _extractingDots.Remove(effect);
     }
 
-    private void FinishMonstrologyDuel(bool victory) {
-        var owners = SubCircles.Where(x => x.AddedToDuel && !x.IsSummonedMinion && MonstrologySessionPolicy.AllowsWizard(x._wizard, MonstrologyService.Enabled))
+    private void FinishMonstrologyDuel(bool victory, HashSet<CombatDuelSubCircle> unrewarded = null) {
+        // CLASSIC: a wizard defeated during a won fight extracts nothing from it (owner ruling 2026-10-10).
+        var owners = SubCircles.Where(x => x.AddedToDuel && !x.IsSummonedMinion && unrewarded?.Contains(x) != true
+                && MonstrologySessionPolicy.AllowsWizard(x._wizard, MonstrologyService.Enabled))
             .Select(x => x._wizard.CharId).ToHashSet();
         _victoryEssence = _pendingEssence.Finish(victory, owners);
         _extractingDots.Clear(); _castDotTargets.Clear(); _extractingOwner = 0; _extractingFamily = null;
