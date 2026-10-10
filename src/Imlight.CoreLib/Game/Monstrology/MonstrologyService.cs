@@ -16,6 +16,10 @@ namespace Imlight.CoreLib.Game.Monstrology;
 
 // CLASSIC: authored repository injection keeps actor regressions off the lazy player database; production Props uses the default.
 internal sealed class MonstrologyService(SessionActor session, MonstrologyRepository authoredRepository = null) : MessageService(session) {
+    // CLASSIC: SessionActor.SetServices builds every service by reflection with exactly (SessionActor); an optional
+    // parameter is not a one-argument constructor, and its absence closed every login (2026-10-10, live 16:44-19:5x).
+    public MonstrologyService(SessionActor session) : this(session, null) { }
+
     private readonly HashSet<string> _announcedExtractions = new();
     // Separate from Classic.OwnedMinionControl. No legacy profile gate; explicit opt-in until stock contract is validated.
     internal static bool Enabled => bool.TryParse(ConfigurationManager.Settings["Classic.Monstrology"].AsString(), out var enabled) && enabled;
