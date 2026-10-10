@@ -28,7 +28,8 @@
  *   - A Say's Message is in the official client's own form (EncodeSay: a
  *     16-bit character count, then UTF-16LE), byte for byte what a real
  *     client sends and ChatService relays. With [Classic] AmbientWizardChat
- *     off, Say and Whisper send nothing.
+ *     off, Say and Whisper send nothing. CLASSIC (2026-10-10): neither sends a line the client's chat
+ *     dictionary would hide (Fits; AmbientChatPlanner.Sendable).
  *   - WhereIs answers "where is X" from the quest templates: a goal titled
  *     "Talk to Lady Blackhope" whose destination is WizardCity/WC_Streets/
  *     WC_HauntedCave gives "Lady Blackhope" -> "Haunted Cave".
@@ -40,7 +41,7 @@
  *
  * Created by: Nick with Claude Code (claude-opus-5-5)
  * Version: KALI 1.0
- * Last Updated: 10/01/2026
+ * Last Updated: 10/10/2026
  */
 
 using System;
@@ -51,6 +52,7 @@ using System.Text.RegularExpressions;
 using Akka.Actor;
 using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty.TypeCache;
+using Imlight.Classic.Ambient;
 using Imlight.Common;
 using Imlight.CoreLib.Shared.Resources;
 using Imlight.CoreLib.Shared.Utilities;
@@ -107,7 +109,7 @@ internal static class AmbientChat {
     /// [Classic] AmbientWizardChat is off.
     /// </summary>
     internal static bool Say(AmbientWizard wizard, string text) {
-        if (!AmbientWizards.Settings.Chat || string.IsNullOrEmpty(text)) {
+        if (!AmbientWizards.Settings.Chat || string.IsNullOrEmpty(text) || !Fits(wizard, text)) {
             return false;
         }
 
@@ -133,7 +135,7 @@ internal static class AmbientChat {
 
     /// <summary>Whispers <paramref name="text"/> to a player (MSG_DIRECTEDCHAT, as from a friend).</summary>
     internal static bool Whisper(AmbientWizard wizard, ulong toCharId, string text) {
-        if (!AmbientWizards.Settings.Chat || string.IsNullOrEmpty(text)) {
+        if (!AmbientWizards.Settings.Chat || string.IsNullOrEmpty(text) || !Fits(wizard, text)) {
             return false; // [Classic] AmbientWizardChat off: no chat at all
         }
 
@@ -152,6 +154,22 @@ internal static class AmbientChat {
         Logger.Debug("{Name} (ambient) to {Target}: {Text}", Logger.Args(wizard.Name, toCharId, text));
 
         return true;
+    }
+
+    /// <summary>
+    /// CLASSIC (2026-10-10): the last gate for every ambient line: IsClean, and every word in the client's chat dictionary
+    /// (r806919 lists, when loaded; numbers only for an open-chat grown-up). A line that fails is not sent at all: the
+    /// client would show its words as "..." (a 2009 kid's chat), which no player would type.
+    /// </summary>
+    internal static bool Fits(AmbientWizard wizard, string text) {
+        var persona = ChatPersona.For(wizard.Identity);
+        if (AmbientChatPlanner.Sendable(text, persona, ChatWordFilter.Current)) {
+            return true;
+        }
+
+        Logger.Warning("Ambient wizard {Name} would say \"{Text}\", which the client's chat would hide ({Words}); not sent.",
+            Logger.Args(wizard.Name, text, ChatWordFilter.Current is { } filter ? string.Join(",", filter.Refused(text, persona.Numbers)) : "unclean"));
+        return false;
     }
 
     internal static ActorSystem System { get; set; }

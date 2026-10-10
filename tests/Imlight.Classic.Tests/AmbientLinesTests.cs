@@ -58,7 +58,7 @@ public sealed class AmbientLinesTests {
         foreach (var template in pools.SelectMany(p => p).Concat(idle)) {
             var line = AmbientLines.Fill(template, Context());
             Assert.NotNull(line);
-            Assert.True(AmbientChatBrain.IsClean(line), line);
+            Assert.All(line.Split("||"), part => Assert.True(AmbientChatBrain.IsClean(part), part)); // CLASSIC (2026-10-10): "a||b" is two lines
         }
 
         Assert.True(AmbientLines.Idle(Context()).Distinct().Count() >= 40);
@@ -103,7 +103,7 @@ public sealed class AmbientLinesTests {
         Assert.Equal("hi Nick!", AmbientLines.Fill("hi {name}!", Context()));
         Assert.Equal("good morning everyone", AmbientLines.Fill("good {time} everyone", Context()));
         Assert.Equal("almost level 8!", AmbientLines.Fill("almost level {next}!", Context()));
-        Assert.Contains("Lady Blackhope is down in the Haunted Cave", AmbientLines.Idle(Context()));
+        Assert.Contains("lost souls everywhere", AmbientLines.Idle(Context()));
     }
 
 }

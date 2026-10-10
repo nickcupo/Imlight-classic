@@ -39,6 +39,11 @@
  *     (ChatTiming), staggered so two wizards never answer at once, and
  *     typed in the wizard's own way. Menu-chat wizards answer with menu
  *     phrases.
+ *   - CLASSIC (2026-10-10): an answer is planned by temperament
+ *     (AmbientChatBrain.Plan): straight, short, off on its own thing, or
+ *     an answer plus its own thing, or none; "a||b" lines go out as two;
+ *     its own open call left unanswered gets a "guess not" or "nvm" now
+ *     and then; "brb"/"back" come from AmbientLines.Away/BackFromAway.
  *   - Fights: "gg"/"ty for the help" after a win with players, "aw man"
  *     after a defeat.
  *   - LLM (optional, AmbientLlmClient): replies and some unprompted lines
@@ -50,7 +55,7 @@
  *
  * Created by: Nick with Claude Code (claude-opus-5-5)
  * Version: KALI 1.0
- * Last Updated: 10/05/2026
+ * Last Updated: 10/10/2026
  */
 
 using System;
@@ -78,6 +83,7 @@ internal sealed class AmbientChatter {
         public DateTime BackAt;                  // "brb": away until then
         public ulong TalkingWith;
         public DateTime TalkingUntil;
+        public DateTime AskedAt;                 // CLASSIC (2026-10-10): its own open call went out then, unanswered so far
     }
 
     private readonly string _zone;
@@ -94,6 +100,7 @@ internal sealed class AmbientChatter {
     private DateTime _nextGreeting;
     private DateTime _lastAnswer;
     private (ulong Speaker, string Text, DateTime At) _lastLine;
+    private DateTime _lastPlayerSay;
 
     public AmbientChatter(string zone, List<AmbientWizard> wizards, LineHistory heard, Random rng,
                           Action<AmbientWizard, TimeSpan, Action<AmbientWizard>> later,
@@ -138,7 +145,22 @@ internal sealed class AmbientChatter {
             if (away.BackAt != default && now >= away.BackAt) {
                 away.BackAt = default;
                 if (audience.Count > 0 && _wizards.FirstOrDefault(w => w.CharId == id) is { Present: true } back) {
-                    Send(back, away, now, back.Name.Length % 2 == 0 ? "back" : "im back", TimeSpan.FromSeconds(1));
+                    var backs = AmbientLines.BackFromAway;
+                    Send(back, away, now, ChatStyle.Apply(backs[_rng.Next(backs.Length)], away.Persona, _rng, ChatWordFilter.Current),
+                        TimeSpan.FromSeconds(1));
+                }
+            }
+
+            // CLASSIC (2026-10-10): its own "anyone wanna..." went unanswered: now and then a "guess not" or "nvm".
+            if (away.AskedAt != default && (_lastPlayerSay > away.AskedAt || now - away.AskedAt > TimeSpan.FromSeconds(75))) {
+                var unanswered = _lastPlayerSay <= away.AskedAt;
+                away.AskedAt = default;
+                if (unanswered && audience.Count > 0 && _rng.NextDouble() < 0.45
+                    && _wizards.FirstOrDefault(w => w.CharId == id) is { } asker && Free(asker) && away.BackAt == default) {
+                    var shrugger = Speaker(asker, away, 0, default);
+                    if (AmbientChatPlanner.Answer(AmbientLinePool.NobodyAnswered, shrugger, _rng, ChatWordFilter.Current) is { } shrug) {
+                        Schedule(asker, away, now, shrug, ChatTiming.Typing(shrug, away.Persona, _rng));
+                    }
                 }
             }
         }
@@ -193,7 +215,9 @@ internal sealed class AmbientChatter {
             var away = TimeSpan.FromSeconds(90 + _rng.Next(180));
             state.BackAt = now + away + TimeSpan.FromSeconds(3);
             wizard.Until = state.BackAt;
-            Send(wizard, state, now, _rng.Next(3) == 0 ? "brb dinner" : "brb", TimeSpan.FromSeconds(1 + _rng.NextDouble()));
+            var brbs = AmbientLines.Away;
+            Send(wizard, state, now, ChatStyle.Apply(brbs[_rng.Next(brbs.Length)], state.Persona, _rng, ChatWordFilter.Current),
+                TimeSpan.FromSeconds(1 + _rng.NextDouble()));
             return;
         }
 
@@ -210,13 +234,24 @@ internal sealed class AmbientChatter {
                 state.Persona, ChatWordFilter.Current);
         }
 
+        IReadOnlyList<string> then = null;
         if (text is null) {
             var planned = AmbientChatPlanner.Solo(speaker, _rng, ChatWordFilter.Current, DateTime.Now.DayOfWeek);
             text = planned?.Text;
+            then = planned?.Then;
         }
 
         if (text is not null) {
-            Schedule(wizard, state, now, text, ChatTiming.Typing(text, state.Persona, _rng));
+            var after = ChatTiming.Typing(text, state.Persona, _rng);
+            Schedule(wizard, state, now, text, after);
+            foreach (var more in then ?? []) {
+                after += ChatTiming.FollowUp(more, state.Persona, _rng);
+                Schedule(wizard, state, now, more, after, followUp: true);
+            }
+
+            if (AmbientChatBrain.IsOpenCall(text) && then is null) {
+                state.AskedAt = now + after;
+            }
         }
     }
 
@@ -304,6 +339,7 @@ internal sealed class AmbientChatter {
             }
 
             _lastLine = (speakerId, text, now);
+            _lastPlayerSay = now;
             Remember(AmbientLlmPrompt.Scrub(text));
             _rhythm.Bump(now);
         }
@@ -358,13 +394,32 @@ internal sealed class AmbientChatter {
         }
 
         intent ??= AmbientChatBrain.Fallback;
+
+        // CLASSIC (2026-10-10): not every line gets a straight answer: short, off on its own thing, or let go (Plan).
+        var turn = AmbientChatBrain.Plan(intent, state.Persona, addressed, _rng.NextDouble());
+        if (turn == AmbientChatBrain.ReplyTurn.Ignore) {
+            Logger.Debug("Ambient chat: {Name} ({Kind}) lets \"{Text}\" go by.", Logger.Args(answerer.Name, state.Persona.Kind, text));
+            return false;
+        }
+
         var me = new Dictionary<string, string>(intent.Extra ?? new Dictionary<string, string>()) { ["me"] = answerer.Name };
+        IReadOnlyList<string> replies = turn switch {
+            AmbientChatBrain.ReplyTurn.Curt => AmbientLinePool.Curt,
+            AmbientChatBrain.ReplyTurn.OffTopic => AmbientLinePool.Solo(ChatMoment.Idle, _zone, speaker.Context.Level, answerer.Identity.School,
+                speaker.Context.Hour, state.Persona),
+            _ => intent.Pool,
+        };
         var reply = state.Persona.Channel == ChatChannel.Menu
             ? (intent.Menu ?? AmbientLinePool.MenuReply)[_rng.Next((intent.Menu ?? AmbientLinePool.MenuReply).Count)]
-            : AmbientChatPlanner.Answer(intent.Pool, speaker, _rng, ChatWordFilter.Current, me);
+            : AmbientChatPlanner.Answer(replies, speaker, _rng, ChatWordFilter.Current, me)
+              ?? AmbientChatPlanner.Answer(intent.Pool, speaker, _rng, ChatWordFilter.Current, me);
         if (reply is null) {
             return false;
         }
+
+        var aside = turn == AmbientChatBrain.ReplyTurn.AnswerAndAside
+            ? AmbientChatPlanner.Solo(speaker with { Moment = ChatMoment.Idle }, _rng, ChatWordFilter.Current)?.Text
+            : null;
 
         // The model may word it better; it has until the wizard would have finished typing.
         Task<string> generated = null;
@@ -384,15 +439,30 @@ internal sealed class AmbientChatter {
                 Logger.Debug("Ambient wizard {Name} answers with a model line: {Text}", Logger.Args(w.Name, line));
             }
 
-            Remember(line);
-            if (whisper) {
-                AmbientChat.Whisper(w, speakerId, line);
+            var parts = line.Split("||", StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
+            if (aside is not null) {
+                parts.Add(aside);
             }
-            else {
-                AmbientChat.Say(w, line);
+
+            Out(w, parts[0]);
+            var pause = TimeSpan.Zero;
+            foreach (var more in parts.Skip(1)) {
+                pause += ChatTiming.FollowUp(more, state.Persona, _rng);
+                _later(w, pause, again => Out(again, more));
             }
         });
         return true;
+
+        void Out(AmbientWizard w, string piece) {
+            Remember(piece);
+            state.Memory.LastLine = piece;
+            if (whisper) {
+                AmbientChat.Whisper(w, speakerId, piece);
+            }
+            else {
+                AmbientChat.Say(w, piece);
+            }
+        }
     }
 
     /// <summary>When an answer due at <paramref name="due"/> goes out, at least two seconds after the zone's last one.</summary>
@@ -415,7 +485,7 @@ internal sealed class AmbientChatter {
         var speaker = Speaker(wizard, state, player, facts) with { Moment = won ? ChatMoment.AfterWin : ChatMoment.AfterLoss };
         string line;
         if (won && state.Persona.Channel != ChatChannel.Menu && _rng.NextDouble() < 0.35) {
-            line = AmbientChatPlanner.Answer(["ty for the help {name}", "thanks {name}", "gg {name}", "nice job {name}", "ty {name}"],
+            line = AmbientChatPlanner.Answer(["ty {name}", "gg {name}", "thx {name}", "ty for the help", "gg ty"],
                 speaker, _rng, ChatWordFilter.Current);
         }
         else {
@@ -432,10 +502,11 @@ internal sealed class AmbientChatter {
     private ChatSpeaker Speaker(AmbientWizard wizard, State state, ulong speaker, (string Name, string Zone, string Quest) facts)
         => new(state.Persona, _context(wizard, speaker, facts), MomentOf(wizard), state.Memory);
 
-    private void Schedule(AmbientWizard wizard, State state, DateTime now, string text, TimeSpan after) {
+    private void Schedule(AmbientWizard wizard, State state, DateTime now, string text, TimeSpan after, bool followUp = false) {
         state.LastSpoke = now + after;
         _later(wizard, after, w => {
-            if (!w.Present || !w.Limiter.TryTake(DateTime.UtcNow)) {
+            // A second line right after the first ("anyone?") is one thought: the spam limiter counted the first.
+            if (!w.Present || (!followUp && !w.Limiter.TryTake(DateTime.UtcNow))) {
                 return; // it left, or it would be talking too much
             }
 

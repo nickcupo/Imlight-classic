@@ -35,6 +35,12 @@
  *     filter ends the talk there.
  *   - PickSpeaker: chatty wizards talk more, quiet ones rarely, nobody
  *     twice in two minutes.
+ *   - CLASSIC (2026-10-10): threads (ChatMemory.Thread): now and then an
+ *     idle wizard starts a small story (AmbientLinePool.Threads) and
+ *     tells its next step on later turns, so it refers back to itself;
+ *     "a||b" templates go out as two lines (PlannedLine.Then); an
+ *     exchange turn may be silence, which ends the talk; Sendable is the
+ *     last check (IsClean and the client's dictionary) for every line.
  * Randomness comes from a Random the caller seeds, so a run can be
  * replayed in tests.
  *
@@ -43,7 +49,7 @@
  *
  * Created by: Nick with Claude Code (claude-opus-5-5)
  * Version: KALI 1.0
- * Last Updated: 10/04/2026
+ * Last Updated: 10/10/2026
  */
 
 using System;
@@ -53,13 +59,17 @@ using System.Linq;
 
 namespace Imlight.Classic.Ambient;
 
-/// <summary>The last templates one wizard used, so it does not repeat itself.</summary>
+/// <summary>
+/// What one wizard said lately, so it does not repeat itself, and (CLASSIC 2026-10-10) the small story it is in the
+/// middle of telling (AmbientLinePool.Threads) and its last line, so it can refer back to them.
+/// </summary>
 public sealed class ChatMemory {
 
     /// <summary>How many of its own lines a wizard will not say again.</summary>
     public const int Window = 40;
 
     private readonly Queue<string> _said = new();
+    private readonly HashSet<string> _told = new(StringComparer.Ordinal);
 
     public bool Said(string template) => _said.Contains(template);
 
@@ -67,6 +77,38 @@ public sealed class ChatMemory {
         _said.Enqueue(template);
         while (_said.Count > Window) {
             _said.Dequeue();
+        }
+    }
+
+    /// <summary>The last line it sent, as typed, or null.</summary>
+    public string? LastLine { get; set; }
+
+    /// <summary>The story it is telling, or null.</summary>
+    public ChatThread? Thread { get; private set; }
+
+    /// <summary>The next step of <see cref="Thread"/>.</summary>
+    public int Step { get; private set; }
+
+    /// <summary>True when it told (or started) the thread with this key already this session.</summary>
+    public bool Told(string key) => _told.Contains(key);
+
+    /// <summary>Starts <paramref name="thread"/> at its first step.</summary>
+    public void Start(ChatThread thread) {
+        ArgumentNullException.ThrowIfNull(thread);
+        Thread = thread;
+        Step = 0;
+        _told.Add(thread.Key);
+    }
+
+    /// <summary>The step was said: on to the next, or the story is over.</summary>
+    public void Advance() {
+        if (Thread is null) {
+            return;
+        }
+
+        if (++Step >= Thread.Steps.Length) {
+            Thread = null;
+            Step = 0;
         }
     }
 
@@ -125,8 +167,11 @@ public sealed class ChatRhythm {
 /// <param name="Memory">What it said lately.</param>
 public sealed record ChatSpeaker(ChatPersona Persona, ChatContext Context, ChatMoment Moment, ChatMemory Memory);
 
-/// <summary>A line to send: by speaker 0 (A) or 1 (B), <see cref="After"/> the previous line of the plan (or now).</summary>
-public sealed record PlannedLine(int Speaker, string Text, TimeSpan After, string Template);
+/// <summary>
+/// A line to send: by speaker 0 (A) or 1 (B), <see cref="After"/> the previous line of the plan (or now).
+/// <see cref="Then"/> are more lines the same wizard sends right after, each after a short pause (a template "a||b").
+/// </summary>
+public sealed record PlannedLine(int Speaker, string Text, TimeSpan After, string Template, IReadOnlyList<string>? Then = null);
 
 /// <summary>Picks unprompted lines (see the file header).</summary>
 public static class AmbientChatPlanner {
@@ -162,15 +207,78 @@ public static class AmbientChatPlanner {
         return Array.FindLastIndex(weights, w => w > 0);
     }
 
+    /// <summary>How often an idle wizard in the middle of a story tells its next step instead of something else.</summary>
+    public const double ThreadChance = 0.35;
+
+    /// <summary>How often an idle wizard with no story starts one.</summary>
+    public const double ThreadStartChance = 0.12;
+
     /// <summary>A line <paramref name="speaker"/> says on its own, or null when everything fitting was said lately.</summary>
     public static PlannedLine? Solo(ChatSpeaker speaker, Random rng, ChatWordFilter? filter = null, DayOfWeek? day = null) {
         ArgumentNullException.ThrowIfNull(speaker);
         ArgumentNullException.ThrowIfNull(rng);
         var context = speaker.Context;
-        var pool = AmbientLinePool.Solo(speaker.Moment, context.ZoneKey, context.Level, context.School, context.Hour, speaker.Persona, day);
         var extra = Extra(context, rng);
+        if (ThreadLine(speaker, rng, filter, extra) is { } told) {
+            return told;
+        }
+
+        var pool = AmbientLinePool.Solo(speaker.Moment, context.ZoneKey, context.Level, context.School, context.Hour, speaker.Persona, day);
         var text = Pick(pool, speaker, rng, filter, extra, out var template);
-        return text is null ? null : new PlannedLine(0, text, ChatTiming.Typing(text, speaker.Persona, rng), template!);
+        return text is null ? null : Planned(text, template!, speaker, rng);
+    }
+
+    // CLASSIC (2026-10-10): the next step of the wizard's story, or a new story, now and then (idle kids and teens only).
+    private static PlannedLine? ThreadLine(ChatSpeaker speaker, Random rng, ChatWordFilter? filter, IReadOnlyDictionary<string, string> extra) {
+        var memory = speaker.Memory;
+        if (speaker.Moment != ChatMoment.Idle || speaker.Persona.Channel == ChatChannel.Menu || speaker.Persona.Grownup) {
+            return null;
+        }
+
+        if (memory.Thread is null) {
+            var fits = AmbientLinePool.ThreadsFor(speaker.Context.ZoneKey, speaker.Context.Level).Where(t => !memory.Told(t.Key)).ToList();
+            if (fits.Count == 0 || rng.NextDouble() >= ThreadStartChance) {
+                return null;
+            }
+
+            memory.Start(fits[rng.Next(fits.Count)]);
+        }
+        else if (rng.NextDouble() >= ThreadChance) {
+            return null;
+        }
+
+        var thread = memory.Thread!;
+        var template = thread.Steps[memory.Step];
+        var key = $"t:{thread.Key}:{memory.Step}";
+        memory.Advance();
+        var filled = Fill(template, speaker, extra);
+        if (filled is null) {
+            return null;
+        }
+
+        var styled = ChatStyle.Apply(filled, speaker.Persona, rng, filter);
+        if (!Sendable(styled, speaker.Persona, filter)) {
+            return null;
+        }
+
+        memory.Note(key);
+        memory.LastLine = styled;
+        speaker.Context.History?.Note(speaker.Context.Audience ?? [], key);
+        return new PlannedLine(0, styled, ChatTiming.Typing(styled, speaker.Persona, rng), key);
+    }
+
+    /// <summary>
+    /// CLASSIC (2026-10-10): the last check before a line goes out: clean, and every word in the client's chat dictionary
+    /// when the lists are loaded (numbers only for open chat).
+    /// </summary>
+    public static bool Sendable(string? line, ChatPersona persona, ChatWordFilter? filter)
+        => AmbientChatBrain.IsClean(line) && (filter is null || !filter.HasDictionary || filter.Passes(line, persona.Numbers));
+
+    // A picked line, split where the template had "||" (the rest go out right after, as their own lines).
+    private static PlannedLine Planned(string text, string template, ChatSpeaker speaker, Random rng) {
+        var parts = text.Split("||", StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var first = parts.Length > 0 ? parts[0] : text;
+        return new PlannedLine(0, first, ChatTiming.Typing(first, speaker.Persona, rng), template, parts.Length > 1 ? parts[1..] : null);
     }
 
     /// <summary>
@@ -203,25 +311,39 @@ public static class AmbientChatPlanner {
             ["aschool"] = AmbientChatBrain.SchoolName(a.Context.School).ToLowerInvariant(),
             ["bschool"] = AmbientChatBrain.SchoolName(b.Context.School).ToLowerInvariant(),
             ["pet"] = AmbientLinePool.Pet(rng.Next()),
+            ["spell"] = AmbientLinePool.SpellFor(a.Context.School, a.Context.Level),
         };
         if (bosses.Length > 0) {
             slots["boss"] = bosses[rng.Next(bosses.Length)];
         }
 
         string? previous = null;
+        var picked = 0;
         foreach (var turn in exchange.Turns) {
-            var who = turn.StartsWith("B:", StringComparison.Ordinal) ? 1 : 0;
+            var who = turn.StartsWith('B') ? 1 : 0;
             var speaker = who == 0 ? a : b;
-            var options = turn[2..].Split('|').OrderBy(_ => rng.Next()).ToList();
+
+            // CLASSIC (2026-10-10): "B=" answers the option the other one picked (the same position; '/' splits its
+            // alternatives), so "what level are you" gets a level and "bored" gets "same"; "B:" picks freely.
+            var all = turn[2..].Split('|');
+            var aligned = turn[1] == '=' && picked < all.Length;
+            var indexed = aligned
+                ? all[picked].Split('/').Select(o => (Index: picked, Text: o)).OrderBy(_ => rng.Next()).ToList()
+                : all.Select((o, i) => (Index: i, Text: o)).OrderBy(_ => rng.Next()).ToList();
             string? line = null;
-            foreach (var option in options) {
+            foreach (var (index, option) in indexed) {
+                picked = index;
+                if (option.Length == 0) {
+                    break; // CLASSIC (2026-10-10): this one just doesn't answer; talks fizzle out like that
+                }
+
                 var filled = Fill(option, speaker, slots);
                 if (filled is null) {
                     continue;
                 }
 
                 var styled = ChatStyle.Apply(filled, speaker.Persona, rng, filter);
-                if (AmbientChatBrain.IsClean(styled) && (filter is null || filter.Passes(styled, speaker.Persona.Numbers))) {
+                if (Sendable(styled, speaker.Persona, filter)) {
                     line = styled;
                     break;
                 }
@@ -230,6 +352,8 @@ public static class AmbientChatPlanner {
             if (line is null) {
                 break;
             }
+
+            speaker.Memory.LastLine = line;
 
             var wait = previous is null
                 ? ChatTiming.Typing(line, speaker.Persona, rng)
@@ -274,17 +398,21 @@ public static class AmbientChatPlanner {
                 continue;
             }
 
-            var styled = ChatStyle.Apply(filled, speaker.Persona, rng, filter);
-            if (!AmbientChatBrain.IsClean(styled) || (filter is not null && !filter.Passes(styled, speaker.Persona.Numbers))) {
+            // Each part of a double line ("a||b") is typed and checked on its own.
+            var parts = filled.Split("||", StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Select(part => ChatStyle.Apply(part, speaker.Persona, rng, filter)).ToArray();
+            if (parts.Length == 0 || !parts.All(part => Sendable(part, speaker.Persona, filter))) {
                 continue;
             }
 
+            var styled = string.Join("||", parts);
             if (speaker.Memory.Said(candidate) || speaker.Context.History?.Recent(audience, candidate) == true) {
                 (fallback, fallbackTemplate) = (fallback ?? styled, fallbackTemplate ?? candidate);
                 continue;
             }
 
             speaker.Memory.Note(candidate);
+            speaker.Memory.LastLine = parts[^1];
             speaker.Context.History?.Note(audience, candidate);
             template = candidate;
             return styled;
@@ -309,7 +437,11 @@ public static class AmbientChatPlanner {
         var slots = new Dictionary<string, string>(StringComparer.Ordinal) {
             ["me"] = speaker.Context.MyName,
             ["school"] = AmbientChatBrain.SchoolName(speaker.Context.School).ToLowerInvariant(),
+            ["spell"] = AmbientLinePool.SpellFor(speaker.Context.School, speaker.Context.Level),
         };
+        if (speaker.Memory.LastLine is { Length: > 0 and <= 40 } last && !last.Contains("||", StringComparison.Ordinal)) {
+            slots["last"] = last.TrimEnd('.', '!', '?').ToLowerInvariant();
+        }
         foreach (var (key, value) in extra ?? new Dictionary<string, string>()) {
             slots[key] = value;
         }
