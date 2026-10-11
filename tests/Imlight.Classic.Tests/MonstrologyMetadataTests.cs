@@ -11,7 +11,8 @@ namespace Imlight.Classic.Tests;
 public sealed class MonstrologyMetadataTests(ITestOutputHelper output) {
     [Fact] public void AllOwnedExtractSpellsResolveExactCreatureAdjectiveFamilies() {
         var root = "/private/tmp/w101c-minion-metadata";
-        if (!Directory.Exists(root)) Assert.Skip("Owned extraction fixtures unavailable.");
+        // macOS clears /private/tmp but can leave the folder behind: no fixtures means skip, not fail.
+        if (!Directory.Exists(root) || Directory.GetFiles(root,"CollectEssence*.xml").Length == 0) Assert.Skip("Owned extraction fixtures unavailable.");
         var files = Directory.GetFiles(root,"CollectEssence*.xml");
         Assert.True(files.Length >= 30);
         var families = new System.Collections.Generic.HashSet<string>();
