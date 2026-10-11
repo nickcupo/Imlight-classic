@@ -569,26 +569,11 @@ public class CombatResolver(Duel duel, CombatDuelSubCircle[] actorSubCircles) {
             return SPELL_PASS_TIME;
         }
 
+        // CLASSIC: the cast, then each stage the client plays once (SpellCinematics.GetCastWaitTime). The stock sum
+        // (summon + cast + act, else summon + cast + every stage) counted the summon twice for the stage layouts with
+        // no timed Act: Ra waited 26.9 s for 16.5 s of stages, Wraith 30.3 s for 20.1 s.
         var spellName = SpellFactory.GetBaseSpellName(action.Spell.m_templateID);
-        var cinematicFactory = SpellCinematics.Instance;
-
-        // All spells will always have a summon time.
-        var count = SpellCinematics.GetSpellSummonTime(spellName);
-
-        // Check if this spell has a special casting time. If not, just add the default casting time.
-        var castTime = SpellCinematics.GetSpellCastingTime(spellName);
-        count += castTime > 0.1f ? castTime : SPELL_CAST_TIME;
-
-        // Check to see if the spell has an act time. If it does, add it to the total time.
-        // Otherwise, return the total time.
-        var actTime = SpellCinematics.GetSpellActTime(spellName);
-        if (actTime <= 0.1f) {
-            return count + SpellCinematics.GetSpellTotalTime(spellName);
-        }
-
-        count += actTime;
-
-        return count;
+        return SpellCinematics.GetCastWaitTime(spellName, SPELL_CAST_TIME);
     }
 
     private static bool SpellHits(CombatDuelSubCircle caster, Spell spell) {
