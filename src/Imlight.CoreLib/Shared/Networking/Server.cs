@@ -118,8 +118,21 @@ public abstract class Server : ReceiveProtocolDispatcher {
     [MessageHandler(typeof(SERVER_100_PROTOCOL.MSG_ALLOCATESOCKET))]
     protected virtual void ReceiveAllocateSocket(SERVER_100_PROTOCOL.MSG_ALLOCATESOCKET message) {
         // CLASSIC: refuse a connection over the per-address or total limit before any session state exists.
+        // CLASSIC: a client that hangs up while the host is overloaded can hand over an already-disposed socket;
+        // reading RemoteEndPoint then threw ObjectDisposedException, which restarted this actor and left the game
+        // server's listener stopped (rig-pg-gh 2026-10-12 02:32: login came back, nothing else did).
+        string? remote;
+        System.Net.EndPoint? endPoint;
+        try {
+            endPoint = message.Socket.RemoteEndPoint;
+            remote = endPoint?.ToString();
+        }
+        catch (ObjectDisposedException) {
+            return;
+        }
+
         var address = Imlight.Classic.Net.GameSessionKeys.NormalizeAddress(
-            (message.Socket.RemoteEndPoint as System.Net.IPEndPoint)?.Address.ToString()) ?? "?";
+            (endPoint as System.Net.IPEndPoint)?.Address.ToString()) ?? "?";
         var refusal = Imlight.Classic.Net.ConnectionLimits.Refuse(address, _connectionsPerIp.GetValueOrDefault(address),
             _connectionIps.Count, _maxConnectionsPerIp, _maxConnections, _limitLoopback);
         if (refusal is not null) {
@@ -154,7 +167,7 @@ public abstract class Server : ReceiveProtocolDispatcher {
 
         // Logger
         Logger.Debug("{Type} new connection from {RemoteEndPoint} given session ID {Id}",
-            Logger.Args(GetType(), message.Socket.RemoteEndPoint?.ToString(), id));
+            Logger.Args(GetType(), remote, id));
     }
 
     [MessageHandler(typeof(SERVER_100_PROTOCOL.MSG_DEALLOCATESOCKET))]
