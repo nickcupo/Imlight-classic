@@ -293,7 +293,7 @@ public class ZoneEntity(
             return;
         }
 
-        if (ActiveGameObject.m_globalID == message.GlobalID || MobileID == message.MobileID) {
+        if (Imlight.Classic.Zones.EntityQuery.Matches(ActiveGameObject.m_globalID.Full, MobileID, message.GlobalID, message.MobileID)) { // CLASSIC: a mobile id of 0 names nobody
             Sender.Tell(new ZONE_102_PROTOCOL.MSG_QUERYZONEENTITYRSP() {
                 ZoneObject = this,
                 Found = true
