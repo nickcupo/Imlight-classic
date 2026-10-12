@@ -88,10 +88,10 @@ input:focus-visible,button:focus-visible,a:focus-visible { outline:3px solid var
             <input id="username" name="username" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" minlength="3" maxlength="24" pattern="[a-z0-9_\-]{3,24}" aria-describedby="usernameHint" required>
             <p id="usernameHint" class="hint">3–24 lowercase letters, numbers, underscores or hyphens.</p>
             <label for="gamePassword">Game password</label>
-            <input id="gamePassword" name="password" type="password" autocomplete="new-password" minlength="12" maxlength="128" aria-describedby="passwordHint" required>
-            <p id="passwordHint" class="hint">Use 12–128 characters.</p>
+            <input id="gamePassword" name="password" type="password" autocomplete="new-password" minlength="6" maxlength="128" aria-describedby="passwordHint" required>
+            <p id="passwordHint" class="hint">Use 6–128 characters.</p>
             <label for="passwordConfirm">Confirm game password</label>
-            <input id="passwordConfirm" name="passwordConfirm" type="password" autocomplete="new-password" minlength="12" maxlength="128" required>
+            <input id="passwordConfirm" name="passwordConfirm" type="password" autocomplete="new-password" minlength="6" maxlength="128" required>
             <p class="hint">This creates a regular player account. Already have one? Use it in the launcher below.</p>
             <div class="actions"><button id="registerButton" type="submit">Create account</button></div>
           </form>

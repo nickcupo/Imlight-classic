@@ -33,6 +33,9 @@
  * The rejoining client gets the duel the way a wizard walking into a running
  * fight does: the sigil's duel behavior on zone entry, MSG_DUEL, its slot
  * (MSG_AGGRO), then the next planning phase's hand, pips and health.
+ * CLASSIC (2026-10-10): not on arrival any more, but once the client is in
+ * the zone (its MSG_CLIENTZONED, at least 2 s after arrival; 10 s without it;
+ * Imlight.Classic.Rules.RejoinTiming). Until then the seat stays held.
  * Verified with the headless client; the official client is unverified.
  * A wizard away when the fight ends gets no rewards; one defeated while
  * away comes back at the world's commons with 1 health.
@@ -43,6 +46,7 @@
  */
 
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using Akka.Actor;
 using Imcodec.Math;
@@ -50,9 +54,11 @@ using Imcodec.MessageLayer.Generated;
 using Imcodec.Cryptography;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Classic;
+using Imlight.Classic.Rules;
 using Imlight.Common;
 using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.Game.Combat;
+using Imlight.CoreLib.Game.Services;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;
 using Imlight.CoreLib.WizardData.Models.Player;
@@ -133,6 +139,89 @@ internal sealed partial class CombatDuelComponent {
         if (TakeResumeAfterWaiting()) {
             Logger.Information("Duel {0} | a wizard joined; play resumes.", Logger.Args(Duel.m_duelID.Full));
             Self.Tell(new COMBAT_106_PROTOCOL.MSG_NEWROUND());
+        }
+    }
+
+    // CLASSIC: wizards who logged back in to a seat held here, waiting until their client is in the zone
+    // (Imlight.Classic.Rules.RejoinTiming).
+    private sealed record PendingRejoin(CoreObject Object, IActorRef Actor, Wizard Wizard, DateTime ArrivedUtc) {
+        internal bool Zoned { get; set; }
+    }
+
+    private const string REJOIN_READY_TIMER_PREFIX = "RejoinReady_";
+    private const string REJOIN_WAIT_TIMER_PREFIX = "RejoinWait_";
+    private readonly Dictionary<ulong, PendingRejoin> _pendingRejoins = [];
+
+    /// <summary>True when a seat is held here for <paramref name="playerWizard"/> (and the duel is still on).</summary>
+    private bool HoldsSeatFor(Wizard playerWizard)
+        => _isActive && playerWizard is not null && SubCircles is not null
+            && SubCircles.Any(circle => circle is { Occupied: true, Disconnected: true }
+                && circle.HeldCharacterId == playerWizard.CharId);
+
+    /// <summary>
+    /// CLASSIC: a wizard with a seat held here arrived in the zone. The seat stays held (it passes; a duel whose every
+    /// wizard is away keeps waiting) until their client is in the zone; then they take it (TryRejoin). False when no
+    /// seat is held for them.
+    /// </summary>
+    private bool QueueRejoin(CoreObject playerObj, IActorRef playerActor, Wizard playerWizard) {
+        if (!HoldsSeatFor(playerWizard) || playerActor is null) {
+            return false;
+        }
+
+        var charId = playerWizard.CharId;
+        var pending = new PendingRejoin(playerObj, playerActor, playerWizard, DateTime.UtcNow);
+        _pendingRejoins[charId] = pending;
+        pending.Zoned = ClientZoneSignals.Await(charId, playerActor, ActorRef);
+        Timers.StartSingleTimer(REJOIN_READY_TIMER_PREFIX + charId,
+            new CLASSIC_FEATURES_PROTOCOL.MSG_REJOINCLIENTREADY { CharacterId = charId }, RejoinTiming.ClientLoadDelay);
+        Timers.StartSingleTimer(REJOIN_WAIT_TIMER_PREFIX + charId,
+            new CLASSIC_FEATURES_PROTOCOL.MSG_REJOINCLIENTREADY { CharacterId = charId }, RejoinTiming.ZonedWait);
+        Logger.Information("Duel {0} | wizard {1} is back; the held seat is theirs once their client is in the zone{2}.",
+            Logger.Args(Duel?.m_duelID.Full ?? 0UL, charId, pending.Zoned ? " (it is)" : ""));
+
+        return true;
+    }
+
+    [MessageHandler(typeof(CLASSIC_FEATURES_PROTOCOL.MSG_REJOINCLIENTREADY))]
+    private void ReceiveRejoinClientReady(CLASSIC_FEATURES_PROTOCOL.MSG_REJOINCLIENTREADY message) {
+        if (!_pendingRejoins.TryGetValue(message.CharacterId, out var pending)) {
+            return;
+        }
+
+        if (message.Zoned) {
+            pending.Zoned = true;
+        }
+
+        if (!RejoinTiming.Due(pending.ArrivedUtc, pending.Zoned, DateTime.UtcNow)) {
+            return; // the load delay or the wait timer brings it back
+        }
+
+        DropPendingRejoin(message.CharacterId);
+        if (!HoldsSeatFor(pending.Wizard)) {
+            return; // the hold ran out or the duel ended meanwhile: the wizard is simply in the zone
+        }
+
+        if (!TryRejoin(pending.Object, pending.Actor, pending.Wizard) && _arena
+                && !(ElixirService.PreparesCombatSnapshots && HoldsSeatFor(pending.Wizard))) {
+            ArenaOnPlayer(pending.Object, pending.Actor, pending.Wizard);
+        }
+    }
+
+    private void DropPendingRejoin(ulong charId) {
+        if (!_pendingRejoins.Remove(charId, out var pending)) {
+            return;
+        }
+
+        Timers.Cancel(REJOIN_READY_TIMER_PREFIX + charId);
+        Timers.Cancel(REJOIN_WAIT_TIMER_PREFIX + charId);
+        ClientZoneSignals.Forget(charId, pending.Actor);
+    }
+
+    /// <summary>CLASSIC: a wizard waiting to take a held seat left the zone (dropped again): the seat stays held.</summary>
+    private void ForgetPendingRejoins(IActorRef playerActor) {
+        foreach (var charId in _pendingRejoins.Where(entry => Equals(entry.Value.Actor, playerActor))
+                     .Select(entry => entry.Key).ToList()) {
+            DropPendingRejoin(charId);
         }
     }
 

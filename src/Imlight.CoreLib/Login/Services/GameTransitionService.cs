@@ -102,7 +102,8 @@ internal class GameTransitionService(SessionActor sessionActor) : MessageService
 
         var charSelectedMsg = new LOGIN_7_PROTOCOL.MSG_CHARACTERSELECTED() {
             // Set details about the game server.
-            IP = gameServer.IP,
+            // CLASSIC (go-live): a friend outside the home network is told the public address.
+            IP = Imlight.CoreLib.Classic.PublicGameAddress.For(gameServer.IP, SessionActor.RemoteIp),
             TCPPort = gameServer.Port,
             UDPPort = gameServer.Port,
             Key = allocatedKey,                   // Login server -> game server session key.

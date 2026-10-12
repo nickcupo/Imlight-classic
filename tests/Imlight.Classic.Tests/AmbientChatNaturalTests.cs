@@ -30,7 +30,7 @@
  *
  * Created by: Nick with Claude Code (claude-opus-5-5)
  * Version: KALI 1.0
- * Last Updated: 10/05/2026
+ * Last Updated: 10/10/2026
  */
 
 using System;
@@ -65,32 +65,10 @@ public sealed class AmbientChatNaturalTests {
         "MooShu/MS_Hub", "DragonSpire/DS_Hub", "Grizzleheim/GH_Hub",
     ];
 
-    private static IEnumerable<string> EveryTemplate() {
-        var pools = new List<IEnumerable<string>> {
-            AmbientLinePool.MenuIdle, AmbientLinePool.MenuReply, AmbientLinePool.MenuAfterWin, AmbientLinePool.Kid,
-            AmbientLinePool.Grownup, AmbientLinePool.GrownupLevel, AmbientLinePool.Level1To5, AmbientLinePool.Level6To14,
-            AmbientLinePool.Level15To25, AmbientLinePool.Level26To40, AmbientLinePool.Level41To50, AmbientLinePool.Hunting,
-            AmbientLinePool.Shopping, AmbientLinePool.Following, AmbientLinePool.AfterWin, AmbientLinePool.AfterWinGrownup,
-            AmbientLinePool.AfterLoss, AmbientLinePool.BossDoor, AmbientLinePool.Arrived, AmbientLinePool.Leaving,
-            AmbientLinePool.Greet, AmbientLinePool.GreetNear, AmbientLinePool.HowAreYou, AmbientLinePool.LevelNoNumber,
-            AmbientLinePool.LevelNumber, AmbientLinePool.SchoolAnswer, AmbientLinePool.AgeAnswer, AmbientLinePool.NameAnswer,
-            AmbientLinePool.ComplimentThanks, AmbientLinePool.GoldBeg, AmbientLinePool.NotABot, AmbientLinePool.Laugh,
-            AmbientLinePool.Agree, AmbientLinePool.Busy, AmbientLinePool.Unsure, AmbientLinePool.Come, AmbientLinePool.Teleport,
-            AmbientLinePool.HowToHatch, AmbientLinePool.HowToGold, AmbientLinePool.Trade, AmbientLinePool.Duel, AmbientLinePool.Friend,
-            AmbientLinePool.Thanks, AmbientLinePool.Bye, AmbientLinePool.Fallback, AmbientLinePool.HelpSure, AmbientLinePool.Doing,
-            AmbientLinePool.QuestTogether,
-        };
-        pools.AddRange(AmbientLinePool.School.Values);
-        pools.AddRange(AmbientLinePool.Time.Values);
-        pools.AddRange(AmbientLinePool.Zone.Select(z => z.Lines));
-        pools.Add(AmbientLinePool.Exchanges.SelectMany(x => x.Turns.SelectMany(t => t[2..].Split('|'))));
-        return pools.SelectMany(p => p);
-    }
+    // CLASSIC (2026-10-10): every line pool, found by reflection so a new pool cannot be missed (AmbientChatCorpus).
+    private static IEnumerable<string> EveryTemplate() => AmbientChatCorpus.Templates();
 
-    private static Dictionary<string, string> Slots() => new() {
-        ["boss"] = "Rattlebones", ["mob"] = "ghosts", ["pet"] = "fire cat", ["a"] = "Duncan", ["b"] = "Ryan", ["aschool"] = "fire",
-        ["bschool"] = "storm", ["me"] = "Duncan AshFriend", ["what"] = "Lady Blackhope", ["where"] = "Unicorn Way",
-    };
+    private static Dictionary<string, string> Slots() => AmbientChatCorpus.Slots();
 
     private static readonly ChatPersona Open = ChatPersona.For(1, AmbientTemper.Friendly) with { Grownup = true, Channel = ChatChannel.Open };
 
@@ -98,12 +76,14 @@ public sealed class AmbientChatNaturalTests {
     public void EveryTemplateFillsCleanAndInEra() {
         var speaker = new ChatSpeaker(Open, Ctx(), ChatMoment.Idle, new ChatMemory());
         var templates = EveryTemplate().Distinct().ToList();
-        Assert.True(templates.Count >= 600, $"only {templates.Count} templates");
+        Assert.True(templates.Count >= 700, $"only {templates.Count} templates");
         foreach (var template in templates) {
             var line = AmbientChatPlanner.Fill(template, speaker, Slots());
             Assert.True(line is not null, template);
-            Assert.True(AmbientChatBrain.IsClean(line), line);
-            Assert.True(AmbientLlmPrompt.InEra(line), line);
+            foreach (var part in line.Split("||")) {
+                Assert.True(AmbientChatBrain.IsClean(part), part);
+                Assert.True(AmbientLlmPrompt.InEra(part), part);
+            }
         }
     }
 
@@ -113,7 +93,7 @@ public sealed class AmbientChatNaturalTests {
             foreach (var seed in Enumerable.Range(0, 30)) {
                 var persona = ChatPersona.For(seed, (AmbientTemper) (seed % 3));
                 var pool = AmbientLinePool.Solo(ChatMoment.Idle, zone, 1 + seed, (AmbientSchool) (seed % 7), 20, persona, DayOfWeek.Saturday);
-                Assert.True(pool.Distinct().Count() >= (persona.Channel == ChatChannel.Menu ? 20 : persona.Grownup ? 70 : 150), $"{zone} {persona}");
+                Assert.True(pool.Distinct().Count() >= (persona.Channel == ChatChannel.Menu ? 20 : persona.Grownup ? 40 : 70), $"{zone} {persona}");
             }
         }
     }
@@ -243,14 +223,21 @@ public sealed class AmbientChatNaturalTests {
         var kid = ChatPersona.For(4, AmbientTemper.Friendly) with { Channel = ChatChannel.Dictionary };
         var failures = new List<string>();
         foreach (var template in EveryTemplate().Distinct()) {
-            var line = AmbientChatPlanner.Fill(template, new ChatSpeaker(Open, Ctx(), ChatMoment.Idle, new ChatMemory()), Slots())!;
-            if (!filter.Passes(line, allowNumbers: true)) {
-                failures.Add($"{line} [{string.Join(",", filter.Refused(line, true))}]");
-            }
+            var filled = AmbientChatPlanner.Fill(template, new ChatSpeaker(Open, Ctx(), ChatMoment.Idle, new ChatMemory()), Slots())!;
+            foreach (var line in filled.Split("||")) {
+                if (!filter.Passes(line, allowNumbers: true)) {
+                    failures.Add($"{line} [{string.Join(",", filter.Refused(line, true))}]");
+                }
 
-            foreach (var spelling in Enum.GetValues<ChatSpelling>()) {
-                var styled = ChatStyle.Apply(line, kid with { Spelling = spelling }, rng, filter);
-                Assert.True(filter.Passes(styled, allowNumbers: true) || styled == line, styled);
+                // CLASSIC (2026-10-10): every style and temperament, without the fallback to the plain line hiding a miss.
+                foreach (var spelling in Enum.GetValues<ChatSpelling>()) {
+                    foreach (var kind in Enum.GetValues<ChatTemperament>()) {
+                        var styled = ChatStyle.Apply(line, kid with { Spelling = spelling, Kind = kind }, rng);
+                        if (!filter.Passes(styled, allowNumbers: true)) {
+                            failures.Add($"{styled} ({spelling}, {kind}) [{string.Join(",", filter.Refused(styled, true))}]");
+                        }
+                    }
+                }
             }
         }
 

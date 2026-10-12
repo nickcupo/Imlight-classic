@@ -21,6 +21,7 @@ using System.Collections.Generic;
 using System.Linq;
 using Newtonsoft.Json;
 using Imlight.Classic;
+using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.WizardData.Implementations;
 using Imlight.CoreLib.Shared.Character;
 using Imlight.CoreLib.Game.Combat;
@@ -176,6 +177,7 @@ public class ServerWizGameStats : IClientTypeProvider<WizGameStats> {
     // ctor
     public ServerWizGameStats(MagicSchool magicSchool, int level) {
         MagicSchool = magicSchool;
+        m_schoolID = (uint)magicSchool; // CLASSIC: new/ambient wizards use this authoritative constructor school before any database reload.
         Level = level;
 
         m_baseGoldPouch = ConfigurationManager.Settings["Character.BaseGoldPouch"].AsInt();
@@ -196,6 +198,8 @@ public class ServerWizGameStats : IClientTypeProvider<WizGameStats> {
     /// <returns></returns>
     public WizGameStats GetCombatGameStats() {
         var stats = new WizGameStats() { // CLASSIC: was `return new WizGameStats() {`; see the block after it.
+            // CLASSIC: retain the authoritative school hash in the native combat stats snapshot as well as the participant.
+            m_schoolID = m_schoolID,
             m_baseHitpoints = m_baseHitpoints,
             m_currentHitpoints = m_currentHitpoints,
             m_baseMana = m_baseMana,
@@ -301,7 +305,9 @@ public class ServerWizGameStats : IClientTypeProvider<WizGameStats> {
             m_gardeningXP = m_gardeningXP,
             m_invisibleToFriends = m_invisibleToFriends,
             m_showItemLock = m_showItemLock,
-            m_questFinderEnabled = m_questFinderEnabled,
+            // CLASSIC: r806919 creates the post-2010 Finder card only when this native flag is true.
+            // Mask the October presentation, preserving saved preferences and ordinary held-quest helpers.
+            m_questFinderEnabled = m_questFinderEnabled && !(ClassicRuntime.IsInitialized && ClassicOctoberRules.Active),
             m_buddyListLimit = m_buddyListLimit,
             m_dontAllowFriendFinderCodes = m_dontAllowFriendFinderCodes,
             m_shadowMagicUnlocked = m_shadowMagicUnlocked,

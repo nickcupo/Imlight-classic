@@ -250,10 +250,32 @@ internal sealed class CLASSIC_FEATURES_PROTOCOL : IServerProtocol {
 
     }
 
+    /// <summary>CLASSIC: a RideService timer: a ride zone's fallback (ClassicRides).</summary>
+    public sealed class MSG_RIDEFALLBACK : IServerMessage {
+        public byte MessageOrder { get; } = 18;
+        public byte ServiceID { get; } = 110;
+        public string Zone;
+        public long Arrival;
+        /// <summary>True: start the ride (post its start event); false: the fallback.</summary>
+        public bool Start;
+    }
+
     /// <summary>CLASSIC: a committed activation requests a timer/effect refresh; never on the wire.</summary>
     public sealed class MSG_ELIXIRCHANGED : IServerMessage {
         public byte MessageOrder { get; } = 17;
         public byte ServiceID { get; } = 110;
         public ulong CharacterId;
+    }
+
+    /// <summary>
+    /// CLASSIC: a wizard who logged back in to a held duel seat is ready for the duel (their client reported
+    /// MSG_CLIENTZONED, or the duel's own wait ran out). Never on the wire.
+    /// </summary>
+    public sealed class MSG_REJOINCLIENTREADY : IServerMessage {
+        public byte MessageOrder { get; } = 19;
+        public byte ServiceID { get; } = 110;
+        public ulong CharacterId;
+        /// <summary>True when the wizard's client said it entered the zone (MSG_CLIENTZONED).</summary>
+        public bool Zoned;
     }
 }

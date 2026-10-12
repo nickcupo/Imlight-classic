@@ -263,6 +263,8 @@ public sealed class COMBAT_106_PROTOCOL : IServerProtocol {
 
         public uint CreatureTid;
         public IActorRef Actor;
+        // CLASSIC: the henchman's level (the shop item's "Level N"); its wizard deck is built for it.
+        public int Level;
 
     }
 
@@ -276,6 +278,21 @@ public sealed class COMBAT_106_PROTOCOL : IServerProtocol {
 
         public uint CreatureTid;
         public bool Success;
+        // CLASSIC: why a hire was refused (the client's own Error_Henchmen* locale texts name these cases).
+        public Imlight.Classic.Rules.HenchmanRefusal Refusal;
+
+    }
+
+    /// <summary>
+    /// Server-internal (CLASSIC): a player asks their duel to dismiss the henchman in <see cref="SubCircle"/>.
+    /// </summary>
+    internal sealed class MSG_DISMISSHENCHMAN : IServerMessage {
+
+        public byte MessageOrder => 37;
+        public byte ServiceID => 106;
+
+        public IActorRef Actor;
+        public int SubCircle;
 
     }
 

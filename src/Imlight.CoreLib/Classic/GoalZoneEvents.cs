@@ -22,7 +22,8 @@
  * PURPOSE:
  * The active goals whose start posts zone events and nothing else, to post
  * again when the wizard enters the goal's zone: a new instance of the zone
- * has not seen them.
+ * has not seen them. Also a goal that only activates spawners (Keys to Success's
+ * Big Ben chests) and one that re-posts another quest's event (It's Alive!'s Clockwork).
  *
  * USAGE EXAMPLE:
  * foreach (var (quest, goal) in GoalZoneEvents.ToReplay(held, isActive, zone)) { ... }
@@ -53,9 +54,12 @@ namespace Imlight.CoreLib.Classic;
 /// <summary>Active goals whose zone events are posted again on entering their zone.</summary>
 internal static class GoalZoneEvents {
 
+    private static bool IsReplayable(object result) // CLASSIC: a goal's spawner activation is re-posted like its events
+        => result is ResPostEvent or ResSpawn { m_activate: true };
+
     /// <summary>
     /// The (quest, goal) pairs to replay in <paramref name="zone"/>: active goals of held quests whose destination is
-    /// that zone and whose activate results are all ResPostEvent.
+    /// that zone and whose activate results are all ResPostEvent or an activating ResSpawn.
     /// </summary>
     internal static IEnumerable<(QuestTemplate Quest, GoalTemplate Goal)> ToReplay(IEnumerable<QuestTemplate> held,
         Func<QuestTemplate, string, bool> isActive, string zone) {
@@ -66,7 +70,7 @@ internal static class GoalZoneEvents {
         foreach (var quest in held) {
             foreach (var goal in quest?.m_goals ?? []) {
                 var results = goal?.m_activateResults?.m_results;
-                if (results is not { Count: > 0 } || !results.All(r => r is ResPostEvent)
+                if (results is not { Count: > 0 } || !results.All(IsReplayable)
                     || !string.Equals(goal.m_destinationZone, zone, StringComparison.OrdinalIgnoreCase)
                     || !isActive(quest, goal.m_goalName)) {
                     continue;

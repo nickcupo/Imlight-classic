@@ -39,6 +39,16 @@ public sealed class PotionsSecondChanceTests {
     }
 
     [Fact]
+    public void OctoberHildaBrewerChargesTheSeptember2010Prices() {
+        Assert.Equal("rules/potions-october-2010.yaml", ClassicDataFixture.LoadProfile("october-2010-arc1").Rules.Potions);
+        var rules = PotionRulesLoader.Load(Path.Combine(ClassicDataFixture.Root, "rules", "potions-october-2010.yaml"));
+        Assert.Equal(100, rules.ShopPrice(1));     // 100-1500 (Hilda Brewer oldid 105136, 2010-09-25)
+        Assert.Equal(390, rules.ShopPrice(13));
+        Assert.Equal(1500, rules.ShopPrice(50));
+        Assert.Equal(Potions().MinigameMana(120), rules.MinigameMana(120)); // flasks unchanged
+    }
+
+    [Fact]
     public void HildaBrewerCharges2009Prices() {
         var rules = Potions();
         Assert.Equal(100, rules.ShopPrice(1));    // January 2009: Fill One 100

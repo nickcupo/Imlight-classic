@@ -42,7 +42,13 @@
  *
  * Created by: Nick with Claude Code (claude-opus-5-5)
  * Version: KALI 1.0
- * Last Updated: 10/04/2026
+ * CLASSIC (2026-10-08): rules with a shelf (bazaar-october-2010.yaml, the
+ * october-2010-arc1 profile) restock the October 2010 way: a few hundred
+ * lots, about a third rotating each restock, gear spread over level
+ * bands, boss drops in few copies, the library's treasure cards and every
+ * 2010 reagent (BazaarStockPlanner.PlanShelf). Other profiles unchanged.
+ *
+ * Last Updated: 10/08/2026
  */
 
 #nullable enable
@@ -52,6 +58,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Threading;
+using Imcodec.Cryptography;
 using Imcodec.ObjectProperty.TypeCache;
 using Imcodec.Types;
 using Imlight.Classic;
@@ -128,11 +135,11 @@ public static class ClassicBazaar {
         // This does not restock: copies, current price factors and the server/player ownership ledger stay untouched.
         RepriceGlacialTreasure(profileId, selectedRules);
 
-        s_pool = BuildPool();
+        s_pool = BuildPool(selectedRules);
         // CLASSIC: only acknowledged correction publishes a ready Bazaar. A later initialization rereads
         // persisted quotes after failure, rather than seeing rules and skipping the unfinished correction.
         s_rules = selectedRules;
-        Logger.Information("Classic Bazaar: {File}; {Count} 2009 items may be stocked ({Gear} gear, {Cards} treasure cards, "
+        Logger.Information("Classic Bazaar: {File}; {Count} items may be stocked ({Gear} gear, {Cards} treasure cards, "
             + "{Reagents} reagents, {Housing} housing).",
             Logger.Args(s_rules.SourceFile, s_pool.Count, s_pool.Count(c => c.Kind == BazaarKind.Gear),
                 s_pool.Count(c => c.Kind == BazaarKind.TreasureCard), s_pool.Count(c => c.Kind == BazaarKind.Reagent),
@@ -263,7 +270,7 @@ public static class ClassicBazaar {
         }
 
         try {
-            var result = Restock(s_rules, ClassicSettings.BazaarStocked ? ClassicSettings.BazaarStockPerRestock : 0, Random.Shared);
+            var result = Restock(s_rules, LotsPerRestock(s_rules), Random.Shared);
             s_lastRestockUtc = DateTime.UtcNow;
             s_lastResult = result;
             Logger.Information("Classic Bazaar: restocked: {Result}.", Logger.Args(result));
@@ -277,6 +284,16 @@ public static class ClassicBazaar {
             return s_lastResult;
         }
     }
+
+    /// <summary>
+    /// The lots a restock aims for: 0 when stocking is off; with an October 2010 shelf at least the shelf's lots
+    /// (the dashboard setting can raise it); otherwise the setting. CLASSIC (2026-10-08).
+    /// </summary>
+    internal static int LotsPerRestock(BazaarRules rules, bool stocked, int setting)
+        => !stocked ? 0 : rules.Shelf is { } shelf ? Math.Max(setting, shelf.Lots) : setting;
+
+    private static int LotsPerRestock(BazaarRules rules)
+        => LotsPerRestock(rules, ClassicSettings.BazaarStocked, ClassicSettings.BazaarStockPerRestock);
 
     private static void TickRestock() {
         // The interval is read each time, so a change on the dashboard applies to the restock already scheduled.
@@ -292,10 +309,25 @@ public static class ClassicBazaar {
     }
 
     private static string Restock(BazaarRules rules, int lots, Random random) {
-        var plan = BazaarStockPlanner.Plan(rules, s_pool, lots, random).ToDictionary(lot => lot.Template);
         var ledger = BazaarServerStockCollection.Load().Copies
             .Select(pair => (Ok: ulong.TryParse(pair.Key, out var id), Id: id, pair.Value))
             .Where(entry => entry.Ok).ToDictionary(entry => entry.Id, entry => entry.Value);
+        Dictionary<ulong, BazaarLot> plan;
+        if (rules.Shelf is null) {
+            plan = BazaarStockPlanner.Plan(rules, s_pool, lots, random).ToDictionary(lot => lot.Template);
+        }
+        else {
+            // CLASSIC (2026-10-08): the October 2010 shelf keeps most server lots; it needs the server's copies held now.
+            Dictionary<ulong, int> serverHeld;
+            lock (AuctionHouseCollection.Lock) {
+                var heldNow = AuctionHouseCollection.GetAllAuctionHouseEntries().GroupBy(entry => entry.m_templateID.Full)
+                    .ToDictionary(group => group.Key, group => group.Sum(entry => entry.m_numForSale));
+                serverHeld = ledger.ToDictionary(pair => pair.Key,
+                    pair => Math.Clamp(pair.Value, 0, heldNow.GetValueOrDefault(pair.Key)));
+            }
+
+            plan = BazaarStockPlanner.PlanShelf(rules, s_pool, lots, serverHeld, random).ToDictionary(lot => lot.Template);
+        }
 
         var upserts = new List<AuctionHouseEntry>();
         var removals = new List<ulong>();
@@ -305,7 +337,7 @@ public static class ClassicBazaar {
             var held = AuctionHouseCollection.GetAllAuctionHouseEntries().GroupBy(entry => entry.m_templateID.Full)
                 .ToDictionary(group => group.Key, group => group.Sum(entry => entry.m_numForSale));
             lock (s_priceFactors) {
-                foreach (var lot in plan.Values) {
+                foreach (var lot in plan.Values.Where(lot => !lot.Kept)) {
                     s_priceFactors[lot.Template] = lot.PriceFactor;
                 }
             }
@@ -346,37 +378,99 @@ public static class ClassicBazaar {
 
         BazaarServerStockCollection.Save(newLedger, DateTime.UtcNow);
 
-        return $"{plan.Count} server lots, {added} copies added, {removed} rotated out, {newLedger.Count} templates of server stock";
+        var keptLots = plan.Values.Count(lot => lot.Kept);
+        return $"{plan.Count} server lots ({keptLots} kept, {plan.Count - keptLots} new), {added} copies added, {removed} rotated out, {newLedger.Count} templates of server stock";
     }
 
     // Every template a 2009 mob dropped (classic-data mob rewards, with the client loot-table fallbacks), which the
-    // Bazaar takes and which has a price.
-    private static IReadOnlyList<BazaarCandidate> BuildPool() {
+    // Bazaar takes and which has a price. CLASSIC (2026-10-08): each carries the level it needs and whether only bosses
+    // drop it (rare); rules with a shelf add the treasure cards of its library vendors and its listed reagents.
+    private static IReadOnlyList<BazaarCandidate> BuildPool(BazaarRules rules) {
         var rewards = ClassicProgression.MobRewards;
         if (rewards is null) {
             return [];
         }
 
         var templates = new HashSet<ulong>();
+        var commonDrops = new HashSet<ulong>();
+        var droppers = new Dictionary<ulong, int>();
         foreach (var mob in rewards.Mobs) {
-            templates.UnionWith(mob.Items.Select(entry => entry.Template));
-            templates.UnionWith(mob.TreasureCards.Select(entry => entry.Template));
-            templates.UnionWith(mob.Reagents.Select(entry => entry.Template));
+            var drops = mob.Items.Select(entry => entry.Template).Concat(mob.TreasureCards.Select(entry => entry.Template))
+                .Concat(mob.Reagents.Select(entry => entry.Template)).Distinct().ToList();
+            templates.UnionWith(drops);
+            foreach (var template in drops) {
+                droppers[template] = droppers.GetValueOrDefault(template) + 1;
+                if (mob.Kind != Imlight.Classic.Rules.MobKind.Boss) {
+                    commonDrops.Add(template);
+                }
+            }
         }
 
         foreach (var list in rewards.TreasureCardFallback.Values.Concat(rewards.ReagentFallback.Values)) {
             templates.UnionWith(list.Select(entry => entry.Template));
+            commonDrops.UnionWith(list.Select(entry => entry.Template));
+        }
+
+        if (rules.Shelf is { } shelf) {
+            foreach (var vendor in shelf.TreasureCardVendors) {
+                if (WizardData.SpiralDB.TryGetTreasureCardInventory(vendor, out var inventory) && inventory?.TreasureCards is { } cards) {
+                    foreach (var card in cards.Where(card => !string.IsNullOrEmpty(card.SpellName))) {
+                        var id = (ulong) StringHash.Compute(card.SpellName);
+                        templates.Add(id);
+                        commonDrops.Add(id);
+                    }
+                }
+                else {
+                    Logger.Warning("Classic Bazaar: treasure card vendor {Vendor} has no inventory.", Logger.Args(vendor));
+                }
+            }
+
+            foreach (var reagent in shelf.Reagents) {
+                templates.Add(reagent.Template);
+                commonDrops.Add(reagent.Template);
+            }
         }
 
         var pool = new List<BazaarCandidate>();
         foreach (var id in templates) {
             var template = CoreObjectFactory.GetCoreTemplate(id);
             if (KindOf(template) is { } kind && BaseCostOf(template) > 0) {
-                pool.Add(new BazaarCandidate(id, kind, BaseCostOf(template)));
+                // Rare: only bosses drop it, and at most two of them.
+                var rare = !commonDrops.Contains(id) && droppers.GetValueOrDefault(id) <= 2;
+                pool.Add(new BazaarCandidate(id, kind, BaseCostOf(template), LevelOf(template), rare));
             }
         }
 
         return pool;
+    }
+
+    /// <summary>
+    /// CLASSIC (2026-10-08): the wizard level an item needs (its ReqMagicLevel at or above), or 0 when it needs none.
+    /// </summary>
+    internal static int LevelOf(CoreTemplate? template)
+        => template is WizItemTemplate item ? LevelOf(item.m_equipRequirements) : 0;
+
+    private static int LevelOf(RequirementList? requirements) {
+        var level = 0;
+        foreach (var requirement in requirements?.m_requirements ?? []) {
+            switch (requirement) {
+                case RequirementList nested:
+                    level = Math.Max(level, LevelOf(nested));
+                    break;
+                case ReqMagicLevel magic when !magic.m_applyNOT:
+                    var op = magic.m_operatorType.ToString();
+                    if (op is "OPERATOR_GREATER_THAN_EQ") {
+                        level = Math.Max(level, (int) magic.m_numericValue);
+                    }
+                    else if (op is "OPERATOR_GREATER_THAN") {
+                        level = Math.Max(level, (int) magic.m_numericValue + 1);
+                    }
+
+                    break;
+            }
+        }
+
+        return level;
     }
 
     /// <summary>CLASSIC (2026-10-04): a real player sold <paramref name="templateId"/>: ambient wizards leave it for players a while.</summary>
@@ -475,8 +569,25 @@ public static class ClassicBazaar {
         lastResult = s_lastResult,
         nextRestock = s_nextRestockUtc.ToString("u"),
         entries = AuctionHouseCollection.GetAllAuctionHouseEntries().Count,
+        shelf = ShelfDashboard(),
         ambient = AmbientDashboard(),
     };
+
+    // CLASSIC (2026-10-08): what is on the shelf now, by kind (lots and copies) and gear by level band.
+    private static object ShelfDashboard() {
+        var entries = AuctionHouseCollection.GetAllAuctionHouseEntries();
+        var byTemplate = entries.GroupBy(entry => entry.m_templateID.Full)
+            .Select(group => (Template: CoreObjectFactory.GetCoreTemplate(group.Key), Copies: group.Sum(entry => entry.m_numForSale)))
+            .ToList();
+        return new {
+            mode = s_rules?.Shelf is { } shelf ? $"October 2010 shelf: {shelf.Lots} lots, {shelf.RotateShare:P0} rotate each restock" : "2009 whole-shelf restock",
+            kinds = byTemplate.GroupBy(t => (KindOf(t.Template) ?? BazaarKind.Gear).ToString())
+                .ToDictionary(group => group.Key, group => new { lots = group.Count(), copies = group.Sum(t => t.Copies) }),
+            gearByLevel = byTemplate.Where(t => KindOf(t.Template) == BazaarKind.Gear)
+                .GroupBy(t => LevelOf(t.Template) switch { <= 10 => "1-10", <= 20 => "11-20", <= 30 => "21-30", <= 40 => "31-40", _ => "41+" })
+                .OrderBy(group => group.Key).ToDictionary(group => group.Key, group => group.Count()),
+        };
+    }
 
     private static object AmbientDashboard() {
         lock (s_ambientStatsGate) {

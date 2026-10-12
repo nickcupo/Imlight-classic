@@ -306,7 +306,7 @@ public sealed class AmbientMannersTests {
             Assert.Contains(DungeonLines.Pick(lines, -5), lines);
         }
 
-        Assert.Contains("ty for the group!", DungeonLines.Thanks);
+        Assert.Contains("ty for the group", DungeonLines.Thanks);
         Assert.Contains("gtg sorry", DungeonLines.Leave);
     }
 

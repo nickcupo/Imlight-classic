@@ -39,6 +39,39 @@ public sealed class ElixirTests {
         Assert.False(ElixirRules.EffectsEnabled(null!, false, false));
     }
 
+    [Theory]
+    [InlineData(191117u, "Fire", .15f, .10f)]
+    [InlineData(191118u, "Ice", .10f, .20f)]
+    [InlineData(191119u, "Storm", .15f, .10f)]
+    [InlineData(191120u, "Myth", .10f, .15f)]
+    [InlineData(191121u, "Life", .05f, .20f)]
+    [InlineData(191122u, "Death", .10f, .15f)]
+    public void SchoolBattleElixirsAreOctoberOnlyAndMatchTheirNativeTemplates(uint id, string school, float accuracy, float damage) {
+        using var canonical = new CanonicalFixture();
+        var october = ClassicDataFixture.RealRules("october-2010-arc1");
+        var definition = ElixirRules.Approved(october, id);
+        Assert.NotNull(definition);
+        Assert.Equal(1800u, definition.DurationSeconds); Assert.Equal(300, definition.Crowns);
+        Assert.Equal(["Battle" + school], definition.Families);
+        Assert.Equal([accuracy, damage], definition.Effects!.Select(e => e.Value));
+        foreach (var profile in new[] { "late-2009", "arc1-2009h1", "dev-unrestricted" })
+            Assert.Null(ElixirRules.Approved(ClassicDataFixture.RealRules(profile), id));
+        var template = new WizItemTemplate {
+            m_templateID = id, m_behaviors = [new ElixirBehaviorTemplate {
+                m_timerType = TimerType.TimerType_Game, m_expireTime = "1800", m_combatEnabled = true, m_PvPEnabled = false,
+                m_typeList = ["Battle" + school] }],
+            m_equipEffects = [.. definition.Effects!.Select(e => (GameEffectInfo) new StatisticEffectInfo { m_effectName = e.Name, m_lookupIndex = e.LookupIndex })],
+        };
+        Assert.True(ElixirRules.MatchesNative(definition, template));
+    }
+
+    [Fact]
+    public void TheUnsettledBattleGoldXpAndRegenerationElixirsStayClosed() {
+        var october = ClassicDataFixture.RealRules("october-2010-arc1");
+        foreach (var id in new uint[] { 191109, 191110, 191111, 191112, 191113, 191114, 191115, 191116, 191123 })
+            Assert.Null(ElixirRules.Approved(october, id));
+    }
+
     [Fact]
     public void NativeCanonicalValuesUseFractionsForDamageAccuracyAndPowerAndFlatHealthMana() {
         using var canonical = new CanonicalFixture();
@@ -570,6 +603,16 @@ public sealed class ElixirTests {
                 effects.Add(new WizStatisticEffectTemplate { m_effectName = row.Item1, m_effectCategory = row.Item2, m_statTableName = row.Item3 });
                 var values = Enumerable.Repeat(0f, row.Item4 + 1).ToList(); values[row.Item4] = row.Item5;
                 tables[row.Item3] = new WizardStatTable { m_statVector = values };
+            }
+            foreach (var school in new[] { "Fire", "Ice", "Storm", "Myth", "Life", "Death" }) {
+                foreach (var family in new[] { "Accuracy", "Damage" }) {
+                    var table = family + "_" + school;
+                    effects.Add(new WizStatisticEffectTemplate { m_effectName = "Canonical" + school + family,
+                        m_effectCategory = school + family, m_statTableName = table });
+                    var values = Enumerable.Repeat(0f, 120).ToList();
+                    values[104] = .05f; values[109] = .10f; values[114] = .15f; values[119] = .20f;
+                    tables[table] = new WizardStatTable { m_statVector = values };
+                }
             }
             _effects.SetValue(null, new GameEffectTemplateList { m_effectTemplates = effects });
             _tables.SetValue(null, tables);

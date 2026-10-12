@@ -17,12 +17,17 @@
  *
  * CLASSIC: resolves the path of a walker that is placed in a zone (the Marleybone cops), as opposed to
  * one a spawner creates. A placed walker's PathBehavior template names a path of the zone's path data.
+ * CLASSIC (2026-10-08): a walker placed off its path walks to the nearest node over the zone's walk grid (the
+ * ambient wizards' NavGrid, from collision.bcd) when the straight line would cross a wall; before, that first
+ * leg was always a straight line of up to 862 units (the Marleybone cops).
  */
 
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using Imcodec.Math;
 using Imcodec.ObjectProperty.TypeCache;
+using Imlight.Classic.Ambient;
 
 namespace Imlight.CoreLib.Game.Zone.Core;
 
@@ -66,5 +71,52 @@ internal sealed class PlacedWalkerPaths {
     /// <summary>The node closest to <paramref name="location"/>, or null with no nodes.</summary>
     public static NodeObject Nearest(IEnumerable<NodeObject> nodes, Vector3 location)
         => nodes.MinBy(node => Vector3.Distance(node.m_location, location));
+
+    /// <summary>How a placed walker's first walk to its path goes (see <see cref="ApproachLegs"/>).</summary>
+    internal enum Approach { Straight, NoGrid, Routed, NoRoute }
+
+    /// <summary>
+    /// The legs of a placed walker's first walk, from <paramref name="from"/> to <paramref name="node"/> (the nearest
+    /// node of its path), ending with <paramref name="node"/> itself. One leg (the node) when the straight line stays on
+    /// the zone's open ground, when there is no grid (no collision data: the old straight walk) or when no walk joins
+    /// the two (logged by the caller); otherwise the grid's turns first, each a node that faces along its leg.
+    /// </summary>
+    internal static List<NodeObject> ApproachLegs(NavGrid grid, Vector3 from, NodeObject node, out Approach how) {
+        if (grid is null) {
+            how = Approach.NoGrid;
+            return [node];
+        }
+
+        var (a, b) = (Num(from), Num(node.m_location));
+        if (grid.SegmentClear(a, b)) {
+            how = Approach.Straight;
+            return [node];
+        }
+
+        if (!grid.TryRoute(a, b, out var turns) || turns.Count == 0) {
+            how = Approach.NoRoute;
+            return [node];
+        }
+
+        how = Approach.Routed;
+        var legs = new List<NodeObject>(turns.Count);
+        var at = a;
+        foreach (var turn in turns.Take(turns.Count - 1)) {          // the last turn is the snapped node: walk to the node
+            legs.Add(new NodeObject {
+                m_location = new Vector3(turn.X, turn.Y, turn.Z),
+                m_direction = ClientDirection(at, turn),
+            });
+            at = turn;
+        }
+
+        legs.Add(node);
+        return legs;
+    }
+
+    private static System.Numerics.Vector3 Num(Vector3 v) => new(v.X, v.Y, v.Z);
+
+    // The node yaw the server sends for a move (radians, the client's clockwise yaw), facing from a to b.
+    private static float ClientDirection(System.Numerics.Vector3 a, System.Numerics.Vector3 b)
+        => Imlight.CoreLib.Classic.Ambient.AmbientWizards.ClientYaw(MathF.Atan2(b.Y - a.Y, b.X - a.X));
 
 }

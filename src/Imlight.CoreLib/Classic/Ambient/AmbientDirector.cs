@@ -85,10 +85,22 @@ internal sealed class AmbientDirector : ReceiveActor {
             ? DungeonSettings.Parse(Setting("Classic.AmbientWizardDungeons"), Setting("Classic.AmbientWizardDungeonChance"),
                 Setting("Classic.AmbientWizardDungeonHelpers"))
             : DungeonSettings.Off;
+        // CLASSIC (2026-10-09): grouping with players (AmbientZone.Groups, AmbientCompanionGroup).
+        AmbientGroups.Settings = settings.Enabled
+            ? GroupSettings.Parse(Setting("Classic.AmbientWizardGroups"), Setting("Classic.AmbientWizardGroupSize"),
+                Setting("Classic.AmbientWizardGroupChance"), Setting("Classic.AmbientWizardGroupWindow"),
+                Setting("Classic.AmbientWizardGroupMinutes"))
+            : GroupSettings.Off;
         if (!settings.Enabled) {
             Logger.Information("Ambient wizards are off ([Classic] AmbientWizards).");
             return;
         }
+
+        var groups = AmbientGroups.Settings;
+        Logger.Information(groups.Enabled
+            ? "Ambient wizards group with players who ask: up to {Size} in a group, {Chance} willing, about {Minutes} minutes, client group window {Window}."
+            : "Ambient wizards do not group with players ([Classic] AmbientWizardGroups).",
+            Logger.Args(groups.MaxSize, groups.Willing, groups.StayMinutes, groups.Window ? "on" : "off"));
 
         AmbientChat.System = context.System;
         AmbientZone.ConfigureChat(Setting); // CLASSIC (2026-10-05): chat word lists, optional local LLM

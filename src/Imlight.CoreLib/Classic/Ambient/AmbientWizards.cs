@@ -64,7 +64,8 @@ namespace Imlight.CoreLib.Classic.Ambient;
 /// <summary>What an ambient wizard is doing.</summary>
 // CLASSIC (2026-10-04): Hatching = on a Pet Pavilion hatching spot with a player (AmbientHatching); Dungeon = in a dungeon
 // run with a player (AmbientDungeonParty).
-internal enum AmbientActivity { Arriving, Idle, Walking, Shopping, Following, Helping, Fighting, Sparring, Away, Hatching, Dungeon }
+// CLASSIC (2026-10-09): Grouped = a companion in a real player's group (AmbientCompanionGroup).
+internal enum AmbientActivity { Arriving, Idle, Walking, Shopping, Following, Helping, Fighting, Sparring, Away, Hatching, Dungeon, Grouped }
 
 /// <summary>
 /// One ambient wizard: its stored record, its Wizard (never saved), its endpoint actor and its live state. Only its
@@ -119,6 +120,8 @@ internal sealed class AmbientWizard {
     public DateTime PauseUntil { get; set; }
     public DateTime Until { get; set; }
     public bool Moving { get; set; }
+    /// <summary>CLASSIC (2026-10-08): how many times running it found no walk and stood (AmbientZone.StandAWhile).</summary>
+    public int Stands { get; set; }
     public ulong DuelSigil { get; set; }
     public ulong FollowCharId { get; set; }
     public int Turn { get; set; }
@@ -168,6 +171,7 @@ internal static class AmbientWizards {
     /// the zone has none.
     /// </summary>
     internal static void NotifyDuel(IActorRef zone, AmbientDuelNotice notice) {
+        AmbientGroups.NotifyDuel(notice); // CLASSIC (2026-10-09): a player's companions fight with them, wherever they are
         if (zone is not null && !s_groups.IsEmpty && s_groups.TryGetValue(zone, out var group)) {
             group.Tell(notice);
         }

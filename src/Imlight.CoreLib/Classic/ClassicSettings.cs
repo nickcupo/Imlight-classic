@@ -74,6 +74,7 @@ public static class ClassicSettings {
     public static bool PetPavilion => Store.Bool(ClassicSettingKeys.PetPavilion);
     public static bool MovementGuard => Store.Bool(ClassicSettingKeys.MovementGuard);
     public static int MovementMaxSpeed => Store.Int(ClassicSettingKeys.MovementMaxSpeed);
+    public static bool DefeatedGetNoRewards => Store.Bool(ClassicSettingKeys.DefeatedGetNoRewards); // CLASSIC: 2026-10-10
 
     /// <summary>Scales a whole reward amount, rounding to the nearest unit (never below 0).</summary>
     public static int Scale(int amount, double multiplier)

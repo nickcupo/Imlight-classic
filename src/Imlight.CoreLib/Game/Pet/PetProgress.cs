@@ -188,7 +188,7 @@ internal static class PetProgress {
         }
 
         var current = Stats(b.m_currentStats);
-        var applied = PetRules.ApplyStats(current, Stats(b.m_maxStats), changes);
+        var applied = PetRules.ApplyStats(current, PetTalentRuntime.EffectiveMaximums(pet), changes);
         b.m_currentStats = [.. PetRules.StatNames.Select(name => new PetStat {
             m_name = name, m_statID = StatId(name), m_value = current.GetValueOrDefault(name),
         })];

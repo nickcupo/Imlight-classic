@@ -236,7 +236,7 @@ public static class AmbientSparring {
         playerObject = null;
         if (!AmbientWizards.TryGet(ambientCharId, out var wizard) || !wizard.Present || wizard.Endpoint is null
             || wizard.Activity is AmbientActivity.Fighting or AmbientActivity.Sparring or AmbientActivity.Helping
-                or AmbientActivity.Dungeon or AmbientActivity.Away) {
+                or AmbientActivity.Dungeon or AmbientActivity.Away or AmbientActivity.Grouped) { // CLASSIC (2026-10-09): a companion
             return false;
         }
 

@@ -345,6 +345,7 @@ internal partial class EquipmentService(SessionActor sessionActor) : MessageServ
 
         zoneActor.Tell(spawnMsg, Self);
         _summonedPetId = coreObj.m_globalID;
+        SessionActor.SummonedPetGlobalId = coreObj.m_globalID.Full; // CLASSIC: the pet games steer this world pet.
     }
 
     [MessageHandler(typeof(CHARACTER_103_PROTOCOL.MSG_RESUMMONPET))]
@@ -374,6 +375,7 @@ internal partial class EquipmentService(SessionActor sessionActor) : MessageServ
         }, Self);
 
         _summonedPetId = 0;
+        SessionActor.SummonedPetGlobalId = 0; // CLASSIC
     }
 
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_ENFORCEINTERIORMOUNT))]

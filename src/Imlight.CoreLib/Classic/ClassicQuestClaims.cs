@@ -140,6 +140,8 @@ internal static partial class ClassicQuestClaims {
             return true;
         }, saved => {
             dependencies.BeforePublish?.Invoke(live);
+            // CLASSIC: validate this nonzero staged mana transition before publishing any live claim fields.
+            if (progression?.ManaTransition is not null) WizardProgressionTransactions.ValidatePublication(live, progression);
             // Only this claim's committed fields; runtime deck/temporary spell/equipment state is retained.
             live.QuestBehavior.CurrentQuestIDs = [.. saved.QuestBehavior.CurrentQuestIDs];
             live.QuestBehavior.CurrentQuestInstances = [.. saved.QuestBehavior.CurrentQuestInstances];

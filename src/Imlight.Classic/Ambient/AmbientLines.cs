@@ -26,6 +26,9 @@
  * pools of templates (greetings, school talk, zone tips, reactions, small
  * talk) with {name}, {zone}, {school}, {level}, {next} and {time} slots.
  * 2009 tone: short, friendly, kid-safe, nothing from after 2009.
+ * CLASSIC (2026-10-10): rewritten with AmbientLinePool to sound like
+ * players rather than a tour guide (owner: "too AI ish"); the idle talk
+ * now comes from AmbientLinePool's moods, schools and zones.
  *
  * LineHistory remembers the last HeardWindow templates each player heard
  * from any ambient wizard in the zone; a pick skips those.
@@ -35,7 +38,7 @@
  *
  * Created by: Nick with Claude Code (claude-opus-5-5)
  * Version: KALI 1.0
- * Last Updated: 10/03/2026
+ * Last Updated: 10/10/2026
  */
 
 using System;
@@ -82,186 +85,121 @@ public sealed class LineHistory {
 /// <summary>Template pools and the no-repeat pick (see the file header).</summary>
 public static class AmbientLines {
 
+    // CLASSIC (rewritten 2026-10-10, owner: the wizards sounded "too AI ish"): short, plain, a bit careless, the way kids
+    // and parents typed in 2009-2010; no tour-guide lines, no "great teamwork". Every word is in the client's chat
+    // dictionary (see AmbientLinePool's header).
+
     // ---- talk to a player -----------------------------------------------------------------------
 
-    public static readonly string[] Greetings = [
-        "hi {name}!", "hey {name}", "hello {name}!", "hiya {name}", "oh hi {name}!", "hey there {name}!",
-        "hi! :)", "heya {name}", "hello!", "hi {name}, nice hat", "hey {name}, whats up?", "good {time} {name}!",
-        "oh hey, hi!", "hi {name}! welcome to {zone}", "howdy {name}",
-    ];
+    public static readonly string[] Greetings = ["hi {name}", "hey {name}", "hi", "hey", "oh hi", "yo", "hiya {name}", "sup {name}", "hi?"];
 
     public static readonly string[] FriendGreetings = [
-        "{name}! good to see you again", "hey {name}! :)", "hi {name}! whats up?", "{name}!! hi!",
-        "there you are {name}!", "hey {name}, buddy!", "hi {name}! ready to quest?", "yay {name} is here!",
-        "{name}! i was just thinking about you", "oh hi {name}, long time no see", "good {time} {name}!",
-        "hey {name}, want to team up?",
+        "{name}!", "hey {name}", "{name} hi", "oh hey {name}", "yo {name}", "{name} wanna quest", "hi {name} where were you",
+        "{name}!! finally", "hey {name} what are you doing",
     ];
 
-    public static readonly string[] Thanks = [
-        "np!", "no problem", "anytime!", "you're welcome", "sure thing", "glad to help!", "no prob :)", "any time {name}",
-    ];
+    public static readonly string[] Thanks = ["np", "yw", "sure", "k", "np lol"];
 
-    public static readonly string[] Bye = [
-        "bye!", "cya later", "see you around!", "bye {name}!", "take care!", "good luck out there!", "cya {name}!",
-        "have fun!", "see you in the Spiral!", "bye bye",
-    ];
+    public static readonly string[] Bye = ["bye", "cya", "bye {name}", "later", "ttyl"];
 
-    public static readonly string[] HowAreYou = [
-        "good! just questing", "pretty good, you?", "great! leveling up", "tired lol, been fighting all day",
-        "good, just got a new hat", "awesome! almost level {next}", "good! {zone} is busy today", "not bad, you?",
-        "great, i finally finished a hard quest", "pretty good! just practicing my {school} spells",
-        "good! saving up gold", "happy {time}! i'm good",
-    ];
+    public static readonly string[] HowAreYou = ["good", "bored", "ok you", "tired", "meh", "good just questing"];
 
-    public static readonly string[] Fallback = [
-        "lol", "cool", "hmm idk", "oh nice", "haha", "yeah", "i see", "really?", "wow", "nice!", "oh ok",
-        "same here", "hehe", "true", "maybe!", "ooh", "neat",
-    ];
+    public static readonly string[] Fallback = ["lol", "ok", "what", "huh", "oh", "cool", "hmm", "ya", "idk"];
 
-    public static readonly string[] Level = [
-        "i'm level {level}", "level {level}!", "{level}, almost {next}", "level {level}, you?", "just hit {level}!",
-        "{level}! slowly getting there", "level {level}, trying for {next}",
-    ];
+    public static readonly string[] Level = ["level {level}", "lvl {level}", "{level}", "{level} you?"];
 
-    public static readonly string[] School = [
-        "{school}! best school", "i'm a {school} wizard", "{school} :)", "{school}, of course!", "{school}! you?",
-        "{school} all the way", "i picked {school} on my first day",
-    ];
+    public static readonly string[] School = ["{school}", "im {school}", "{school} you?"];
 
-    public static readonly string[] Duel = [
-        "maybe later, i'm questing", "sure, ask me for a practice match at the arena", "lol i'd lose",
-        "after this quest!", "hmm not right now", "i need more practice first", "only a friendly match :)",
-    ];
+    public static readonly string[] Duel = ["maybe later", "lol no", "after this quest", "ok meet at the arena", "ill lose lol"];
 
-    public static readonly string[] Help = [
-        "sure, where are you?", "i can help! start a fight and i'll ask to join", "ok! what do you need?",
-        "sure! fight something and i'll come", "yep, just say yes when i ask", "of course!",
-    ];
+    public static readonly string[] Help = ["sure where", "ok start a fight", "what do you need", "k"];
 
-    public static readonly string[] Friend = [
-        "sure! send me a request", "ok! add me :)", "yeah sure", "yes! friends!", "ok, i'll accept", "sure, add me",
-    ];
+    public static readonly string[] Friend = ["sure", "k", "ok send it"];
 
-    public static readonly string[] Doing = [
-        "just {school} stuff", "helping out in {zone}", "hunting in {zone}", "working on my {school} spells",
-        "trying to level up", "looking for people to quest with", "just walking around", "waiting for a friend",
-        "saving up gold for gear", "doing my quests", "exploring {zone}",
-    ];
+    public static readonly string[] Doing = ["nothing", "questing", "bored", "hunting stuff", "waiting for my friend"];
 
-    public static readonly string[] WhereUnknown = [
-        "hmm not sure, ask an npc", "idk, sorry", "i forget where that is", "maybe check your map?",
-        "not sure, sorry!", "try asking in the Commons",
-    ];
+    public static readonly string[] WhereUnknown = ["idk", "no idea", "ask someone else", "check your map", "dunno sorry"];
 
-    public static readonly string[] WhereKnown = ["{what} is in {where}", "try {where}", "{where}, i think", "i think it's in {where}"];
+    public static readonly string[] WhereKnown = ["{where}", "{where} i think", "its in {where}", "{where} lol"];
+
+    // ---- friends --------------------------------------------------------------------------------
+
+    /// <summary>To a friend, about the quest they are on ({quest} is the quest's title).</summary>
+    public static readonly string[] FriendQuest = ["still on {quest}?", "did you finish {quest}", "need help with {quest}?", "{quest} took me forever"];
+
+    /// <summary>To a friend, about where they are ({where} is the zone players know).</summary>
+    public static readonly string[] FriendZone = ["{where}? cool", "how is {where}", "ill be in {where} later", "still in {where}?"];
+
+    /// <summary>A friend back after a while: did they finish last time's quest.</summary>
+    public static readonly string[] RecallQuest = ["{name} did you ever finish {quest}", "{name}! did you beat {quest}"];
+
+    /// <summary>A friend back after a while: last time together in a zone ({ago} is "earlier" or "the other day").</summary>
+    public static readonly string[] RecallZone = ["{name} hi again", "{name}!! that was fun {ago}", "hey {name} back in {where}?"];
+
+    /// <summary>A friend it fought beside before.</summary>
+    public static readonly string[] RecallFight = ["{name}! wanna fight stuff again", "{name} hi, need help again?"];
+
+    /// <summary>Its answer when a player's friend request comes in.</summary>
+    public static readonly string[] FriendAdded = ["ty for the add", "added you", "ok added", "ty {name}"];
 
     // ---- battles --------------------------------------------------------------------------------
 
-    public static readonly string[] HelpOffer = [
-        "need a hand?", "want some help?", "need help with that fight?", "want me to jump in?", "need a hand there?",
-        "i can help if you want", "want a {school} wizard on your team?", "need backup?",
-    ];
+    public static readonly string[] HelpOffer = ["need help?", "want help", "need a hand", "want me to join", "can i join", "i can help if you want", "help?"];
 
-    public static readonly string[] HelpOfferFriend = [
-        "need a hand {name}?", "{name}, want help?", "want me to join {name}?", "i got your back {name}, want help?",
-        "{name}! need backup?",
-    ];
+    public static readonly string[] HelpOfferFriend = ["{name} need help", "want help {name}", "{name} want me to join"];
 
-    public static readonly string[] Joining = ["on my way!", "coming!", "ok!", "here i come!", "be right there!", "ok, joining!"];
+    public static readonly string[] Joining = ["k coming", "ok", "coming", "joining", "here i come", "k"];
 
-    public static readonly string[] NotJoining = ["ok, good luck!", "np, have fun", "ok!", "ok, you got this!", "alright, good luck {name}"];
+    public static readonly string[] NotJoining = ["k", "ok", "np", "ok then", "fine lol", "k good luck"];
 
-    public static readonly string[] AfterWin = [
-        "gg!", "nice one", "that was fun", "good fight!", "we did it!", "great teamwork", "yay!", "phew, that was close",
-        "good game!", "nice spells!", "thanks for the fight", "woo!",
-    ];
+    /// <summary>It went to join but the battle had filled.</summary>
+    public static readonly string[] Full = ["aw its full", "oh its full", "nvm its full"];
+
+    public static readonly string[] AfterWin = ["gg", "nice", "phew", "that was close", "ty", "easy", "woot", "yay"];
+
+    // ---- away and menu stand-ins ----------------------------------------------------------------
+
+    /// <summary>Going quiet for a few minutes.</summary>
+    public static readonly string[] Away = ["brb", "brb", "brb dinner", "brb my mom is calling me", "afk"];
+
+    /// <summary>Back from <see cref="Away"/>.</summary>
+    public static readonly string[] BackFromAway = ["back", "im back", "ok back", "back sorry"];
+
+    /// <summary>Menu-chat stand-ins (r806919 QuickChat phrases) where a typed wizard would type a line.</summary>
+    public const string MenuJoining = "On my way!", MenuNotJoining = "Good luck", MenuHi = "Hi!", MenuThanks = "Thanks", MenuFull = "Sorry, I can't";
 
     // ---- on their own ---------------------------------------------------------------------------
 
-    private static readonly string[] s_smallTalk = [
-        "anyone want to quest?", "lfg", "this place is busy today", "anyone seen my pet?", "hi everyone",
-        "where's a good place to level?", "i love this hat", "need more gold lol", "i wish i had more treasure cards",
-        "my deck needs work", "anyone know a good shield spell?", "i keep fizzling today", "brb, getting a snack",
-        "back!", "so many quests", "i almost have enough training points", "who else is questing?",
-        "Gamma says hi lol", "i should visit my dorm room", "my backpack is so full", "anyone want to trade tips?",
-        "being a wizard is the best", "i need a new robe", "wizard city is so pretty",
-    ];
-
-    private static readonly string[] s_level = [
-        "almost level {next}!", "one more level to {next}", "level {level} and counting", "ding! oh wait, not yet lol",
-        "need more experience for {next}",
-    ];
-
-    private static readonly string[] s_time = [
-        "good {time} everyone", "nice {time} for questing", "happy {time}!", "anyone else playing this {time}?",
-    ];
-
-    private static readonly Dictionary<AmbientSchool, string[]> s_school = new() {
-        [AmbientSchool.Fire] = ["fire spells are so warm", "fire elf, go!", "{school} wizards are the hottest lol", "i love my fire cat"],
-        [AmbientSchool.Ice] = ["ice wizards are tough", "my ice shields are the best", "ice magic is so cold", "frost beetle time"],
-        [AmbientSchool.Storm] = ["storm spells hit so hard", "thunder snake!", "storm wizards never miss lol, jk", "zap!"],
-        [AmbientSchool.Myth] = ["myth minions are so helpful", "blood bat go!", "myth is the coolest", "my minion is my best friend"],
-        [AmbientSchool.Life] = ["need a heal? i'm life", "life wizards heal everyone", "imp, go!", "fairy heals for everyone :)"],
-        [AmbientSchool.Death] = ["death school is spooky fun", "dark sprite, go!", "death wizards are cool", "ghoul time"],
-        [AmbientSchool.Balance] = ["balance is the best of everything", "scarab, go!", "balance wizards are so balanced lol", "i love my sandstorm"],
-    };
-
-    private static readonly (string Key, string[] Lines)[] s_zone = [
-        ("WC_Hub", [
-            "Ravenwood has all the teachers", "the Headmaster lives right here in the Commons", "Gamma is with the Headmaster",
-            "Private Stillson guards the gate to Unicorn Way", "the Commons is so busy", "the Shopping District has nice gear",
-            "first quests start with the Headmaster", "go see your school teacher in Ravenwood",
-        ]),
-        ("WC_Unicorn", [
-            "Lady Blackhope is down in the Haunted Cave", "Lady Oriel is at the end of the street", "stay on the sidewalks, the undead walk the street",
-            "Private Stillson asked me to help here", "so many lost souls on this street", "Unicorn Way is spooky", "the Haunted Cave is scary",
-        ]),
-        ("WC_Shop_Area", [
-            "saving up for a new hat", "this robe costs so much gold", "i need a better wand", "shopping is fun",
-            "check the shops for your level", "new boots!", "which hat should i get?",
-        ]),
-        ("Krokotopia", [
-            "the sand gets everywhere lol", "watch out for the kroks", "the Pyramid of the Sun is huge", "manders are tough",
-            "Krokotopia is so hot", "the Krokosphinx is amazing",
-        ]),
-        ("Marleybone", [
-            "Marleybone is so foggy", "the dogs here are so polite", "Regent's Square is busy today", "Meowiarty is up to no good",
-            "Digmoore Station is creepy", "jolly good! lol",
-        ]),
-        ("MooShu", [
-            "the Emperor is sick, we have to help", "MooShu is so pretty", "the Jade Palace is beautiful", "watch out for the oni",
-            "Hametsu Village needs help",
-        ]),
-        ("Dragonspyre", [
-            "Malistaire went this way", "it's so hot in Dragonspyre", "the Basilica is huge", "careful, drakes everywhere",
-            "Dragonspyre is so old",
-        ]),
-        ("Grizzleheim", [
-            "the bears here are so wise", "Northguard is cold", "watch out for the ravens", "Grizzleheim is so snowy",
-        ]),
-    ];
-
-    /// <summary>What an idle wizard might say: small talk, its school, its level, the time of day, tips for its zone.</summary>
+    /// <summary>
+    /// What an idle wizard might say when its persona is not at hand (the group companions): the shared kid moods, its
+    /// school at its level, its level band, the time of day and its zone (twice: the place is what a passer-by cares about).
+    /// No numbers (the persona is not known).
+    /// </summary>
     public static IReadOnlyList<string> Idle(ChatContext context) {
         ArgumentNullException.ThrowIfNull(context);
-        var pool = new List<string>(s_smallTalk);
-        pool.AddRange(s_school[context.School]);
-        pool.AddRange(s_level);
-        if (context.Hour >= 0) {
-            pool.AddRange(s_time);
+        var pool = new List<string>();
+        foreach (var mood in AmbientLinePool.MoodsFor(ChatTemperament.Chatty)) {
+            pool.AddRange(mood);
         }
 
-        if (ZoneTips(context.ZoneKey) is { } tips) {
-            pool.AddRange(tips); // tips twice: the place is what a passer-by cares about
+        pool.AddRange(AmbientLinePool.SchoolFor(context.School, context.Level));
+        pool.AddRange(AmbientLinePool.ForLevel(context.Level));
+        if (context.Hour >= 0) {
+            pool.AddRange(AmbientLinePool.ForTime(context.Hour, null));
+        }
+
+        if (ZoneTips(context.ZoneKey) is { Length: > 0 } tips) {
+            pool.AddRange(tips);
             pool.AddRange(tips);
         }
 
-        return pool;
+        return pool.Where(t => !t.Contains("{level}", StringComparison.Ordinal) && !t.Contains("{next}", StringComparison.Ordinal)
+                               && !t.Contains("||", StringComparison.Ordinal)).ToList(); // one line at a time here
     }
 
-    /// <summary>The tips for the zone with internal name <paramref name="zoneKey"/>, or null.</summary>
+    /// <summary>The lines for the zone with internal name <paramref name="zoneKey"/>, or null.</summary>
     public static string[]? ZoneTips(string? zoneKey)
-        => zoneKey is null ? null : s_zone.FirstOrDefault(z => zoneKey.Contains(z.Key, StringComparison.OrdinalIgnoreCase)).Lines;
+        => AmbientLinePool.ForZone(zoneKey) is { Length: > 0 } lines ? lines : null;
 
     /// <summary>"morning", "afternoon", "evening" or "night" for a local hour.</summary>
     public static string TimeOfDay(int hour) => hour switch {

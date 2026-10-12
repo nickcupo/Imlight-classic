@@ -68,6 +68,10 @@ internal sealed class BadgeService(SessionActor sessionActor) : MessageService(s
         }
 
         ClassicBadges.ZoneEntered(wizard, wizard.Zone, SendToSocket);
+        // CLASSIC: rank and school-spell badges catch up on attach (earned before these awards existed, or by a path
+        // that does not announce them).
+        ClassicBadges.SpellsChanged(wizard, SendToSocket);
+        if (wizard.GameStats?.m_pArenaLadder is { } ladder) ClassicBadges.PvpRatingChanged(wizard, ladder.m_score, SendToSocket);
         if (WizardCollection.IsInventorySnapshotUncertain(wizard)) CloseSession();
     }
 

@@ -301,6 +301,23 @@ public class ZoneEntity(
         }
     }
 
+    // CLASSIC: a pet game (the cannon's target, the maze's ghosts) asks where this object is.
+    [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_QUERYTEMPLATEOBJECTS))]
+    private void ReceiveQueryTemplateObjects(ZONE_102_PROTOCOL.MSG_QUERYTEMPLATEOBJECTS message) {
+        if (ActiveGameObject is not { } active || message.Requester is null || message.TemplateIds is null) {
+            return;
+        }
+
+        var templateId = (uint) active.m_templateID.Full;
+        if (Array.IndexOf(message.TemplateIds, templateId) < 0) {
+            return;
+        }
+
+        message.Requester.Tell(new ZONE_102_PROTOCOL.MSG_TEMPLATEOBJECTLOCATION {
+            GlobalId = active.m_globalID.Full, TemplateId = templateId, Location = active.m_location,
+        });
+    }
+
     [MessageHandler(typeof(IServerMessage))]
     protected virtual void ReceiveElse(IServerMessage message) {
         if (message is ZONE_102_PROTOCOL.MSG_ZONEOBJECTLOADBEGIN) {
@@ -342,7 +359,20 @@ public class ZoneEntity(
     // CLASSIC: a creature that is gone is no longer read by duels.
     protected override void PostStop() {
         Classic.CreatureStatsDirectory.Remove(Self);
+        // CLASSIC: give the zone back this object's reserved mobile id (Zone.ReleaseReservedMobileId). A restart keeps
+        // the actor, the object and its id, so only a real stop gives it back.
+        if (!_restarting) {
+            Zone?.ReleaseReservedMobileId(Self);
+        }
         base.PostStop();
+    }
+
+    // CLASSIC: see PostStop.
+    private bool _restarting;
+
+    protected override void PreRestart(Exception reason, object message) {
+        _restarting = true;
+        base.PreRestart(reason, message);
     }
 
     /// <summary>
@@ -427,7 +457,7 @@ public class ZoneEntity(
 
     private ushort ReserveMobileId() {
         try {
-            return Zone.ReserveMobileId();
+            return Zone.ReserveMobileId(Self); // CLASSIC: held under this actor and given back when it stops.
         } catch (Exception e) {
             Logger.Error("Failed to get mobile ID from zone: {Reason}", Logger.Args(e.Message));
 

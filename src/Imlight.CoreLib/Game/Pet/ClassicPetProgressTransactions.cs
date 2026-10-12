@@ -18,7 +18,9 @@ using Imlight.CoreLib.WizardData.Models.Player;
 namespace Imlight.CoreLib.Game.Pet;
 
 internal sealed record PetProgressReceipt(WizClientObjectItem Pet, PetGrowth Growth,
-    IReadOnlyList<PetStatChange> Applied, IReadOnlyList<IMessage> Messages, int Cost, SnackTaste Taste);
+    IReadOnlyList<PetStatChange> Applied, IReadOnlyList<IMessage> Messages, int Cost, SnackTaste Taste) {
+    internal PetTalentTransition Talents { get; init; }
+}
 
 // CLASSIC: fixtures replace only native preparation; ownership, calculations and the commit remain real.
 internal sealed class PetProgressDependencies {
@@ -31,19 +33,21 @@ internal static class ClassicPetProgressTransactions {
     internal static readonly AsyncLocal<PetProgressDependencies> TestScope = new();
 
     internal static bool TryInitialize(Wizard live, ulong petId, out WizClientObjectItem pet, out int energy)
-        => TryInitialize(live, petId, false, null, out pet, out energy);
+        => TryInitialize(live, petId, false, null, out pet, out energy, out _);
 
     // CLASSIC: game admission requires the selected pet to remain in the exact fresh Pet slot.
+    // Callers must publish the acknowledged native effect transition, even if admission later refuses.
     // The generic owned-pet initializer above still accepts backpack pets.
     internal static bool TryInitializeForGame(Wizard live, ulong petId, out WizClientObjectItem pet, out int energy,
-        Func<bool> contextStillValid = null)
-        => TryInitialize(live, petId, true, contextStillValid, out pet, out energy);
+        out IReadOnlyList<IMessage> messages, Func<bool> contextStillValid = null)
+        => TryInitialize(live, petId, true, contextStillValid, out pet, out energy, out messages);
 
     private static bool TryInitialize(Wizard live, ulong petId, bool requireEquipped, Func<bool> contextStillValid,
-        out WizClientObjectItem pet, out int energy) {
-        pet = null; energy = 0;
+        out WizClientObjectItem pet, out int energy, out IReadOnlyList<IMessage> messages) {
+        pet = null; energy = 0; messages = [];
         if (!Usable(live)) return false;
         WizClientObjectItem snapshot = null, published = null;
+        PetTalentTransition talents = null;
         var availableEnergy = 0;
         var unchanged = false;
         var committed = WizardCollection.CommitCharacterMutation(live.CharId, (session, saved) => {
@@ -59,13 +63,22 @@ internal static class ClassicPetProgressTransactions {
                 return false;
             }
             WizardInventoryTransactions.ProtectUnmodifiedRows(session, snapshot);
+            // CLASSIC: prepare native old-ID removal/new-ID addition before saving, like feeding.
+            // A payload failure must not commit progress that cannot be published to the client.
+            try { talents = PetTalentRuntime.PrepareTransition(live, snapshot); }
+            catch (Exception) { return false; }
             return contextStillValid?.Invoke() != false;
-        }, saved => published = WizardInventoryTransactions.PublishCommittedOwnedItem(live, saved, snapshot),
+        }, saved => {
+            published = WizardInventoryTransactions.PublishCommittedOwnedItem(live, saved, snapshot);
+            PetTalentRuntime.Publish(live, published, talents?.Receipt);
+        },
             onSaveFailure: _ => WizardCollection.MarkInventorySnapshotUncertain(live));
         if (!committed && !unchanged) return false;
         // No mutation is published for an unchanged authoritative read, and no needless save is issued.
         pet = committed ? published : snapshot;
         energy = availableEnergy;
+        // CLASSIC: false, unchanged and failed/lost ACK paths expose no native publication.
+        messages = committed ? talents?.Messages ?? [] : [];
         return true;
     }
 
@@ -109,7 +122,9 @@ internal static class ClassicPetProgressTransactions {
                     MaxEnergy = max, TickTime = (int)saved.PetOwnerBehavior.LastEnergyTickEpoch },
                     new PET_9_PROTOCOL.MSG_PETGAMEEND { Game = game, Data = data }];
                 if (!PrepareGrowthMessages(live, pet, growth, messages)) return false;
-                prepared = new(pet, growth, applied, messages, cost, default);
+                var talents = PetTalentRuntime.PrepareTransition(live, pet);
+                messages.AddRange(talents.Messages);
+                prepared = new(pet, growth, applied, messages, cost, default) { Talents = talents };
             }
             catch (Exception) { return false; }
             WizardInventoryTransactions.ProtectUnmodifiedRows(session, pet);
@@ -118,6 +133,7 @@ internal static class ClassicPetProgressTransactions {
         }, saved => {
             var pet = WizardInventoryTransactions.PublishCommittedOwnedItem(live, saved, prepared.Pet);
             live.PetOwnerBehavior.PublishCommittedEnergy(saved.PetOwnerBehavior);
+            PetTalentRuntime.Publish(live, pet, prepared.Talents?.Receipt);
             prepared = prepared with { Pet = pet };
         }, onSaveFailure: _ => WizardCollection.MarkInventorySnapshotUncertain(live));
         if (committed) receipt = prepared;
@@ -156,7 +172,9 @@ internal static class ClassicPetProgressTransactions {
                     : new PET_9_PROTOCOL.MSG_PETSNACKREMOVE { GlobalID = live.GameObjectID, ItemID = snackId },
                     new PET_9_PROTOCOL.MSG_PETGAMESNACKFEEDSUCCESS { Data = data }];
                 if (!PrepareGrowthMessages(live, pet, growth, messages)) return false;
-                prepared = new(pet, growth, applied, messages, 0, taste);
+                var talents = PetTalentRuntime.PrepareTransition(live, pet);
+                messages.AddRange(talents.Messages);
+                prepared = new(pet, growth, applied, messages, 0, taste) { Talents = talents };
             }
             catch (Exception) { return false; }
             WizardInventoryTransactions.ProtectUnmodifiedRows(session, pet);
@@ -164,6 +182,7 @@ internal static class ClassicPetProgressTransactions {
         }, saved => {
             var pet = WizardInventoryTransactions.PublishCommittedOwnedItem(live, saved, prepared.Pet);
             WizardPetSnackTransactions.PublishCommittedBag(live, saved, snackBag);
+            PetTalentRuntime.Publish(live, pet, prepared.Talents?.Receipt);
             prepared = prepared with { Pet = pet };
         }, onSaveFailure: _ => WizardCollection.MarkInventorySnapshotUncertain(live));
         if (committed) receipt = prepared;
@@ -174,8 +193,19 @@ internal static class ClassicPetProgressTransactions {
         => live is not null && live.CharId != 0 && !WizardCollection.IsInventorySnapshotUncertain(live);
 
     private static bool OwnedPetCanPublish(Wizard live, Wizard saved, WizClientObjectItem pet) {
-        return PetProgress.Behavior(pet) is { m_level: > 0 }
-            && WizardInventoryTransactions.CanPublishOwnedItem(live, saved, pet);
+        if (PetProgress.Behavior(pet) is not { m_level: > 0 }
+            || !WizardInventoryTransactions.CanPublishOwnedItem(live, saved, pet)) return false;
+        if (!PetTalentRuntime.Enabled) return true;
+        var id = pet.m_globalID.Full;
+        // CLASSIC: the receipt may refresh only the same fresh Pet slot. A contradictory bag/bank/materialized
+        // alias is refused before growth or resource staging, rather than silently refreshing stale equipment.
+        if (saved.EquipmentBehavior?.EquippedItemIds?.Contains(id) == true)
+            return HasExactEquippedPet(saved, id) && PetTalentRuntime.HasExactEquippedPet(live, id);
+        return live.InventoryBehavior?.InventoryItemIds?.Count(itemId => itemId == id) == 1
+            && live.EquipmentBehavior?.EquippedItemIds?.Contains(id) != true
+            && live.EquipmentBehavior?.EquippedItems?.Any(item => item is not null && item.m_globalID.Full == id) != true
+            && live.StorageBehavior?.BankItemIds?.Contains(id) != true
+            && live.StorageBehavior?.Items?.Any(item => item is not null && item.m_globalID.Full == id) != true;
     }
 
     private static bool PrepareGrowthMessages(Wizard live, WizClientObjectItem pet, PetGrowth growth,

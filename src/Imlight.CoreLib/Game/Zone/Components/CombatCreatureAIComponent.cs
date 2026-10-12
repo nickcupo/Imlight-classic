@@ -178,6 +178,11 @@ internal sealed class CombatCreatureAIComponent(ZoneEntity entity) : ZoneEntityC
             return;
         }
 
+        // CLASSIC: a hired henchman's turns are the duel's (the ally brain, CombatDuelComponent.Henchmen).
+        if (_currentSubCircle?.IsHenchman == true) {
+            return;
+        }
+
         _roundHand = _currentSubCircle.DrawHand();
 
         DetermineAttitude();

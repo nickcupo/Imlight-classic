@@ -468,6 +468,7 @@ public sealed partial class SessionActor : ReceiveActor, IDisposable {
         Receive<LegacyDoorOwnerObject>(ReceiveLegacyDoorOwnerObject);
         Receive<LegacyDoorSocketBatch>(ReceiveLegacyDoorSocketBatch);
         Receive<SERVICE_101_PROTOCOL.MSG_ATTACHCOMPLETE>(ReceivePetGameAttachComplete);
+        Receive<PetGameAttachRetry>(ReceivePetGameAttachRetry);
         Receive<PetGamePublication>(ReceivePetGamePublication);
         Receive<PetGameSessionOutput>(ReceivePetGameSessionOutput);
 

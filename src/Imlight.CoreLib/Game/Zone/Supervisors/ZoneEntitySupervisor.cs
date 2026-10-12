@@ -95,6 +95,21 @@ internal abstract class ZoneEntitySupervisor(Core.Zone zone) : ReceiveProtocolDi
         }
     }
 
+    // CLASSIC: pet-game scene query (ZonePath passes it on to its creatures).
+    [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_QUERYTEMPLATEOBJECTS))]
+    public virtual void ReceiveQueryTemplateObjects(ZONE_102_PROTOCOL.MSG_QUERYTEMPLATEOBJECTS message) {
+        foreach (var entity in EntityActors) {
+            entity?.Forward(message);
+        }
+    }
+
+    [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_ARMSCRIPTEDCOMBAT))]
+    public virtual void ReceiveArmScriptedCombat(ZONE_102_PROTOCOL.MSG_ARMSCRIPTEDCOMBAT message) { // CLASSIC: ScriptedAggro
+        foreach (var entity in EntityActors) {
+            entity?.Forward(message);
+        }
+    }
+
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_ZONESTART))]
     public virtual void ReceiveZoneStart(ZONE_102_PROTOCOL.MSG_ZONESTART message) {
         foreach (var entity in EntityActors) {
@@ -109,7 +124,8 @@ internal abstract class ZoneEntitySupervisor(Core.Zone zone) : ReceiveProtocolDi
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_ZONEBROADCAST))]
     public virtual void ReceiveZoneBroadcast(ZONE_102_PROTOCOL.MSG_ZONEBROADCAST message) {
         foreach (var entity in EntityActors) {
-            if (entity is null) {
+            // CLASSIC: exclusions are trusted internal actor identities, never names or a native packet field.
+            if (entity is null || message.ExcludedRecipients?.Contains(entity) == true) {
                 continue;
             }
 

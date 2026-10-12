@@ -34,6 +34,10 @@
  * Start at the `CombatResolver` class and work your way down.
  * Tutorial duels are scripted by the `TutorialDuelDirector` in that namespace.
  * Combat positions are determined by sigil templates, with specific subcircle positions.
+ * CLASSIC: OWNER RULING 2026-10-10, "take the rewards away": a wizard defeated during a battle their side still wins
+ * gets no rewards from it (no XP, gold, Crowns, drops, reagents or quest kill credit) and is still sent home with low
+ * health. Wizards standing at the end keep everything. [Classic] DefeatedGetNoRewards (on); see
+ * DefeatedWithoutRewards. PvE only: PvP and the arena keep their own rules.
  * 
  * TODO:
  * - Implementation of creature stunning functionality
@@ -42,7 +46,7 @@
  * 
  * Created by: Jooty
  * Version: KALI 1.0
- * Last Updated: 10/01/2026
+ * Last Updated: 10/10/2026
  */
 
 using System;
@@ -184,6 +188,11 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
     public override void OnPlayerJoin(CoreObject playerObj, IActorRef playerActor, Wizard playerWizard) {
         // CLASSIC: a wizard of an arena match arrives: their seat (or their held seat after a drop).
         if (_arena) {
+            // CLASSIC: a held seat is taken once the client is in the zone (ReceiveRejoinClientReady).
+            if (QueueRejoin(playerObj, playerActor, playerWizard)) {
+                return;
+            }
+
             if (!(_isActive && TryRejoin(playerObj, playerActor, playerWizard))
                 && (!ElixirService.PreparesCombatSnapshots
                     || SubCircles?.Any(circle => circle is { Occupied: true, Disconnected: true }
@@ -198,8 +207,9 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
             return;
         }
 
-        // CLASSIC: a wizard who dropped mid-fight and logged back in takes their held seat again.
-        if (TryRejoin(playerObj, playerActor, playerWizard)) {
+        // CLASSIC: a wizard who dropped mid-fight and logged back in takes their held seat again, once their client is
+        // in the zone (CombatDuelComponent.Rejoin.cs, Imlight.Classic.Rules.RejoinTiming).
+        if (QueueRejoin(playerObj, playerActor, playerWizard)) {
             return;
         }
 
@@ -215,6 +225,7 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
 
     // CLASSIC: forget a player who leaves the zone, so the same object coming back in range counts as an enter again.
     public override void OnPlayerLeave(IActorRef playerActor, ulong id) {
+        ForgetPendingRejoins(playerActor); // CLASSIC: gone again before taking a held seat; it stays held
         foreach (var key in _entitiesInRange.Where(x => x.Value.Equals(playerActor)).Select(x => x.Key).ToList()) {
             _entitiesInRange.Remove(key);
         }
@@ -454,6 +465,7 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
         PassHeldSeats();
         // CLASSIC: ambient wizards in the duel pick their cards a few seconds in.
         ScheduleAmbientTurns();
+        ScheduleHenchmanTurns(); // CLASSIC: hired henchmen too
 
         // Tutorial duels flush queued card grants and re-script the golems before planning.
         _tutorialDirector.OnPlanningPhaseBegin();
@@ -529,6 +541,11 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
         // Tutorial duels script the golems' moves server-side; drop their own AI moves so a pass cannot
         // overwrite the scripted attack. Player moves still flow through normally.
         if (_tutorialDirector.IsActive && caster.OccupiedTeam == CombatTeam.Monster) {
+            return;
+        }
+
+        // CLASSIC: a henchman's moves come from the ally brain (ReceiveHenchmanTurn), never from its creature AI.
+        if (caster.IsHenchman && !_choosingHenchmanMove) {
             return;
         }
 
@@ -699,6 +716,10 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
         }
 
         ActiveDuels.Remove(SigilId);
+        foreach (var charId in _pendingRejoins.Keys.ToList()) {
+            DropPendingRejoin(charId); // CLASSIC: nobody waits for a seat in a duel that is gone
+        }
+
         _waitingForRejoin = false;
         _isActive = false;
         _ownedMinionControl.Clear();
@@ -989,7 +1010,8 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
         circle._duelActor.ForgetOwnedMinion(circle, identity);
     }
 
-    private void SpawnAndAssignMinion(uint creatureTid, CombatDuelSubCircle caster, bool controllableSummon = false) {
+    // CLASSIC: returns the minion's slot (null when none joined), so a hired henchman can be set up after it joins.
+    private CombatDuelSubCircle SpawnAndAssignMinion(uint creatureTid, CombatDuelSubCircle caster, bool controllableSummon = false) {
         // CLASSIC: PvP minions occupy their caster's physical half, which the creature AI uses for enemy targets.
         // PvE summons retain the existing player-half selection.
         var slot = _pvp && caster.SlotIndex < 4
@@ -999,7 +1021,7 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
             Logger.Information("Duel {0} | minion summon (tid {1}) skipped, no free summon-team slot.",
                 Logger.Args(Duel.m_duelID.Full, creatureTid));
 
-            return;
+            return null;
         }
 
         var template = CoreObjectFactory.GetCoreTemplate(creatureTid);
@@ -1007,7 +1029,7 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
             Logger.Warning("Duel {0} | minion summon: no template for creature tid {1}.",
                 Logger.Args(Duel.m_duelID.Full, creatureTid));
 
-            return;
+            return null;
         }
 
         var centre = Entity.ActiveGameObject?.m_location ?? (caster?.ParticipantObject?.m_location ?? default);
@@ -1021,7 +1043,7 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
 
         var minionActor = Entity.SpawnCombatMinionActor(minionObj, template);
         if (minionActor is null) {
-            return;
+            return null;
         }
 
         try {
@@ -1035,11 +1057,13 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
             slot.RemoveParticipant();
             minionActor.Tell(PoisonPill.Instance);
 
-            return;
+            return null;
         }
 
         Logger.Information("Duel {0} | summoned minion tid {1} into summon-team slot {2} (caught up next round).",
             Logger.Args(Duel.m_duelID.Full, creatureTid, slot.SlotIndex));
+
+        return slot;
     }
 
     private void AddParticipant(CoreObject participantObject, IActorRef participantActor) {
@@ -1619,7 +1643,10 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
         return (byte) upFirst.SlotIndex;
     }
 
-    private void AddWaitingCombatParticipants() => EnactActionOnSubCircles(circle => {
+    private void AddWaitingCombatParticipants() => EnactActionOnSubCircles(AddCircleToCombat);
+
+    // CLASSIC: one circle's MSG_COMBATADD, so a henchman hired during card selection joins the round it was hired in.
+    private void AddCircleToCombat(CombatDuelSubCircle circle) {
         if (circle.AddedToDuel || !circle.Occupied) {
             return;
         }
@@ -1644,7 +1671,7 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
 
         circle.AddedToDuel = true;
         Duel.m_flatParticipantList.Add(participant);
-    });
+    }
 
     private void DoPipGain() => EnactActionOnSubCircles(circle => {
         if (!circle.AddedToDuel || !circle.IsAlive) {
@@ -1675,20 +1702,6 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
     private void ReceiveCheatInstantCinematics(COMBAT_106_PROTOCOL.MSG_CHEATINSTANTCINEMATICS message)
         => CheatInstantCinematics = message.Enabled;
 
-    // CLASSIC: a henchman hired from the Crown Shop during this duel joins the buyer's side (October 2009: henchmen
-    // "can only be purchased during a duel" and "behave similarly to your Minion"). The buyer is told whether it joined.
-    [MessageHandler(typeof(COMBAT_106_PROTOCOL.MSG_HIREHENCHMAN))]
-    private void ReceiveHireHenchman(COMBAT_106_PROTOCOL.MSG_HIREHENCHMAN message) {
-        var buyer = SubCircles.FirstOrDefault(x => x.ParticipantActor == message.Actor);
-        var joined = _isActive && buyer is { IsAlive: true } && GetAvailableSubCircleTeamPlayer() is not null
-            && CoreObjectFactory.GetCoreTemplate(message.CreatureTid) is not null;
-        if (joined) {
-            SpawnAndAssignMinion(message.CreatureTid, buyer);
-        }
-
-        message.Actor?.Tell(new COMBAT_106_PROTOCOL.MSG_HENCHMANHIRED { CreatureTid = message.CreatureTid, Success = joined });
-    }
-
     [MessageHandler(typeof(COMBAT_106_PROTOCOL.MSG_CHEATNOFIZZLE))]
     private void ReceiveCheatNoFizzle(COMBAT_106_PROTOCOL.MSG_CHEATNOFIZZLE message) {
         var subCircle = SubCircles.FirstOrDefault(x => x.ParticipantActor == message.Actor);
@@ -1711,7 +1724,11 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
         var playersWin = AliveAndInDuelCreatureCount <= 0;
         var creaturesWin = AliveAndInDuelPlayerCount <= 0;
 
-        FinishMonstrologyDuel(playersWin);
+        // CLASSIC: who was down when the fight ended, taken before anything (a defeated wizard's session sets 1 health
+        // once it hears of the defeat). Owner ruling 2026-10-10: they get no rewards from a fight their side wins.
+        var unrewarded = DefeatedWithoutRewards();
+
+        FinishMonstrologyDuel(playersWin, unrewarded);
         AwardMonstrologyExtractions(); // CLASSIC: Animus and Monstrology XP for the winners' extractions
 
         // A queued tutorial card grant must not leak into the next duel on this sigil.
@@ -1725,7 +1742,7 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
         RemovePlayersFromDuel();
 
         if (playersWin) {
-            PlayerWin();
+            PlayerWin(unrewarded);
         }
         else if (creaturesWin) {
             CreatureWin();
@@ -1750,7 +1767,31 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
         NotifyAmbientWizards(active: false); // CLASSIC
     }
 
-    private void PlayerWin() {
+    /// <summary>
+    /// CLASSIC: [Classic] DefeatedGetNoRewards (owner ruling 2026-10-10, "take the rewards away"). The player-side
+    /// circles down (0 health) when the fight ends. Their side may still win, but they get nothing from it: no
+    /// MSG_COMBATWIN, so no XP, gold, Crowns, drops, reagents, Treasure Cards, kill badges, Second Chance chest or
+    /// quest kill credit (CombatService and QuestService hand all of those out on that message), and no Monstrology
+    /// extraction. They are still sent home as defeated (RemovePlayersFromDuel). A wizard healed back up before the
+    /// end (a direct heal revives in this game, March 2009) is standing and keeps every reward. Empty when the switch
+    /// is off or without a classic profile. PvP never gets here (PvpEndDuel has its own rules).
+    /// </summary>
+    private HashSet<CombatDuelSubCircle> DefeatedWithoutRewards() {
+        var defeated = new HashSet<CombatDuelSubCircle>();
+        if (!ClassicRuntime.IsActive || !ClassicSettings.DefeatedGetNoRewards) {
+            return defeated;
+        }
+
+        foreach (var circle in SubCircles) {
+            if (circle is { Occupied: true, OccupiedTeam: CombatTeam.Player } && !circle.IsAlive) {
+                defeated.Add(circle);
+            }
+        }
+
+        return defeated;
+    }
+
+    private void PlayerWin(HashSet<CombatDuelSubCircle> unrewarded) {
         Logger.Debug("Duel {0} | Duel ended. Players win.", Logger.Args(Duel.m_duelID.Full));
 
         Duel.m_duelPhase = kDuelPhase.kPhase_Victory;
@@ -1784,6 +1825,14 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
             }
 
             circle.ParticipantActor.Tell(combatVictoryMsg);
+
+            // CLASSIC: defeated during the fight: no rewards and no kill credit (DefeatedWithoutRewards).
+            if (unrewarded.Contains(circle)) {
+                Logger.Debug("Duel {0} | Slot {1} | Defeated before the win: no rewards.",
+                    Logger.Args(Duel.m_duelID.Full, circle.SlotIndex));
+
+                return;
+            }
 
             var victoryMsg = new COMBAT_106_PROTOCOL.MSG_COMBATWIN() {
                 UsedPips = circle._usedPipsForExperienceGain,

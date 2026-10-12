@@ -29,7 +29,7 @@ using Type = System.Type;
 namespace Imlight.Classic.Tests;
 
 [Collection(nameof(ClassicRuntimeCollection))] // The fixture replaces shared rules and template caches.
-public sealed class PetGameSessionAdmissionTests {
+public sealed partial class PetGameSessionAdmissionTests {
     private const BindingFlags Private = BindingFlags.Instance | BindingFlags.NonPublic;
     private const BindingFlags Static = BindingFlags.Static | BindingFlags.NonPublic;
     private const string Dance = "PetGameDance", Morph = "PetGameMorph";
@@ -984,6 +984,7 @@ public sealed class PetGameSessionAdmissionTests {
     private static Array Sides(object lobby) => (Array)lobby.GetType().GetField("Sides")!.GetValue(lobby)!;
     private sealed record Ready;
     private sealed record Inspect;
+    private sealed record InspectTimers;
     private sealed record Send(object Message);
     private sealed record RestartPetActor;
     private sealed record State(object? Session, string? Game, bool Started, bool Ended, string? Current, int Round, int Successes,
@@ -995,6 +996,8 @@ public sealed class PetGameSessionAdmissionTests {
         internal readonly ConcurrentQueue<IActorRef> WireSenders = new(), AttachFanout = new();
         internal readonly ConcurrentQueue<CHARACTER_103_PROTOCOL.MSG_RESUMMONPET> Resummons = new();
         internal readonly ConcurrentQueue<(Type Type, IActorRef Sender)> Ingress = new();
+        internal readonly ConcurrentQueue<ZONE_102_PROTOCOL.MSG_ZONETRANSFER> Transfers = new();
+        internal Func<string, int, PetGameScene>? SceneLoader = AuthoredScene;
         internal List<ClientPetSnackItem> Snacks = [];
         internal readonly PetProgressDependencies ProgressDependencies = new() { SerializePet = _ => new ByteString(new byte[] { 2 }), MaxEnergy = _ => 50 };
         internal PetGameEndData? PreparedEnd;
@@ -1015,6 +1018,7 @@ public sealed class PetGameSessionAdmissionTests {
         private readonly FieldInfo _lazyValue, _lazyState;
         private readonly IDictionary<ulong, CoreTemplate> _templates;
         private readonly CoreTemplate? _oldPet, _oldSnack, _oldDance;
+        private readonly Dictionary<uint, CoreTemplate?> _oldPhantom = [];
         private readonly FieldInfo _talents = typeof(PetProgress).GetField("s_talentNames", Static)!;
         private readonly object? _oldTalents;
         private readonly List<string> _fullKeys = [];
@@ -1025,8 +1029,9 @@ public sealed class PetGameSessionAdmissionTests {
             _oldGames = _gamesField.GetValue(null);
             _gamesField.SetValue(null, PetGameConfigs.KioskGames.Values.ToDictionary(game => game, game => new PetGameInfo {
                 m_name = game, m_energyCosts = [], m_gameIcon = "", m_trackIcons = [], m_trackToolTips = [],
-                m_trackChoices = [new() { m_name = "AuthoredTrack", m_scene = "AuthoredScene", m_gameScoreFactor = [],
-                    m_modifications = [new() { m_name = "Agility", m_change = 4 }] }],
+                // Five authored tracks, like each Pavilion game's five.
+                m_trackChoices = [..Enumerable.Range(0, 5).Select(_ => new PetStatModificationSet { m_name = "AuthoredTrack",
+                    m_scene = "AuthoredScene", m_gameScoreFactor = [], m_modifications = [new() { m_name = "Agility", m_change = 4 }] })],
             }, StringComparer.Ordinal));
             _lazy = typeof(PetGameConfigs).BaseType!.GetField("s_instance", Static)!.GetValue(null)!;
             _lazyValue = _lazy.GetType().GetField("_value", Private)!; _lazyState = _lazy.GetType().GetField("_state", Private)!;
@@ -1037,6 +1042,15 @@ public sealed class PetGameSessionAdmissionTests {
             _oldSnack = _templates.TryGetValue(SnackTemplate, out var snack) ? snack : null;
             _oldDance = _templates.TryGetValue(PetGameObjectCodec.DanceTemplate, out var dance) ? dance : null;
             _templates[PetGameObjectCodec.DanceTemplate] = AuthoredDanceTemplate();
+            foreach (var (game, id) in PhantomLogicTemplates) {
+                _oldPhantom[id] = _templates.TryGetValue(id, out var old) ? old : null;
+                _templates[id] = new WizItemTemplate { m_templateID = id, m_displayName = "", m_behaviors = [new PetGameBehaviorTemplate {
+                    m_behaviorName = "PetGameBehavior", m_gameName = game }] };
+            }
+            foreach (var id in PieceTemplates) {
+                _oldPhantom[id] = _templates.TryGetValue(id, out var old) ? old : null;
+                _templates[id] = new GameObjectTemplate { m_templateID = id, m_objectName = "AuthoredPiece" + id, m_behaviors = [] };
+            }
             _oldTalents = _talents.GetValue(null); _talents.SetValue(null, new Dictionary<uint, string>());
             _templates[PetTemplate] = new WizItemTemplate { m_templateID = PetTemplate, m_adjectiveList = ["Pet"], m_school = "Fire",
                 m_behaviors = [new PetItemBehaviorTemplate { m_behaviorName = "PetItemBehavior", m_Levels = [],
@@ -1052,6 +1066,7 @@ public sealed class PetGameSessionAdmissionTests {
             Store.Live = Store.Reload(); Store.Live.EquipmentBehavior.EquippedItems = [..Store.Items.Select(TerminalClaimFixture.CloneItem)];
             Store.Live.PetSnackBehavior = new() { SnackItemIds = [], Snacks = [] };
             Store.Live.Account = new Account { AuthLevel = AuthLevel.QualityAssurance };
+            typeof(Account).GetProperty(nameof(Account.AccountId))!.SetValue(Store.Live.Account, 793010UL);
             Store.Live.GameObject = new WizClientObject { m_templateID = 1, m_inactiveBehaviors = [] };
             _system = ActorSystem.Create("pet-admission-" + Guid.NewGuid().ToString("N"), "akka.actor.provider = local");
         }
@@ -1174,11 +1189,12 @@ public sealed class PetGameSessionAdmissionTests {
                 f.AttachSender = f._system.ActorOf(Props.Create(() => new AttachProbeService(session)), "attach");
                 await f.AttachSender.Ask<ActorIdentity>(new Identify("ready"), Timeout, TestContext.Current.CancellationToken);
                 f.Attach = new(f.Store.Live.Zone, f._socket, 1, f.Store.Live.GameObjectID);
-                f._fanout = f._system.ActorOf(Props.Create(() => new AttachFanoutProbeService(session, f.AttachFanout, f.Resummons)), "fanout");
+                f._fanout = f._system.ActorOf(Props.Create(() => new AttachFanoutProbeService(session, f.AttachFanout, f.Resummons, f.Transfers)), "fanout");
                 await f._fanout.Ask<ActorIdentity>(new Identify("ready"), Timeout, TestContext.Current.CancellationToken);
                 var routes = (Dictionary<Type, List<IActorRef>>)typeof(SessionActor).GetField("_dispatchTable", Private)!.GetValue(session)!;
                 routes[typeof(SERVICE_101_PROTOCOL.MSG_ATTACHCOMPLETE)] = [f._fanout];
                 routes[typeof(CHARACTER_103_PROTOCOL.MSG_RESUMMONPET)] = [f._fanout];
+                routes[typeof(ZONE_102_PROTOCOL.MSG_ZONETRANSFER)] = [f._fanout];
                 session.PublishDoorAttach(f.Attach);
                 f._endpoint.Tell(new SERVICE_101_PROTOCOL.MSG_ATTACHCOMPLETE {
                     AttachGeneration = f.Attach.Generation, ZoneActorRef = f.Attach.Actor }, f.AttachSender);
@@ -1189,7 +1205,9 @@ public sealed class PetGameSessionAdmissionTests {
                 // Keep the real parent's routing and graceful close recipients in this scoped actor fixture.
                 var order = (List<(IActorRef Ref, Type Type)>)typeof(SessionActor).GetField("_serviceOrder", Private)!.GetValue(session)!;
                 order.Add((f._service, typeof(PetGameService)));
-                foreach (var type in MessageHandlerTable.HandlersOf(typeof(PetGameService)).Keys) routes[type] = [f._service];
+                // The attach fanout keeps its probe recipient as well as the pet service's phantom arrival handler.
+                foreach (var type in MessageHandlerTable.HandlersOf(typeof(PetGameService)).Keys)
+                    routes[type] = type == typeof(SERVICE_101_PROTOCOL.MSG_ATTACHCOMPLETE) ? [f._fanout, f._service] : [f._service];
                 f._endpoint.Tell(new SERVICE_101_PROTOCOL.MSG_GETALLSERVICES());
                 return f;
             } catch { f.Dispose(); throw; }
@@ -1215,6 +1233,7 @@ public sealed class PetGameSessionAdmissionTests {
             return Send(new PET_9_PROTOCOL.MSG_PETGAMEJOIN { Game = game, Track = "0" });
         }
         internal Task<State> State() => _service.Ask<State>(new Inspect(), Timeout, TestContext.Current.CancellationToken);
+        internal Task<Dictionary<object, object>> Timers() => _service.Ask<Dictionary<object, object>>(new InspectTimers(), Timeout, TestContext.Current.CancellationToken);
         internal async Task ParentBarrier() {
             if (Instance.IsDisposed) return;
             try { await _endpoint.Ask<SessionActor>("Identify", Timeout, TestContext.Current.CancellationToken); }
@@ -1255,6 +1274,8 @@ public sealed class PetGameSessionAdmissionTests {
             if (_oldPet is null) _templates.Remove(PetTemplate); else _templates[PetTemplate] = _oldPet;
             if (_oldSnack is null) _templates.Remove(SnackTemplate); else _templates[SnackTemplate] = _oldSnack;
             if (_oldDance is null) _templates.Remove(PetGameObjectCodec.DanceTemplate); else _templates[PetGameObjectCodec.DanceTemplate] = _oldDance;
+            foreach (var (id, old) in _oldPhantom) { if (old is null) _templates.Remove(id); else _templates[id] = old; }
+            PetGameTransfers.Cancel(Store.Saved.CharId);
             _talents.SetValue(null, _oldTalents); Store.Dispose();
         }
     }
@@ -1264,7 +1285,10 @@ public sealed class PetGameSessionAdmissionTests {
             => Receive<IMessage>(packet => { senders.Enqueue(Sender); packets.Enqueue(packet); });
     }
     private sealed class AttachFanoutProbeService(SessionActor parent, ConcurrentQueue<IActorRef> seen,
-        ConcurrentQueue<CHARACTER_103_PROTOCOL.MSG_RESUMMONPET> resummons) : MessageService(parent) {
+        ConcurrentQueue<CHARACTER_103_PROTOCOL.MSG_RESUMMONPET> resummons,
+        ConcurrentQueue<ZONE_102_PROTOCOL.MSG_ZONETRANSFER> transfers) : MessageService(parent) {
+        [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_ZONETRANSFER))]
+        private void Transfer(ZONE_102_PROTOCOL.MSG_ZONETRANSFER message) => transfers.Enqueue(message);
         [MessageHandler(typeof(SERVICE_101_PROTOCOL.MSG_ATTACHCOMPLETE))]
         private void Completed(SERVICE_101_PROTOCOL.MSG_ATTACHCOMPLETE message) => seen.Enqueue(Sender);
         [MessageHandler(typeof(CHARACTER_103_PROTOCOL.MSG_RESUMMONPET))]
@@ -1309,6 +1333,7 @@ public sealed class PetGameSessionAdmissionTests {
                     _timers = (PetAdmissionTimers)(object)service.Timers; sender.Tell(true); return true;
                 }
                 if (message is Inspect) { sender.Tell(Snapshot()); return true; }
+                if (message is InspectTimers) { sender.Tell(new Dictionary<object, object>(_timers.Messages)); return true; }
                 var actual = message is Send send ? send.Message : message;
                 fixture.Ingress.Enqueue((actual.GetType(), sender));
                 if (actual is PetGamePublicationResult result && fixture.HoldResult) {
@@ -1341,7 +1366,8 @@ public sealed class PetGameSessionAdmissionTests {
             var oldStack = Imlight.CoreLib.Game.DropTables.ClassicStackRewards.TestScope.Value;
             var oldProgress = WizardProgressionTransactions.TestScope.Value; var oldItems = WizardInventoryTransactions.TestRowsScope.Value;
             var oldReagents = WizardReagentCollection.TestRowsScope.Value; var oldPet = ClassicPetProgressTransactions.TestScope.Value;
-            var oldSnacks = WizardPetSnackTransactions.TestRowsScope.Value;
+            var oldSnacks = WizardPetSnackTransactions.TestRowsScope.Value; var oldScenes = PetGameScenes.TestScope.Value;
+            PetGameScenes.TestScope.Value = fixture.SceneLoader;
             fixture.Store.Install(); ClassicPetProgressTransactions.TestScope.Value = fixture.ProgressDependencies;
             WizardCollection.TestStoreScope.Value = new(fixture.Open, fixture.Load);
             WizardPetSnackTransactions.TestRowsScope.Value = fixture.SnackRows;
@@ -1350,7 +1376,7 @@ public sealed class PetGameSessionAdmissionTests {
                 Imlight.CoreLib.Game.DropTables.ClassicStackRewards.TestScope.Value = oldStack;
                 WizardProgressionTransactions.TestScope.Value = oldProgress; WizardInventoryTransactions.TestRowsScope.Value = oldItems;
                 WizardReagentCollection.TestRowsScope.Value = oldReagents; ClassicPetProgressTransactions.TestScope.Value = oldPet;
-                WizardPetSnackTransactions.TestRowsScope.Value = oldSnacks;
+                WizardPetSnackTransactions.TestRowsScope.Value = oldSnacks; PetGameScenes.TestScope.Value = oldScenes;
             });
         }
     }

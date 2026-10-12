@@ -89,6 +89,7 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
             ? TimeSpan.FromSeconds(seconds) : fallback;
 
     private readonly PostCombatGrace _grace = new(StillSeconds, MoveGraceSeconds); // CLASSIC
+    private bool _publishGraceEffect = true; // CLASSIC: PvP keeps authoritative grace without the PvE native presentation.
 
     private readonly CoreObjectSerializer _effectSerializer = new(
         behaviors: SerializerFlags.None
@@ -110,11 +111,23 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
         MinionHelperHub.Shared.UnbindSession(_helperAccountId, SessionActor.ActorRef); // CLASSIC: Minion Helper.
     }
 
+    // CLASSIC: the real client's "I am in the zone" (MSG_CLIENTZONED, after every zone entry). A duel holding a seat for
+    // this wizard (they logged back in mid-fight) sends them the fight after it (ClientZoneSignals, RejoinTiming).
+    [MessageHandler(typeof(WIZARD2_53_PROTOCOL.MSG_CLIENTZONED))]
+    private void ReceiveClientZoned(WIZARD2_53_PROTOCOL.MSG_CLIENTZONED message) {
+        if (GetActiveWizard() is { CharId: > 0 } wizard) {
+            ClientZoneSignals.Zoned(wizard.CharId, SessionActor.ActorRef);
+        }
+    }
+
     // CLASSIC: the Crown Shop's henchman hire goes to the duel this player is in; outside a duel it fails at once.
     [MessageHandler(typeof(COMBAT_106_PROTOCOL.MSG_HIREHENCHMAN))]
     private void ReceiveHireHenchman(COMBAT_106_PROTOCOL.MSG_HIREHENCHMAN message) {
         if (_currentDuelActor is null) {
-            SessionActor.ActorRef.Tell(new COMBAT_106_PROTOCOL.MSG_HENCHMANHIRED { CreatureTid = message.CreatureTid, Success = false });
+            SessionActor.ActorRef.Tell(new COMBAT_106_PROTOCOL.MSG_HENCHMANHIRED {
+                CreatureTid = message.CreatureTid, Success = false,
+                Refusal = Imlight.Classic.Rules.HenchmanRefusal.NotInCombat,
+            });
 
             return;
         }
@@ -122,6 +135,14 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
         message.Actor = SessionActor.ActorRef;
         _currentDuelActor.Tell(message, SessionActor.ActorRef);
     }
+
+    // CLASSIC: the client's henchman Dismiss button (GUI_DismissHenchmen, "Crowns will not be refunded") sends
+    // MSG_DISMISS_SUMMON with the henchman's sub-circle; the duel checks that it is this player's henchman.
+    [MessageHandler(typeof(DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_DISMISS_SUMMON))]
+    private void ReceiveDismissSummon(DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_DISMISS_SUMMON message)
+        => _currentDuelActor?.Tell(new COMBAT_106_PROTOCOL.MSG_DISMISSHENCHMAN {
+            Actor = SessionActor.ActorRef, SubCircle = (int) message.Subcircle,
+        }, SessionActor.ActorRef);
 
     [MessageHandler(typeof(COMBAT_106_PROTOCOL.MSG_ACTORADDEDTODUEL))]
     private void RecieveDuelAdd(COMBAT_106_PROTOCOL.MSG_ACTORADDEDTODUEL message) {
@@ -225,9 +246,14 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
             });
         }
 
+        // CLASSIC: this is a wizard duel, not a creature reward. Omit the shared native post-combat effect;
+        // its role in the reported empty Animus panel is inferred, while server aggro protection stays unchanged.
+        _publishGraceEffect = false;
         SetNoAggroGrace();
         if (message.Fought) {
-            InformGameClient(message.Won ? "Your side won the duel!" : "Your side lost the duel.");
+            // CLASSIC: the native duel/result UI already shows this; a non-modal notice creates a "!" alert.
+            Logger.Information("PvP result for {0} (log only): {1}",
+                Logger.Args(wizard.CharId, message.Won ? "Your side won the duel!" : "Your side lost the duel."));
         }
     }
 
@@ -235,7 +261,7 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
     [MessageHandler(typeof(CLASSIC_FEATURES_PROTOCOL.MSG_PVPCOMMAND))]
     private void ReceivePvpCommand(CLASSIC_FEATURES_PROTOCOL.MSG_PVPCOMMAND message) {
         if (_currentDuelActor is null) {
-            InformGameClient("You are not in an open PvP circle.");
+            InformGameClient("You are not in an open PvP circle.", isImportant: true);
 
             return;
         }
@@ -250,8 +276,11 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
         // (a second "Duel ended" and a MSG_SENDTOHUB).
         _currentDuelActor = null;
         if (!PublishCombatState(GetActiveWizard(), false, false)) return;
+        // CLASSIC: the health the wizard walks away with, before any reward (a level-up refill comes after it).
+        if (HealthAfterDuel(GetActiveWizard()) is { } health) SendToSocket(health);
         PushHelperIdle();
         EquipMount();
+        _publishGraceEffect = true; // CLASSIC: a creature victory retains the known native fade effects.
         SetNoAggroGrace();
 
         ClassicBadges.MobsDefeated(GetActiveWizard(), message.MobTemplateIds, SendToSocket); // CLASSIC: kill badges.
@@ -278,6 +307,27 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
         TellOtherServices(msg);
 
         GrantMobCrowns(GrantMobLoot(message.MobTemplateIds));
+    }
+
+    /// <summary>
+    /// CLASSIC: the wizard's health after a won duel, for the HUD. The duel changed health on the server only (the
+    /// client saw it in MSG_COMBATHEALTH); nothing else told the client after the duel, so a wizard's own health stat
+    /// stayed at its pre-duel value until the next zone change (playbot DS 2026-10-05: wizards chained fights at
+    /// 100-300 health believing they were full). The maximum is the level table's, as in every other MSG_UPDATEHEALTH:
+    /// the client adds its equipment effects itself. DisplayDiff 0: no floating number. Null without a level table.
+    /// </summary>
+    internal static WIZARD_12_PROTOCOL.MSG_UPDATEHEALTH HealthAfterDuel(Wizard wizard) {
+        if (wizard?.GameStats is not { } stats || wizard.MagicSchoolBehavior is not { } school
+            || WizardProgressionTransactions.LevelInfo(school.MagicSchool, school.Level) is not { m_hitpoints: > 0 } table) {
+            return null;
+        }
+
+        return new WIZARD_12_PROTOCOL.MSG_UPDATEHEALTH {
+            CharacterID = wizard.GameObjectID,
+            NewHealth = Math.Max(stats.m_currentHitpoints, 0),
+            NewHealthMax = table.m_hitpoints,
+            DisplayDiff = 0,
+        };
     }
 
     // CLASSIC: the bosses this wizard beat here open their Second Chance chests (October 2009).
@@ -889,8 +939,14 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
 
     private void PutEffect(string name, DateTime endUtc) {
         var wizard = GetActiveWizard();
-        foreach (var message in PostCombatEffects.Put(wizard, GetActiveGameObject().m_globalID, name, endUtc)) {
-            ZoneBroadcast(message, isSelfless: false);
+        if (_publishGraceEffect) {
+            foreach (var message in PostCombatEffects.Put(wizard, GetActiveGameObject().m_globalID, name, endUtc)) {
+                ZoneBroadcast(message, isSelfless: false);
+            }
+        }
+        else {
+            // CLASSIC: no unpublished NamedEffect in GameEffects: later stat rebuilds/attach must not expose it.
+            wizard.IsInCombatGrace = true;
         }
 
         Timers.StartSingleTimer("NoAggroGraceOver", new COMBAT_106_PROTOCOL.MSG_NOAGGROGRACEOVER(),

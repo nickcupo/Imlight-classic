@@ -194,6 +194,8 @@ internal sealed partial class ZoneTriggerSupervisor(Core.Zone zone) : ZoneEntity
                 continue;
             }
 
+            trigger.m_fireEvents = Imlight.Classic.Quests.ClassicRides.FireEvents(zoneName, trigger.m_fireEvents, e => e.ToString()); // CLASSIC
+
             // If there's persistent data associated with this trigger, load it.
             var persistentTriggerData = databaseTriggers?.Teleports
                 .FirstOrDefault(x => x.TriggerName == trigger.m_triggerName);
@@ -211,8 +213,10 @@ internal sealed partial class ZoneTriggerSupervisor(Core.Zone zone) : ZoneEntity
                 }
 
                 // Set the trigger results to the results stored in the database.
+                // CLASSIC: in a ride zone (ClassicRides) the trigger's own animation and waits stay before the teleport.
                 var resultList = new ResultList {
-                    m_results = [persistentTriggerData.Teleport]
+                    m_results = Imlight.Classic.Quests.ClassicRides.ResultsWithDestination<Result>(zoneName,
+                        trigger.m_results?.m_results, persistentTriggerData.Teleport, result => result is ResTeleport)
                 };
                 trigger.m_results = resultList;
                 RememberTeleportRequirements(trigger, persistentTriggerData.Teleport); // CLASSIC

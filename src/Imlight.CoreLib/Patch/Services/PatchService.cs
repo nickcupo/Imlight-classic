@@ -40,10 +40,11 @@ internal class PatchService(SessionActor sessionActor) : MessageService(sessionA
             ListFileName = rsp.Name,
             ListFileSize = rsp.Size,
             ListFileCRC = rsp.CRC,
-            ListFileURL = rsp.URL,
+            // CLASSIC (go-live): the patch-file mirror's public address for a friend outside the home network.
+            ListFileURL = Imlight.CoreLib.Classic.PublicGameAddress.Url(rsp.URL, SessionActor.RemoteIp),
             ListFileType = 1, // This causes the client to fail parsing the file if it is not 1. Do not change !
             ListFileTime = rsp.FileTime,
-            URLPrefix = rsp.URLPrefix,
+            URLPrefix = Imlight.CoreLib.Classic.PublicGameAddress.Url(rsp.URLPrefix, SessionActor.RemoteIp),
             URLSuffix = rsp.URLSuffix,
             Locale = message.Locale,
         };

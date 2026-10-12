@@ -73,6 +73,8 @@ internal static class CharacterHelper {
     private static void RecalculateGameStatsLocked(Wizard wizard) {
         Logger.Debug("Recalculation of game stats for {0}.", Logger.Args(wizard.PlayerNameBehavior.GetWizardName()));
 
+        // CLASSIC: retire exact pet-owned card/effect references before resetting all derived equipment stats.
+        Imlight.CoreLib.Game.Pet.PetTalentRuntime.RetireForRebuild(wizard);
         // Reset the base stats to the default values.
         wizard.GameStats.SetBaseStats();
         CharacterEffectHelper.ResetRebuiltEquipmentEffects(wizard.GameStats); // CLASSIC: discard only rebuilt bonuses and the mana ledger.
@@ -95,6 +97,9 @@ internal static class CharacterHelper {
                 ? ElixirRuntime.AddApprovedEffects(wizard, item, template,
                     pvp: wizard.IsInDuel && Imlight.CoreLib.Classic.Arena.ClassicArena.IsArenaZone(wizard.Zone))
                 : CharacterEffectHelper.AddEffectsToWizard(wizard, template);
+            if (Imlight.CoreLib.Game.Pet.PetTalentRuntime.HasExactEquippedPet(wizard, item.m_globalID.Full))
+                activatedEffects.AddRange(Imlight.CoreLib.Game.Pet.PetTalentRuntime.Publish(wizard, item,
+                    Imlight.CoreLib.Game.Pet.PetTalentRuntime.Prepare(wizard, item)));
 
             Logger.Debug("{0} Applied {1} effects for item {2}.",
                 Logger.Args(wizard.PlayerNameBehavior.GetWizardName(), activatedEffects.Count, template.m_objectName));

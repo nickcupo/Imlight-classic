@@ -205,6 +205,9 @@ public sealed class ProfileRules {
     /// </summary>
     public string? InstanceResets { get; init; }
 
+    /// <summary>CLASSIC: dated dungeon answers and quest-goal helper overrides, restricted to October 2010.</summary>
+    public string? PuzzleHelpers { get; init; }
+
     /// <summary>
     /// The rank from which power pips appear; null when unset or set to null.
     /// </summary>

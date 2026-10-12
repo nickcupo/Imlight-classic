@@ -51,6 +51,7 @@ using System;
 using System.Linq;
 using Akka.Actor;
 using Imcodec.ObjectProperty.TypeCache;
+using Imlight.Common;
 using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.Game.Results;
 using Imlight.CoreLib.WizardData.Collections;
@@ -82,6 +83,8 @@ internal partial class QuestService {
         foreach (var (quest, goal) in GoalZoneEvents.ToReplay(templates,
                      (q, goalName) => held.TryGetValue(q.m_questName, out var instance) && instance.IsGoalActive(goalName),
                      wizard.Zone)) {
+            Logger.Debug("Zone {0}: posting again the activation of goal {1} of {2}.",
+                Logger.Args(wizard.Zone, goal.m_goalName, quest.m_questName));
             ResultDispatcher.ExecuteResults(
                 actorContext: Context,
                 results: goal.m_activateResults,

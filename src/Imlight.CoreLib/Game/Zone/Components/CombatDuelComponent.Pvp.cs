@@ -68,6 +68,7 @@ internal sealed partial class CombatDuelComponent {
     private DateTime _pvpLobbyOpenedUtc;
     private DateTime? _pvpCountdownStartedUtc;
     private readonly HashSet<IActorRef> _pvpReady = [];
+    private readonly HashSet<IActorRef> _pvpResultRecipients = []; // CLASSIC: personal winner already sent before Ended.
 
     /// <summary>Wizards on each side (seated, whether or not the fight has started).</summary>
     private (int Side0, int Side1) PvpSeats()
@@ -148,18 +149,18 @@ internal sealed partial class CombatDuelComponent {
 
         var slot = side < 0 ? null : SubCircles.FirstOrDefault(c => !c.Occupied && (side == 0 ? c.SlotIndex < 4 : c.SlotIndex >= 4));
         if (slot is null) {
-            actor.Tell(ClassicChat.Line("This duel circle is full."));
+            PvpNote("This duel circle is full.");
 
             return false;
         }
 
         if (!AssignParticipantToSubCircle(slot, actor, participant)) return false;
         var (now0, now1) = PvpSeats();
-        actor.Tell(ClassicChat.Line(_arena
+        PvpNote(_arena
             ? $"You are on side {side + 1} ({now0} v {now1}). The match starts when everyone is here."
             : now0 > 0 && now1 > 0
             ? $"You joined side {side + 1} ({now0} v {now1}). The duel starts soon; say .pvp ready to start sooner, .pvp leave to step out."
-            : $"You joined side {side + 1}. Waiting for a wizard on the other side; .pvp leave to step out."));
+            : $"You joined side {side + 1}. Waiting for a wizard on the other side; .pvp leave to step out.");
         Logger.Information("Duel {0} | open PvP: {1} joined side {2} ({3} v {4}).",
             Logger.Args(Duel.m_duelID.Full, participant.m_globalID.Full, side + 1, now0, now1));
         PvpPublish();
@@ -256,7 +257,7 @@ internal sealed partial class CombatDuelComponent {
     private void ReceivePvpCommand(CLASSIC_FEATURES_PROTOCOL.MSG_PVPCOMMAND message) {
         var seat = SubCircles?.FirstOrDefault(c => c is { Occupied: true } && c.ParticipantActor == message.Actor);
         if (!_pvp || !_isActive || seat is null) {
-            message.Actor?.Tell(ClassicChat.Line("You are not in an open PvP circle."));
+            PvpNote("You are not in an open PvP circle.");
 
             return;
         }
@@ -284,6 +285,23 @@ internal sealed partial class CombatDuelComponent {
         var actor = circle.ParticipantActor;
         var participantId = circle.ParticipantObject?.m_globalID ?? 0;
         var wasAdded = circle.AddedToDuel;
+        // CLASSIC: the native ending phase closes the planning hand. Once the seat is cleared, the final
+        // DuelBroadcast cannot reach this wizard, and native EndDuel sees a duel we no longer participate in.
+        // End only this client's combat before release; teammates may still be fighting in the shared duel.
+        if (wasAdded && circle.Occupied && actor is not null && !circle.Disconnected) {
+            // CLASSIC: deliver the native winner through the same actor route before its Ended phase.
+            // A team conceder loses personally now even if their remaining teammates later win.
+            if (fought) {
+                var ownTeam = circle.OccupiedTeam;
+                var winningTeam = won ? ownTeam : ownTeam == CombatTeam.Monster ? CombatTeam.Player : CombatTeam.Monster;
+                actor.Tell(new DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_COMBATMATCHRESULT {
+                    DuelID = SigilId, WinningTeam = (int) winningTeam,
+                });
+                _pvpResultRecipients.Add(actor);
+            }
+            SendCombatPhase((byte) kDuelPhase.kPhase_Ended, actor);
+        }
+
         if (circle.Disconnected) {
             if (circle._wizard is { } away && away.GameStats.m_currentHitpoints <= 0) {
                 away.UpdateHealth(1);
@@ -323,7 +341,13 @@ internal sealed partial class CombatDuelComponent {
 
         ArenaReport(side1Won ? 1 : 0); // CLASSIC: slots 1-4 are side 1 (index 0)
 
-        ZoneBroadcast(new DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_COMBATMATCHRESULT { DuelID = SigilId, WinningTeam = (byte) winning });
+        // CLASSIC: preserve the public winner for observers without re-sending a contrary shared result to
+        // a wizard who already conceded. Copy the recipients: cleanup runs before asynchronous zone fanout.
+        Entity.ZoneRef.Tell(new ZONE_102_PROTOCOL.MSG_ZONEBROADCAST {
+            Selfless = false, Sender = Self,
+            Message = new DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_COMBATMATCHRESULT { DuelID = SigilId, WinningTeam = (int) winning },
+            ExcludedRecipients = _pvpResultRecipients.ToArray(),
+        });
         Duel.m_duelPhase = kDuelPhase.kPhase_Ended;
         SendCombatPhase((byte) Duel.m_duelPhase);
         ZoneBroadcast(new DOODLEDOUG_MESSAGES_51_PROTOCOL.MSG_ENDDUEL { DuelID = SigilId });
@@ -335,7 +359,7 @@ internal sealed partial class CombatDuelComponent {
         Logger.Information("Duel {0} | open PvP circle closed: {1}.", Logger.Args(Duel.m_duelID.Full, reason));
         ArenaReport(-1); // CLASSIC: an arena match that never fought (no-op when already reported)
         foreach (var seat in SubCircles.Where(c => c is { Occupied: true }).ToList()) {
-            seat.ParticipantActor?.Tell(ClassicChat.Line($"The duel circle closed: {reason}."));
+            PvpNote($"The duel circle closed: {reason}.");
             PvpReleaseSeat(seat, won: false, fought: false);
         }
 
@@ -348,6 +372,7 @@ internal sealed partial class CombatDuelComponent {
         _pvpLobby = false;
         _pvpCountdownStartedUtc = null;
         _pvpReady.Clear();
+        _pvpResultRecipients.Clear();
         ClassicPvp.Forget(Entity.Zone?.ZonePath ?? "", _combatSigilObjectInfo?.m_zoneTag ?? "");
 
         // The circle stays in the zone for the next fight: the duel state goes, the entity does not. Wizards still
@@ -359,11 +384,13 @@ internal sealed partial class CombatDuelComponent {
         }
     }
 
-    private void PvpTellSeated(string text) {
-        foreach (var seat in SubCircles.Where(c => c is { Occupied: true, IsWizard: true })) {
-            seat.ParticipantActor?.Tell(ClassicChat.Line(text));
-        }
-    }
+    // CLASSIC (owner, 2026-10-08): r806919 shows every non-modal MSG_SERVERMESSAGE as a "!" alert
+    // (WizardGUIManager::HandleServerMessage), and the 2009 arena sent no such notices, so PvP status lines go to the
+    // server log only. The circle, PvP window and duel phases already show the player what happens.
+    private void PvpTellSeated(string text) => PvpNote(text);
+
+    private void PvpNote(string text)
+        => Logger.Debug("Duel {0} | PvP notice (log only): {1}", Logger.Args(Duel?.m_duelID.Full ?? 0UL, text));
 
     private void PvpPublish() {
         if (!_isActive) {

@@ -170,6 +170,56 @@ public sealed class QuestProgressionSessionTests {
         Assert.True(await actors.Complete()); Assert.Empty(await actors.Drain()); Assert.Equal(2, f.Saves);
     }
 
+    // CLASSIC (2026-10-10, Marleybone playthrough): a saved journal ahead of what the session showed used to stop
+    // silently, so the client kept the goal open and a group hunt fought on. The session now re-sends what changed.
+    [Fact]
+    public async Task ACompletionTheSavedJournalAlreadyHasIsReSentWithoutAnotherSaveOrReward() {
+        using var f = new TerminalClaimFixture(); NativeFields(f);
+        var next = new PersonaGoalTemplate { m_goalName = "Next", m_goalNameID = 789001, m_goalType = GOAL_TYPE.GOAL_TYPE_PERSONA,
+            m_goalTitle = "QA_Next", m_locationName = "QA_Location", m_completeResults = new() { m_results = [] } };
+        f.Template.m_goals.Add(next); f.Template.m_goalLogic = [new GoalCompleteLogic { m_goalsAND = [TerminalClaimFixture.GoalName], m_goalsToAdd = ["Next"] }];
+        f.Quests[0].GoalProgress = [f.Quests[0].GoalProgress[0], new GoalInstance { ID = 789002,
+            OwnerCharId = f.Live.CharId, GoalName = "Next", GoalType = next.m_goalType }];
+        f.Expected.GoalProgress = [f.Expected.GoalProgress[0], TerminalClaimFixture.CloneQuest(f.Quests[0]).GoalProgress[1]];
+        // Another write already finished the first goal and began the next; this session never showed either.
+        Progress(f.Quests[0].GoalProgress[0], int.MaxValue); Progress(f.Quests[0].GoalProgress[1], 0);
+        using var actors = await SessionFixture.Create(f);
+        Assert.True(await actors.Complete());
+        var packets = await actors.Drain();
+        Assert.Equal([typeof(QUEST_MESSAGES_52_PROTOCOL.MSG_COMPLETEGOAL), typeof(QUEST_MESSAGES_52_PROTOCOL.MSG_SENDGOAL)], packets.Select(p => p.GetType()));
+        Assert.Equal(TerminalClaimFixture.GoalId, (ulong)Assert.IsType<QUEST_MESSAGES_52_PROTOCOL.MSG_COMPLETEGOAL>(packets[0]).GoalID);
+        var started = Assert.IsType<QUEST_MESSAGES_52_PROTOCOL.MSG_SENDGOAL>(packets[1]);
+        Assert.Equal(789002UL, (ulong)started.GoalID); Assert.Equal(1, started.SendType); Assert.Equal(0, started.GoalCount);
+        Assert.Equal(0, f.Saves); Assert.Equal(0, f.Rolls); Assert.Empty(f.Receipts);
+        Assert.True(f.Expected.GoalProgress[0].IsGoalCompleted()); Assert.Equal(0, f.Expected.GoalProgress[1].CurrentProgress);
+        Assert.False(actors.Session.IsDisposed);
+        // Now current: nothing more to tell.
+        Assert.True(await actors.Complete()); Assert.Empty(await actors.Drain()); Assert.Equal(0, f.Saves);
+    }
+
+    [Fact]
+    public async Task ACreditForATallyTheSavedJournalAlreadyFinishedReSendsTheCompletion() {
+        using var f = Usage(); Progress(f.Quests[0].GoalProgress[0], int.MaxValue);
+        using var actors = await SessionFixture.Create(f);
+        var alias = f.Expected.GoalProgress[0];
+        Assert.True(await actors.Step("ReceiveCompleteScavengeGoal", new CHARACTER_103_PROTOCOL.MSG_COMPLETEUSAGEGOAL {
+            QuestID = f.Expected.ID, GoalID = alias.ID }));
+        var packet = Assert.IsType<QUEST_MESSAGES_52_PROTOCOL.MSG_COMPLETEGOAL>(Assert.Single(await actors.Drain()));
+        Assert.Equal(alias.ID, (ulong)packet.GoalID); Assert.True(alias.IsGoalCompleted()); Assert.Same(alias, f.Expected.GoalProgress[0]);
+        Assert.Equal(0, f.Saves); Assert.Empty(f.Receipts); Assert.Equal(0, f.Rolls); Assert.False(actors.Session.IsDisposed);
+    }
+
+    [Fact]
+    public async Task ACreditThatChangesNothingSendsNothingWhenTheSessionIsCurrent() {
+        using var f = Usage(); Progress(f.Quests[0].GoalProgress[0], int.MaxValue); Progress(f.Expected.GoalProgress[0], int.MaxValue);
+        using var actors = await SessionFixture.Create(f);
+        Assert.False(await actors.Step("IncrementCommittedGoal", f.Live, f.Expected, f.Goal, true));
+        Assert.Empty(await actors.Drain()); Assert.Equal(0, f.Saves);
+    }
+
+    private static void Progress(GoalInstance goal, int progress)
+        => typeof(GoalInstance).GetProperty(nameof(GoalInstance.CurrentProgress))!.SetValue(goal, progress);
+
     private static TerminalClaimFixture Acceptance() {
         var f = new TerminalClaimFixture(); NativeFields(f); f.Quests.Clear();
         f.Saved.QuestBehavior.CurrentQuestIDs = []; f.Live.QuestBehavior.CurrentQuestIDs = []; f.Live.QuestBehavior.CurrentQuestInstances = [];

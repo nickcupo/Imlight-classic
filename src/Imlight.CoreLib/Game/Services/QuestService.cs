@@ -199,6 +199,7 @@ internal partial class QuestService(SessionActor sessionActor) : MessageService(
         }
 
         CompleteGoal(qInstance, gTemplate);
+        ShareInstanceGoal(wizard, qInstance.QuestName, gTemplate); // CLASSIC: QuestService.SharedInstanceGoals.cs
     }
 
     [MessageHandler(typeof(CHARACTER_103_PROTOCOL.MSG_COMPLETEUSAGEGOAL))]
@@ -257,6 +258,7 @@ internal partial class QuestService(SessionActor sessionActor) : MessageService(
         var goalMax = gTemplate.m_tallyCounter?.m_count ?? 1;
         if (gInstance.CurrentProgress >= goalMax) {
             CompleteGoal(qInstance, gTemplate);
+            ShareInstanceGoal(wizard, qInstance.QuestName, gTemplate); // CLASSIC: one-use goals only (SharedInstanceGoals)
 
             return;
         }
@@ -352,6 +354,7 @@ internal partial class QuestService(SessionActor sessionActor) : MessageService(
         var questInstance = new QuestInstance(quest, wizard.CharId);
         if (ClassicQuestEngine.IsActive) {
             AcceptCommittedQuest(wizard, quest, questInstance);
+            QuestBuddyNotices.QuestChanged(Context.System, wizard.CharId); // CLASSIC: friends hear about it once settled
             return;
         }
         if (!wizard.AddQuest(questInstance)) return;
@@ -749,6 +752,7 @@ internal partial class QuestService(SessionActor sessionActor) : MessageService(
     private void CompleteQuest(QuestInstance questInstance) {
         var wizard = GetActiveWizard();
         if (StopUncertainQuestSession(wizard)) return; // CLASSIC
+        QuestBuddyNotices.QuestChanged(Context.System, wizard.CharId); // CLASSIC: friends hear about it once settled
         if (ClassicQuestEngine.IsActive) {
             CompleteCommittedQuest(wizard, questInstance);
             return;

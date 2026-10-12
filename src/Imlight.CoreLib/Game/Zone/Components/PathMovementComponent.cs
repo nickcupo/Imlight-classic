@@ -42,7 +42,9 @@ using Akka.Actor;
 using Imcodec.Math;
 using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty.TypeCache;
+using Imlight.Classic.Ambient;
 using Imlight.Common;
+using Imlight.CoreLib.Classic.Ambient;
 using Imlight.CoreLib.Game.Zone.Core;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;
@@ -76,6 +78,11 @@ internal sealed class PathMovementComponent(ZoneEntity entity) : ZoneEntityCompo
     private bool _receivedPathDetails;
     private bool _hasNoPath; // CLASSIC: told there is no path to walk; the creature stands still.
     private NodeObject _approachNode; // CLASSIC: placed off its path, a walker first goes to the nearest node.
+    // CLASSIC (2026-10-08): the legs of that first walk, over the zone's walk grid when a straight line would cross a
+    // wall (PlacedWalkerPaths.ApproachLegs), ending at _approachNode. Null until planned; the first move waits for it.
+    private Queue<NodeObject> _approachLegs;
+    private DateTime _approachPlanDeadline;
+    private sealed record ApproachGrid(NavGrid Grid);
     private uint _pathDetailsFailureCount;
     private DateTime _lastMoveTime;
     private Vector3 _lastStartLocation;
@@ -171,6 +178,7 @@ internal sealed class PathMovementComponent(ZoneEntity entity) : ZoneEntityCompo
         _lastStartLocation = Entity.ActiveGameObject.m_location;
         if (_currentNode is null) {
             _approachNode = PlacedWalkerPaths.Nearest(_nodes, Entity.ActiveGameObject.m_location);
+            PlanApproach();
         }
 
         if (wasStill) {
@@ -178,10 +186,58 @@ internal sealed class PathMovementComponent(ZoneEntity entity) : ZoneEntityCompo
         }
     }
 
+    /// <summary>
+    /// CLASSIC (2026-10-08): asks for the zone's walk grid (built once per zone, off this actor) to plan the first walk
+    /// to the path. Placed walkers only; one placed on its path, or a spawned creature, never gets here.
+    /// </summary>
+    private void PlanApproach() {
+        _approachLegs = null;
+        _approachPlanDeadline = DateTime.UtcNow.AddSeconds(10);
+        var zone = Entity.Zone?.ZonePath;
+        if (string.IsNullOrEmpty(zone)) {
+            ReceiveApproachGrid(new ApproachGrid(null));
+            return;
+        }
+
+        var self = ActorRef;
+        AmbientNav.ForZone(zone).ContinueWith(task => self.Tell(new ApproachGrid(task.IsCompletedSuccessfully ? task.Result : null)),
+            System.Threading.Tasks.TaskScheduler.Default);
+    }
+
+    [MessageHandler(typeof(ApproachGrid))]
+    private void ReceiveApproachGrid(ApproachGrid message) {
+        if (_approachNode is null || _currentNode is not null || _approachLegs is not null) {
+            return;
+        }
+
+        var from = Entity.ActiveGameObject.m_location;
+        var legs = PlacedWalkerPaths.ApproachLegs(message.Grid, from, _approachNode, out var how);
+        _approachLegs = new Queue<NodeObject>(legs);
+        var distance = Vector3.Distance(from, _approachNode.m_location);
+        if (how == PlacedWalkerPaths.Approach.NoRoute) {
+            Logger.Warning("Walker {0} in {1}: no walk on the zone's grid reaches its path ({2:F0} units off); it walks straight there.",
+                Logger.Args(Entity.ActiveGameObject.m_debugName, Entity.Zone?.ZoneName, distance));
+        }
+        else {
+            Logger.Debug("Walker {0} in {1}: first walk to its path, {2:F0} units: {3} ({4} legs).",
+                Logger.Args(Entity.ActiveGameObject.m_debugName, Entity.Zone?.ZoneName, distance, how, legs.Count));
+        }
+    }
+
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_CREATUREMOVEINTERVAL))]
     private void ReceiveMoveInterval(ZONE_102_PROTOCOL.MSG_CREATUREMOVEINTERVAL message) {
         if (!CheckPathDetails()) {
             return;
+        }
+
+        // CLASSIC: a placed walker's first walk waits (briefly) for its plan; without one by the deadline it walks straight.
+        if (_currentNode is null && _approachNode is not null && _approachLegs is null) {
+            if (DateTime.UtcNow < _approachPlanDeadline) {
+                RestartMoveInterval(500);
+                return;
+            }
+
+            _approachLegs = new Queue<NodeObject>([_approachNode]);
         }
 
         if (Stopped) {
@@ -214,7 +270,9 @@ internal sealed class PathMovementComponent(ZoneEntity entity) : ZoneEntityCompo
         // Determine how long it will take to reach the new node.
         var distanceToNewNode = Vector3.Distance(_lastStartLocation, _currentNode.m_location);
         var travelTimeInSeconds = distanceToNewNode / (_movementSpeed * _movementScale);
-        var travelTimeInMilli = (uint) travelTimeInSeconds * 1000;
+        // CLASSIC: was `(uint) travelTimeInSeconds * 1000`, which dropped the fraction of a second: the next move went out
+        // up to a second early and the client turned before the corner (cutting it, and a placed walker's turns round a wall).
+        var travelTimeInMilli = (uint) (travelTimeInSeconds * 1000);
 
         if (travelTimeInMilli < TRAVEL_TIME_CLAMP_MINIMUM_IN_MS) {
             travelTimeInMilli = TRAVEL_TIME_CLAMP_MINIMUM_IN_MS;
@@ -259,6 +317,10 @@ internal sealed class PathMovementComponent(ZoneEntity entity) : ZoneEntityCompo
     private NodeObject GetNextNode() {
         if (_nodes is null || _nodes.Count == 0) {
             return null; // CLASSIC: no nodes, nowhere to go.
+        }
+
+        if (_approachLegs is { Count: > 0 }) {
+            return _approachLegs.Dequeue(); // CLASSIC: the first walk to the path, leg by leg; its last leg is the node
         }
 
         if (_currentNode is null) {

@@ -77,7 +77,18 @@ internal static class AmbientDungeons {
 
     /// <summary>Tells <paramref name="zone"/>'s ambient wizards a real player is on a dungeon sigil. Free when it has none.</summary>
     internal static void NotifySigil(IActorRef zone, AmbientSigilNotice notice) {
-        if (Settings.Enabled && AmbientWizards.Count > 0 && AmbientWizards.TryGetGroup(zone, out var group)) {
+        if (AmbientWizards.Count == 0) {
+            return;
+        }
+
+        // CLASSIC (2026-10-09): a player with ambient companions takes them in (AmbientCompanionGroup); strangers on the
+        // street do not come over to a grouped player's sigil.
+        if (AmbientGroups.HasGroup(notice.PlayerCharId)) {
+            AmbientGroups.NotifySigil(notice);
+            return;
+        }
+
+        if (Settings.Enabled && AmbientWizards.TryGetGroup(zone, out var group)) {
             group.Tell(notice);
         }
     }

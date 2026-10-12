@@ -36,6 +36,10 @@
  * random 256-bit cookies (HttpOnly, SameSite=Strict, 12 hours); every POST
  * also needs the X-W101C header, which a cross-site form cannot send.
  * Failed logins are limited per address. Plain HTTP: for the LAN only.
+ * CLASSIC (go-live): the admin page and API answer only private addresses and
+ * never a proxied request (a tunnel header present). [Classic]
+ * FriendPortalProxyPort = 12381 adds a listener on 127.0.0.1 for the Cloudflare
+ * tunnel that serves the friend page (/friends/) and nothing else.
  *
  * Created by: Nick with Claude Code (claude-opus-5-5)
  * Version: KALI 1.0
@@ -78,6 +82,7 @@ public static class AdminDashboard {
     private static readonly ConcurrentDictionary<string, Func<object?>> s_sections = new();
     private static readonly JsonSerializerOptions s_json = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
     private static HttpListener? s_listener;
+    private static HttpListener? s_friendProxy;
 
     /// <summary>
     /// Lets a feature add its own block to the dashboard state (the Bazaar stock, holiday events, PvP circles).
@@ -108,9 +113,49 @@ public static class AdminDashboard {
             Logger.Error("[ADMIN] The dashboard could not listen on {Address}:{Port}: {Error}",
                 Logger.Args(address, port, ex.Message));
         }
+
+        StartFriendProxy();
     }
 
-    private static async Task AcceptLoop(HttpListener listener) {
+    /// <summary>
+    /// CLASSIC (go-live): the friend page for the Cloudflare tunnel in this container, on 127.0.0.1 only. The tunnel
+    /// must send Host 127.0.0.1:&lt;port&gt; (cloudflared originRequest.httpHostHeader); everything but /friends/ is 404.
+    /// </summary>
+    private static void StartFriendProxy() {
+        var port = Setting("Classic.FriendPortalProxyPort") is { } text && int.TryParse(text, out var value) && value is > 0 and < 65536 ? value : 0;
+        if (port == 0) return;
+        try {
+            var listener = new HttpListener();
+            listener.Prefixes.Add($"http://127.0.0.1:{port}/");
+            listener.Start();
+            s_friendProxy = listener;
+            _ = Task.Run(() => AcceptLoop(listener, friendsOnly: true));
+            Logger.Information("[FRIENDS] Friend page for the tunnel on http://127.0.0.1:{Port}/friends/.", Logger.Args(port));
+        }
+        catch (Exception ex) when (ex is HttpListenerException or InvalidOperationException or PlatformNotSupportedException) {
+            Logger.Error("[FRIENDS] The friend page could not listen on 127.0.0.1:{Port}: {Error}", Logger.Args(port, ex.Message));
+        }
+    }
+
+    /// <summary>CLASSIC (go-live): whether a request may reach the admin page or API.</summary>
+    internal static bool AdminAllowed(IPAddress? peer, Func<string, string?> header)
+        => Imlight.Classic.Net.PublicAccess.IsPrivate(peer) && !Imlight.Classic.Net.PublicAccess.CameThroughProxy(header);
+
+    /// <summary>CLASSIC (go-live): the friend-proxy listener's request handling (friend paths only).</summary>
+    internal static void HandleFriendProxy(HttpListenerContext context, Func<HttpListenerContext, bool> friends) {
+        var response = context.Response;
+        try {
+            response.Headers["X-Content-Type-Options"] = "nosniff";
+            response.Headers["X-Frame-Options"] = "DENY";
+            response.Headers["Cache-Control"] = "no-store";
+            if (!friends(context)) Write(response, 404, "text/plain", "not found");
+        }
+        catch (Exception) {
+            try { response.Abort(); } catch (Exception) { }
+        }
+    }
+
+    private static async Task AcceptLoop(HttpListener listener, bool friendsOnly = false) {
         while (listener.IsListening) {
             HttpListenerContext context;
             try {
@@ -124,7 +169,9 @@ public static class AdminDashboard {
                 continue;
             }
 
-            _ = Task.Run(() => Handle(context));
+            _ = friendsOnly
+                ? Task.Run(() => HandleFriendProxy(context, Friends.FriendPortal.TryHandle))
+                : Task.Run(() => Handle(context));
         }
     }
 
@@ -141,6 +188,12 @@ public static class AdminDashboard {
             var path = request.Url?.AbsolutePath ?? "/";
             // CLASSIC: the friend page has its own scoped site sessions, before the Administrator API gate.
             if (Friends.FriendPortal.TryHandle(context)) return;
+            // CLASSIC (go-live): the admin page and API never answer the internet or a tunnel.
+            if (!AdminAllowed(request.RemoteEndPoint?.Address, name => request.Headers[name])) {
+                Write(response, 404, "text/plain", "not found");
+
+                return;
+            }
             if (request.HttpMethod == "GET" && path == "/") {
                 Write(response, 200, "text/html; charset=utf-8", AdminDashboardPage.Html);
 
@@ -444,6 +497,8 @@ public static class AdminDashboard {
     internal static void StopForTests() {
         s_listener?.Stop();
         s_listener = null;
+        s_friendProxy?.Stop();
+        s_friendProxy = null;
     }
 
 }

@@ -40,6 +40,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Text.RegularExpressions;
@@ -54,6 +55,11 @@ using Imlight.CoreLib.Shared.Items;
 using Imlight.CoreLib.WizardData.Models.Player;
 
 namespace Imlight.CoreLib.Game.Effects;
+
+// CLASSIC: detached values for one acknowledged progression write, keyed to the original runtime stats.
+internal sealed record ManaProgressionMaximum(ServerWizGameStats Stats, object Ledger,
+    int OriginalMaximum, int OriginalUnreducedMaximum, ImmutableArray<KeyValuePair<uint, float>> Reductions,
+    int Maximum, int UnreducedMaximum);
 
 /// <summary>
 /// Helper class for adding and removing effects to/from a wizard character.
@@ -74,6 +80,38 @@ internal static class CharacterEffectHelper {
     private sealed class ManaAdjustment(int maximum) {
         internal int UnreducedMaximum = Math.Max(0, maximum);
         internal readonly Dictionary<uint, float> Reductions = [];
+    }
+
+    // CLASSIC: table deltas belong to the unreduced maximum. Preparation never changes the live ledger;
+    // the zero-delta path does not even look it up, and absent ledgers retain existing flat arithmetic.
+    internal static ManaProgressionMaximum PrepareManaProgressionMaximum(ServerWizGameStats stats, int delta) {
+        if (delta == 0) return null;
+        if (!s_manaAdjustments.TryGetValue(stats, out var adjustment))
+            return new(stats, null, stats.m_baseMana, stats.m_baseMana, [], stats.m_baseMana + delta, stats.m_baseMana + delta);
+        var reductions = adjustment.Reductions.ToImmutableArray();
+        var maximum = (int)Math.Clamp((long)adjustment.UnreducedMaximum + delta, 0, int.MaxValue);
+        var reduction = Math.Clamp(reductions.Sum(entry => (double)entry.Value), 0, 1);
+        return new(stats, adjustment, stats.m_baseMana, adjustment.UnreducedMaximum, reductions,
+            (int)Math.Floor(maximum * (1 - reduction)), maximum);
+    }
+
+    // CLASSIC: the character lane blocks other writers, but a reentrant callback can rebuild/change this
+    // exact ledger. Refuse stale ACK publication into the existing uncertainty quarantine.
+    internal static void ValidateManaProgressionMaximum(ServerWizGameStats stats, ManaProgressionMaximum prepared) {
+        if (prepared is null) return;
+        var present = s_manaAdjustments.TryGetValue(stats, out var current);
+        if (!ReferenceEquals(stats, prepared.Stats) || stats.m_baseMana != prepared.OriginalMaximum
+            || (prepared.Ledger is null ? present : !present || !ReferenceEquals(current, prepared.Ledger)
+                || current.UnreducedMaximum != prepared.OriginalUnreducedMaximum
+                || current.Reductions.Count != prepared.Reductions.Length
+                || prepared.Reductions.Any(entry => !current.Reductions.TryGetValue(entry.Key, out var value) || value != entry.Value)))
+            throw new InvalidOperationException("Mana progression runtime context changed before publication.");
+    }
+
+    internal static void PublishManaProgressionMaximum(ServerWizGameStats stats, ManaProgressionMaximum prepared) {
+        ValidateManaProgressionMaximum(stats, prepared);
+        if (prepared?.Ledger is ManaAdjustment adjustment) adjustment.UnreducedMaximum = prepared.UnreducedMaximum;
+        // No ApplyManaMaximum: no-refill progression deliberately preserves current mana, even above its new maximum.
     }
 
     // CLASSIC: only fields rebuilt by the equipment-effect loop are reset. Persistent resources,

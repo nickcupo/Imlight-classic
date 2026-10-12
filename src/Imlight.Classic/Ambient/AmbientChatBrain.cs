@@ -37,12 +37,20 @@
  * no numbers beyond levels) and AmbientChatLimiter keeps the wizard from
  * spamming.
  *
+ * CLASSIC (2026-10-10, owner: the wizards sounded "too AI ish"): it also
+ * hears rudeness ("noob": a shrug, never rudeness back), "what?" (it
+ * repeats itself or says "nvm"), "brb"/"back", and school bragging; and
+ * Plan decides per line whether a wizard answers, answers short, talks
+ * about its own thing instead, answers and adds its own thing, or lets
+ * the line go, by its temperament (ChatPersona.Kind). Lines a player
+ * waits on (help, friend, where, duel...) are always answered.
+ *
  * USAGE EXAMPLE:
  * var reply = AmbientChatBrain.Reply("hi Ryan, what level are you?", context, direct: false, turn: 3);
  *
  * Created by: Nick with Claude Code (claude-opus-5-5)
  * Version: KALI 1.0
- * Last Updated: 10/01/2026
+ * Last Updated: 10/10/2026
  */
 
 using System;
@@ -107,7 +115,7 @@ public static class AmbientChatBrain {
 
     private const RegexOptions Options = RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled;
 
-    private static readonly string[] s_menuYes = ["Sure!", "Okay!", "Yes!"];
+    private static readonly string[] s_menuYes = ["Yes!", "Yes please", "Let me help you with that quest"];
 
     private static ChatIntent Pool(string name, IReadOnlyList<string> pool, IReadOnlyList<string>? menu = null) => new(name, pool, null, menu);
 
@@ -115,22 +123,27 @@ public static class AmbientChatBrain {
     private static readonly Rule[] s_rules = [
         new("bot", new(@"\b(are|r)\s+(you|u)\s+(a\s+)?(bot|robot|npc|real|computer|fake)\b|\bnpc\b", Options),
             (_, _, _) => Pool("bot", AmbientLinePool.NotABot, ["What?"])),
+        // CLASSIC (2026-10-10): rudeness gets a shrug, never rudeness back (and never the blocked words).
+        new("rude", new(@"\b(noob|newb|n00b|nub|loser|ugly|you suck|u suck|shut up|go away|stupid|idiot|dumb|ur bad|you're bad|youre bad|your bad)\b", Options),
+            (_, _, _) => Pool("rude", AmbientLinePool.Rude, ["Don't be mean", "That wasn't nice"])),
         new("age", new(@"\bhow old\b|\bwhat grade\b|\bur age\b|\byour age\b|\bage\s*\?", Options),
-            (_, _, _) => Pool("age", AmbientLinePool.AgeAnswer, ["Sorry!"])),
+            (_, _, _) => Pool("age", AmbientLinePool.AgeAnswer, ["Sorry, I don't know"])),
         new("level", new(@"\b(what|wat|wut)\s*(level|lvl|lv)\b|\b(level|lvl)\s*\?|\bhow high\b|\bur (level|lvl)\b|\byour (level|lvl)\b", Options),
-            (_, _, p) => Pool("level", p is null || p.Numbers ? AmbientLinePool.LevelNumber : AmbientLinePool.LevelNoNumber, ["I don't know."])),
+            (_, _, p) => Pool("level", p is null || p.Numbers ? AmbientLinePool.LevelNumber : AmbientLinePool.LevelNoNumber, ["Sorry, I don't know"])),
         new("school", new(@"\b(what|wat|which)\s+school\b|\bur school\b|\byour school\b", Options),
             (_, _, _) => Pool("school", AmbientLinePool.SchoolAnswer)),
+        new("schoolopinion", new(@"\b(fire|ice|storm|myth|life|death|balance)\s+(is|r|rules|rocks)\b.*\b(best|better|cool|awesome|bad|lame|weak|worst)\b|\b(fire|ice|storm|myth|life|death|balance)\s+(rules|rocks|ftw)\b", Options),
+            (_, _, _) => Pool("schoolopinion", AmbientLinePool.SchoolOpinion, ["Cool"])),
         new("name", new(@"\bwhat'?s\s+(your|ur)\s+name\b|\bwhat is your name\b|\bwho are (you|u)\b", Options),
             (_, _, _) => Pool("name", AmbientLinePool.NameAnswer)),
-        new("where", new(@"\bwhere\s+(is|are|r|can i find|do i find)\s+(?:the\s+)?(?<what>[a-z' ]{3,40})", Options),
+        new("where", new(@"\bwhere\s+(is|are|r|can i find|do i find)\s+(?:the\s+)?(?<what>[a-z' ]{3,40})|\bhow\s+do\s+(i|you|u)\s+get\s+to\s+(?:the\s+)?(?<what>[a-z' ]{3,40})", Options),
             (m, c, _) => WhereIntent(m.Groups["what"].Value, c)),
         new("thanks", new(@"\b(thanks|thank you|thx|ty|tyvm|thanx)\b", Options),
-            (_, _, _) => Pool("thanks", AmbientLinePool.Thanks, ["You're welcome!"])),
+            (_, _, _) => Pool("thanks", AmbientLinePool.Thanks, ["You're welcome!", "No problem", "Any time"])),
         new("compliment", new(@"\b(nice|cool|love|like|awesome|pretty)\s+(your\s+|ur\s+)?(hat|robe|wand|outfit|clothes|pet|name|boots|mount|broom|deck)\b", Options),
-            (_, _, _) => Pool("compliment", AmbientLinePool.ComplimentThanks, ["Thank you!"])),
+            (_, _, _) => Pool("compliment", AmbientLinePool.ComplimentThanks, ["Thanks", "Thank you"])),
         new("gold", new(@"\b(give|gimme|spare|can i have|need)\b.*\bgold\b|\bfree gold\b", Options),
-            (_, _, _) => Pool("gold", AmbientLinePool.GoldBeg, ["Sorry!"])),
+            (_, _, _) => Pool("gold", AmbientLinePool.GoldBeg, ["Sorry, I can't"])),
         new("howgold", new(@"\bhow\s+(do|can)\s+(i|you|u)\s+(get|make)\s+(more\s+)?gold\b", Options),
             (_, _, _) => Pool("howgold", AmbientLinePool.HowToGold)),
         new("hatch", new(@"\bhatch", Options),
@@ -147,21 +160,27 @@ public static class AmbientChatBrain {
         new("help", new(@"\b(can|could|will)\s+(you|u|someone|anyone|any1)\s+help\b|\bneed\s+help\b|\bhelp\s+me\b|\bhelp\s+(pls|plz|please)\b|\bhelp\s+with\b|\b(wanna|want to)\s+help\b", Options),
             (_, _, _) => Pool("help", AmbientLinePool.HelpSure, s_menuYes)),
         new("friend", new(@"\b(friend me|add me|be my friend|be friends|friend request|wanna be friends|want to be friends)\b", Options),
-            (_, _, _) => Pool("friend", AmbientLinePool.Friend, ["Sure!", "Okay!"])),
+            (_, _, _) => Pool("friend", AmbientLinePool.Friend, ["Yes!", "Please be my friend"])),
+        new("boss", new(@"\b(anyone|anybody|any1|who|has anyone|did anyone)\b.*\b(done|beat|beaten|did|fought)\b|\bis\s+[a-z ]{3,30}\s+(hard|easy)\b", Options),
+            (_, _, _) => Pool("boss", AmbientLinePool.BossTalk, ["Yes, I think so", "That quest is too difficult"])),
         new("quest", new(@"\b(anyone|anybody|who|wanna|want to|lets|let's)\b.*\b(quest|questing|team up|group|lfg)\b|\blfg\b", Options),
             (_, _, _) => Pool("quest", AmbientLinePool.QuestTogether, s_menuYes)),
         new("come", new(@"\b(follow me|come here|come with me|come on|lets go|let's go)\b", Options),
-            (_, _, _) => Pool("come", AmbientLinePool.Come, ["Okay!", "Let's go!"])),
+            (_, _, _) => Pool("come", AmbientLinePool.Come, ["On my way!", "Lead the way", "Wait for me"])),
         new("bye", new(@"\b(bye|cya|see ya|gtg|got to go|g2g|later|ttyl|good night|goodnight)\b", Options),
-            (_, _, _) => Pool("bye", AmbientLinePool.Bye, ["Goodbye!", "See you later!"])),
+            (_, _, _) => Pool("bye", AmbientLinePool.Bye, ["Goodbye", "See ya!", "Cya later", "Take care"])),
+        new("brb", new(@"^\s*(brb|back|im back|i'm back|bak|ok back)\s*!*$", Options),
+            (_, _, _) => Pool("brb", AmbientLinePool.Brb, ["Cool"])),
         new("how", new(@"\bhow\s+(are|r)\s+(you|u)\b|\bhow'?s it going\b|\bsup\b|\bwhat'?s up\b|\bwassup\b", Options),
-            (_, _, _) => Pool("how", AmbientLinePool.HowAreYou, ["Good!"])),
+            (_, _, _) => Pool("how", AmbientLinePool.HowAreYou, ["I'm doing great!", "I'm okay", "Tired"])),
         new("doing", new(@"\b(what|which)\s+quest\b|\bwhat are (you|u) doing\b|\bwhat r u doing\b|\bwhatcha doing\b|\bwyd\b", Options),
             (_, _, _) => Pool("doing", AmbientLinePool.Doing)),
         new("greet", new(@"^\s*(hi+|hello|hey+|hiya|yo|heya|howdy|greetings|sup)\b", Options),
-            (_, c, _) => Pool("greet", c.Friend is not null ? AmbientLines.FriendGreetings : AmbientLinePool.Greet, ["Hi!", "Hello!"])),
+            (_, c, _) => Pool("greet", c.Friend is not null ? AmbientLines.FriendGreetings : AmbientLinePool.Greet, ["Hi!", "Hello", "What's up?"])),
         new("laugh", new(@"^\s*(lol+|lolz|haha+|hehe+|rofl|xd)\s*!*$", Options),
             (_, _, _) => Pool("laugh", AmbientLinePool.Laugh)),
+        new("what", new(@"^\s*(what|wat|wut|huh|wha|eh)?\s*\?*\s*$", Options),
+            (_, _, _) => Pool("what", AmbientLinePool.What, ["Sorry, I don't know"])),
         new("agree", new(@"^\s*(yes|yeah|ya|yep|ok|okay|k|sure|true|cool|nice)\s*!*$", Options),
             (_, _, _) => Pool("agree", AmbientLinePool.Agree)),
     ];
@@ -200,7 +219,7 @@ public static class AmbientChatBrain {
     }
 
     /// <summary>The fallback intent: a short "lol" or "hmm" for a line to the wizard that no rule understood.</summary>
-    public static ChatIntent Fallback { get; } = new("fallback", AmbientLinePool.Fallback, null, ["Okay!", "Cool!"]);
+    public static ChatIntent Fallback { get; } = new("fallback", AmbientLinePool.Fallback, null, ["Cool", "Ha Ha", "Wow!"]);
 
     /// <summary>
     /// The reply to <paramref name="text"/>, or null to stay quiet. A Say that does not use the wizard's first name gets
@@ -243,9 +262,7 @@ public static class AmbientChatBrain {
             return null;
         }
 
-        var first = friend.Name.Split(' ', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? friend.Name;
-        var recall = Recall(friend, context, turn);
-        return recall ?? AmbientLines.Choose(AmbientLines.FriendGreetings, turn, context);
+        return Recall(friend, context, turn) ?? AmbientLines.Choose(AmbientLines.FriendGreetings, turn, context);
     }
 
     /// <summary>A remark on the friend's zone or quest, as a buddy would make on seeing them.</summary>
@@ -255,27 +272,84 @@ public static class AmbientChatBrain {
         }
 
         if (!string.IsNullOrEmpty(context.SpeakerQuest) && turn % 2 == 0) {
-            return AmbientLines.Choose(["how's {quest} going?", "still on {quest}?", "need help with {quest}?", "{quest} is a fun one",
-                "almost done with {quest}?"], turn, context, new Dictionary<string, string> { ["quest"] = context.SpeakerQuest });
+            return AmbientLines.Choose(AmbientLines.FriendQuest, turn, context, new Dictionary<string, string> { ["quest"] = context.SpeakerQuest });
         }
 
         if (!string.IsNullOrEmpty(context.SpeakerZone)) {
-            return AmbientLines.Choose(["you're in {where}? cool", "how is {where}?", "i'll be in {where} later", "ooh, {where}!",
-                "say hi to {where} for me lol"], turn, context, new Dictionary<string, string> { ["where"] = context.SpeakerZone });
+            return AmbientLines.Choose(AmbientLines.FriendZone, turn, context, new Dictionary<string, string> { ["where"] = context.SpeakerZone });
         }
 
         return null;
     }
 
-    /// <summary>"Need a hand?" and friends: the help offer before joining a battle.</summary>
+    /// <summary>"need help?" and friends: the help offer before joining a battle.</summary>
     public static string HelpOffer(ChatContext context, int turn)
-        => (context.Friend is not null ? AmbientLines.Choose(AmbientLines.HelpOfferFriend, turn, context) : null)
-           ?? AmbientLines.Choose(AmbientLines.HelpOffer, turn, context) ?? "need a hand?";
+        => (context.Friend is not null && turn % 2 == 0 ? AmbientLines.Choose(AmbientLines.HelpOfferFriend, turn, context) : null)
+           ?? AmbientLines.Choose(AmbientLines.HelpOffer, turn, context) ?? "need help?";
+
+    /// <summary>The menu phrase a menu-chat wizard offers help with (r806919 QuickChat).</summary>
+    public const string MenuHelpOffer = "Would you like some help?";
 
     /// <summary>The reply to a yes (joining) or no.</summary>
     public static string HelpAnswered(bool yes, int turn, ChatContext? context = null) {
         context ??= new ChatContext("", AmbientSchool.Balance, 1, "");
-        return AmbientLines.Choose(yes ? AmbientLines.Joining : AmbientLines.NotJoining, turn, context) ?? "ok!";
+        return AmbientLines.Choose(yes ? AmbientLines.Joining : AmbientLines.NotJoining, turn, context) ?? "ok";
+    }
+
+    // ---- how a wizard answers (CLASSIC 2026-10-10) ------------------------------------------------
+
+    /// <summary>
+    /// What a wizard does with a line it heard: answer it, answer short, talk about its own thing instead, answer and then
+    /// add its own thing, or let it go by. Real players did all of these (owner, 2026-10-10: replies were "always on topic").
+    /// </summary>
+    public enum ReplyTurn { Answer, Curt, OffTopic, AnswerAndAside, Ignore }
+
+    // Intents a player is waiting on (a yes or no, a place, a request): answered, if briefly.
+    private static readonly HashSet<string> s_mustAnswer = new(StringComparer.Ordinal) {
+        "help", "friend", "duel", "where", "quest", "come", "teleport", "hatch", "thanks", "bye", "name", "school", "level", "age", "bot",
+    };
+
+    /// <summary>
+    /// The turn a wizard of <paramref name="persona"/> takes on <paramref name="intent"/>; <paramref name="addressed"/> is
+    /// false for a line to everyone; <paramref name="roll"/> is a roll in [0, 1).
+    /// </summary>
+    public static ReplyTurn Plan(ChatIntent intent, ChatPersona persona, bool addressed, double roll) {
+        ArgumentNullException.ThrowIfNull(intent);
+        ArgumentNullException.ThrowIfNull(persona);
+        if (persona.Channel == ChatChannel.Menu) {
+            return ReplyTurn.Answer;
+        }
+
+        if (!addressed && persona.Kind == ChatTemperament.Shy && roll < 0.4) {
+            return ReplyTurn.Ignore; // a shy kid rarely answers the whole street
+        }
+
+        if (s_mustAnswer.Contains(intent.Name)) {
+            return persona.Kind is ChatTemperament.Bossy or ChatTemperament.ShowOff && roll < 0.12 && intent.Name is not ("help" or "come" or "friend")
+                ? ReplyTurn.Curt : ReplyTurn.Answer;
+        }
+
+        (double Curt, double OffTopic, double Aside, double Ignore) odds = persona.Kind switch {
+            ChatTemperament.Shy => (0.30, 0.00, 0.00, 0.10),
+            ChatTemperament.Chatty => (0.05, 0.20, 0.25, 0.00),
+            ChatTemperament.Bossy => (0.40, 0.10, 0.05, 0.00),
+            ChatTemperament.ShowOff => (0.10, 0.25, 0.20, 0.00),
+            ChatTemperament.Newbie => (0.15, 0.25, 0.05, 0.00),
+            _ => (0.05, 0.00, 0.20, 0.00),
+        };
+        if ((roll -= odds.Ignore) < 0) {
+            return ReplyTurn.Ignore;
+        }
+
+        if ((roll -= odds.Curt) < 0) {
+            return ReplyTurn.Curt;
+        }
+
+        if ((roll -= odds.OffTopic) < 0) {
+            return ReplyTurn.OffTopic;
+        }
+
+        return roll - odds.Aside < 0 ? ReplyTurn.AnswerAndAside : ReplyTurn.Answer;
     }
 
     /// <summary>
@@ -310,18 +384,20 @@ public static class AmbientChatBrain {
         }
 
         var first = friend.Name.Split(' ', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? friend.Name;
+        var slots = new Dictionary<string, string> { ["name"] = first };
         if (friend.LastQuest is { Length: > 0 } quest && turn % 2 == 0) {
-            return Clean($"hi {first}! did you finish {quest}?");
+            slots["quest"] = quest;
+            return AmbientLines.Choose(AmbientLines.RecallQuest, turn, context, slots);
         }
 
         if (friend.LastZone is { Length: > 0 } zone) {
-            var ago = context.Now == default || friend.LastPlayedTogether is null
-                ? "last time"
-                : (context.Now - friend.LastPlayedTogether.Value).TotalDays >= 1 ? "the other day" : "earlier";
-            return Clean($"hey {first}! that was fun in {zone} {ago}");
+            slots["where"] = zone;
+            slots["ago"] = context.Now == default || friend.LastPlayedTogether is null || (context.Now - friend.LastPlayedTogether.Value).TotalDays >= 1
+                ? "the other day" : "earlier";
+            return AmbientLines.Choose(AmbientLines.RecallZone, turn, context, slots);
         }
 
-        return friend.TimesHelped > 0 ? Clean($"{first}! ready for another fight?") : null;
+        return friend.TimesHelped > 0 ? AmbientLines.Choose(AmbientLines.RecallFight, turn, context, slots) : null;
     }
 
     private static ChatIntent? WhereIntent(string what, ChatContext context) {
@@ -332,13 +408,11 @@ public static class AmbientChatBrain {
 
         if (context.WhereIs?.Invoke(subject) is { Length: > 0 } where) {
             return new ChatIntent("where", AmbientLines.WhereKnown,
-                new Dictionary<string, string> { ["what"] = Title(subject), ["where"] = where }, ["I don't know."]);
+                new Dictionary<string, string> { ["what"] = Title(subject), ["where"] = where }, ["Sorry, I don't know", "I know where it is"]);
         }
 
-        return new ChatIntent("where", AmbientLines.WhereUnknown, null, ["I don't know."]);
+        return new ChatIntent("where", AmbientLines.WhereUnknown, null, ["Sorry, I don't know"]);
     }
-
-    private static string? Clean(string line) => IsClean(line) ? line : null;
 
     private static string Title(string text)
         => string.Join(' ', text.Split(' ', StringSplitOptions.RemoveEmptyEntries)

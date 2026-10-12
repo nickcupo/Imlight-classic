@@ -260,11 +260,14 @@ internal class AttachService(SessionActor sessionActor) : MessageService(session
 
         // Add the player to the online player collection.
         // I don't know why this is normally blocking. Put it on a background thread.
+        var questBuddySystem = Context.System; // CLASSIC: for the quest buddy notice after the row is in
+        var questBuddyCharId = _wizard.CharId;
         Task.Run(() => AddPlayerToOnlineCollection(_wizard,
                                                    _wizard.Zone,
                                                    _wizard.ZoneDisplayName,
                                                    "Centaur",
-                                                   SessionActor.ActorRef));
+                                                   SessionActor.ActorRef))
+            .ContinueWith(_ => Classic.QuestBuddyNotices.Arrived(questBuddySystem, questBuddyCharId), TaskScheduler.Default);
 
         TellOtherServices(new SERVICE_101_PROTOCOL.MSG_ATTACHCOMPLETE { AttachGeneration = addPlayerResponse.AttachGeneration, ZoneActorRef = addPlayerResponse.ZoneActorRef });
 
@@ -513,8 +516,10 @@ internal class AttachService(SessionActor sessionActor) : MessageService(session
             }
 
             var transferKey = keys.IssueTransfer(rsp.UserId, SessionActor.RemoteIp);
+            // CLASSIC (go-live): a friend outside the home network is told the public address.
+            var advertised = Imlight.CoreLib.Classic.PublicGameAddress.For(rsp.GameServerIp, SessionActor.RemoteIp);
             var serverTransfer = new GAME_5_PROTOCOL.MSG_SERVERTRANSFER {
-                IP = rsp.GameServerIp,
+                IP = advertised,
                 TCPPort = rsp.GameServerPort,
                 UDPPort = rsp.GameServerPort,
                 Key = transferKey.Key,
@@ -529,7 +534,7 @@ internal class AttachService(SessionActor sessionActor) : MessageService(session
                 SessionID = transferKey.SessionId, // CLASSIC: the client echoes it in MSG_ATTACH (the proof)
                 TargetPlayerID = rsp.CharId,
                 TransitionID = 1,
-                FallbackIP = rsp.GameServerIp,
+                FallbackIP = advertised,
                 FallbackTCPPort = rsp.GameServerPort,
                 FallbackUDPPort = rsp.GameServerPort,
                 FallbackZone = rsp.FallbackZone,

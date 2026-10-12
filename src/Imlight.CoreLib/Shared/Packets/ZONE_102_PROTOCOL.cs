@@ -429,6 +429,9 @@ public class ZONE_102_PROTOCOL : IServerProtocol {
         /// </summary>
         public ZoneBroadcastTarget Targets = ZoneBroadcastTarget.All;
 
+        /// <summary>CLASSIC: exact actors omitted from this internal broadcast; no native protocol field.</summary>
+        public IReadOnlyCollection<IActorRef> ExcludedRecipients = [];
+
     }
 
     /// <summary>
@@ -983,6 +986,19 @@ public class ZONE_102_PROTOCOL : IServerProtocol {
 
     }
 
+    /// <summary>
+    /// CLASSIC: sent by a ResInitiateCombat that found no creature in range, so every scripted-only boss in the zone
+    /// fights the wizard when he comes near (ScriptedAggro).
+    /// </summary>
+    public sealed class MSG_ARMSCRIPTEDCOMBAT : IServerMessage {
+
+        public byte MessageOrder { get; } = 142;
+        public byte ServiceID { get; } = 102;
+
+        public CoreObject PlayerGameObject;
+
+    }
+
     public sealed class MSG_QUERYNEARESTDUELTARGET : IServerMessage {
 
         public byte MessageOrder { get; } = 57;
@@ -1157,6 +1173,33 @@ public class ZONE_102_PROTOCOL : IServerProtocol {
         public byte ServiceID { get; } = 102;
 
         public ulong CharacterId;
+
+    }
+
+
+    /// <summary>
+    /// CLASSIC: a pet game asks its private phantom zone where the objects of some templates are (the cannon's target,
+    /// the maze's ghosts). Every matching entity answers <see cref="Requester"/> with a <see cref="MSG_TEMPLATEOBJECTLOCATION"/>.
+    /// </summary>
+    public sealed class MSG_QUERYTEMPLATEOBJECTS : IServerMessage {
+
+        public byte MessageOrder { get; } = 140;
+        public byte ServiceID { get; } = 102;
+
+        public uint[] TemplateIds = [];
+        public IActorRef Requester;
+
+    }
+
+    /// <summary>CLASSIC: one answer to <see cref="MSG_QUERYTEMPLATEOBJECTS"/>.</summary>
+    public sealed class MSG_TEMPLATEOBJECTLOCATION : IServerMessage {
+
+        public byte MessageOrder { get; } = 141;
+        public byte ServiceID { get; } = 102;
+
+        public ulong GlobalId;
+        public uint TemplateId;
+        public Imcodec.Math.Vector3 Location;
 
     }
 

@@ -276,6 +276,11 @@ internal class ChatService(SessionActor sessionActor) : MessageService(sessionAc
         // This message uses a wide-character string (16 bits per character).
         var targetID = message.TargetID;
 
+        // CLASSIC (2026-10-09): group chat with ambient companions goes to their channel (AmbientGroupService), not a whisper.
+        if (Classic.Ambient.AmbientGroups.LeaderOfChannel(targetID) != 0) {
+            return;
+        }
+
         // Check if the sender is muted.
         var account = GetActiveAccount();
         if (account.InfractionHistory.IsCurrentlyMuted) {

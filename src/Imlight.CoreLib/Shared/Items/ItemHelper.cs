@@ -64,6 +64,7 @@ internal static class ItemHelper {
             m_pattern = (Bui5) item.m_pattern,
             m_baseColor = (Bui5) item.m_primaryColor,
             m_trimColor = (Bui5) item.m_secondaryColor,
+            m_displayID = (uint) item.m_displayID.Full, // CLASSIC: a stitched item shows the appearance it was given.
         };
 
         return publicItem;

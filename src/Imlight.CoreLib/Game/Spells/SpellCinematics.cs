@@ -90,6 +90,11 @@ internal class SpellCinematics : RootDirectoryResourceSingleton<SpellCinematics>
     /// <param name="name">The name of the spell.</param>
     /// <returns>The <see cref="CinematicTemplate"/> of the spell. </returns>
     internal static CinematicTemplate GetCinematicTemplate(string name) {
+        // CLASSIC: the profile's players see the 2014 client's cinematic; time the cast from its stages.
+        if (Imlight.CoreLib.Classic.ClassicSpellAnimations.TryGet(name, out var older)) {
+            return older;
+        }
+
         if (s_cinematicTemplates.TryGetValue(name, out var cinematicTemplate)) {
             return cinematicTemplate;
         }
@@ -186,6 +191,67 @@ internal class SpellCinematics : RootDirectoryResourceSingleton<SpellCinematics>
         }
 
         return totalTime;
+    }
+
+    /// <summary>
+    /// CLASSIC: how long the round waits for one cast of <paramref name="name"/>: the caster's cast, then every
+    /// stage of the cinematic the client plays, each once.
+    /// </summary>
+    internal static float GetCastWaitTime(string name, float defaultCastTime)
+        => string.IsNullOrEmpty(name) ? defaultCastTime : GetCastWaitTime(GetCinematicTemplate(name), defaultCastTime);
+
+    /// <summary>
+    /// CLASSIC: the round's wait for one cast of <paramref name="template"/>.
+    ///
+    /// The client first plays the caster's cast (the turn cursor, the Cast animation and the school's casting sign:
+    /// 3.7 s from the cursor to the summon, 61.07 s to 64.76 s on the cinematic clock, for a player Blood Bat in the
+    /// owner's client log of 2026-10-04 03:08), which
+    /// is in the cinematic only when it has a Casting stage, else <paramref name="defaultCastTime"/> covers it. Then
+    /// the client plays the stages in order. Two layouts:
+    ///  * an Act stage with a length (Kraken: Summon 4.3 s, Act 3.3 s; the creature variants Act1/Act2/Act3, of which
+    ///    the client plays one, are timed by the longest): summon + cast + longest act, plus any StartAOE/StopAOE
+    ///    stage, which the client plays besides the act (r806919 Storm Lord: StopAOEAct1 5.8 s, then Act2 3.3 s);
+    ///  * no Act stage with a length (r806919's AoE layout, StartAOEAct 0 s / Act 0 s / StopAOEAct 9.13 s for Ra, and
+    ///    the Take/Give spells: Wraith, Vampire, Ghoul, Scarecrow): cast + the sum of every stage. This used to add the
+    ///    summon a second time (summon + cast + total, where total already holds the summon): Ra waited 26.9 s for
+    ///    16.5 s of stages, Wraith 30.3 s for 20.1 s.
+    /// AddHanging stages count <see cref="HANGING_EFFECT_ADD_TIME"/> each, as before.
+    /// </summary>
+    internal static float GetCastWaitTime(CinematicTemplate template, float defaultCastTime) {
+        if (template?.m_stages is null) {
+            return defaultCastTime;
+        }
+
+        float summon = 0f, casting = 0f, longestAct = 0f, aoe = 0f, total = 0f;
+        var summonSeen = false;
+        foreach (var stage in template.m_stages) {
+            if (stage is null) continue;
+            var name = stage.m_name?.ToString() ?? "";
+            var duration = stage.m_duration;
+            if (!summonSeen && (stage is SummonCinematicStageTemplate || name == "Summon")) {
+                summon = duration;
+                summonSeen = true;
+            }
+            if (name == "Casting" && casting <= 0f) {
+                casting = duration;
+            }
+            if (stage is ActCinematicStageTemplate || name.StartsWith("Act")) {
+                longestAct = System.Math.Max(longestAct, duration);
+            }
+            if (name.StartsWith("StartAOE") || name.StartsWith("StopAOE")) {
+                aoe += duration;
+            }
+            total += name.Contains("AddHanging") ? HANGING_EFFECT_ADD_TIME : duration;
+        }
+
+        var hasCasting = casting > 0.1f;
+        var cast = hasCasting ? casting : defaultCastTime;
+        if (longestAct > 0.1f) {
+            return summon + cast + longestAct + aoe;
+        }
+
+        // Every stage once; the Casting stage is already the cast.
+        return cast + total - (hasCasting ? casting : 0f);
     }
 
     public void DisposeStream() 

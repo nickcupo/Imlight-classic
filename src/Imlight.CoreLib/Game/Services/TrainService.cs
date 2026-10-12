@@ -171,6 +171,7 @@ internal class TrainService(SessionActor sessionActor) : MessageService(sessionA
             SpellID = (int) spellEntry.TemplateID
         };
         SendToSocket(addSpellMsg);
+        ClassicBadges.SpellsChanged(wizard, SendToSocket); // CLASSIC: Master of <school>.
 
         var newTrainingPoints = wizard.MagicSchoolBehavior.TrainingPoints;
 

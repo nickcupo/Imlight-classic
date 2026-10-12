@@ -115,7 +115,7 @@ internal partial class QuestService {
         if (!ClassicQuestEngine.IsActive) return wizard.IncrementQuestGoal(quest.QuestName, template.m_goalName);
         var goal = quest.GoalProgress?.FirstOrDefault(entry => entry?.GoalName == template.m_goalName);
         IMessage message = null;
-        return RunQuestMutation(wizard, () => WizardQuestTransactions.TryIncrementGoal(wizard, quest, goal, out _,
+        if (RunQuestMutation(wizard, () => WizardQuestTransactions.TryIncrementGoal(wizard, quest, goal, out _,
             preparePublication: receipt => {
                 if (!sendProgress || receipt.Goal.CurrentProgress >= (template.m_tallyCounter?.m_count
                     ?? (template.m_goalType == GOAL_TYPE.GOAL_TYPE_BOUNTY ? 0 : 1))) return true;
@@ -123,7 +123,10 @@ internal partial class QuestService {
                 return PrepareQuestMessages([message]);
             }, afterCommit: _ => {
                 if (message is not null) PublishQuestMessages([message]);
-            }));
+            }), out var status)) return true;
+        // CLASSIC: nothing saved (the saved goal is already done or further on): bring the client up to date.
+        ResyncQuestJournalAfterNoWrite(wizard, status, $"a credit for {quest.QuestName}/{template.m_goalName}");
+        return false;
     }
 
     private void StartCommittedGoal(Wizard wizard, QuestInstance quest, GoalTemplate template) {
@@ -142,7 +145,14 @@ internal partial class QuestService {
                 PublishQuestMessages(messages.Skip(1).ToArray());
                 QueueZoneEntryCheck(template);
             }, validateFresh: saved => GoalRequirementsMet(saved,
-                WizardQuestTransactions.Held(saved, quest.QuestName), template)))) return;
+                WizardQuestTransactions.Held(saved, quest.QuestName), template)), out var status)) {
+            // CLASSIC: the saved goal had begun already (a write this session missed). A refusal is usually the goal's
+            // own gate (another school's goal), which needs no check.
+            if (status == QuestMutationStatus.Unchanged) {
+                ResyncQuestJournalAfterNoWrite(wizard, status, $"starting {quest.QuestName}/{template.m_goalName}");
+            }
+            return;
+        }
     }
 
     private void CompleteCommittedGoal(Wizard wizard, QuestInstance quest, GoalTemplate template) {
@@ -155,7 +165,11 @@ internal partial class QuestService {
                     receipt.Goal.ID, out var dialog)) return false;
                 if (dialog is not null) messages.Add(dialog);
                 return PrepareQuestMessages(messages);
-            }, afterCommit: _ => PublishQuestMessages(messages)))) return;
+            }, afterCommit: _ => PublishQuestMessages(messages)), out var status)) {
+            // CLASSIC: the saved goal was already done (its notice may never have reached the client): re-send.
+            ResyncQuestJournalAfterNoWrite(wizard, status, $"completing {quest.QuestName}/{template.m_goalName}");
+            return;
+        }
         if (!ExecuteAcknowledgedQuestResults(wizard, template.m_completeResults, quest.QuestName, template.m_goalName)) return;
         PostGoalCompleteEvents(quest, template);
         var authored = _cachedQuestTemplates.FirstOrDefault(entry => entry.m_questName == quest.QuestName);

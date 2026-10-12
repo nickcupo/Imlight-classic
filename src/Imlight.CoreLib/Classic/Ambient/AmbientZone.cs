@@ -82,6 +82,12 @@ internal sealed partial class AmbientZone : ReceiveActor, IWithTimers {
     private sealed record Tick;
     private sealed record Enter(ulong CharId);
     private sealed record Later(AmbientWizard Wizard, Action<AmbientWizard> Action);
+
+    /// <summary>
+    /// CLASSIC (2026-10-09): a timer for one of this zone's own wizards wherever it is now (a companion in a player's
+    /// group included): friend requests and friend greetings are its home zone's business.
+    /// </summary>
+    private sealed record HomeLater(AmbientWizard Wizard, Action<AmbientWizard> Action);
     private sealed record LegEnd(AmbientWizard Wizard, int LegId);
     private sealed record Stream;
     private sealed record FriendAccepted(AmbientWizard Wizard, ulong Requester, Relationship Relationship, string Name);
@@ -138,11 +144,17 @@ internal sealed partial class AmbientZone : ReceiveActor, IWithTimers {
                 later.Action(later.Wizard);
             }
         });
+        Receive<HomeLater>(later => {
+            if (_wizards.Contains(later.Wizard) || Equals(later.Wizard.Group, Self)) {
+                later.Action(later.Wizard);
+            }
+        });
         Receive<AmbientInbox>(OnInbox);
         Receive<AmbientDuelNotice>(OnDuelNotice);
         Receive<FriendAccepted>(OnFriendAccepted);
         ReceiveManners(); // CLASSIC (2026-10-04): AmbientZone.Manners.cs
         ReceiveDungeons(); // CLASSIC (2026-10-04): AmbientZone.Dungeons.cs
+        ReceiveGroups(); // CLASSIC (2026-10-09): AmbientZone.Groups.cs
         Receive<NavReady>(ready => {
             _nav = ready.Grid;
             _spots = null; // re-made on the grid
@@ -709,6 +721,13 @@ internal sealed partial class AmbientZone : ReceiveActor, IWithTimers {
             return; // CLASSIC (2026-10-04): off doorways, not on another wizard (AmbientZone.Manners.cs)
         }
 
+        // CLASSIC (2026-10-08): no place to go (a hub with few NPCs and named spots, as Grizzleheim's four, every one
+        // taken or out of reach): a stroll over open ground instead. Before, such a wizard stood on for good (the owner's
+        // "standing around"; on the rig two Grizzleheim wizards moved 2 units in two minutes).
+        if (roll < 0.85 && WalkSomewhereNear(wizard)) {
+            return;
+        }
+
         // Stay a while, turning now and then.
         StandAWhile(wizard, now);
     }
@@ -767,6 +786,7 @@ internal sealed partial class AmbientZone : ReceiveActor, IWithTimers {
         wizard.Target = wizard.Route.Dequeue();
         wizard.Activity = activity;
         wizard.Moving = true;
+        wizard.Stands = 0;
         return true;
     }
 
@@ -1007,7 +1027,7 @@ internal sealed partial class AmbientZone : ReceiveActor, IWithTimers {
     private void JoinWithYes(AmbientWizard wizard, HelpAnswer answer, ulong player, string line) {
         if (!_duels.TryGetValue(answer.DuelId, out var notice) || notice.FreePlayerSlots <= 0
             || wizard.Activity is AmbientActivity.Fighting or AmbientActivity.Sparring or AmbientActivity.Away) {
-            Say(wizard, player, "aw, it's full. good luck!");
+            Say(wizard, player, Typed(wizard, AmbientLines.Full[_rng.Next(AmbientLines.Full.Length)], AmbientLines.MenuFull)); // CLASSIC (2026-10-10)
             return;
         }
 
@@ -1105,17 +1125,23 @@ internal sealed partial class AmbientZone : ReceiveActor, IWithTimers {
 
         var answer = wizard.Offers.Hear(speaker, text, now);
         if (answer.Kind == HelpAnswerKind.Yes) {
-            var line = ChatStyle.Apply(AmbientChatBrain.HelpAnswered(true, wizard.Turn++, ChatFor(wizard, speaker)), persona, _rng,
-                ChatWordFilter.Current);
+            var line = persona.Channel == ChatChannel.Menu ? AmbientLines.MenuJoining // CLASSIC (2026-10-10): the menu's own phrase
+                : ChatStyle.Apply(AmbientChatBrain.HelpAnswered(true, wizard.Turn++, ChatFor(wizard, speaker)), persona, _rng, ChatWordFilter.Current);
             Answer(wizard, "yes", text, line, w => JoinWithYes(w, answer, speaker, line));
             return;
         }
 
         if (answer.Kind == HelpAnswerKind.No) {
             _helpMemory.SaidNo(speaker, now); // CLASSIC (2026-10-04): no wizard here asks again for a while
-            var line = ChatStyle.Apply(AmbientChatBrain.HelpAnswered(false, wizard.Turn++, ChatFor(wizard, speaker)), persona, _rng,
-                ChatWordFilter.Current);
+            var line = persona.Channel == ChatChannel.Menu ? AmbientLines.MenuNotJoining
+                : ChatStyle.Apply(AmbientChatBrain.HelpAnswered(false, wizard.Turn++, ChatFor(wizard, speaker)), persona, _rng, ChatWordFilter.Current);
             Answer(wizard, "no", text, line, w => Say(w, speaker, line));
+            return;
+        }
+
+        // CLASSIC (2026-10-09): "anyone want to do jotun?", "wanna group?", a wizard's name with either, the client's "Would
+        // you like to join my group?": who answers, and the group (AmbientZone.Groups.cs).
+        if (GroupHeard(wizard, speaker, text, whisper, now)) {
             return;
         }
 
@@ -1149,7 +1175,7 @@ internal sealed partial class AmbientZone : ReceiveActor, IWithTimers {
         var name = (string) request.OwnerName ?? "";
         // A human-feeling pause before the yes: 3 to 8 seconds.
         var delay = TimeSpan.FromSeconds(3 + (int) ((requester ^ wizard.CharId) % 6));
-        Timers.StartSingleTimer($"friend-{wizard.CharId}-{requester}", new Later(wizard, w => {
+        Timers.StartSingleTimer($"friend-{wizard.CharId}-{requester}", new HomeLater(wizard, w => { // CLASSIC (2026-10-09): HomeLater
             var self = Self;
             Task.Run(() => {
                 var character = w.Wizard;
@@ -1190,9 +1216,20 @@ internal sealed partial class AmbientZone : ReceiveActor, IWithTimers {
         Logger.Information("Ambient wizard {Name} is now friends with {Friend}.", Logger.Args(wizard.Name, name));
         if (AmbientWizards.Settings.Chat) {
             var first = name?.Split(' ').FirstOrDefault() ?? "";
-            Timers.StartSingleTimer($"thanks-{wizard.CharId}-{accepted.Requester}", new Later(wizard, w =>
-                AmbientChat.Whisper(w, accepted.Requester, $"thanks for the add {first}!".Replace("  ", " "))), TimeSpan.FromSeconds(2));
+            Timers.StartSingleTimer($"thanks-{wizard.CharId}-{accepted.Requester}", new HomeLater(wizard, w =>
+                AmbientChat.Whisper(w, accepted.Requester, Typed(w,
+                    AmbientLines.Fill(AmbientLines.FriendAdded[_rng.Next(AmbientLines.FriendAdded.Length)], ChatFor(w, accepted.Requester),
+                        new Dictionary<string, string> { ["name"] = first }) ?? "ty for the add", AmbientLines.MenuThanks))), TimeSpan.FromSeconds(2)); // CLASSIC (2026-10-10)
         }
+    }
+
+    /// <summary>
+    /// CLASSIC (2026-10-10): <paramref name="line"/> typed the wizard's own way, or <paramref name="menu"/> (a QuickChat
+    /// phrase) for a wizard that only has menu chat.
+    /// </summary>
+    private string Typed(AmbientWizard wizard, string line, string menu) {
+        var persona = ChatPersona.For(wizard.Identity);
+        return persona.Channel == ChatChannel.Menu ? menu : ChatStyle.Apply(line, persona, _rng, ChatWordFilter.Current);
     }
 
     private void Unfriended(AmbientWizard wizard, ulong friend) {
@@ -1211,8 +1248,9 @@ internal sealed partial class AmbientZone : ReceiveActor, IWithTimers {
         }
 
         var facts = AmbientKnowledge.Facts(friend);
-        if (AmbientChatBrain.GreetFriend(ChatFor(wizard, friend, facts), wizard.Turn++) is { } line) {
-            Timers.StartSingleTimer($"hello-{wizard.CharId}-{friend}", new Later(wizard, w => AmbientChat.Whisper(w, friend, line)),
+        if (AmbientChatBrain.GreetFriend(ChatFor(wizard, friend, facts), wizard.Turn++) is { } greeting) {
+            var line = Typed(wizard, greeting, AmbientLines.MenuHi);
+            Timers.StartSingleTimer($"hello-{wizard.CharId}-{friend}", new HomeLater(wizard, w => AmbientChat.Whisper(w, friend, line)),
                 TimeSpan.FromSeconds(4 + _rng.Next(6)));
         }
 
@@ -1233,7 +1271,8 @@ internal sealed partial class AmbientZone : ReceiveActor, IWithTimers {
 
         if (AmbientWizards.Settings.Chat && wizard.Limiter.TryTake(DateTime.UtcNow, arrival.CharId)) {
             var facts = AmbientKnowledge.Facts(arrival.CharId);
-            if (AmbientChatBrain.GreetFriend(ChatFor(wizard, arrival.CharId, facts), wizard.Turn++) is { } line) {
+            if (AmbientChatBrain.GreetFriend(ChatFor(wizard, arrival.CharId, facts), wizard.Turn++) is { } greeting) {
+                var line = Typed(wizard, greeting, AmbientLines.MenuHi);
                 // CLASSIC (2026-10-04): out loud only when the friend is close enough to hear it; else a whisper.
                 var near = Distance(arrival.Location, wizard.Position) <= HelpManners.HearingDistance;
                 Timers.StartSingleTimer($"greet-{wizard.CharId}-{arrival.CharId}", new Later(wizard, w => {
