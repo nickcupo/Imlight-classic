@@ -57,8 +57,23 @@ public static class ClassicDialogCamera {
             return dialog!;
         }
 
-        return dialog with { m_dialogEntries = [.. dialog.m_dialogEntries.Select(WithoutCamera)] };
+        // Two wizards entering one dialog volume together run this on two actors at once; copying the ObjectProperty
+        // records is not thread safe (InvalidOperationException from a non-concurrent collection, 19:43:52 in the pg-ms rig,
+        // MooddhaDialogueTrigger), so the copy is serialised.
+        for (var attempt = 0; ; attempt++) {
+            try {
+                lock (CopyLock) {
+                    return dialog with { m_dialogEntries = [.. dialog.m_dialogEntries.Select(WithoutCamera)] };
+                }
+            }
+            catch (System.InvalidOperationException) when (attempt < 3) {
+                // The shared template was being touched by another actor at the same moment: look again.
+                System.Threading.Thread.Sleep(5);
+            }
+        }
     }
+
+    private static readonly object CopyLock = new();
 
     internal static ActorDialogEntry WithoutCamera(ActorDialogEntry entry) => entry is null ? entry! : entry with {
         m_cameraName = "",
