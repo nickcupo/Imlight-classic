@@ -62,16 +62,26 @@ internal sealed class ResInitiateCombatHandler : BaseResultHandler<ResInitiateCo
         var targetQuery = new ZONE_102_PROTOCOL.MSG_QUERYNEARESTDUELTARGET {
             PlayerGameObject = context.GetPlayerObj(),
         };
-        var targetResponse = zoneActor
-            .Ask<ZONE_102_PROTOCOL.MSG_QUERYNEARESTDUELTARGETRSP>(targetQuery, queryTimeout);
-        if (targetResponse is null) {
-            Logger.Error("Handler failed to retrieve nearest duel target within {0} seconds.",
-                Logger.Args(QUERY_TARGET_TIMEOUT_SECONDS));
-
-            return false;
+        ZONE_102_PROTOCOL.MSG_QUERYNEARESTDUELTARGETRSP target = null;
+        try {
+            target = zoneActor.Ask<ZONE_102_PROTOCOL.MSG_QUERYNEARESTDUELTARGETRSP>(targetQuery, queryTimeout).Result;
+        }
+        catch (Exception error) when (error is AggregateException or TimeoutException or AskTimeoutException) {
+            // CLASSIC: only a creature with the wizard in its aggro radius answers, so silence means none is in range.
+            target = null;
         }
 
-        if (targetResponse.Result.CreatureActor is null) {
+        if (target is null) {
+            // CLASSIC: nothing in range. A room script such as the Gobbler throne room's MakeWar fires on entry, long before
+            // the boss is near (and the boss's own aggro radius is 1), and its trigger then disarms. Send every
+            // scripted-only boss after the wizard instead; each attacks when he comes within reach (ScriptedAggro).
+            Logger.Debug("No dueling creature in aggro range; arming scripted-only bosses against the wizard.");
+            zoneActor.Tell(new ZONE_102_PROTOCOL.MSG_ARMSCRIPTEDCOMBAT { PlayerGameObject = context.GetPlayerObj() });
+
+            return true;
+        }
+
+        if (target.CreatureActor is null) {
             Logger.Debug("No dueling creature in aggro range; skipping combat initiation.");
             return true;
         }
@@ -79,7 +89,7 @@ internal sealed class ResInitiateCombatHandler : BaseResultHandler<ResInitiateCo
         var startMsg = new ZONE_102_PROTOCOL.MSG_REQUESTCOMBATSIGIL {
             StartingParticipants = new Dictionary<IActorRef, CoreObject> {
                 { context.GetPlayerRef(), context.GetPlayerObj() },
-                { targetResponse.Result.CreatureActor, targetResponse.Result.CreatureObject },
+                { target.CreatureActor, target.CreatureObject },
             },
         };
         zoneActor.Tell(startMsg);

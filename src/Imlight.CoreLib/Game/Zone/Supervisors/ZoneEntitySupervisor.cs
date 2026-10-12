@@ -103,6 +103,13 @@ internal abstract class ZoneEntitySupervisor(Core.Zone zone) : ReceiveProtocolDi
         }
     }
 
+    [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_ARMSCRIPTEDCOMBAT))]
+    public virtual void ReceiveArmScriptedCombat(ZONE_102_PROTOCOL.MSG_ARMSCRIPTEDCOMBAT message) { // CLASSIC: ScriptedAggro
+        foreach (var entity in EntityActors) {
+            entity?.Forward(message);
+        }
+    }
+
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_ZONESTART))]
     public virtual void ReceiveZoneStart(ZONE_102_PROTOCOL.MSG_ZONESTART message) {
         foreach (var entity in EntityActors) {

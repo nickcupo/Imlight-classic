@@ -97,6 +97,9 @@ internal sealed class NpcComponent : ZoneEntityComponent, IComponentFactory, ICl
 
         this.IsMonster = _duelistBehaviorTemplate is not null;
         this.Proximity = _duelistBehaviorTemplate?.m_npcProximity ?? 0;
+        if (IsMonster && ClassicQuestEngine.IsActive) { // CLASSIC: the aggro radius each creature starts with, to tell a boss that cannot aggro from a distance.
+            Logger.Debug("Creature {Creature} starts with aggro radius {Proximity}.", Logger.Args(Entity.ActiveGameObject?.m_debugName, Proximity));
+        }
         
         // Try to parse the npcBehaviorTemplate.m_schoolOfFocus to a MagicSchool.
         var parsedSchool = MagicSchool.Balance;
@@ -159,9 +162,32 @@ internal sealed class NpcComponent : ZoneEntityComponent, IComponentFactory, ICl
             _playersInRange.Remove(key);
             _lastAggroTry.Remove(key); // CLASSIC
         }
+
+        _scriptedWar.Clear(); // CLASSIC: ScriptedAggro; a wizard who left the zone is no longer hunted
+    }
+
+    // CLASSIC: wizards a zone script has sent this scripted-only boss after (ScriptedAggro).
+    private readonly HashSet<CoreObject> _scriptedWar = new(ReferenceEqualityComparer.Instance);
+
+    [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_ARMSCRIPTEDCOMBAT))]
+    private void ReceiveArmScriptedCombat(ZONE_102_PROTOCOL.MSG_ARMSCRIPTEDCOMBAT message) {
+        if (message.PlayerGameObject is not null && Imlight.Classic.Quests.ScriptedAggro.IsScriptedOnly(IsMonster, Proximity)) {
+            _scriptedWar.Add(message.PlayerGameObject);
+            Logger.Debug("{Creature} is sent after a wizard by the zone script; it attacks within {Reach}.",
+                Logger.Args(Entity.ActiveGameObject?.m_debugName, Imlight.Classic.Quests.ScriptedAggro.Reach));
+        }
     }
 
     public override void OnPlayerMove(CoreObject playerObj, IActorRef playerActor, Wizard playerWizard) {
+        // CLASSIC: a scripted-only boss attacks the wizard it was armed against once he is near (ScriptedAggro).
+        if (_scriptedWar.Count != 0 && playerWizard is not null && !playerWizard.IsInDuel && !playerWizard.IsInCombatGrace
+            && Imlight.Classic.Quests.ScriptedAggro.Engages(IsMonster, Proximity, _scriptedWar.Contains(playerObj),
+                IsInRadius(playerObj, Imlight.Classic.Quests.ScriptedAggro.Reach))) {
+            _scriptedWar.Remove(playerObj);
+            OnProximityEnter(playerObj, playerActor, playerWizard);
+            return;
+        }
+
         // Check if the player is now in range of the object.
         if (IsInRadius(playerObj, Proximity) && !_playersInRange.ContainsKey(playerObj)) {
             // If the player is in range, trigger the enter events.
