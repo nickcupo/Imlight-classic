@@ -134,6 +134,7 @@ internal partial class QuestService {
         var messages = new List<IMessage>();
         if (!RunQuestMutation(wizard, () => WizardQuestTransactions.TryStartGoal(wizard, quest, goal, out _,
             preparePublication: receipt => {
+                messages.Clear(); // a retried commit prepares again: publish each packet once
                 messages.Add(PrepareGoalMessage(template, receipt.Quest, 1, strict: true));
                 if (!PrepareProgressionDialog(template.m_dialogList, "Prep", "QuestStart", receipt.Quest.ID,
                     receipt.Goal.ID, out var dialog)) return false;
@@ -160,6 +161,7 @@ internal partial class QuestService {
         var messages = new List<IMessage>();
         if (!RunQuestMutation(wizard, () => WizardQuestTransactions.TryCompleteGoal(wizard, quest, goal, out _,
             preparePublication: receipt => {
+                messages.Clear(); // a retried commit prepares again: publish each packet once
                 messages.Add(new QUEST_MESSAGES_52_PROTOCOL.MSG_COMPLETEGOAL { QuestID = receipt.Quest.ID, GoalID = receipt.Goal.ID });
                 if (!PrepareProgressionDialog(template.m_dialogList, "Completion", "Completion", receipt.Quest.ID,
                     receipt.Goal.ID, out var dialog)) return false;
@@ -189,6 +191,7 @@ internal partial class QuestService {
             new QUEST_MESSAGES_52_PROTOCOL.MSG_REMOVEQUEST { QuestID = quest.ID } };
         if (!RunQuestMutation(wizard, () => WizardQuestTransactions.TryComplete(wizard, quest, out _,
             preparePublication: _ => {
+                if (messages.Count > 2) messages.RemoveRange(2, messages.Count - 2); // a retried commit prepares again: the dialogue once
                 if (!PrepareProgressionDialog(template.m_dialogList, "Complete", "QuestComplete", 0, 0, out var dialog)) return false;
                 if (dialog is not null) messages.Add(dialog);
                 return PrepareQuestMessages(messages);
