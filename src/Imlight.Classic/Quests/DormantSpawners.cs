@@ -61,7 +61,8 @@ namespace Imlight.Classic.Quests;
 /// <param name="Id">The spawner's m_id.</param>
 /// <param name="Active">The spawner's m_active.</param>
 /// <param name="TemplateIds">The templates of its spawn list.</param>
-public sealed record SpawnerInfo(uint Id, bool Active, IReadOnlyList<uint> TemplateIds);
+/// <param name="TriggerStarted">Whether a zone trigger's ResSpawn starts it (in a new instance the trigger's event may never come again).</param>
+public sealed record SpawnerInfo(uint Id, bool Active, IReadOnlyList<uint> TemplateIds, bool TriggerStarted = false);
 
 /// <summary>
 /// The inactive spawners that only a quest starts.
@@ -98,7 +99,7 @@ public static class DormantSpawners {
     /// <param name="isNeeded">Whether one of the wizard's active goals needs the template.</param>
     /// <param name="placed">Templates the zone places anyway (<see cref="Placed"/>); never started here.</param>
     public static IReadOnlyList<uint> Plan(IEnumerable<SpawnerInfo> dormant, Func<uint, bool> isNeeded,
-                                           IReadOnlySet<uint>? placed = null) {
+                                           IReadOnlySet<uint>? placed = null, Func<uint, bool>? isTalkNeeded = null) {
         var planned = new List<uint>();
         var covered = new HashSet<uint>(placed ?? new HashSet<uint>());
         var answers = new Dictionary<uint, bool>();
@@ -108,10 +109,11 @@ public static class DormantSpawners {
                     continue;
                 }
 
-                if (!answers.TryGetValue(templateId, out var needed)) {
-                    needed = isNeeded(templateId);
-                    answers[templateId] = needed;
-                }
+                // A spawner a trigger starts is brought up here only for someone an open talk goal waits for: its NPC
+                // (the Bonekeeper after the mob death watcher, an informant after a kill) is in no other way in a new instance.
+                var needed = spawner.TriggerStarted
+                    ? isTalkNeeded?.Invoke(templateId) == true
+                    : answers.TryGetValue(templateId, out var known) ? known : (answers[templateId] = isNeeded(templateId));
 
                 if (!needed) {
                     continue;

@@ -91,7 +91,7 @@ internal sealed class ZonePathSupervisor(Core.Zone zone) : ZoneEntitySupervisor(
             }
 
             var planned = DormantSpawners.Plan(_questSpawns.Dormant, templateId => ClassicQuestSpawns.Needs(wizard, templateId),
-                _questSpawns.Placed);
+                _questSpawns.Placed, templateId => ClassicQuestSpawns.NeedsTalk(wizard, templateId));
             foreach (var spawnerId in planned) {
                 Logger.Debug("Zone {Zone} starts dormant spawner {Spawner} for {Wizard}'s open goal.",
                     Logger.Args(Zone.ZonePath, spawnerId, join.ActualWizardName));
