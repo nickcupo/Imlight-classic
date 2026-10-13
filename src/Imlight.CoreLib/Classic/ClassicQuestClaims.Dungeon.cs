@@ -36,6 +36,7 @@ internal static partial class ClassicQuestClaims {
             if (WizardCollection.IsInventorySnapshotUncertain(live) || saved.CharId != live.CharId
                 || saved.QuestBehavior is null || !string.Equals(saved.Zone, live.Zone, StringComparison.OrdinalIgnoreCase)
                 || !TryReadJournal(session, saved, out var current)) return false;
+            staged.Clear(); // the operation can run again on a retried commit: nothing of a first try may be published twice
             var owned = ReadOwnedQuestRows(session, saved.CharId);
             saved.QuestBehavior.CurrentQuestInstances = current;
             before = saved.QuestBehavior.Registry.ToDictionary(entry => entry.Key, entry => entry.Value);

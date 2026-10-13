@@ -98,6 +98,17 @@ public sealed class AtomicShopInventoryTests {
         Assert.Equal(2, f.Saved.SpellbookBehavior.DeckTreasureCards[13][77]);
     }
 
+    [Fact]
+    public void ARetriedSaleCommitPaysAndReportsEachItemOnce() {
+        var f = new Fixture { ConcurrentOnce = true }; f.Add(11); f.Add(12);
+        f.Saved.GameStats.m_currentGold = 10; f.Saved.GameStats.m_baseGoldPouch = 1000;
+        using var scope = f.Scope(); var live = f.Live();
+        Assert.True(InventoryService.TrySellBackpackItems(live, [new(11, 1), new(12, 1)], _ => 7, out var sales));
+        Assert.Equal(new ulong[] { 11, 12 }, sales.Select(sale => sale.Id));
+        Assert.Equal(24, f.Saved.GameStats.m_currentGold);
+        Assert.Equal(24, live.GameStats.m_currentGold);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -186,7 +197,7 @@ public sealed class AtomicShopInventoryTests {
         internal Dictionary<string, WizClientObjectItem> Rows = [];
         internal readonly Dictionary<string, int> RowWrites = [];
         internal ItemSession? Working;
-        internal bool Fail, Durable; internal int Saves; internal System.Action? BeforeSave;
+        internal bool Fail, Durable, ConcurrentOnce; internal int Saves; internal System.Action? BeforeSave;
         internal static WizClientObjectItem Item(ulong id) => new() { m_globalID = id, m_templateID = Template, m_characterId = Owner, m_inactiveBehaviors = [] };
         internal void Add(ulong id) { Saved.InventoryBehavior.InventoryItemIds.Add(id); Rows["original/" + id] = Item(id); }
         internal void Fill() { for (ulong id = 100; Saved.InventoryBehavior.InventoryItemIds.Count < ServerWizInventoryBehavior.MaxItemsAllowed; id++) Add(id); }
@@ -217,6 +228,7 @@ public sealed class AtomicShopInventoryTests {
             proxy.Standing = new() { CharId = Standing.CharId, Rating = Standing.Rating };
             proxy.Save = () => {
                 Assert.True(WizardCollection.HoldsWriteLane); Saves++; BeforeSave?.Invoke();
+                if (ConcurrentOnce) { ConcurrentOnce = false; throw new Raven.Client.Exceptions.ConcurrencyException("changed meanwhile"); }
                 if (Fail && !Durable) throw new InvalidOperationException("fixture refused write");
                 foreach (var (document, item) in proxy.Rows.Where(pair => !proxy.Advanced.Ignored.Contains(pair.Value)))
                     RowWrites[document] = RowWrites.GetValueOrDefault(document) + 1;

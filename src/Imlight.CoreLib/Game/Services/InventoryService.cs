@@ -148,6 +148,7 @@ internal class InventoryService(SessionActor sessionActor) : MessageService(sess
         var success = WizardCollection.CommitCharacterMutation(wizard.CharId, (session, saved) => {
             if (WizardCollection.IsInventorySnapshotUncertain(wizard) || saved.GameStats is null
                 || !WizardInventoryTransactions.TryReadOwnedBackpack(session, saved, out var owned)) return false;
+            accepted.Clear(); // the operation can run again on a retried commit: the payout and the receipt are counted once
             var seen = new HashSet<ulong>();
             var removedOriginals = new List<WizClientObjectItem>();
             foreach (var request in requested) {
