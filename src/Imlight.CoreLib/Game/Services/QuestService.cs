@@ -129,6 +129,7 @@ internal partial class QuestService(SessionActor sessionActor) : MessageService(
         CheckForWaypointGoalZoneExit(wizard);
 
         ReplayGoalZoneEvents(wizard); // CLASSIC: QuestService.ZoneEvents.cs.
+        ReplayFinishedGoalEvents(wizard); // CLASSIC: and the finished goals' events an open kill goal here waits for.
 
         RefreshTowerGuide(); // CLASSIC: QuestService.TowerGuide.cs.
     }

@@ -81,4 +81,46 @@ internal static class GoalZoneEvents {
         }
     }
 
+
+    /// <summary>
+    /// CLASSIC: the events a wizard's already finished goals posted, to post again on entering the zone of a kill goal
+    /// that waits for them. A boss that a quest event spawns (the Dean in Detention_T4 after DS-NEC3-C02-003's talk,
+    /// Malistaire after DS-ACAD-C01-005's volume goal, the Plaza and Arena summons) exists only in the zone instance that saw the
+    /// event; after a lost duel, a flight, a logout or an instance reset the new instance never saw it, so the open
+    /// kill goal could never be finished. Only the ResPostEvent results of a finished goal are posted, and only
+    /// while the quest still has an active BOUNTY or BOUNTYCOLLECT goal for this zone.
+    /// </summary>
+    internal static IEnumerable<(QuestTemplate Quest, GoalTemplate Goal, IReadOnlyList<ResPostEvent> Posts)> ToReplayCompleted(
+        IEnumerable<QuestTemplate> held, Func<QuestTemplate, string, bool> isActive, Func<QuestTemplate, string, bool> isCompleted,
+        string zone) {
+        if (string.IsNullOrEmpty(zone)) {
+            yield break;
+        }
+
+        foreach (var quest in held) {
+            var goals = quest?.m_goals;
+            if (goals is null) {
+                continue;
+            }
+
+            var kills = goals.Where(goal => goal is BountyGoalTemplate && isActive(quest, goal.m_goalName)).ToList();
+            if (kills.Count == 0) {
+                continue;
+            }
+
+            foreach (var goal in goals) {
+                var posts = goal?.m_completeResults?.m_results?.OfType<ResPostEvent>().ToList();
+                if (posts is not { Count: > 0 } || !isCompleted(quest, goal.m_goalName)) {
+                    continue;
+                }
+
+                var here = string.Equals(goal.m_destinationZone, zone, StringComparison.OrdinalIgnoreCase)
+                    || kills.Any(kill => string.Equals(kill.m_destinationZone, zone, StringComparison.OrdinalIgnoreCase));
+                if (here) {
+                    yield return (quest, goal, posts);
+                }
+            }
+        }
+    }
+
 }
