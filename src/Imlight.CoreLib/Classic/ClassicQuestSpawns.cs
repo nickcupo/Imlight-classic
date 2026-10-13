@@ -80,19 +80,27 @@ internal static class ClassicQuestSpawns {
                     .Select(item => (uint) item.m_objectInfo.m_templateID.Full)
                     .ToList()))
             .ToList();
-        var started = (triggerData?.m_triggers ?? [])
+        var triggerStarted = (triggerData?.m_triggers ?? [])
             .Where(trigger => trigger?.m_results?.m_results is not null)
             .SelectMany(trigger => trigger.m_results.m_results)
             .OfType<ResSpawn>()
             .Where(spawn => spawn.m_activate) // m_activate false stops a spawner (a boss's death trigger); it starts nothing.
             .Select(spawn => (uint) spawn.m_spawnID)
-            .Concat(InteractableQuestEvents.SpawnersStartedByObjects());
+            .ToHashSet();
+        var objectStarted = InteractableQuestEvents.SpawnersStartedByObjects().ToHashSet();
+        var started = triggerStarted.Concat(objectStarted);
 
         var statics = (zoneData?.m_objectList ?? [])
             .Where(info => info is not null)
             .Select(info => (uint) info.m_templateID.Full);
 
-        return new ZoneQuestSpawns(DormantSpawners.Find(spawners, started), DormantSpawners.Placed(spawners, statics));
+        // CLASSIC: and the inactive spawners only a trigger starts, kept for a talk goal (Plan's isTalkNeeded).
+        var dormant = DormantSpawners.Find(spawners, started)
+            .Concat(spawners.Where(spawner => !spawner.Active && triggerStarted.Contains(spawner.Id) && !objectStarted.Contains(spawner.Id))
+                .Select(spawner => spawner with { TriggerStarted = true }))
+            .ToList();
+
+        return new ZoneQuestSpawns(dormant, DormantSpawners.Placed(spawners, statics));
     }
 
     /// <summary>
@@ -123,6 +131,26 @@ internal static class ClassicQuestSpawns {
 
             foreach (var goal in questTemplate.m_goals) {
                 if (goal is not null && quest.IsGoalActive(goal.m_goalName) && Targets(quest.QuestName, goal, template, templateId)) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>Whether an open PERSONA goal of the wizard talks to the template.</summary>
+    internal static bool NeedsTalk(Wizard wizard, uint templateId) {
+        if (wizard?.QuestBehavior?.CurrentQuestInstances is not { } quests
+            || CoreObjectFactory.GetCoreTemplate(templateId) is not GameObjectTemplate template) {
+            return false;
+        }
+
+        foreach (var quest in quests.ToArray()) {
+            var questTemplate = QuestTemplateCollection.GetQuestByName(quest.QuestName);
+            foreach (var goal in questTemplate?.m_goals ?? []) {
+                if (goal is PersonaGoalTemplate persona && quest.IsGoalActive(goal.m_goalName)
+                    && !string.IsNullOrEmpty(persona.m_personaName) && persona.m_personaName == template.m_objectName) {
                     return true;
                 }
             }
