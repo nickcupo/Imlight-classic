@@ -120,21 +120,31 @@ public static class WizardCollection {
         }
 
         return WithWriteLane(charId, () => {
-            using var session = openSession is null ? s_store.OpenSession() : openSession();
-            session.Advanced.OptimisticConcurrencyMode = OptimisticConcurrencyMode.Writes;
-            var wizard = loadWizard is null ? GetCharacterByCharId(session, charId) : loadWizard(session, charId);
-            if (wizard is null || !operation(session, wizard)) return false;
-            try {
-                session.SaveChanges();
-                afterCommit?.Invoke(wizard);
+            // CLASSIC: a document this character owns that is written outside the lane (the reagent bag, ClientReagentItems) can
+            // change between this load and the save: Raven then refuses the save (optimistic concurrency) and, before this, the
+            // caller's session was closed (the pg-ms rig, 21:34:59, MSG_COMBATWIN loot). The load, the operation and the save are
+            // all done again on a fresh session (up to twice) before the failure counts.
+            for (var attempt = 0; ; attempt++) {
+                using var session = openSession is null ? s_store.OpenSession() : openSession();
+                session.Advanced.OptimisticConcurrencyMode = OptimisticConcurrencyMode.Writes;
+                var wizard = loadWizard is null ? GetCharacterByCharId(session, charId) : loadWizard(session, charId);
+                if (wizard is null || !operation(session, wizard)) return false;
+                try {
+                    session.SaveChanges();
+                    afterCommit?.Invoke(wizard);
+                }
+                catch (Raven.Client.Exceptions.ConcurrencyException) when (attempt < 2) {
+                    Logger.Debug("Character {0}: a document changed during the save; trying the whole change again.", Logger.Args(charId));
+                    continue;
+                }
+                catch (Exception error) {
+                    // CLASSIC: quarantine before releasing the lane, so a queued stale inventory save cannot
+                    // run between a lost acknowledgement (or failed publication) and its caller's catch.
+                    onSaveFailure?.Invoke(error);
+                    throw;
+                }
+                return true;
             }
-            catch (Exception error) {
-                // CLASSIC: quarantine before releasing the lane, so a queued stale inventory save cannot
-                // run between a lost acknowledgement (or failed publication) and its caller's catch.
-                onSaveFailure?.Invoke(error);
-                throw;
-            }
-            return true;
         });
     }
 
