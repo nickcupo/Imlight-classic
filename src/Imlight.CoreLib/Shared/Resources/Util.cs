@@ -30,6 +30,11 @@ internal static class Util {
     }
 
     public static string GetCompactStringFromVector(Vector3 vector, Vector3 orientation) {
+        // CLASSIC: a saved position outside every possible zone (see WorldBounds) puts the wizard at the zone's start.
+        if (Imlight.Classic.Security.WorldBounds.Outside(vector.X, vector.Y, vector.Z)) {
+            return Imlight.Classic.Security.WorldBounds.StartLocation;
+        }
+
         var inv = System.Globalization.CultureInfo.InvariantCulture;
         return $"{vector.X.ToString(inv)},{vector.Y.ToString(inv)},{vector.Z.ToString(inv)},{orientation.Z.ToString(inv)}";
     }

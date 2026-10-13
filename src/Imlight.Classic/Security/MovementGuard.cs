@@ -102,6 +102,20 @@ public sealed class MovementGuard {
             maxSpeed = DefaultMaxSpeed;
         }
 
+        // CLASSIC: no zone reaches this far (the widest placed object in any zone is ~85000 from the origin; the wire format ends at
+        // +-131068), so a position out here is a client bug or a forgery, never walking. The entry grace trusts the first
+        // positions after a zone change, and before this check it saved such a position: the wizard then logged in outside the map
+        // and could not walk back. Refuse it without touching the anchor (snap back once there is one, else just drop it).
+        if (WorldBounds.Outside(x, y, z)) {
+            if (!_hasAnchor || now < _quietUntil) {
+                return MoveVerdict.Drop;
+            }
+
+            _quietUntil = now + SnapQuiet;
+
+            return MoveVerdict.SnapBack;
+        }
+
         if (!_hasAnchor || now < _graceUntil) {
             (_x, _y, _z) = (x, y, z);
             _hasAnchor = true;

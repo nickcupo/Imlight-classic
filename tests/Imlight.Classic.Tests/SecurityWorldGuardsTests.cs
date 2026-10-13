@@ -155,6 +155,28 @@ public sealed class SecurityWorldGuardsTests {
     }
 
     [Fact]
+    public void APositionOutsideEveryZoneIsRefusedEvenInTheEntryGrace() {
+        // pg-kt: a bot walked off the map; the first positions after a zone change are trusted and the wizard was saved at (131068, -69360)
+        var guard = new MovementGuard();
+        Assert.Equal(MoveVerdict.Drop, guard.Check(131068, -69360, 0, T0)); // no anchor yet: dropped, nothing anchored
+        Assert.False(guard.HasAnchor);
+        Assert.Equal(MoveVerdict.Accept, guard.Check(100, 100, 0, T0.AddSeconds(0.1))); // the real first move anchors
+        Assert.Equal(MoveVerdict.SnapBack, guard.Check(-97284, 84476, 0, T0.AddSeconds(0.2))); // with an anchor: snapped back once
+        Assert.Equal((100.0, 100.0, 0.0), guard.Anchor);
+        Assert.Equal(MoveVerdict.Drop, guard.Check(131068, -131072, 0, T0.AddSeconds(0.3)));
+        Assert.Equal(MoveVerdict.Accept, guard.Check(110, 100, 0, T0.AddSeconds(0.4)));
+    }
+
+    [Fact]
+    public void LegitimateFarPositionsStillPassTheEntryGrace() {
+        var guard = new MovementGuard();
+        Assert.Equal(MoveVerdict.Accept, guard.Check(84788, -60000, 1500, T0)); // MS_Death_Zone2_HauntedVillage reaches 84788
+        Assert.True(WorldBounds.Outside(100001, 0, 0));
+        Assert.False(WorldBounds.Outside(-99999, 99999, 0));
+        Assert.True(WorldBounds.Outside(double.NaN, 0, 0));
+    }
+
+    [Fact]
     public void AZoneChangeTrustsTheSpawnPoint() {
         var guard = new MovementGuard();
         guard.Check(0, 0, 0, T0);
