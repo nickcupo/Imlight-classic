@@ -130,7 +130,10 @@ public sealed class HeldSeatRejoinTests : IDisposable {
         Assert.False(ClientZoneSignals.Await(5, session, inbox.Receiver));
         ClientZoneSignals.Forget(5, session);
         ClientZoneSignals.Zoned(5, session);
-        Assert.Throws<TimeoutException>(() => inbox.Receive(TimeSpan.FromMilliseconds(300)));
+        // Nothing may arrive. Inbox.Receive reports that as a TimeoutException, or (a loaded machine) wrapped in an AggregateException.
+        var outcome = Record.Exception(() => inbox.Receive(TimeSpan.FromMilliseconds(600)));
+        Assert.True(outcome is TimeoutException || outcome is AggregateException aggregate
+            && aggregate.Flatten().InnerExceptions.All(inner => inner is TimeoutException), $"expected a timeout, got {outcome?.GetType().Name ?? "a message"}");
     }
 
     [Fact]
