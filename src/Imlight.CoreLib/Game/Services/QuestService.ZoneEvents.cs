@@ -97,6 +97,34 @@ internal partial class QuestService {
         }
     }
 
+    // CLASSIC: and the events of finished goals that a still open kill goal here waits for (GoalZoneEvents.ToReplayCompleted).
+    private void ReplayFinishedGoalEvents(Imlight.CoreLib.WizardData.Models.Player.Wizard wizard) {
+        if (!ClassicQuestEngine.IsActive || wizard?.QuestBehavior is null) {
+            return;
+        }
+
+        var held = wizard.QuestBehavior.CurrentQuestInstances
+            .Where(q => q is not null)
+            .ToDictionary(q => q.QuestName, q => q, StringComparer.Ordinal);
+        var templates = held.Keys.Select(QuestTemplateCollection.GetQuestByName).Where(t => t is not null).ToList();
+        foreach (var (quest, goal, posts) in GoalZoneEvents.ToReplayCompleted(templates,
+                     (q, goalName) => held.TryGetValue(q.m_questName, out var instance) && instance.IsGoalActive(goalName),
+                     (q, goalName) => held.TryGetValue(q.m_questName, out var instance) && instance.IsGoalCompleted(goalName),
+                     wizard.Zone)) {
+            Logger.Debug("Zone {0}: posting again the finished goal {1} of {2} for its open kill goal.",
+                Logger.Args(wizard.Zone, goal.m_goalName, quest.m_questName));
+            ResultDispatcher.ExecuteResults(
+                actorContext: Context,
+                results: new ResultList { m_results = posts.Cast<Result>().ToList() },
+                playerRef: SessionActor.ActorRef,
+                playerObj: GetActiveGameObject(),
+                zoneActor: ResultZoneActor(),
+                questName: quest.m_questName,
+                goalName: goal.m_goalName
+            );
+        }
+    }
+
     private void PostMonsterKilled(ulong[] defeatedTemplateIds) {
         if (!ClassicQuestEngine.IsActive || defeatedTemplateIds is not { Length: > 0 }) {
             return;
