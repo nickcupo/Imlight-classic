@@ -64,15 +64,17 @@ internal static class SpellEffectFilter {
             }
 
             // Filter spells that deal damage to the enemy team.
+            // CLASSIC: an X-pip spell (every creature "NA ...-Boss-01" natural attack, Tempest, ...) wraps its per-tier
+            // damage in a VariableSpellEffect whose own type is kInvalidSpellEffect, so the loop saw no damage in it and a
+            // creature whose only damage was an X-pip card passed every round ("No castable damage spells"). Look into
+            // the tiers, and list each spell once however many damage effects it has.
             foreach (var effect in spellTemplate.m_effects) {
-                if (!IsEnemyTarget(effect)) {
-                    continue;
-                }
-                if (!IsDamageEffect(effect)) {
+                if (!IsOutgoingDamage(effect)) {
                     continue;
                 }
 
                 filteredSpells.Add(spell);
+                break;
             }
         }
 
@@ -171,6 +173,28 @@ internal static class SpellEffectFilter {
                  or kEffectTarget.kMultiTargetEnemy
                  or kEffectTarget.kAtLeastOneEnemy
                  or kEffectTarget.kPreselectedEnemySingle;
+
+    // An effect that damages the enemy, including through the tiers of an X-pip (Variable) or list effect, whose
+    // wrapper carries the target while the damage sits in the nested effects.
+    private static bool IsOutgoingDamage(SpellEffect effect, bool parentIsEnemy = false) {
+        var enemy = parentIsEnemy || IsEnemyTarget(effect);
+        var children = effect switch {
+            VariableSpellEffect v => v.m_effectList,
+            EffectListSpellEffect l => l.m_effectList,
+            _ => null,
+        };
+        if (children is not null) {
+            foreach (var child in children) {
+                if (child is not null && IsOutgoingDamage(child, enemy)) {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        return enemy && IsDamageEffect(effect);
+    }
 
     private static bool IsFriendlyTarget(SpellEffect effect)
         => effect.m_effectTarget is kEffectTarget.kFriendlyMinion
