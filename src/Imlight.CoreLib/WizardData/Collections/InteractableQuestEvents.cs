@@ -90,6 +90,12 @@ internal static class InteractableQuestEvents {
         // use, and the zone's OpenSpiritGate trigger opens the spirit-world portal on the same event (ZoneEventsFiredIn).
         ["MS_LifeTree"] = [new("TreeUsed", "MooShu/MS_Death/MS_Death_Zone3_AncientTree")],
         ["MS_AirShrine"] = [new("AirShrineUsed", "MooShu/MS_Plague/Interiors/MS_Plague2_T5")], // MS-PLAG2-C04-005 goal 2
+        // MS-DTH2-C05-002's three candles in MS_Death2_T5 (MS_Candle*.xml InteractableBehavior strings: each fires the shared
+        // "CandleUsed" and its own). The zone's Spawn1/2/3 triggers listen for "CandleUsed" and start Fushiko's waves; without
+        // the event the boss never came and the quest's kill goal could not be reached (pg-ms rig, sq-38).
+        ["MS_Candle"] = [new("CandleUsed", "MooShu/MS_Death/Interiors/MS_Death2_T5")],
+        ["MS_Candle2"] = [new("CandleUsed", "MooShu/MS_Death/Interiors/MS_Death2_T5"), new("CandleUsed2", "MooShu/MS_Death/Interiors/MS_Death2_T5")],
+        ["MS_Candle3"] = [new("CandleUsed", "MooShu/MS_Death/Interiors/MS_Death2_T5"), new("CandleUsed3", "MooShu/MS_Death/Interiors/MS_Death2_T5")],
         ["KT_MapRoomStaff"] = [new("UseStaff")], // KT-PYMHub-C01-005 goal 3, in the Throne Room of Fire
         ["DS_Crystal_SampleGrove2_006"] = [new("CollectCrystal_Grove2_6")], // DS-ACAD1-C01-002 goal 6, in the Crystal Grove
         ["DS_Desk"] = [new("UseTable")], // DS-ACAD1-C04-003 goal 2, in the Crystal Grove's first tower

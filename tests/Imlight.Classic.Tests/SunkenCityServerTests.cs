@@ -155,6 +155,15 @@ public sealed class SunkenCityServerTests : IDisposable {
     }
 
     [Fact]
+    public void TheThreeCandlesOfTheDeathTowerPostTheEventsFushikosWavesWaitFor() {
+        const string tower = "MooShu/MS_Death/Interiors/MS_Death2_T5";
+        Assert.Equal(["CandleUsed"], InteractableQuestEvents.ZoneEventsFiredIn(new GameObjectTemplate { m_objectName = "MS_Candle" }, tower));
+        Assert.Equal(["CandleUsed", "CandleUsed2"], InteractableQuestEvents.ZoneEventsFiredIn(new GameObjectTemplate { m_objectName = "MS_Candle2" }, tower));
+        Assert.Equal(["CandleUsed", "CandleUsed3"], InteractableQuestEvents.ZoneEventsFiredIn(new GameObjectTemplate { m_objectName = "MS_Candle3" }, tower));
+        Assert.Empty(InteractableQuestEvents.ZoneEventsFiredIn(new GameObjectTemplate { m_objectName = "MS_Candle" }, "MooShu/MS_Death/Interiors/MS_Death2_T3"));
+    }
+
+    [Fact]
     public void EveryGoalChainEndsInCompletion() {
         foreach (var (name, _, expected) in SunkenCityTests.Chain) {
             var quest = LoadQuest(name);
