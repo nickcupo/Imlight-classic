@@ -159,6 +159,36 @@ public sealed class BadgeRules {
     private FrozenDictionary<string, ImmutableArray<Badge>>? _byZone;
     private FrozenDictionary<string, Badge>? _byId;
 
+    /// <summary>
+    /// CLASSIC: these rules without <paramref name="disabled"/> quests (a profile's <c>disabled_quests</c>) among the quests an
+    /// all-quests or area badge asks for: a quest no wizard can be offered must not keep a badge out of reach. Any-one-of
+    /// quest awards and every other award are unchanged.
+    /// </summary>
+    public BadgeRules WithoutQuests(IReadOnlyCollection<string> disabled) {
+        if (disabled.Count == 0) {
+            return this;
+        }
+
+        bool Keep(string quest) => !disabled.Contains(quest, StringComparer.Ordinal);
+        Badge Strip(Badge badge) => badge.Award switch {
+            AllQuestsBadgeAward a when a.Quests.Any(q => !Keep(q)) && a.Quests.Any(Keep)
+                => badge with { Award = new AllQuestsBadgeAward([.. a.Quests.Where(Keep)]) },
+            AreaQuestsBadgeAward area when area.Quests.Any(q => !Keep(q)) || area.BySchool.Values.Any(l => l.Any(q => !Keep(q)))
+                => badge with {
+                    Award = new AreaQuestsBadgeAward([.. area.Quests.Where(Keep)],
+                        area.BySchool.ToImmutableDictionary(e => e.Key, e => ImmutableArray.CreateRange(e.Value.Where(Keep)))),
+                },
+            _ => badge,
+        };
+
+        return new BadgeRules {
+            Id = Id,
+            Profiles = Profiles,
+            Badges = [.. Badges.Select(Strip)],
+            SourceFile = SourceFile,
+        };
+    }
+
     /// <summary>The badges awarded at all.</summary>
     public IEnumerable<Badge> Granted => Badges.Where(badge => badge.IsGranted);
 

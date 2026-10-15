@@ -77,7 +77,17 @@ internal sealed class InteractVendorComponent(ZoneEntity entity) : ZoneEntityCom
         => template is GameObjectTemplate goTemplate
         && goTemplate.m_behaviors.Any(x => x is NPCBehaviorTemplate)
         && (NpcInventoryCollection.TryGetNpcInventory(goTemplate.m_templateID, out _)
-        || WorldVendorLocations.IsVendor(goTemplate.m_templateID));
+        || WorldVendorLocations.IsVendor(goTemplate.m_templateID))
+        && !IsClosedRecipeShop(goTemplate);
+
+    /// <summary>
+    /// CLASSIC: a recipe shop of a profile with crafting off (owner 2026-10-15, "just turn crafting off"): the recipes are
+    /// not in the data, so the NPC offers no shop at all (its talk and quest options stay). A recipe-named vendor that
+    /// has a real stock in the data (Felicia's furniture, the pet snack shops) keeps it.
+    /// </summary>
+    private static bool IsClosedRecipeShop(GameObjectTemplate template)
+        => ClassicCrafting.ClosesRecipeShop(template.m_objectName?.ToString(),
+            NpcInventoryCollection.TryGetNpcInventory(template.m_templateID, out _));
 
     public override void OnStart() {
         // CLASSIC: ticket shops use the same dated configuration that registers their SpiralDB inventories.
@@ -139,10 +149,17 @@ internal sealed class InteractVendorComponent(ZoneEntity entity) : ZoneEntityCom
         => OfferedInventory().Any(x => x.MParts.TemplateId == itemGID.MParts.TemplateId);
 
     // CLASSIC: unverified deeds remain closed in the visible stock and purchase validation.
+    // CLASSIC: with crafting off, the housing vendors do not sell crafting stations either.
     private List<GID> OfferedInventory() => !ClassicRuntime.IsInitialized || !ClassicRuntime.IsActive ? _inventory : _inventory.Where(id =>
         !Classic.Arena.ClassicArenaGearTemplates.IsWithheld(id.MParts.TemplateId)
+        && !IsCraftingStationItem(id)
         && (CoreObjectFactory.GetCoreTemplate(id) is not WizItemTemplate t || !HouseCatalog.IsDeed(t)
             || HouseCatalog.TryGet(id.MParts.TemplateId, out _))).ToList();
+
+    /// <summary>CLASSIC: a crafting station (housing furniture) while crafting is off.</summary>
+    internal static bool IsCraftingStationItem(GID id)
+        => !ClassicCrafting.Enabled
+        && ClassicCrafting.IsCraftingStationName((CoreObjectFactory.GetCoreTemplate(id) as GameObjectTemplate)?.m_objectName?.ToString());
 
     private void SendShopOfferings(IActorRef playerActor) {
         var shopOffering = new WizShopOffering() {

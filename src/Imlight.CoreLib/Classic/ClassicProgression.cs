@@ -182,7 +182,8 @@ public static class ClassicProgression {
         }
 
         if (profile.Rules.Badges is { } badges && File.Exists(Path.Combine(classicDataRoot, badges))) {
-            s_badges = BadgeRulesLoader.Load(Path.Combine(classicDataRoot, badges));
+            // CLASSIC: a quest the profile disables (disabled_quests) cannot be completed, so no badge waits for it.
+            s_badges = BadgeRulesLoader.Load(Path.Combine(classicDataRoot, badges)).WithoutQuests(profile.DisabledQuests);
             Logger.Information("Classic badges {Table}: {Count} badges, {Granted} awarded by the server.",
                 Logger.Args(s_badges.Id, s_badges.Badges.Length, s_badges.Granted.Count()));
         }
