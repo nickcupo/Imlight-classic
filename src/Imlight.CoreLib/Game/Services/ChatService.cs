@@ -184,6 +184,38 @@ internal class ChatService(SessionActor sessionActor) : MessageService(sessionAc
         SendFilteredZoneMessage(msg, character.CharId, character.Zone);
     }
 
+    // CLASSIC (client-protocol audit 2026-10): menu chat said aloud for phrases the client sends in the "extended" form
+    // (a UTF-8 STR phrase reference instead of a numeric id). It had no handler, so those phrases reached nobody. Same
+    // rules as the numeric quick chat above (mute, rate limit, ignore lists, same zone and instance), plus the length
+    // check the whisper form uses.
+    [MessageHandler(typeof(GAME_5_PROTOCOL.MSG_REQUESTRADIALQUICKCHATEXT))]
+    private void ReceiveRequestRadialQuickChatExt(GAME_5_PROTOCOL.MSG_REQUESTRADIALQUICKCHATEXT message) {
+        var account = GetActiveAccount();
+        if (account.InfractionHistory.IsCurrentlyMuted) {
+            InformGameClient("You are currently muted.");
+
+            return;
+        }
+
+        byte[] quickExt = message.Message;
+        if (!Imlight.Classic.Security.ChatGuard.AcceptsQuickChatExt(quickExt) || !TakeChatToken()) {
+            return;
+        }
+
+        var globalId = GetActiveGameObject().m_globalID;
+        var character = GetActiveWizard();
+        var byteName = character.PlayerNameBehavior.GetWizardNameAsByteHexString();
+        var src = DataManipulation.SpacedHexStringToBytes(byteName);
+
+        var msg = new GAME_5_PROTOCOL.MSG_RADIALQUICKCHATEXT() {
+            Message = message.Message,
+            SourceID = globalId,
+            SourceName = src,
+            Filter = 0,
+        };
+        SendFilteredZoneMessage(msg, character.CharId, character.Zone);
+    }
+
     [MessageHandler(typeof(GAME_5_PROTOCOL.MSG_REQUESTDIRECTEDQUICKCHAT))]
     private void ReceiveWhisperRadialQuickChat(GAME_5_PROTOCOL.MSG_REQUESTDIRECTEDQUICKCHAT message) {
         // A player is whispering to another player using the radial quick chat.
@@ -322,6 +354,87 @@ internal class ChatService(SessionActor sessionActor) : MessageService(sessionAc
         var targetActorPath = targetPlayer.ActorPath;
         Context.ActorSelection(targetActorPath).Tell(msg);
     }
+
+    // CLASSIC (client-protocol audit 2026-10): a whisper to a name the player typed. The same rules as a whisper by id
+    // (mute, rate limit, ignore, online check, ChatGuard filter); the name must match an online player. The client is
+    // told the target's id with DIRECTEDCHATBYNAMERESPONSE, and DIRECTEDCHATFAIL when nobody online has that name.
+    [MessageHandler(typeof(GAME_5_PROTOCOL.MSG_REQUESTDIRECTEDCHATBYNAME))]
+    private void ReceiveWhisperByName(GAME_5_PROTOCOL.MSG_REQUESTDIRECTEDCHATBYNAME message) {
+        var account = GetActiveAccount();
+        if (account.InfractionHistory.IsCurrentlyMuted) {
+            InformGameClient("You are currently muted.");
+
+            return;
+        }
+
+        var myWizard = GetActiveWizard();
+        if (!TakeChatToken()) {
+            return;
+        }
+
+        string typedName = message.TargetName;
+        var candidates = OnlinePlayerCollection.GetOnlinePlayers()
+            .Where(p => !Classic.Ambient.AmbientWizards.TryGetWizard(p.CharacterId, out _)); // ambient wizards hear no whispers
+        var target = FindOnlinePlayerByName(typedName, candidates, myWizard.CharId, id => {
+            try {
+                return WizardCollection.GetCharacterUnloaded(id)?.PlayerNameBehavior?.GetWizardName();
+            }
+            catch (Exception) {
+                return null;
+            }
+        });
+        if (target is null || string.IsNullOrEmpty(target.ActorPath)) {
+            SendToSocket(new GAME_5_PROTOCOL.MSG_DIRECTEDCHATFAIL());
+
+            return;
+        }
+
+        // An ignored sender gets no answer, as in a whisper by id.
+        if (BuddyRelationshipCollection.HasBlocked(target.CharacterId, myWizard.CharId)) {
+            return;
+        }
+
+        string whisper = message.Message;
+        var cleanWhisper = Imlight.Classic.Security.ChatGuard.SanitizeText(whisper);
+        if (cleanWhisper is null) {
+            return;
+        }
+
+        var hexName = myWizard.PlayerNameBehavior.GetWizardNameAsByteHexString();
+        var sourceName = DataManipulation.SpacedHexStringToBytes(hexName);
+        var msg = new GAME_5_PROTOCOL.MSG_DIRECTEDCHAT {
+            SourceName = sourceName,
+            SourceID = myWizard.CharId,
+            Message = cleanWhisper,
+            Filter = 0
+        };
+        Context.ActorSelection(target.ActorPath).Tell(msg);
+
+        SendToSocket(new GAME_5_PROTOCOL.MSG_DIRECTEDCHATBYNAMERESPONSE {
+            TargetID = target.CharacterId,
+            TargetName = typedName,
+        });
+    }
+
+    /// <summary>
+    /// CLASSIC: the online player whose wizard name is the typed one (case and extra spaces ignored), never the sender.
+    /// Null when nobody online has that name.
+    /// </summary>
+    internal static OnlinePlayer FindOnlinePlayerByName(string typedName, IEnumerable<OnlinePlayer> online,
+                                                       ulong senderCharId, Func<ulong, string> nameOf) {
+        var wanted = NormalizeName(typedName);
+        if (wanted.Length == 0) {
+            return null;
+        }
+
+        return online.FirstOrDefault(p => p.CharacterId != senderCharId
+                                          && NormalizeName(nameOf(p.CharacterId)) == wanted);
+    }
+
+    private static string NormalizeName(string name)
+        => string.IsNullOrWhiteSpace(name)
+            ? ""
+            : string.Join(' ', name.Split((char[]) null, StringSplitOptions.RemoveEmptyEntries)).ToUpperInvariant();
 
     [MessageHandler(typeof(GAME_5_PROTOCOL.MSG_BUDDYSTATS))]
     private void ReceivePlayerSelect(GAME_5_PROTOCOL.MSG_BUDDYSTATS message) {
