@@ -137,7 +137,8 @@ public sealed class CelestiaProfileTests {
         var october = new ClassicSpellOverrides(book, ClassicDataFixture.LoadProfile(October));
 
         Assert.NotEmpty(book.Records);
-        foreach (var record in book.Records) {
+        // CLASSIC: the Astral records (work package C) are Celestia's own; every inherited record means the same.
+        foreach (var record in book.Records.Where(record => !ClassicSpellSchema.AstralSchools.Contains(record.School))) {
             Assert.Equal(record.IsInProfile(October), record.IsInProfile(Celestia));
             Assert.Equal(october.ValuesOf(record), celestia.ValuesOf(record));
             if (record.ClientTemplate is { } path) {
@@ -145,7 +146,8 @@ public sealed class CelestiaProfileTests {
             }
         }
 
-        Assert.Equal(october.RecordsNotInProfile.Select(r => r.Id), celestia.RecordsNotInProfile.Select(r => r.Id));
+        Assert.Equal(october.RecordsNotInProfile.Where(r => !ClassicSpellSchema.AstralSchools.Contains(r.School)).Select(r => r.Id),
+            celestia.RecordsNotInProfile.Select(r => r.Id));
     }
 
     [Fact]
