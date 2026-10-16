@@ -102,7 +102,7 @@ public sealed class SchemaDriftTests {
         Assert.Equal(EnumValues(rules.GetProperty("dragonspyre_difficulty")), ClassicSchema.DragonspyreDifficulties.ToArray());
         Assert.Equal(EnumValues(rules.GetProperty("tutorial")), ClassicSchema.Tutorials.ToArray());
         Assert.Equal(EnumValues(rules.GetProperty("teleport_stones")), ClassicSchema.TeleportStoneRules.ToArray());
-        Assert.Equal(new[] { "accuracy_table", "xp_table", "player_health", "level_stats", "mob_rewards", "badges", "quest_cards", "treasure_prices", "mob_stats", "crown_shop", "later_objects", "creature_decks", "power_pips_from_rank",
+        Assert.Equal(new[] { "accuracy_table", "xp_table", "player_health", "level_stats", "critical", "mob_rewards", "badges", "quest_cards", "treasure_prices", "mob_stats", "crown_shop", "later_objects", "creature_decks", "power_pips_from_rank",
                              "dragonspyre_difficulty", "tutorial", "teleport_stones", "potions", "second_chance", "boss_cheats", "puzzle_helpers", "instance_resets" },
             rules.EnumerateObject().Select(rule => rule.Name).ToArray());
     }
@@ -114,6 +114,12 @@ public sealed class SchemaDriftTests {
 
         Assert.Equal(Keys(ReadSchema("potions.schema.json")), Sorted(PotionRulesLoader.s_rootKeys));
         Assert.Equal(Keys(ReadSchema("second-chance.schema.json")), Sorted(SecondChanceRulesLoader.s_rootKeys));
+    }
+
+    [Fact]
+    public void CriticalModelLoaderKeysMatchTheirSchema() { // CLASSIC
+        var keys = ReadSchema("critical.schema.json").GetProperty("properties").EnumerateObject().Select(p => p.Name).Order(StringComparer.Ordinal);
+        Assert.Equal(keys, CriticalModelLoader.s_rootKeys.Order(StringComparer.Ordinal));
     }
 
     [Fact]

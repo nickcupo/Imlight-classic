@@ -38,6 +38,12 @@
  * x2. Vengeance and Conviction add to their side of the roll, then are
  * consumed. Crits are gated by the config's level threshold.
  * 
+ * CLASSIC: a profile with rules.critical (celestia-2010) uses the 2010-2014
+ * percent model instead (ClassicCritical below, Imlight.Classic.Rules.CriticalModel):
+ * per-piece chances, one roll per cast, a per-target block against the same
+ * roll and a flat x2. Package C's Star auras feed it through
+ * AuraCritBoostPoints / AuraBlockBoostPoints.
+ *
  * TODO:
  * 
  * Created by: Jooty
@@ -46,10 +52,15 @@
  */
 
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Classic;
+using Imlight.Classic.Rules;
+using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.Game.Effects;
+using Imlight.CoreLib.Game.Spells;
+using Imlight.CoreLib.Shared.Behaviors;
 
 namespace Imlight.CoreLib.Game.Combat;
 
@@ -176,5 +187,102 @@ internal static class CombatCriticals {
 
         return rng.Next(0, 10000) < (int) (chance * 10000f);
     }
+
+    // ====================================================================
+    // CLASSIC: the 2010-2014 percent model (rules.critical; docs/research/crit-block-2010.md)
+    // ====================================================================
+
+    /// <summary>CLASSIC: the active 2010-2014 model, or null when the profile keeps the modern one or has no crits.</summary>
+    internal static CriticalModel ActiveClassicModel
+        => ClassicRuntime.Rules.CriticalAndBlockEnabled ? ClassicProgression.CriticalModel : null;
+
+    /// <summary>
+    /// CLASSIC hook for work package C (Star auras): percent points (20 = +20%) an aura adds to this caster's critical
+    /// chance (Vengeance). Read on every roll and never consumed; the aura's own rounds decide how long it lasts.
+    /// Default: no auras.
+    /// </summary>
+    internal static Func<CombatDuelSubCircle, int> AuraCritBoostPoints = static _ => 0;
+
+    /// <summary>
+    /// CLASSIC hook for work package C (Star auras): percent points (20 = 20%) an aura adds to this target's block
+    /// chance (Conviction). Read for every damage target of a landed critical and never consumed. Default: no auras.
+    /// </summary>
+    internal static Func<CombatDuelSubCircle, int> AuraBlockBoostPoints = static _ => 0;
+
+    /// <summary>CLASSIC: the summed per-piece chance (0-1) of one bucket: all schools (-1) or one school index.</summary>
+    internal static float PieceChance(ServerWizGameStats stats, CriticalModel model, bool block, int schoolIndex) {
+        var pieces = block ? stats?.ClassicBlockPieces : stats?.ClassicCritPieces;
+        if (pieces is null) {
+            return 0f;
+        }
+
+        var level = stats.Level;
+        var total = 0.0;
+        foreach (var (school, rating) in pieces) {
+            if (school == schoolIndex) {
+                total += block ? model.BlockPieceChance(rating, level) : model.CritPieceChance(rating, level);
+            }
+        }
+
+        return (float) total;
+    }
+
+    /// <summary>CLASSIC: per-school chances shaped like <paramref name="ratingsBySchool"/> (null stays null).</summary>
+    internal static List<float> PieceChanceList(ServerWizGameStats stats, CriticalModel model, bool block, List<float> ratingsBySchool) {
+        if (ratingsBySchool is null) {
+            return null;
+        }
+
+        var chances = new List<float>(ratingsBySchool.Count);
+        for (var i = 0; i < ratingsBySchool.Count; i++) {
+            chances.Add(PieceChance(stats, model, block, i));
+        }
+
+        return chances;
+    }
+
+    /// <summary>CLASSIC: a participant's chance (0-1) for a school: all-schools pieces plus that school's pieces.</summary>
+    internal static float ClassicChance(CombatDuelSubCircle sc, CriticalModel model, bool block, string school) {
+        var stats = sc?.ParticipantGameStats;
+        if (stats is null) {
+            return 0f;
+        }
+
+        var chance = PieceChance(stats, model, block, -1);
+        if (school is not null && MagicSchools.GetMagicSchool(school) is { } template) {
+            chance += PieceChance(stats, model, block, (int) template.m_schoolIndex);
+        }
+
+        return chance;
+    }
+
+    /// <summary>
+    /// CLASSIC: the cast's crit chance in percent points: 100 x the caster's chance for the spell's school, plus aura
+    /// points, plus a hanging Vengeance-style kCritBoost (consumed, as the modern path does).
+    /// </summary>
+    internal static double ClassicCritPoints(CombatDuelSubCircle caster, CriticalModel model, string school)
+        => 100.0 * ClassicChance(caster, model, block: false, school) + AuraCritBoostPoints(caster) + 100.0 * GetCritBoostPercent(caster);
+
+    /// <summary>CLASSIC: a target's block chance in percent points, the block counterpart of <see cref="ClassicCritPoints"/>.</summary>
+    internal static double ClassicBlockPoints(CombatDuelSubCircle target, CriticalModel model, string school)
+        => 100.0 * ClassicChance(target, model, block: true, school) + AuraBlockBoostPoints(target) + 100.0 * GetCritBlockPercent(target);
+
+    /// <summary>
+    /// CLASSIC: rolls the cast once (2014 client 0x010b4430): the roll is uniform in [0, max(99, chance)); the cast crits
+    /// when the chance is above it. The roll is returned for the per-target block test.
+    /// </summary>
+    internal static bool ClassicRollsCritical(CombatDuelSubCircle caster, CriticalModel model, string school, out double roll) {
+        var chance = ClassicCritPoints(caster, model, school);
+        roll = model.Roll(chance, caster._duelActor.Rng.NextDouble());
+
+        return CriticalModel.Crits(chance, roll);
+    }
+
+    /// <summary>
+    /// CLASSIC: whether <paramref name="target"/> blocks a landed critical with roll <paramref name="roll"/> (2014 client
+    /// 0x010ae010). Heals are never blocked.
+    /// </summary>
+    internal static bool ClassicBlocks(CombatDuelSubCircle target, CriticalModel model, string school, double roll, bool isHeal)
+        => !isHeal && CriticalModel.Blocks(ClassicBlockPoints(target, model, school), roll);
 
 }

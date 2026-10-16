@@ -59,6 +59,7 @@ public static class ClassicProgression {
     private static volatile XpTable? s_xpTable;
     private static volatile HealthTable? s_healthTable; // CLASSIC
     private static volatile LevelStats? s_levelStats; // CLASSIC
+    private static volatile CriticalModel? s_criticalModel; // CLASSIC
     private static volatile MobRewardRules? s_mobRewards;
     private static volatile BadgeRules? s_badges;
     private static volatile QuestCardRewards? s_questCards;
@@ -87,6 +88,15 @@ public static class ClassicProgression {
     /// null for the client's values at every level.
     /// </summary>
     public static LevelStats? LevelStats => s_levelStats;
+
+    /// <summary>
+    /// CLASSIC: the profile's critical and block model (rules.critical, the 2010-2014 percent model), or null for the
+    /// modern model. Used only while the profile's critical_and_block switch is on.
+    /// </summary>
+    public static CriticalModel? CriticalModel => s_criticalModel;
+
+    /// <summary>CLASSIC: test hook.</summary>
+    internal static void UseCriticalModelForTests(CriticalModel? model) => s_criticalModel = model;
 
     /// <summary>
     /// The profile's combat XP, gold and drop rules, or null for stock Imlight.
@@ -189,6 +199,18 @@ public static class ClassicProgression {
             if (s_levelStats.Status == "unverified") {
                 Logger.Warning("Classic level stats {Table} are client values without a dated source, awaiting the owner's ruling {Decision}.",
                     Logger.Args(s_levelStats.Id, s_levelStats.Decision ?? "(none named)"));
+            }
+        }
+
+        s_criticalModel = null; // CLASSIC
+        if (profile.Rules.Critical is { } critical && File.Exists(Path.Combine(classicDataRoot, critical))) {
+            s_criticalModel = CriticalModelLoader.Load(Path.Combine(classicDataRoot, critical));
+            Logger.Information("Classic critical model {Table}: {Crit} chance per critical rating, {Block} per block rating, x{Multiplier} ({Status}).",
+                Logger.Args(s_criticalModel.Id, s_criticalModel.CritPerRating, s_criticalModel.BlockPerRating,
+                    s_criticalModel.CritMultiplier, s_criticalModel.Status));
+            if (s_criticalModel.Status == "unverified") {
+                Logger.Warning("Classic critical model {Table} holds 2014 client values without a source dated in 2010, per the owner's ruling {Decision}.",
+                    Logger.Args(s_criticalModel.Id, s_criticalModel.Decision ?? "(none named)"));
             }
         }
 

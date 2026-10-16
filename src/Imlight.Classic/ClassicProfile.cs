@@ -150,6 +150,12 @@ public sealed class ProfileRules {
     public string? LevelStats { get; init; }
 
     /// <summary>
+    /// CLASSIC: path under classic-data of the critical and block model (rules.critical, such as rules/critical-2010.yaml
+    /// for celestia-2010), if any. With critical_and_block on and no file, the server keeps the modern model.
+    /// </summary>
+    public string? Critical { get; init; }
+
+    /// <summary>
     /// Path under classic-data of the mob reward rules (combat XP, gold, drops), if any.
     /// </summary>
     public string? MobRewards { get; init; }

@@ -171,6 +171,11 @@ public class ServerWizGameStats : IClientTypeProvider<WizGameStats> {
     [JsonIgnore] public byte m_startingPips;
     [JsonIgnore] public byte m_startingPowerPips;
 
+    // CLASSIC: one entry per equipped critical/block stat effect (school index, or -1 for all schools). The
+    // 2010-2014 model (rules.critical) converts each piece to a chance with the wearer's level and adds the chances.
+    [JsonIgnore] internal List<(int School, float Rating)> ClassicCritPieces;
+    [JsonIgnore] internal List<(int School, float Rating)> ClassicBlockPieces;
+
     [JsonIgnore] public MagicSchool MagicSchool;
     [JsonIgnore] public int Level;
 
@@ -237,6 +242,14 @@ public class ServerWizGameStats : IClientTypeProvider<WizGameStats> {
             m_criticalHitPercentAll = CombatCriticals.RatingToChance(m_criticalHitRatingAll, Level),
             m_blockPercentAll = CombatCriticals.RatingToChance(m_blockRatingAll, Level),
         };
+
+        // CLASSIC: the 2010-2014 model sends the per-piece chances it rolls with (rules.critical).
+        if (ClassicRuntime.Rules.CriticalAndBlockEnabled && ClassicProgression.CriticalModel is { } model) {
+            stats.m_criticalHitPercentAll = CombatCriticals.PieceChance(this, model, block: false, schoolIndex: -1);
+            stats.m_blockPercentAll = CombatCriticals.PieceChance(this, model, block: true, schoolIndex: -1);
+            stats.m_criticalHitPercentBySchool = CombatCriticals.PieceChanceList(this, model, block: false, m_criticalHitRatingBySchool);
+            stats.m_blockPercentBySchool = CombatCriticals.PieceChanceList(this, model, block: true, m_blockRatingBySchool);
+        }
 
         // CLASSIC: without critical and block the client gets no rating or chance to re-simulate a crit from.
         if (!ClassicRuntime.Rules.CriticalAndBlockEnabled) {

@@ -91,16 +91,33 @@ internal static class CombatActionResolver {
         var critMultiplier = 1f;
         var landedCrit = false;
         var critPrimaryTarget = action.SelectedTarget;
+        // CLASSIC: the 2010-2014 model (rules.critical) rolls once per cast and lets each damage target block
+        // against the same roll; null keeps the modern model above.
+        var classicCritModel = CombatCriticals.ActiveClassicModel;
+        var classicCritRoll = 0.0;
+        string critSchool = null;
+        var classicBlockedSlots = new HashSet<int>();
+        var classicBlockDecided = new HashSet<int>();
         if (critPrimaryTarget is not null) {
             var spellSchool = MagicSchools.GetMagicSchool(action.Spell.m_magicSchoolID)?.m_schoolName;
             if (spellSchool is not null) {
                 var isHealCast = action.SpellTemplate.m_effects
-                    .Any(x => x.m_effectType == kSpellEffects.kHeal);
+                    .Any(x => x.m_effectType == kSpellEffects.kHeal
+                        || (classicCritModel is not null && IsClassicHealEffect(x.m_effectType)));
                 var isOffensiveCast = critPrimaryTarget.OccupiedTeam != action.SpellCaster.ActingTeam;
                 if (isHealCast || isOffensiveCast) {
-                    landedCrit = CombatCriticals.RollsCritical(action.SpellCaster, critPrimaryTarget, spellSchool, isHealCast);
-                    if (landedCrit) {
-                        critMultiplier = CombatCriticals.GetCritMultiplier(action.SpellCaster, critPrimaryTarget, spellSchool, isHealCast);
+                    if (classicCritModel is not null) {
+                        critSchool = spellSchool;
+                        landedCrit = CombatCriticals.ClassicRollsCritical(action.SpellCaster, classicCritModel, spellSchool, out classicCritRoll);
+                        if (landedCrit) {
+                            critMultiplier = classicCritModel.CritMultiplier;
+                        }
+                    }
+                    else {
+                        landedCrit = CombatCriticals.RollsCritical(action.SpellCaster, critPrimaryTarget, spellSchool, isHealCast);
+                        if (landedCrit) {
+                            critMultiplier = CombatCriticals.GetCritMultiplier(action.SpellCaster, critPrimaryTarget, spellSchool, isHealCast);
+                        }
                     }
                 }
             }
@@ -157,12 +174,26 @@ internal static class CombatActionResolver {
             InformDuelParticipantsOfEffect(action.SpellCaster, targets, chosenEffect);
 
             // The effect types CombatEffectApplicator applies critMultiplier to.
-            if (chosenEffect.m_effectType is kSpellEffects.kDamage
-                                          or kSpellEffects.kDamagePerTotalPipPower
-                                          or kSpellEffects.kHeal) {
+            // CLASSIC: the 2010 model's list is the 2014 client's (0x010db940): damage, heal, drain, DoT and HoT.
+            var critsThisEffect = classicCritModel is not null
+                ? IsClassicCritableEffect(chosenEffect.m_effectType)
+                : chosenEffect.m_effectType is kSpellEffects.kDamage
+                                            or kSpellEffects.kDamagePerTotalPipPower
+                                            or kSpellEffects.kHeal;
+            if (critsThisEffect) {
                 foreach (var target in targets) {
                     if (!critEligibleTargetSlots.Contains(target.SlotIndex)) {
                         critEligibleTargetSlots.Add(target.SlotIndex);
+                    }
+                }
+            }
+
+            // CLASSIC: each damage target decides its block once per cast, against the cast's roll; heals never block.
+            if (classicCritModel is not null && landedCrit && critsThisEffect && !IsClassicHealEffect(chosenEffect.m_effectType)) {
+                foreach (var target in targets) {
+                    if (classicBlockDecided.Add(target.SlotIndex)
+                        && CombatCriticals.ClassicBlocks(target, classicCritModel, critSchool, classicCritRoll, isHeal: false)) {
+                        classicBlockedSlots.Add(target.SlotIndex);
                     }
                 }
             }
@@ -171,15 +202,17 @@ internal static class CombatActionResolver {
                                                                 [.. charmsAffectingThisSpell],
                                                                 action.SpellCaster,
                                                                 targets,
-                                                                critMultiplier,
-                                                                casterPipCost);
+                                                                critsThisEffect ? critMultiplier : 1f, // CLASSIC: was critMultiplier
+                                                                casterPipCost,
+                                                                classicCritModel is not null ? classicBlockedSlots : null);
         }
 
         if (critEligibleTargetSlots.Count > 0) {
             combatAction.m_CritHitList = [.. critEligibleTargetSlots.Select(slot => new TargetCritHit {
                 m_target = slot,
-                m_mult = landedCrit ? critMultiplier : 0f,
-                m_blocked = false,
+                // CLASSIC: a target that blocked (2010 model) is reported blocked with no multiplier.
+                m_mult = landedCrit && !classicBlockedSlots.Contains(slot) ? critMultiplier : 0f,
+                m_blocked = landedCrit && classicBlockedSlots.Contains(slot),
             })];
 
             if (landedCrit) {
@@ -196,6 +229,16 @@ internal static class CombatActionResolver {
 
         return spellWorthCasting;
     }
+
+    // CLASSIC: the 2014 client's critable effect types (0x010db940: kDamage, kHeal, kHealPercent, kStealHealth,
+    // kDamageOverTime, kHealOverTime, kAfterlife); kHealPercent and kAfterlife have no handler here.
+    private static bool IsClassicCritableEffect(kSpellEffects type)
+        => type is kSpellEffects.kDamage or kSpellEffects.kHeal or kSpellEffects.kHealPercent or kSpellEffects.kStealHealth
+            or kSpellEffects.kDamageOverTime or kSpellEffects.kHealOverTime;
+
+    // CLASSIC: heals the 2014 block test skips (0x010ae010: kHeal, kHealPercent, kHealOverTime).
+    private static bool IsClassicHealEffect(kSpellEffects type)
+        => type is kSpellEffects.kHeal or kSpellEffects.kHealPercent or kSpellEffects.kHealOverTime;
 
     private static SpellEffect ChooseRandomEffect(RandomSpellEffect randomSpellEffect, CombatEffectStack effectStack, Random rng) {
         var count = randomSpellEffect.m_effectList.Count;

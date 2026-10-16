@@ -41,6 +41,7 @@ using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Classic;
 using Imlight.Common;
 using System;
+using System.Collections.Generic;
 using System.Linq;
 
 namespace Imlight.CoreLib.Game.Combat;
@@ -67,13 +68,16 @@ internal static class CombatEffectApplicator {
     /// <param name="targets">The targets of the spell effect.</param>
     /// <param name="critMultiplier">The landed critical's multiplier, 1 when none landed.</param>
     /// <param name="casterPipCost">The pips the caster pays for the spell after its effects land.</param>
+    /// <param name="critBlockedSlots">CLASSIC: target slots that blocked the landed critical (2010 model); they take the
+    /// effect without the multiplier. Null for the modern model.</param>
     /// <returns>The cinematic time required for the effect to be applied.</returns>
     internal static float ApplyEffect(SpellEffect effect,
                                       SpellEffect[] charms,
                                       CombatDuelSubCircle caster,
                                       CombatDuelSubCircle[] targets,
                                       float critMultiplier = 1,
-                                      int casterPipCost = 0) {
+                                      int casterPipCost = 0,
+                                      IReadOnlySet<int> critBlockedSlots = null) {
         var cinematicTime = 0.0f;
 
         if (effect.m_effectTarget == kEffectTarget.kGlobal) {
@@ -89,22 +93,23 @@ internal static class CombatEffectApplicator {
 
         switch (effect.m_effectType) {
             case kSpellEffects.kDamage:
-                cinematicTime += ApplyFlatDamageEffect(effect, charms, caster, targets, critMultiplier);
+                cinematicTime += ApplyFlatDamageEffect(effect, charms, caster, targets, critMultiplier, critBlockedSlots);
                 break;
             case kSpellEffects.kDamagePerTotalPipPower:
-                cinematicTime += ApplyFlatDamageEffect(effect, charms, caster, targets, critMultiplier);
+                cinematicTime += ApplyFlatDamageEffect(effect, charms, caster, targets, critMultiplier, critBlockedSlots);
                 break;
             case kSpellEffects.kDamageOverTime:
-                cinematicTime += ApplyDamageOverTime(effect, charms, caster, targets);
+                // CLASSIC: the resolver passes a multiplier here only under the 2010 model, where DoTs crit.
+                cinematicTime += ApplyDamageOverTime(effect, charms, caster, targets, critMultiplier, critBlockedSlots);
                 break;
             case kSpellEffects.kHeal:
                 cinematicTime += ApplyFlatHealEffect(effect, charms, caster, targets, critMultiplier);
                 break;
             case kSpellEffects.kHealOverTime:
-                cinematicTime += ApplyHealOverTime(effect, charms, caster, targets);
+                cinematicTime += ApplyHealOverTime(effect, charms, caster, targets, critMultiplier); // CLASSIC: as DoTs
                 break;
             case kSpellEffects.kStealHealth:
-                cinematicTime += ApplyStealHealthEffect(effect, charms, caster, targets);
+                cinematicTime += ApplyStealHealthEffect(effect, charms, caster, targets, critMultiplier, critBlockedSlots); // CLASSIC: as DoTs
                 break;
             case kSpellEffects.kModifyOutgoingDamage:
             case kSpellEffects.kModifyIncomingDamage:
@@ -175,8 +180,9 @@ internal static class CombatEffectApplicator {
                                                SpellEffect[] charms,
                                                CombatDuelSubCircle caster,
                                                CombatDuelSubCircle[] targets,
-                                               float critMultiplier = 1) {
-        var (cinematicTime, _) = ApplyDamageEffect(effect, charms, caster, targets, critMultiplier);
+                                               float critMultiplier = 1,
+                                               IReadOnlySet<int> critBlockedSlots = null) {
+        var (cinematicTime, _) = ApplyDamageEffect(effect, charms, caster, targets, critMultiplier, critBlockedSlots);
 
         return cinematicTime;
     }
@@ -184,7 +190,9 @@ internal static class CombatEffectApplicator {
     private static float ApplyDamageOverTime(SpellEffect effect,
                                              SpellEffect[] charms,
                                              CombatDuelSubCircle caster,
-                                             CombatDuelSubCircle[] targets) {
+                                             CombatDuelSubCircle[] targets,
+                                             float critMultiplier = 1,
+                                             IReadOnlySet<int> critBlockedSlots = null) {
         var damageFromCaster = effect.m_effectParam;
         var cinematicTime = 0.0f;
 
@@ -204,7 +212,8 @@ internal static class CombatEffectApplicator {
         damageFromCaster = (int) Math.Floor(damageFromCaster * (1 + bubbleDamageIncrease));
 
         foreach (var target in targets) {
-            var targetSpecificDamage = damageFromCaster;
+            // CLASSIC: a landed critical (2010 model) multiplies the whole DoT unless this target blocked it.
+            var targetSpecificDamage = (int) Math.Floor(damageFromCaster * CritFor(critMultiplier, critBlockedSlots, target));
 
             // Calculate damage reduction from target stats
             var damageReductionFlat = GetFlatDamageReduction(target, effect.m_sDamageType);
@@ -232,7 +241,8 @@ internal static class CombatEffectApplicator {
     private static float ApplyHealOverTime(SpellEffect effect,
                                            SpellEffect[] charms,
                                            CombatDuelSubCircle caster,
-                                           CombatDuelSubCircle[] targets) {
+                                           CombatDuelSubCircle[] targets,
+                                           float critMultiplier = 1) {
         var healFromCaster = effect.m_effectParam;
         var cinematicTime = 0.0f;
 
@@ -248,6 +258,7 @@ internal static class CombatEffectApplicator {
         var duel = caster._duelActor.Duel;
         var bubbleHealIncrease = GetGlobalEffectHealingModifier(duel);
         healFromCaster = (int) Math.Ceiling(healFromCaster * (1 + bubbleHealIncrease));
+        healFromCaster = (int) Math.Ceiling(healFromCaster * critMultiplier); // CLASSIC: 1 unless the 2010 model crits it
 
         foreach (var target in targets) {
             // Calculate heal increase from target stats
@@ -271,8 +282,10 @@ internal static class CombatEffectApplicator {
     private static float ApplyStealHealthEffect(SpellEffect effect,
                                                 SpellEffect[] charms,
                                                 CombatDuelSubCircle caster,
-                                                CombatDuelSubCircle[] targets) {
-        var (cinematicTime, damageDealt) = ApplyDamageEffect(effect, charms, caster, targets);
+                                                CombatDuelSubCircle[] targets,
+                                                float critMultiplier = 1,
+                                                IReadOnlySet<int> critBlockedSlots = null) {
+        var (cinematicTime, damageDealt) = ApplyDamageEffect(effect, charms, caster, targets, critMultiplier, critBlockedSlots);
         var casterHealTotal = (int) Math.Floor(damageDealt * effect.m_healModifier);
         DoHealToTarget(caster, casterHealTotal);
 
@@ -283,7 +296,8 @@ internal static class CombatEffectApplicator {
                                                                             SpellEffect[] charms,
                                                                             CombatDuelSubCircle caster,
                                                                             CombatDuelSubCircle[] targets,
-                                                                            float critMultiplier = 1) {
+                                                                            float critMultiplier = 1,
+                                                                            IReadOnlySet<int> critBlockedSlots = null) {
         int damageFromCaster = effect.m_effectParam;
         var cinematicTime = 0.0f;
 
@@ -302,12 +316,13 @@ internal static class CombatEffectApplicator {
 
         // A landed critical multiplies the fully-boosted outgoing damage by a variable factor;
         // wards and resist still reduce it.
-        damageFromCaster = (int) Math.Floor(damageFromCaster * critMultiplier);
+        // CLASSIC: per target, so a target that blocked it (2010 model) takes the damage without the multiplier.
+        var damageBeforeCrit = damageFromCaster;
 
         // Apply damage to each target
         var damageDealt = 0;
         foreach (var target in targets) {
-            var damage = damageFromCaster;
+            var damage = (int) Math.Floor(damageBeforeCrit * CritFor(critMultiplier, critBlockedSlots, target));
 
             // Calculate damage changes from target hanging effects.
             var wards = CombatWards.FindAppliedWards(target, effect);
@@ -358,6 +373,10 @@ internal static class CombatEffectApplicator {
 
         return cinematicTime;
     }
+
+    // CLASSIC: the landed critical's multiplier for one target; 1 when it blocked (2010 model).
+    private static float CritFor(float critMultiplier, IReadOnlySet<int> critBlockedSlots, CombatDuelSubCircle target)
+        => critBlockedSlots is not null && critBlockedSlots.Contains(target.SlotIndex) ? 1f : critMultiplier;
 
     private static void ApplyReshuffleEffect(CombatDuelSubCircle caster) 
         => caster.Reshuffle();
