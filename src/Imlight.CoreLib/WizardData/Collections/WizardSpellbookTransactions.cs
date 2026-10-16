@@ -25,7 +25,7 @@ internal enum SpellbookMutationStatus { Refused, Unchanged, Committed }
 internal enum SpellbookMutationKind { Learn, Train, Exclusion }
 internal sealed record SpellbookReceipt(SpellbookMutationKind Kind, uint TemplateId, uint SpellHash,
     ulong ItemId, bool Exclude, int Cost, int TrainingPoints, IReadOnlyList<uint> LearnedSpells,
-    IReadOnlyList<uint> ExcludedSpells, IReadOnlyList<IMessage> Messages);
+    IReadOnlyList<uint> ExcludedSpells, IReadOnlyList<IMessage> Messages, int GoldBalance = -1); // CLASSIC: gold after a gold-priced learn
 internal sealed class SpellbookMutationDependencies {
     internal Func<uint, Spell> Spell;
     internal Func<uint, SpellTemplate> Template;
@@ -60,6 +60,19 @@ internal static class WizardSpellbookTransactions {
         => Commit(live, templateId, SpellbookMutationKind.Learn, null, 0, false, 0,
             out receipt, preparePublication, afterCommit, expectedAccountId, null, null);
 
+    /// <summary>
+    /// CLASSIC: a gardener teaches a gardening spell for gold (December 2010, GardenTrainingService). The gold comes
+    /// from the saved wallet in the same save that adds the spell; <paramref name="eligible"/> checks the fresh saved
+    /// wizard (gardening rank) inside the transaction. The price is the server's table, never the client's.
+    /// </summary>
+    internal static SpellbookMutationStatus TryLearnForGold(Wizard live, uint templateId, int gold, Func<Wizard, bool> eligible,
+        out SpellbookReceipt receipt, Action<SpellbookReceipt> afterCommit = null, ulong? expectedAccountId = null) {
+        receipt = null;
+        if (gold < 0) return SpellbookMutationStatus.Refused;
+        return Commit(live, templateId, SpellbookMutationKind.Learn, null, 0, false, 0,
+            out receipt, null, afterCommit, expectedAccountId, eligible, null, goldCost: gold);
+    }
+
     // The caller supplies only an entry from the queried trainer's authoritative inventory, never a client price.
     internal static SpellbookMutationStatus TryTrain(Wizard live, NPCSpellEntry entry, ulong trainerTemplateId,
         out SpellbookReceipt receipt, Func<SpellbookReceipt, bool> preparePublication = null,
@@ -89,7 +102,7 @@ internal static class WizardSpellbookTransactions {
     private static SpellbookMutationStatus Commit(Wizard live, uint templateId, SpellbookMutationKind kind,
         NPCSpellEntry training, ulong trainer, bool exclude, ulong itemId, out SpellbookReceipt receipt,
         Func<SpellbookReceipt, bool> preparePublication, Action<SpellbookReceipt> afterCommit,
-        ulong? expectedAccountId, Func<Wizard, bool> validateFresh, int? wireSpellId) {
+        ulong? expectedAccountId, Func<Wizard, bool> validateFresh, int? wireSpellId, int goldCost = -1) {
         receipt = null;
         if (templateId == 0 || !Usable(live, expectedAccountId) || kind == SpellbookMutationKind.Exclusion && itemId == 0)
             return SpellbookMutationStatus.Refused;
@@ -108,6 +121,7 @@ internal static class WizardSpellbookTransactions {
                 if (spell is null || spell.m_templateID != templateId) return false;
                 var book = saved.SpellbookBehavior;
                 var cost = 0;
+                var gold = -1;
                 var points = saved.MagicSchoolBehavior?.TrainingPoints ?? 0;
                 var changed = false;
                 IReadOnlyList<uint> selected = Array.AsReadOnly(Array.Empty<uint>());
@@ -122,6 +136,13 @@ internal static class WizardSpellbookTransactions {
                 }
                 else {
                     changed = !book.LearnedSpellTemplateIds.Contains(templateId);
+                    // CLASSIC: a gold-priced learn (gardening spells) checks the fresh wizard and the saved wallet.
+                    if (goldCost >= 0 && changed) {
+                        if (saved.GameStats is null || saved.GameStats.m_currentGold < goldCost
+                            || validateFresh?.Invoke(saved) == false) return false;
+                        gold = saved.GameStats.m_currentGold - goldCost;
+                        cost = goldCost;
+                    }
                     if (kind == SpellbookMutationKind.Train && changed) {
                         if (training is null) return false;
                         var template = dependencies?.Template is { } resolveTemplate ? resolveTemplate(templateId)
@@ -137,8 +158,11 @@ internal static class WizardSpellbookTransactions {
                 var learned = book.LearnedSpellTemplateIds.ToList();
                 if (kind != SpellbookMutationKind.Exclusion && changed) learned.Add(templateId);
                 var messages = changed ? Messages(kind, templateId, wireSpellId ?? unchecked((int)templateId), itemId, exclude, points) : Array.Empty<IMessage>();
+                if (changed && gold >= 0) messages = [.. messages,
+                    new WIZARD_12_PROTOCOL.MSG_UPDATEGOLD { Gold = gold, MaxGold = saved.GameStats.m_baseGoldPouch },
+                    new WIZARD_12_PROTOCOL.MSG_SPELLTRAINCOMPLETE { SpellID = templateId, DisplayText = "WizTraining_00000040", Success = 1 }];
                 staged = new(kind, templateId, spell.m_spellID, itemId, exclude, cost, points,
-                    Array.AsReadOnly(learned.ToArray()), selected, Array.AsReadOnly(messages));
+                    Array.AsReadOnly(learned.ToArray()), selected, Array.AsReadOnly(messages), gold);
                 if (!TryPreparePublication(live, kind, itemId, staged.LearnedSpells, out publication)) { staged = null; return false; }
                 if (!changed) {
                     // A validated fresh read can rehydrate already-durable aliases without a new grant, debit or notice.
@@ -165,6 +189,7 @@ internal static class WizardSpellbookTransactions {
                 else {
                     book.LearnedSpellTemplateIds.Add(templateId);
                     if (kind == SpellbookMutationKind.Train) saved.MagicSchoolBehavior.TrainingPoints = points;
+                    if (gold >= 0) saved.GameStats.m_currentGold = gold; // CLASSIC: gold-priced learn
                 }
                 WizardInventoryTransactions.ProtectUnmodifiedRows(session);
                 return true;

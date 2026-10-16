@@ -162,6 +162,12 @@ public sealed class ProfileRules {
     public string? Astral { get; init; }
 
     /// <summary>
+    /// CLASSIC: path under classic-data of the gardening tables (rules.gardening, such as rules/gardening-2011.yaml in
+    /// wintertusk-2011): Energy per level, gardening ranks, gardener vendors and spells, harvest rewards.
+    /// </summary>
+    public string? Gardening { get; init; }
+
+    /// <summary>
     /// Path under classic-data of the mob reward rules (combat XP, gold, drops), if any.
     /// </summary>
     public string? MobRewards { get; init; }

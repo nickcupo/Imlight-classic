@@ -183,6 +183,8 @@ public static class ClassicProgression {
         s_puzzleHelpers = PuzzleHelpersLoader.LoadForProfile(profile, classicDataRoot);
         // CLASSIC: the Astral schools (celestia-2010); a configured file must exist and validate.
         s_astral = AstralRulesLoader.LoadForProfile(profile, classicDataRoot);
+        // CLASSIC: the gardening tables (wintertusk-2011); a configured file must exist and validate.
+        Gardening.ClassicGardening.Initialize(profile, classicDataRoot);
         if (s_astral.AppliesTo(profile.Id)) {
             Logger.Information("Classic Astral schools {Table}: {Trainers} trainers, {Exclusions} polymorph item exclusions, Moon rework {Rework} (owner extra, [Classic] MoonRework).",
                 Logger.Args(s_astral.Id, s_astral.Trainers.Length, s_astral.FormItemExclusions.Count, s_astral.MoonRework is null ? "absent" : "configured"));

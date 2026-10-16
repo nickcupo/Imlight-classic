@@ -72,21 +72,31 @@ internal static class GardenCollection {
     internal static GardenResult Plant(Wizard live, HousingRoomIdentity room, uint seedTemplate, ulong seedItemId, float x, float y, float z) {
         List<WizClientObjectItem> backpack = [];
         ulong removed = 0;
+        int? energy = null; uint tick = 0;
+        // CLASSIC: "You will need Energy to plant a seed" (December 2010 notes); the amount is the client's "Plant Seed"
+        // spell (rules.gardening plant_seed_energy, unverified).
+        var cost = Math.Max(0, ClassicGardening.Active.PlantSeedEnergy);
         var result = Mutate(live, room, (engine, ledger, saved, session, now) => {
             if (!HouseCollection.TryReadHoldings(session, saved, out _, out backpack)) return "Your backpack could not be read.";
             var doc = backpack.FirstOrDefault(i => i.m_globalID.Full == seedItemId && (uint)i.m_templateID.Full == seedTemplate)
                 ?? (seedItemId == 0 ? backpack.FirstOrDefault(i => (uint)i.m_templateID.Full == seedTemplate) : null);
             if (doc is null || doc.m_characterId != live.CharId) return "You don't have that seed.";
-            var error = engine.Plant(ledger, seedTemplate, x, y, z, now, saved.GameStats?.m_gardeningLevel ?? 0,
+            var owner = saved.PetOwnerBehavior;
+            if (cost > 0 && (owner is null || owner.Energy < cost)) return "You don't have enough Energy.";
+            var error = engine.Plant(ledger, seedTemplate, x, y, z, now, GardenProgress.Rank(saved),
                 doc.m_globalID.Full, session.Advanced.GetDocumentId(doc));
             if (error is not null) return error;
             // The seed leaves the backpack; its original item document is retained (as placed furniture is).
             removed = doc.m_globalID.Full;
             saved.InventoryBehavior.InventoryItemIds = saved.InventoryBehavior.InventoryItemIds.Where(id => id != removed).ToList();
             backpack.Remove(doc);
+            if (cost > 0) { owner.SetEnergy(owner.Energy - cost); energy = owner.Energy; tick = owner.LastEnergyTickEpoch; }
             return null;
-        }, afterCommit: saved => WizardInventoryTransactions.PublishCommittedBackpack(live, saved, backpack));
-        return result.Saved ? result with { RemovedItemId = removed } : result;
+        }, afterCommit: saved => {
+            WizardInventoryTransactions.PublishCommittedBackpack(live, saved, backpack);
+            if (cost > 0) live.PetOwnerBehavior?.PublishCommittedEnergy(saved.PetOwnerBehavior);
+        });
+        return result.Saved ? result with { RemovedItemId = removed, Energy = energy, EnergyTick = tick } : result;
     }
 
     internal static GardenResult Harvest(Wizard live, HousingRoomIdentity room, float x, float y, float z) {

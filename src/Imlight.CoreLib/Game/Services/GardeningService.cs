@@ -66,6 +66,7 @@ internal sealed class GardeningService(SessionActor sessionActor) : MessageServi
         if (result.Saved && result.RemovedItemId != 0) SendToSocket(new GAME_5_PROTOCOL.MSG_INVENTORYBEHAVIOR_REMOVEITEM {
             GlobalID = wizard.GameObjectID, ItemID = result.RemovedItemId,
         });
+        if (result.Saved) SendEnergy(result, wizard);
         Finish(result, wizard);
     }
 
@@ -86,10 +87,7 @@ internal sealed class GardeningService(SessionActor sessionActor) : MessageServi
                 SpellTemplateID = message.SpellTemplateID, PlayerGID = wizard.GameObjectID,
                 PositionX = message.PositionX, PositionY = message.PositionY, PositionZ = message.PositionZ,
             }, isSelfless: false);
-            if (result.Energy is { } energy) SendToSocket(new PET_9_PROTOCOL.MSG_PETENERGYTICK {
-                GlobalID = wizard.GameObjectID, Energy = energy, MaxEnergy = wizard.GameStats?.m_energyMax ?? energy,
-                TickTime = (int)result.EnergyTick,
-            });
+            SendEnergy(result, wizard);
         }
         Finish(result, wizard);
     }
@@ -102,6 +100,14 @@ internal sealed class GardeningService(SessionActor sessionActor) : MessageServi
             GlobalID = wizard.GameObjectID, XP = result.GardeningXp, Level = result.GardeningLevel, IsPet = 0,
         });
         Finish(result, wizard);
+    }
+
+    // CLASSIC: Energy is shared by pets and gardening (December 2010); the client's bar is the pet energy tick.
+    private void SendEnergy(GardenResult result, Wizard wizard) {
+        if (result.Energy is { } energy) SendToSocket(new PET_9_PROTOCOL.MSG_PETENERGYTICK {
+            GlobalID = wizard.GameObjectID, Energy = energy, MaxEnergy = wizard.GameStats?.m_energyMax ?? energy,
+            TickTime = (int)result.EnergyTick,
+        });
     }
 
     private void Finish(GardenResult result, Wizard wizard) {
