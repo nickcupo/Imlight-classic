@@ -193,6 +193,17 @@ internal static class Program {
             Serilog.Log.Error(ex, "Quest name migration failed; old quest names are still resolved to the new ones in memory until it runs.");
         }
 
+        // CLASSIC: XP banked at an old level cap is not paid when the profile raises the cap (October 2010 notes;
+        // owner 2026-10-16 "reset it"): wizards exactly at the old cap go back to that level's total, once per raise
+        // (XpCapMigration; record Meta/XpCapSettlement; [Classic] XpCapMigration = apply | dry-run | off). Under a
+        // cap-50 profile it only records 50. No schema change.
+        try {
+            Imlight.CoreLib.WizardData.Collections.XpCapMigration.RunConfigured(PlayerDatabase.Instance.Store);
+        }
+        catch (Exception ex) {
+            Serilog.Log.Error(ex, "XP cap migration failed; banked XP stays until it runs at the next start-up.");
+        }
+
         var loginServer = StartLoginServer();
         StartGameServers(loginServer);
 
