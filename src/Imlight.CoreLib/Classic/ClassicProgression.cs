@@ -228,7 +228,7 @@ public static class ClassicProgression {
         }
 
         if (profile.Rules.MobRewards is { } mob && File.Exists(Path.Combine(classicDataRoot, mob))) {
-            s_mobRewards = MobRewardRulesLoader.Load(Path.Combine(classicDataRoot, mob));
+            s_mobRewards = MobRewardRulesLoader.Load(Path.Combine(classicDataRoot, mob), profile.Id); // CLASSIC: per-profile mobs
             Logger.Information("Classic mob rewards {Table}: {XpPerPip} XP per pip, gold for {Ranks} ranks, {Mobs} documented mobs ({Templates} templates).",
                 Logger.Args(s_mobRewards.Id, s_mobRewards.CombatXp.XpPerPip, s_mobRewards.GoldByRank.Count,
                     s_mobRewards.Mobs.Length, s_mobRewards.MobCount));
@@ -236,7 +236,7 @@ public static class ClassicProgression {
 
         if (profile.Rules.Badges is { } badges && File.Exists(Path.Combine(classicDataRoot, badges))) {
             // CLASSIC: a quest the profile disables (disabled_quests) cannot be completed, so no badge waits for it.
-            s_badges = BadgeRulesLoader.Load(Path.Combine(classicDataRoot, badges)).WithoutQuests(profile.DisabledQuests);
+            s_badges = BadgeRulesLoader.Load(Path.Combine(classicDataRoot, badges), profile.Id).WithoutQuests(profile.DisabledQuests); // CLASSIC: per-profile badges
             Logger.Information("Classic badges {Table}: {Count} badges, {Granted} awarded by the server.",
                 Logger.Args(s_badges.Id, s_badges.Badges.Length, s_badges.Granted.Count()));
         }
