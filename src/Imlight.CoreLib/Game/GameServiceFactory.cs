@@ -78,6 +78,7 @@ public class GameServiceFactory : ServiceFactory {
         typeof(PotionService),
         typeof(BankService), // CLASSIC: the dorm bank and shared bank.
         typeof(HousingService), // CLASSIC: persistent ordinary furniture in each private dorm.
+        typeof(GardeningService), // CLASSIC: December 2010 gardening; wintertusk-2011 only (off everywhere today).
         typeof(ElixirService), // CLASSIC: validated online-time elixirs; historical approvals are separate.
         typeof(TradeService), // CLASSIC: treasure card trading between friends (2009).
         typeof(ArenaService), // CLASSIC: the 2009 arena's Practice and Ranked matches.
