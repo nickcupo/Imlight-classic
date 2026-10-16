@@ -84,26 +84,38 @@ internal sealed class WorldTeleportDoorComponent(ZoneEntity entity) : ZoneEntity
         SendPlayerIntoState(playerObject.m_globalID);
     }
 
-    private void SendWorldTeleportOptions(IActorRef playerActor, Wizard playerCharacter) {
-        var teleportDoorOptions = new WorldTeleportOptions {
-            m_worldList = [ // TODO: fetch available worlds for user to teleport to from db
-                "WizardCity",
-                "Krokotopia",
-                "Marleybone",
-                "MooShu",
-                "Grizzleheim",
-                "DragonSpire"
-            ]
-        };
+    /// <summary>
+    /// The WorldHubZones.xml keys the Spiral Door can offer, in the order it lists them.
+    /// </summary>
+    internal static readonly string[] SpiralDoorHubKeys = [
+        "WizardCity",
+        "Krokotopia",
+        "Marleybone",
+        "MooShu",
+        "Grizzleheim",
+        "DragonSpire",
+        // CLASSIC: Celestia (live 2010-10-27). Only a profile whose worlds include celestia lists it (celestia-2010),
+        // and there only once the wizard holds Door to the Stars (its world_unlocks rule).
+        "Celestia",
+    ];
 
+    /// <summary>
+    /// CLASSIC: the worlds the Spiral Door lists: the profile's open worlds, then (for a known wizard) only those the
+    /// wizard has unlocked.
+    /// </summary>
+    /// <param name="rules">The active classic rules.</param>
+    /// <param name="progress">What the wizard has done, or null when no wizard is known.</param>
+    /// <returns>The hub keys to send, in door order.</returns>
+    internal static List<string> ListedWorlds(Imlight.Classic.ClassicRules rules, Imlight.Classic.Travel.IPlayerProgress? progress)
+        => [.. SpiralDoorHubKeys.Where(rules.IsHubKeyAllowed)
+            .Where(hubKey => progress is null || rules.IsWorldUnlocked(hubKey, progress).Unlocked)];
+
+    private void SendWorldTeleportOptions(IActorRef playerActor, Wizard playerCharacter) {
         // CLASSIC: list only the worlds the profile opens, and of those only the ones this wizard has unlocked
-        // (the profile's world_unlocks: the 2009 quest that opened each world).
-        teleportDoorOptions.m_worldList = [.. teleportDoorOptions.m_worldList.Where(ClassicRuntime.Rules.IsHubKeyAllowed)];
-        if (playerCharacter is not null) {
-            var progress = new WizardProgress(playerCharacter);
-            teleportDoorOptions.m_worldList = [.. teleportDoorOptions.m_worldList
-                .Where(hubKey => ClassicRuntime.Rules.IsWorldUnlocked(hubKey, progress).Unlocked)];
-        }
+        // (the profile's world_unlocks: the quest that opened each world).
+        var teleportDoorOptions = new WorldTeleportOptions {
+            m_worldList = ListedWorlds(ClassicRuntime.Rules, playerCharacter is null ? null : new WizardProgress(playerCharacter))
+        };
 
         // Serialize the teleport door options and send it to the player.
         var serializer = new ObjectSerializer(

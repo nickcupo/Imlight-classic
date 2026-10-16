@@ -622,6 +622,7 @@ public sealed class HouseTests : IDisposable {
         private static object Clone(object value) => value switch {
             HouseRecord h => h.Copy(), HousePortfolio p => p.Copy(), HouseLocation l => l.Copy(), HousingLedger r => r.Copy(), AtticLedger a => a.Copy(),
             HousingPackageAllocator p => new HousingPackageAllocator { NextPackageNumber = p.NextPackageNumber },
+            Imlight.CoreLib.Classic.Gardening.GardenLedger g => g.Copy(),
             WizClientObjectItem i => i with { }, Wizard w => Store.CloneWizard(w), Account a => Store.CloneAccount(a),
             _ => throw new NotSupportedException(value.GetType().Name),
         };

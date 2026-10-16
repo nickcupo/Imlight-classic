@@ -94,7 +94,8 @@ public static class MobStatsLoader {
     internal static readonly FrozenSet<string> s_rootKeys = FrozenSet.Create(StringComparer.Ordinal,
         "id", "title", "profiles", "provenance", "license_tag", "notes", "mobs");
     internal static readonly FrozenSet<string> s_mobKeys = FrozenSet.Create(StringComparer.Ordinal,
-        "name", "templates", "health", "modern_health", "rank", "school", "source", "source_date", "confidence", "notes", "profiles");
+        "name", "templates", "health", "modern_health", "rank", "school", "source", "source_date", "confidence", "notes", "profiles",
+        "basis"); // CLASSIC: basis 'client' marks a client template value (owner ruling D7), documentation only
     internal static readonly FrozenSet<string> s_schools = FrozenSet.Create(StringComparer.Ordinal,
         "Fire", "Ice", "Storm", "Myth", "Life", "Death", "Balance");
     private static readonly Regex s_id = new(@"^mob-stats-[a-z0-9][a-z0-9-]*\z", RegexOptions.CultureInvariant);

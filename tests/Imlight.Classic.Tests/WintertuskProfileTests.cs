@@ -28,13 +28,6 @@ public sealed class WintertuskProfileTests {
         ClassicRuntime.Initialize(ClassicDataFixture.RealRules(profile));
     }
 
-    private sealed class NoProgress : IPlayerProgress {
-        public bool HasActiveQuest(string questName) => false;
-        public bool HasCompletedQuest(string questName) => false;
-        public bool HasEntry(string entryName) => false;
-        public int Level => 60;
-    }
-
     public static IEnumerable<object[]> EveryProfile()
         => ClassicProfileLoader.LoadAll(ClassicDataFixture.ProfilesPath).Select(p => new object[] { p.Id });
 
@@ -60,10 +53,11 @@ public sealed class WintertuskProfileTests {
         Assert.Equal(celestia.Rules.Potions, profile.Rules.Potions);
         Assert.Equal(celestia.DisabledQuests, profile.DisabledQuests);
         Assert.True(profile.Features.IsEnabled(ClassicFeatures.CriticalAndBlock)); // inherited from celestia-2010 (claude/celestia-b)
-        // Crafting stays off (owner); gardening stays gated until its own package (TODO package K).
+        // Crafting stays off (owner); gardening is on (stage K1 built, claude/house-garden).
         Assert.False(profile.Features.IsEnabled(ClassicFeatures.Crafting));
-        Assert.False(profile.Features.IsEnabled(ClassicFeatures.Gardening));
-        Assert.Contains(profile.WorldUnlocks["wintertusk"].AnyOf, quest => quest.Name == "GH-FJORD-COLD-NEWS-PENDING");
+        Assert.True(profile.Features.IsEnabled(ClassicFeatures.Gardening));
+        // Package I: Wintertusk is not a Spiral Door world, so it has no world_unlocks rule (the quest chain is the way in).
+        Assert.False(profile.WorldUnlocks.ContainsKey("wintertusk"));
         // The Celestia entry rule is inherited.
         Assert.Equal("WC-MAIN-C01-013", Assert.Single(profile.WorldUnlocks["celestia"].AnyOf).Name);
     }
@@ -91,19 +85,18 @@ public sealed class WintertuskProfileTests {
     }
 
     [Fact]
-    public void WintertuskIsListedButItsZonesAndSpiralDoorStayShutUntilPackageI() {
+    public void WintertuskZonesOpenOnlyInWintertuskWithoutASpiralDoorEntry() {
         var rules = ClassicDataFixture.RealRules(Wintertusk);
 
-        Assert.True(rules.IsHubKeyAllowed("Wintertusk"));
-        Assert.False(rules.IsWorldUnlocked("Wintertusk", new NoProgress()).Unlocked);
+        // Package I: no Wintertusk hub key in either client; Hrundle Fjord is a Grizzleheim hub zone.
+        Assert.False(rules.IsHubKeyAllowed("Wintertusk"));
         var zone = rules.IsZoneAllowed("Grizzleheim/GH_HFjord/GH_Nordrilund");
-        Assert.False(zone.Allowed);
-        Assert.Equal("wintertusk", zone.WorldId);
-        Assert.Contains("2011-05-11", zone.Reason);
-        Assert.False(rules.IsZoneAllowed("Grizzleheim/GH_HFjord/GH_HFjord").Allowed);
+        Assert.True(zone.Allowed);
+        Assert.True(rules.IsZoneAllowed("Grizzleheim/GH_HFjord/GH_HFjord").Allowed);
         // Grizzleheim itself is unaffected; the older profiles do not list the world at all.
         Assert.True(rules.IsZoneAllowed("Grizzleheim/GH_MainHub").Allowed);
         Assert.False(ClassicDataFixture.RealRules(Celestia).IsHubKeyAllowed("Wintertusk"));
+        Assert.False(ClassicDataFixture.RealRules(Celestia).IsZoneAllowed("Grizzleheim/GH_HFjord/GH_Nordrilund").Allowed);
         Assert.False(ClassicDataFixture.RealRules(October).IsZoneAllowed("Grizzleheim/GH_HFjord/GH_Nordrilund").Allowed);
         Assert.Equal(60, rules.EffectiveMaxLevel(180));
     }

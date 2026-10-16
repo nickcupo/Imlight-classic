@@ -254,7 +254,8 @@ internal static class HouseCollection {
 
     }
 
-    internal static HouseSaleResult Sell(Wizard live, ulong deedId, int serverCalculatedGold, int atticCapacity = HousingRules.ApprovedAtticCapacity) {
+    internal static HouseSaleResult Sell(Wizard live, ulong deedId, int serverCalculatedGold, int? atticCapacityOverride = null) {
+        var atticCapacity = atticCapacityOverride ?? HousingRules.AtticCapacity;
         if (live is null || live.IsInDuel || serverCalculatedGold < 0) return new("This house cannot be sold now.");
         var result = new HouseSaleResult("This house cannot be sold now.");
         try {

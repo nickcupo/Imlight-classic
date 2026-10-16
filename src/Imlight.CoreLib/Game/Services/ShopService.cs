@@ -365,9 +365,9 @@ internal class ShopService(SessionActor sessionActor) : MessageService(sessionAc
 
         if (ClassicRuntime.IsActive && Classic.Housing.HouseCollection.IsDeed(item)) {
             if (!Classic.Housing.HouseCatalog.TryGet((uint)item.m_templateID.Full, out var house) || !house.ResaleAllowed) { ProcessFailedSale(); return; }
-            // The ordinary vendor's resale percentage is an explicit, separately gated
-            // historical ruling; calculate from the approved gold price, never a request.
-            var sold = Classic.Housing.HouseCollection.Sell(wizard, message.GlobalID, (int)Math.Ceiling(house.Gold * SELL_MODIFIER));
+            // CLASSIC: the resale value is the catalog's explicit, separately gated ruling (dated Imperial Palace
+            // 40,000 -> 2,001 gold, Fandom oldid110495 2010-10-05), never the request and never recomputed here.
+            var sold = Classic.Housing.HouseCollection.Sell(wizard, message.GlobalID, house.ResaleGold);
             if (!sold.Saved) { InformGameClient(sold.Error); ProcessFailedSale(); return; }
             SendToSocket(new WIZARD_12_PROTOCOL.MSG_UPDATEGOLD { Gold = wizard.GameStats.m_currentGold, MaxGold = wizard.GameStats.m_baseGoldPouch });
             SendToSocket(new GAME_5_PROTOCOL.MSG_INVENTORYBEHAVIOR_REMOVEITEM { GlobalID = wizard.GameObjectID, ItemID = message.GlobalID });

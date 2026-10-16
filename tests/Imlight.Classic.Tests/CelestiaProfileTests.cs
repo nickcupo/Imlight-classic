@@ -55,7 +55,9 @@ public sealed class CelestiaProfileTests {
         var october = ClassicDataFixture.LoadProfile(October);
         Assert.Equal(october.Rules.PuzzleHelpers, profile.Rules.PuzzleHelpers);
         Assert.Equal(october.Rules.Potions, profile.Rules.Potions);
-        Assert.Equal(october.Rules.MobRewards, profile.Rules.MobRewards);
+        // Work package E: the 2009 mob rewards and badges plus Celestia (CelestiaLootTests).
+        Assert.Equal("progression/mob-rewards-2010.yaml", profile.Rules.MobRewards);
+        Assert.Equal("badges/badges-2010.yaml", profile.Rules.Badges);
         Assert.Equal(october.DisabledQuests, profile.DisabledQuests);
         // Work package B: critical and block on, with the 2014 client's percent model (ruling D3); every other switch inherited.
         Assert.Equal(october.Features.Explicit.Where(p => p.Key != ClassicFeatures.CriticalAndBlock).OrderBy(p => p.Key),
@@ -65,8 +67,9 @@ public sealed class CelestiaProfileTests {
         Assert.Equal("rules/critical-2010.yaml", profile.Rules.Critical);
         Assert.Null(october.Rules.Critical);
         Assert.False(profile.Features.IsEnabled(ClassicFeatures.Crafting));
-        // Door to the Stars stays tombstoned until work package D authors it, and the Spiral Door waits on it.
-        Assert.Empty(profile.RestoredQuests);
+        // Work package D: Door to the Stars and the Celestia story are restored here only, and the Spiral Door waits on it.
+        Assert.Equal("WC-MAIN-C01-013", profile.RestoredQuests[0]);
+        Assert.Contains("CL-MAIN-C01-009", profile.RestoredQuests);
         Assert.Equal("WC-MAIN-C01-013", Assert.Single(profile.WorldUnlocks["celestia"].AnyOf).Name);
     }
 
