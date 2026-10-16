@@ -500,9 +500,7 @@ public static class ClassicProfileLoader {
             DisabledQuests = merged.Find("disabled_quests")?.Value is YSeq disabled // CLASSIC
                 ? [.. disabled.Items.Cast<YScalar>().Select(quest => quest.Value)]
                 : [],
-            RestoredQuests = merged.Find("restored_quests")?.Value is YSeq restored // CLASSIC
-                ? [.. restored.Items.Cast<YScalar>().Select(quest => quest.Value)]
-                : [],
+            RestoredQuests = RestoredAlongChain(chain), // CLASSIC: every link's restored_quests, root first
             InheritsMembership = IsTrueKey(child, "inherits_membership"), // CLASSIC
             MembershipIds = members.ToImmutable(), // CLASSIC
             Notes = child.Find("notes")?.Value is YSeq notes
@@ -513,6 +511,28 @@ public static class ClassicProfileLoader {
         ClassicProfiles.Register(profile); // CLASSIC: ids in data files resolve through the loaded profiles.
 
         return profile;
+    }
+
+    /// <summary>
+    /// CLASSIC: restored_quests adds up along extends (wintertusk-2011 keeps celestia-2010's restored quests and adds its
+    /// own), unlike the other inherited keys, where a child's value replaces its parent's. Root first, each name once.
+    /// </summary>
+    private static ImmutableArray<string> RestoredAlongChain(List<(string Path, YMap Map)> chain) {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var names = ImmutableArray.CreateBuilder<string>();
+        for (var i = chain.Count - 1; i >= 0; i--) {
+            if (chain[i].Map.Find("restored_quests")?.Value is not YSeq restored) {
+                continue;
+            }
+
+            foreach (var quest in restored.Items.Cast<YScalar>().Select(item => item.Value)) {
+                if (seen.Add(quest)) {
+                    names.Add(quest);
+                }
+            }
+        }
+
+        return names.ToImmutable();
     }
 
     private static bool IsTrueKey(YMap map, string key) => map.Find(key)?.Value is { } node && IsTrue(node);
