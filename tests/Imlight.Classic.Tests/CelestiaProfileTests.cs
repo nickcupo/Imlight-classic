@@ -60,8 +60,9 @@ public sealed class CelestiaProfileTests {
         Assert.Equal(october.Features.Explicit.OrderBy(p => p.Key), profile.Features.Explicit.OrderBy(p => p.Key));
         Assert.False(profile.Features.IsEnabled(ClassicFeatures.CriticalAndBlock)); // decision D3 pending
         Assert.False(profile.Features.IsEnabled(ClassicFeatures.Crafting));
-        // Door to the Stars stays tombstoned until work package D authors it, and the Spiral Door waits on it.
-        Assert.Empty(profile.RestoredQuests);
+        // Work package D: Door to the Stars and the Celestia story are restored here only, and the Spiral Door waits on it.
+        Assert.Equal("WC-MAIN-C01-013", profile.RestoredQuests[0]);
+        Assert.Contains("CL-MAIN-C01-009", profile.RestoredQuests);
         Assert.Equal("WC-MAIN-C01-013", Assert.Single(profile.WorldUnlocks["celestia"].AnyOf).Name);
     }
 
