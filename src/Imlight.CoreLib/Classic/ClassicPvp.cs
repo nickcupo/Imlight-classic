@@ -87,7 +87,7 @@ public static class ClassicPvp {
         foreach (var path in Directory.EnumerateFiles(Path.Combine(classicDataRoot, "pvp"), "open-pvp-*.yaml").Order()) {
             try {
                 var config = OpenPvpLoader.Load(path);
-                if (config.Profiles.Contains(profileId, StringComparer.Ordinal)) {
+                if (ClassicProfiles.Lists(config.Profiles, profileId)) {
                     s_config = config;
                     break;
                 }

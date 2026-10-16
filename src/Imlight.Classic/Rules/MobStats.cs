@@ -151,7 +151,7 @@ public static class MobStatsLoader {
                         continue;
                     }
                     var listed = entryProfiles.Items.Select(item => diagnostics.ReadString(item, YamlTree.Join(keyPath, "profiles"))).ToList();
-                    if (profileId is null || !listed.Contains(profileId, StringComparer.Ordinal)) {
+                    if (profileId is null || !ClassicProfiles.Lists(listed, profileId)) {
                         continue;
                     }
                 }

@@ -92,7 +92,7 @@ internal static class ElixirRules {
         => ClassicRuntime.IsInitialized ? Approved(ClassicRuntime.Rules, templateId) : null;
 
     internal static ElixirDefinition Approved(ClassicRules rules, uint templateId)
-        => rules?.Profile.Id == "october-2010-arc1" && rules.IsFeatureEnabled(ClassicFeatures.Elixirs)
+        => ClassicProfiles.IsOctoberFamily(rules?.Profile) && rules.IsFeatureEnabled(ClassicFeatures.Elixirs)
             && s_verified.TryGetValue(templateId, out var definition) ? definition : null;
 
     internal static bool MatchesNative(ElixirDefinition definition, WizItemTemplate template) {

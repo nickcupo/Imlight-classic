@@ -231,6 +231,7 @@ internal class MagicLevelsConfig : RootSingleResourceSingleton<MagicLevelsConfig
         s_playerLevelConfig = [];
         var allSchoolInfo = magicXPConfig.m_levelInfo;
         ApplyClassicXpTable(allSchoolInfo); // CLASSIC: the profile's XP curve replaces the client's for its levels.
+        ApplyClassicLevelStats(allSchoolInfo); // CLASSIC: rules.level_stats (mana, pip chance, training points) for its levels.
 
         var counter = 0;
         foreach (var classInfo in magicXPConfig.m_classInfo) {
@@ -291,6 +292,31 @@ internal class MagicLevelsConfig : RootSingleResourceSingleton<MagicLevelsConfig
         Logger.Information("Classic XP table {Table} applied to levels 1-{MaxLevel}: {Count} level totals differ from the client{Detail}.",
             Logger.Args(table.Id, table.MaxLevel, differences.Count,
                 differences.Count == 0 ? "" : ": " + string.Join(", ", differences.Select(d => $"L{d.Level} {d.Client}->{d.Classic}"))));
+    }
+
+    // CLASSIC: writes the profile's rules.level_stats (mana, power pip chance, training points) into the shared level
+    // table for the levels it covers; every other level keeps the client's values.
+    private static void ApplyClassicLevelStats(List<MagicLevelInfo> allSchoolInfo) {
+        if (ClassicProgression.LevelStats is not { } table || allSchoolInfo is null) {
+            return;
+        }
+
+        var changed = 0;
+        for (var level = table.MinLevel; level <= table.MaxLevel && level < allSchoolInfo.Count; level++) {
+            var row = table.Row(level)!;
+            var info = allSchoolInfo[level];
+            var pips = (float) row.PowerPipChance;
+            if (info.m_mana != row.Mana || info.m_pipChance != pips || info.m_trainingPoints != row.TrainingPoints) {
+                changed++;
+            }
+
+            info.m_mana = row.Mana;
+            info.m_pipChance = pips;
+            info.m_trainingPoints = row.TrainingPoints;
+        }
+
+        Logger.Information("Classic level stats {Table} applied to levels {Min}-{Max}: {Count} levels differ from the client.",
+            Logger.Args(table.Id, table.MinLevel, table.MaxLevel, changed));
     }
 
     // CLASSIC: writes the profile's base health (rules.player_health) into one school's level table. Levels past the

@@ -155,9 +155,9 @@ public static class ClassicSpellTemplates {
     }
 
     internal static bool HasHistoricalTreasureBase(string profileId, TreasurePrices? prices)
-        => profileId is "late-2009" or "arc1-2009h1" or "october-2010-arc1"
+        => (profileId is "late-2009" or "arc1-2009h1" || ClassicProfiles.IsOctoberFamily(profileId))
             && prices is { Id: "treasure-prices-2009" }
-            && prices.Profiles.Contains(profileId, StringComparer.Ordinal)
+            && ClassicProfiles.Lists(prices.Profiles, profileId)
             && prices.Find(GlacialTreasureName) == 350;
 
     internal static bool ApplyTreasureBaseCost(SpellTemplate spell, string path, string profileId, TreasurePrices? prices) {

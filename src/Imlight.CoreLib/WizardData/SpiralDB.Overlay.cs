@@ -370,20 +370,20 @@ public static partial class SpiralDB {
 
         stats.Touched = true;
         var definedHere = new HashSet<string>(questsInThisRoot, StringComparer.OrdinalIgnoreCase);
-        foreach (var line in File.ReadAllLines(file)) {
-            var hash = line.IndexOf('#');
-            var name = (hash >= 0 ? line[..hash] : line).Trim();
-            if (name.Length == 0) {
-                continue;
-            }
+        var profile = Imlight.Classic.ClassicRuntime.IsInitialized ? Imlight.Classic.ClassicRuntime.Rules.Profile : null;
+        var result = ApplyTombstoneLines(File.ReadAllLines(file), questsByName, RestoredQuests(profile));
+        foreach (var name in result.Restored) {
+            Logger.Information("SpiralDB overlay {0}: quest {1} is tombstoned, but profile {2} restores it.",
+                Logger.Args(root, name, profile!.Id));
+        }
 
-            if (!questsByName.TryRemove(name, out _)) {
-                stats.TombstonesUnmatched++;
-                Logger.Warning("SpiralDB overlay {0}: {1} lists {2}, which is not loaded.",
-                    Logger.Args(root, OverlayTombstoneFile, name));
-                continue;
-            }
+        foreach (var name in result.Unmatched) {
+            stats.TombstonesUnmatched++;
+            Logger.Warning("SpiralDB overlay {0}: {1} lists {2}, which is not loaded.",
+                Logger.Args(root, OverlayTombstoneFile, name));
+        }
 
+        foreach (var name in result.Removed) {
             stats.Tombstoned++;
             if (definedHere.Contains(name)) {
                 Logger.Warning("SpiralDB overlay {0}: quest {1} is both defined and disabled here; it stays disabled.",
@@ -394,6 +394,40 @@ public static partial class SpiralDB {
             }
         }
     }
+
+    /// <summary>
+    /// CLASSIC: applies the lines of a <c>_disabled.txt</c> (one quest name per line, '#' starts a comment) to
+    /// <paramref name="questsByName"/>, except the names in <paramref name="restored"/>, which a later profile keeps
+    /// (restored_quests, such as celestia-2010's "Door to the Stars" once its 2010 quest is authored).
+    /// </summary>
+    internal static (List<string> Removed, List<string> Unmatched, List<string> Restored) ApplyTombstoneLines(
+            IEnumerable<string> lines, ConcurrentDictionary<string, QuestTemplate> questsByName, IReadOnlySet<string> restored) {
+        var result = (Removed: new List<string>(), Unmatched: new List<string>(), Restored: new List<string>());
+        foreach (var line in lines) {
+            var hash = line.IndexOf('#');
+            var name = (hash >= 0 ? line[..hash] : line).Trim();
+            if (name.Length == 0) {
+                continue;
+            }
+
+            if (restored.Contains(name)) {
+                result.Restored.Add(name);
+            }
+            else if (questsByName.TryRemove(name, out _)) {
+                result.Removed.Add(name);
+            }
+            else {
+                result.Unmatched.Add(name);
+            }
+        }
+
+        return result;
+    }
+
+    // CLASSIC: the profile's restored_quests (none before the classic rules load).
+    internal static HashSet<string> RestoredQuests(Imlight.Classic.ClassicProfile? profile)
+        => profile is null ? new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            : new HashSet<string>(profile.RestoredQuests, StringComparer.OrdinalIgnoreCase);
 
     // CLASSIC: removes the active profile's disabled_quests (content of a later update, such as Briskbreeze Tower's
     // Lost Lieutenant in arc1-2009h1) after every overlay has loaded, as a tombstone in the last root would.

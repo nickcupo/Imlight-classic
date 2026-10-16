@@ -40,7 +40,7 @@ internal static class PetTalentRuntime {
     private static readonly uint s_petSlot = StringHash.Compute("Pet");
 
     internal static bool Enabled => ClassicRuntime.IsInitialized
-        && ClassicRuntime.Rules.Profile.Id == "october-2010-arc1"
+        && ClassicProfiles.IsOctoberFamily(ClassicRuntime.Rules.Profile)
         && ClassicRuntime.Rules.IsFeatureEnabled(ClassicFeatures.PetsTalents);
 
     // CLASSIC: saved maximums remain hereditary baseline values. A derived capacity is never re-saved as a new base.

@@ -82,7 +82,7 @@ public static class ClassicArena {
         foreach (var path in Directory.EnumerateFiles(Path.Combine(classicDataRoot, "pvp"), "arena-*.yaml").Order()) {
             try {
                 var config = ArenaLoader.Load(path);
-                if (config.Profiles.Contains(profileId, StringComparer.Ordinal)) {
+                if (ClassicProfiles.Lists(config.Profiles, profileId)) {
                     s_config = config;
                     break;
                 }

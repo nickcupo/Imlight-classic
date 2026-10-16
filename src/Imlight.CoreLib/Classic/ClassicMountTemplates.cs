@@ -21,7 +21,7 @@ namespace Imlight.CoreLib.Classic;
 internal static class ClassicMountTemplates {
 
     internal const string RelativePath = "rules/mounts-october-2010.json";
-    internal const string Profile = "october-2010-arc1";
+    internal const string Profile = ClassicProfiles.October2010; // the data's profile; profiles extending it share it
     private const string CutoffText = "2010-10-31T23:59:59Z";
 
     internal sealed record Mount(uint Id, string Path, float NativeBaseCost, float BaseCost, int NativeSpeed, int Speed);
@@ -38,7 +38,7 @@ internal static class ClassicMountTemplates {
     internal static void Initialize(string? root, string profile) {
         s_mounts = null;
         s_profile = profile;
-        if (profile != Profile) return;
+        if (!ClassicProfiles.IsOctoberFamily(profile)) return;
         if (root is null) throw new InvalidDataException("October mount data root is missing.");
         s_mounts = Load(Path.Combine(root, RelativePath));
         Logger.Information("Classic mounts: {0} October 1 Day rental templates (price and speed).", Logger.Args(s_mounts.Count));
@@ -72,8 +72,8 @@ internal static class ClassicMountTemplates {
         return mounts;
     }
 
-    private static bool Active => s_mounts is not null && s_profile == Profile
-        && ClassicRuntime.IsInitialized && ClassicRuntime.IsActive && ClassicRuntime.Rules.Profile.Id == Profile;
+    private static bool Active => s_mounts is not null && ClassicProfiles.IsOctoberFamily(s_profile)
+        && ClassicRuntime.IsInitialized && ClassicRuntime.IsActive && ClassicRuntime.Rules.Profile.Id == s_profile;
 
     /// <summary>
     /// Writes the dated price and speed into a freshly loaded mount template (CoreObjectFactory).

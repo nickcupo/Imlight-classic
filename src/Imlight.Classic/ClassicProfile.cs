@@ -144,6 +144,12 @@ public sealed class ProfileRules {
     public string? PlayerHealth { get; init; }
 
     /// <summary>
+    /// CLASSIC: path under classic-data of the per-level mana, power pip chance and training points for a level range
+    /// (rules.level_stats, such as levels 51-60 in celestia-2010), if any. Levels it does not cover keep the client's.
+    /// </summary>
+    public string? LevelStats { get; init; }
+
+    /// <summary>
     /// Path under classic-data of the mob reward rules (combat XP, gold, drops), if any.
     /// </summary>
     public string? MobRewards { get; init; }
@@ -279,6 +285,37 @@ public sealed class ClassicProfile {
     /// content of a later update in a profile whose cutoff predates it (<c>disabled_quests</c>).
     /// </summary>
     public ImmutableArray<string> DisabledQuests { get; init; } = [];
+
+    /// <summary>
+    /// CLASSIC: quests a global overlay tombstone (<c>QuestTemplates/_disabled.txt</c>) removes that this profile keeps
+    /// (<c>restored_quests</c>): content a later profile serves while the older profiles keep the tombstone.
+    /// </summary>
+    public ImmutableArray<string> RestoredQuests { get; init; } = [];
+
+    /// <summary>
+    /// CLASSIC: true when the profile declares <c>inherits_membership</c>: every data file and spell record that lists
+    /// its parent applies to it as well, so a later profile needs no edit of the files its parent already uses.
+    /// </summary>
+    public bool InheritsMembership { get; init; }
+
+    /// <summary>
+    /// CLASSIC: the profile ids whose listing in a data file's or record's <c>profiles</c> includes this profile: its
+    /// own id, then each parent reached through <c>inherits_membership</c>, child first. Without it only the own id.
+    /// </summary>
+    public ImmutableArray<string> MembershipIds { get; init; } = [];
+
+    /// <summary>
+    /// CLASSIC: true when <paramref name="profiles"/> (a data file's or record's profile list) includes this profile,
+    /// directly or through <see cref="MembershipIds"/>.
+    /// </summary>
+    public bool IsListedIn(IEnumerable<string> profiles)
+        => ClassicProfiles.AnyListed(profiles, MembershipIds.IsDefaultOrEmpty ? [Id] : MembershipIds);
+
+    /// <summary>
+    /// CLASSIC: true when the profile is <paramref name="ancestorId"/> or extends it, such as every profile of the
+    /// October 2010 family (<see cref="ClassicProfiles.October2010"/>). A capability check, not a data membership.
+    /// </summary>
+    public bool IsOrExtends(string ancestorId) => Lineage.Contains(ancestorId, StringComparer.Ordinal);
 
     /// <summary>
     /// The files the profile was merged from, child first.

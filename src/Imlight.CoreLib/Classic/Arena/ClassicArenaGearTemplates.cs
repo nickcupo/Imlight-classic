@@ -29,7 +29,7 @@ internal static class ClassicArenaGearTemplates {
     internal static void Initialize(string? root, string profile) {
         s_items = null;
         s_excluded = [];
-        if (profile != "october-2010-arc1") return;
+        if (!ClassicProfiles.IsOctoberFamily(profile)) return; // CLASSIC: october-2010-arc1 and the profiles extending it
         if (root is null) throw new InvalidDataException("October arena gear data root is missing.");
         var filename = System.IO.Path.Combine(root, RelativePath);
         using var stream = File.OpenRead(filename);
@@ -37,7 +37,7 @@ internal static class ClassicArenaGearTemplates {
         using var data = JsonDocument.Parse(stream);
         var document = data.RootElement;
         if (document.GetProperty("format").GetInt32() != 1
-            || document.GetProperty("profile").GetString() != profile
+            || document.GetProperty("profile").GetString() != ClassicProfiles.October2010 // CLASSIC: the October family shares the data
             || document.GetProperty("vendor_template").GetUInt32() != 38226
             || document.GetProperty("cutoff").GetString() != CutoffText)
             throw new InvalidDataException("Unexpected October arena gear data identity.");
@@ -147,7 +147,7 @@ internal static class ClassicArenaGearTemplates {
     }
 
     private static bool Active => ClassicRuntime.IsInitialized && ClassicRuntime.IsActive
-        && ClassicRuntime.Rules.Profile.Id == "october-2010-arc1";
+        && ClassicProfiles.IsOctoberFamily(ClassicRuntime.Rules.Profile);
 
     internal static bool IsWithheld(uint id) => Active && s_excluded.Contains(id);
 

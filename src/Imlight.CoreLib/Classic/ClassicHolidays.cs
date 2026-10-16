@@ -90,7 +90,7 @@ public static class ClassicHolidays {
         foreach (var path in Directory.EnumerateFiles(Path.Combine(classicDataRoot, "holidays"), "holidays-*.yaml").Order()) {
             try {
                 var calendar = HolidayCalendarLoader.Load(path);
-                if (!calendar.Profiles.Contains(profileId, StringComparer.Ordinal)) {
+                if (!ClassicProfiles.Lists(calendar.Profiles, profileId)) {
                     continue;
                 }
 

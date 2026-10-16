@@ -58,6 +58,7 @@ public static class ClassicProgression {
 
     private static volatile XpTable? s_xpTable;
     private static volatile HealthTable? s_healthTable; // CLASSIC
+    private static volatile LevelStats? s_levelStats; // CLASSIC
     private static volatile MobRewardRules? s_mobRewards;
     private static volatile BadgeRules? s_badges;
     private static volatile QuestCardRewards? s_questCards;
@@ -80,6 +81,12 @@ public static class ClassicProgression {
     /// The profile's base health per level and school, or null for the client's. CLASSIC.
     /// </summary>
     public static HealthTable? HealthTable => s_healthTable;
+
+    /// <summary>
+    /// CLASSIC: the profile's mana, power pip chance and training points for a level range (rules.level_stats), or
+    /// null for the client's values at every level.
+    /// </summary>
+    public static LevelStats? LevelStats => s_levelStats;
 
     /// <summary>
     /// The profile's combat XP, gold and drop rules, or null for stock Imlight.
@@ -172,6 +179,17 @@ public static class ClassicProgression {
             s_healthTable = HealthTableLoader.Load(Path.Combine(classicDataRoot, health)); // CLASSIC
             Logger.Information("Classic health table {Table}: base health for levels 1-{MaxLevel} of {Schools} schools.",
                 Logger.Args(s_healthTable.Id, s_healthTable.MaxLevel, s_healthTable.BySchool.Count));
+        }
+
+        s_levelStats = null; // CLASSIC
+        if (profile.Rules.LevelStats is { } levelStats && File.Exists(Path.Combine(classicDataRoot, levelStats))) {
+            s_levelStats = LevelStatsLoader.Load(Path.Combine(classicDataRoot, levelStats));
+            Logger.Information("Classic level stats {Table}: mana, power pip chance and training points for levels {Min}-{Max} ({Status}).",
+                Logger.Args(s_levelStats.Id, s_levelStats.MinLevel, s_levelStats.MaxLevel, s_levelStats.Status));
+            if (s_levelStats.Status == "unverified") {
+                Logger.Warning("Classic level stats {Table} are client values without a dated source, awaiting the owner's ruling {Decision}.",
+                    Logger.Args(s_levelStats.Id, s_levelStats.Decision ?? "(none named)"));
+            }
         }
 
         if (profile.Rules.MobRewards is { } mob && File.Exists(Path.Combine(classicDataRoot, mob))) {
