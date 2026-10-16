@@ -402,8 +402,8 @@ internal sealed partial class BossCheatDirector(CombatDuelComponent duel) {
                     or kSpellEffects.kDamageOverTime),
                 CheatTrigger.Trap => effects.Any(e => IsEnemyTarget(e) && (e.m_effectType == kSpellEffects.kModifyIncomingDamageType
                     || e.m_effectType == kSpellEffects.kModifyIncomingDamage && e.m_effectParam > 0)),
-                CheatTrigger.Charm => effects.Any(e => e.m_effectType is kSpellEffects.kModifyOutgoingDamage or kSpellEffects.kModifyAccuracy
-                    or kSpellEffects.kModifyOutgoingHeal or kSpellEffects.kModifyOutgoingHealFlat or kSpellEffects.kDispel),
+                CheatTrigger.Charm => effects.Any(e => e.m_effectTarget != kEffectTarget.kGlobal && e.m_effectType is kSpellEffects.kModifyOutgoingDamage
+                    or kSpellEffects.kModifyAccuracy or kSpellEffects.kModifyOutgoingHeal or kSpellEffects.kModifyOutgoingHealFlat or kSpellEffects.kDispel),
                 CheatTrigger.Global => effects.Any(e => e.m_effectTarget == kEffectTarget.kGlobal),
                 _ => false,
             };

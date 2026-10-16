@@ -26,7 +26,10 @@
  * spell a round, interrupting a wizard's spell, destroying traps, spells for
  * no pips and scripted summons. The profile rule rules.boss_cheats names the
  * file (classic-data/creatures/boss-cheats-2009.yaml); a profile without the
- * rule has no cheating bosses.
+ * rule has no cheating bosses. CLASSIC (2026-10-16): rules.boss_cheats may list
+ * several files, one per dungeon (wintertusk-2011: Briskbreeze Tower and the
+ * Waterworks); BossCheats.Combine joins them. The Waterworks primitives
+ * (marks, reactions, round-start casts, cycles) are in BossCheatMechanics.cs.
  *
  * USAGE EXAMPLE:
  * var cheats = BossCheatsLoader.Load(path);
