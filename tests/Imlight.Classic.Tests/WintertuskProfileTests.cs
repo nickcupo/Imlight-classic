@@ -1,6 +1,7 @@
-// CLASSIC: wintertusk-2011 (May 2011, work package A'): the profile, its family checks, the stun-shield count, the Stun Block
-// move to Diego, the October Cloak stand-in staying out of the Celestia family, the closed Wintertusk world, and the
-// permanent Wild Bolt lock (owner decision D4) in every profile.
+// CLASSIC: wintertusk-2011 (May 2011, work package A'): the profile, its family checks, the stun-shield count, Stun Block
+// staying as in celestia-2010 (owner delegated 2026-10-16: the May 2011 move to Diego / two shields is a spell change and
+// is not taken; the engine support stays), the October Cloak stand-in staying out of the Celestia family, the closed
+// Wintertusk world, and the permanent Wild Bolt lock (owner decision D4) in every profile.
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -126,31 +127,26 @@ public sealed class WintertuskProfileTests {
     }
 
     [Fact]
-    public void StunBlockIsDiegosWithTwoShieldsOnlyInWintertusk() {
+    public void StunBlockStaysSabrinasWithOneShieldInWintertusk() {
+        // Owner delegated 2026-10-16: no 2011 spell changes, so the May 2011 Diego / two-shield Stun Block is not taken.
         var book = Book();
         var record = book.FindByTemplate("Spells/Stun Block.xml")!;
-        foreach (var id in new[] { "late-2009", "arc1-2009h1", October, Celestia }) {
-            if (!record.IsInProfile(id)) {
-                continue;
-            }
-
+        Assert.Empty(record.ProfileValues);
+        foreach (var id in new[] { "late-2009", October, Celestia, Wintertusk }) {
+            Assert.True(record.IsInProfile(id), id);
             var values = record.ValuesFor(ClassicDataFixture.LoadProfile(id).Lineage);
             Assert.Equal("Sabrina Greenstar", values.Trainer);
             Assert.Single(values.Effects);
+            Assert.Equal(SpellPips.Of(0), values.Pips);
+            Assert.Equal(1, values.TrainingPoints);
         }
-
-        var may = record.ValuesFor(ClassicDataFixture.LoadProfile(Wintertusk).Lineage);
-        Assert.True(record.IsInProfile(Wintertusk));
-        Assert.Equal("Diego the Duelmaster", may.Trainer);
-        Assert.Equal(2, may.Effects.Length);
-        Assert.Equal(SpellPips.Of(0), may.Pips);
-        Assert.Equal(1, may.TrainingPoints);
     }
 
     [Fact]
     public void StunBlockStockMovesFromSabrinaToDiegoIdempotently() {
+        // Engine support for a Diego-trained Stun Block (unused by the shipped data since the owner's 2026-10-16 pick).
         var record = Book().FindByTemplate("Spells/Stun Block.xml")!;
-        var values = record.ValuesFor(ClassicDataFixture.LoadProfile(Wintertusk).Lineage);
+        var values = record.ValuesFor(ClassicDataFixture.LoadProfile(Wintertusk).Lineage) with { Trainer = "Diego the Duelmaster" };
         var sabrina = new NPCSpellInventory { TemplateID = 38210, Spells = [new NPCSpellEntry { TemplateID = 777 }, new NPCSpellEntry { TemplateID = 5 }] };
         var diego = new NPCSpellInventory { TemplateID = 38226, Spells = [new NPCSpellEntry { TemplateID = 9 }] };
 
@@ -194,7 +190,7 @@ public sealed class WintertuskProfileTests {
     }
 
     [Fact]
-    public void NoSpellValueChangesExceptStunBlockComparedWithCelestia() {
+    public void NoSpellValueChangesExceptInsaneBoltComparedWithCelestia() {
         // Owner ruling 2026-10-16: the May 2011 spell-value changes are not taken. The one exception (owner, same day: "new
         // dark pact and old insane bolt") is Insane Bolt, a scoped wintertusk-2011 record that celestia-2010 never applies.
         var book = Book();
@@ -204,7 +200,8 @@ public sealed class WintertuskProfileTests {
         Assert.True(may.AppliesHere(insaneBolt));
         Assert.False(celestia.AppliesHere(insaneBolt));
         Assert.Equal(["spell.storm.insane_bolt"], book.Records.Where(r => r.Scoped).Select(r => r.Id));
-        foreach (var record in book.Records.Where(r => r.Id is not ("spell.ice.stun_block" or "spell.storm.insane_bolt"))) {
+        // Stun Block is no exception any more (owner delegated 2026-10-16: no 2011 spell changes).
+        foreach (var record in book.Records.Where(r => r.Id != "spell.storm.insane_bolt")) {
             Assert.Equal(record.IsInProfile(Celestia), record.IsInProfile(Wintertusk));
             Assert.Equal(celestia.ValuesOf(record), may.ValuesOf(record));
             Assert.DoesNotContain(Wintertusk, record.ProfileValues.Keys);
