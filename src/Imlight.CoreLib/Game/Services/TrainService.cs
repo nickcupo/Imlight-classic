@@ -75,6 +75,12 @@ internal class TrainService(SessionActor sessionActor) : MessageService(sessionA
             return;
         }
 
+        // CLASSIC: a gardener teaches gardening spells for gold (GardenTrainingService, wintertusk-2011).
+        if (response.ZoneObject.GetComponentOfType<InteractGardenTrainerComponent>() is { } gardener) {
+            TrainGardening(message, response.ZoneObject, gardener);
+            return;
+        }
+
         // Ensure that the interacted object has a TrainerComponent.
         var trainerComponent = response.ZoneObject.GetComponentOfType<InteractTrainerComponent>();
         if (trainerComponent is null) {
@@ -186,6 +192,39 @@ internal class TrainService(SessionActor sessionActor) : MessageService(sessionA
             Success = 1
         };
         SendToSocket(trainCompleteMsg);
+    }
+
+    // CLASSIC: one gardening spell for gold. Proximity, the table's price and rank, and the saved wallet decide; the
+    // client's index only picks a row of the gardener's own table. Learned and paid in one save (TryLearnForGold).
+    private void TrainGardening(WIZARD_12_PROTOCOL.MSG_TRAIN message, Zone.Core.ZoneEntity npc, InteractGardenTrainerComponent gardener) {
+        var wizard = GetActiveWizard();
+        var spells = gardener.Spells;
+        if (wizard is null || message.TrainingIndex < 0 || message.TrainingIndex >= spells.Count) {
+            Logger.Warning("Gardening training index {0} at {1} is out of range.", Logger.Args(message.TrainingIndex, gardener.TrainerTemplateId));
+            return;
+        }
+        if (!ServiceProximity.IsNear(wizard, npc)) {
+            Logger.Warning("Wizard {0} attempted gardening training at {1} from out of range.", Logger.Args(wizard.CharId, message.MobileID));
+            return;
+        }
+        var spell = spells[message.TrainingIndex];
+        if (InteractGardenTrainerComponent.Refusal(wizard, spell) is { } refusal) {
+            InformGameClient(refusal);
+            return;
+        }
+        var account = SessionActor.GetAssociatedAccount();
+        if (account is null) { CloseSession(); return; }
+        var status = WizardSpellbookTransactions.TryLearnForGold(wizard, spell.Template, spell.Gold,
+            saved => InteractGardenTrainerComponent.Refusal(saved, spell) is null, out _,
+            afterCommit: receipt => {
+                if (wizard.GameStats is not null && receipt.GoldBalance >= 0) wizard.GameStats.m_currentGold = receipt.GoldBalance;
+                foreach (var m in receipt.Messages) SendToSocket(m);
+            }, expectedAccountId: account.AccountId);
+        if (WizardCollection.IsInventorySnapshotUncertain(wizard)) { CloseSession(); return; }
+        if (status == SpellbookMutationStatus.Refused) {
+            Logger.Warning("Wizard {0} gardening training of {1} was refused.", Logger.Args(wizard.CharId, spell.Name));
+            InformGameClient("That spell could not be learned. Please try again.");
+        }
     }
 
     // CLASSIC: success messages share the selected transaction's original ACK lane; no debit/refund split remains.

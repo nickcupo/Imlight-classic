@@ -88,6 +88,21 @@ internal static class WizardPetSnackTransactions {
         return true;
     }
 
+    /// <summary>
+    /// CLASSIC: stages one more snack of <paramref name="templateId"/> inside an outer character transaction (a garden
+    /// harvest). The caller saves, publishes the bag with <see cref="PublishCommittedBag"/> and sends MSG_PETSNACKADD
+    /// (when <paramref name="data"/> is set) and MSG_PETSNACKUPDATE.
+    /// </summary>
+    internal static bool TryStageGrant(IDocumentSession session, Wizard saved, Wizard live, ulong templateId,
+        out ClientPetSnackItem snack, out ByteString data, out List<ClientPetSnackItem> bag) {
+        data = default;
+        if (!TryStageAdd(session, saved, templateId, () => Create(live, templateId), out snack, out var isNew, out bag)) return false;
+        if (!isNew) return true;
+        try { data = Serialize(snack); }
+        catch (Exception) { return false; }
+        return data.Length > 0;
+    }
+
     internal static void PublishCommittedBag(Wizard live, Wizard saved, IReadOnlyList<ClientPetSnackItem> bag) {
         var ids = saved?.PetSnackBehavior?.SnackItemIds ?? [];
         if (live is null || saved is null || live.CharId != saved.CharId || bag is null || ids.Count != bag.Count

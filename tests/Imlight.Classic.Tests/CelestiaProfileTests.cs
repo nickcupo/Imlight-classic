@@ -376,7 +376,7 @@ public sealed class CelestiaProfileTests {
         _ = ClassicDataFixture.LoadProfile(October);
         var real = Path.Combine(ClassicDataFixture.Root, "rules", "crown-shop-2009.yaml");
         var source = File.ReadAllText(real);
-        const string Listed = "profiles: [late-2009, arc1-2009h1, october-2010-arc1]";
+        const string Listed = "profiles: [late-2009, arc1-2009h1, october-2010-arc1, wintertusk-2011]"; // wintertusk: its gardening seeds
         Assert.Contains(Listed, source);
         Assert.Contains("min_level: 20,", source);
         using var data = new TempClassicData();
@@ -387,9 +387,13 @@ public sealed class CelestiaProfileTests {
         }
 
         var high = source.Replace("min_level: 20,", "min_level: 55,");
-        Assert.Throws<ClassicDataException>(() => CrownShopCatalogLoader.Load(Write(high)));
-        var withCelestia = high.Replace(Listed, "profiles: [late-2009, arc1-2009h1, october-2010-arc1, celestia-2010]");
-        Assert.NotEmpty(CrownShopCatalogLoader.Load(Write(withCelestia)).Items);
+        // Without a level-60 profile in the list, 55 is above the cap...
+        Assert.Throws<ClassicDataException>(() => CrownShopCatalogLoader.Load(Write(high
+            .Replace(Listed, "profiles: [late-2009, arc1-2009h1, october-2010-arc1]")
+            .Replace("profiles: [wintertusk-2011], ", ""))));
+        // ...with one (wintertusk-2011 for its gardening seeds, or celestia-2010) it is allowed; 65 never is.
+        Assert.NotEmpty(CrownShopCatalogLoader.Load(Write(high)).Items);
+        Assert.Throws<ClassicDataException>(() => CrownShopCatalogLoader.Load(Write(source.Replace("min_level: 20,", "min_level: 65,"))));
         // The real catalog offers celestia-2010 what it offers october-2010-arc1.
         var catalog = CrownShopCatalogLoader.Load(real);
         Assert.Equal(catalog.Offered(_ => true, October).Keys.Order(), catalog.Offered(_ => true, Celestia).Keys.Order());

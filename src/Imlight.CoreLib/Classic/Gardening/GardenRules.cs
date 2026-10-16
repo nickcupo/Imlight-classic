@@ -38,6 +38,8 @@ internal static class GardenRules {
         FlagNeedMagic = 0x20, FlagNeedMusic = 0x40;
     internal const uint NeedMask = 0x7c;
     internal const uint FlagPest = 0x80;
+    internal const uint FlagProtected = 0x100;    // case 7: a pest protection is on the plant
+    internal const uint FlagGoodPest = 0x400;     // case 7 / 0x141d958b0+0xc0: the pest is a good pest (m_goodPest)
     internal const uint FlagHarvestReady = 0x800;
 
     internal static readonly uint[] NeedFlags = [FlagNeedWater, FlagNeedSun, FlagNeedPollination, FlagNeedMagic, FlagNeedMusic];
@@ -47,13 +49,20 @@ internal static class GardenRules {
         PatchRevive = 8, PatchHarvestReady = 10, PatchAdvanceMature = 13;
     // Client commands (MSG_GARDENINGCOMMAND).
     internal const byte CommandPlow = 2, CommandPlant = 3;
+    // CLASSIC: the gardening window sends its tool mode as the command after the cast animation (0x140fb4df0 via
+    // 0x140fbe7b0): 1 soil (TemplateID = the soil spell), 2 plow, 3 plant (TemplateID = seed, or the Plant Seed spell
+    // with ObjectGID = seed item), 4 growing, 6 insect fighting, 7 plant protection, 8 revive, 9 inspect, 10 stasis,
+    // 13 harvest now; Plow All and Plant All arrive as runs of 2 and 3; 12 follows a multi-cast.
+    internal const byte CommandSoil = 1, CommandGrowing = 4, CommandInsect = 6, CommandProtect = 7, CommandRevive = 8,
+        CommandInspect = 9, CommandStasis = 10, CommandMulti = 12, CommandHarvestNow = 13;
+    internal const byte PatchPestRemoved = 6, PatchProtection = 7;
 
     /// <summary>On only where the profile allows gardening and the profile is the May 2011 one (or a child).</summary>
     internal static bool Enabled => ClassicRuntime.IsInitialized && ClassicRuntime.IsActive
         && ClassicRuntime.Rules.IsFeatureEnabled(ClassicFeatures.Gardening)
         && ClassicProfiles.IsOrExtends(ClassicRuntime.Rules.Profile.Id, Wintertusk2011);
 
-    private static readonly Regex Rate = new(@"^\s*(?:(\d+)d)?\s*(?:(\d+)h)?\s*(?:(\d+)m)?\s*$", RegexOptions.CultureInvariant);
+    private static readonly Regex Rate = new(@"^\s*(?:(\d+)d)?\s*(?:(\d+)h)?\s*(?:(\d+)m)?\s*(?:(\d+)s)?\s*$", RegexOptions.CultureInvariant);
 
     /// <summary>A client rate string ("9d0h0m", "0d13h0m", "0m") in seconds; 0 means never / not used.</summary>
     internal static uint Seconds(string rate) {
@@ -61,7 +70,7 @@ internal static class GardenRules {
         var m = Rate.Match(rate);
         if (!m.Success) throw new FormatException($"Unknown gardening rate '{rate}'.");
         long Part(int i) => m.Groups[i].Success ? long.Parse(m.Groups[i].Value) : 0;
-        var seconds = Part(1) * 86400 + Part(2) * 3600 + Part(3) * 60;
+        var seconds = Part(1) * 86400 + Part(2) * 3600 + Part(3) * 60 + Part(4); // pests: "48h", "96h0s", "8d0s"
         return seconds is >= 0 and <= uint.MaxValue / 4 ? (uint)seconds : throw new FormatException($"Rate '{rate}' is too long.");
     }
 

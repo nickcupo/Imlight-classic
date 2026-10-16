@@ -232,6 +232,7 @@ internal class MagicLevelsConfig : RootSingleResourceSingleton<MagicLevelsConfig
         var allSchoolInfo = magicXPConfig.m_levelInfo;
         ApplyClassicXpTable(allSchoolInfo); // CLASSIC: the profile's XP curve replaces the client's for its levels.
         ApplyClassicLevelStats(allSchoolInfo); // CLASSIC: rules.level_stats (mana, pip chance, training points) for its levels.
+        ApplyClassicEnergy(allSchoolInfo); // CLASSIC: December 2010 Energy (rules.gardening energy) for every level.
 
         var counter = 0;
         foreach (var classInfo in magicXPConfig.m_classInfo) {
@@ -292,6 +293,21 @@ internal class MagicLevelsConfig : RootSingleResourceSingleton<MagicLevelsConfig
         Logger.Information("Classic XP table {Table} applied to levels 1-{MaxLevel}: {Count} level totals differ from the client{Detail}.",
             Logger.Args(table.Id, table.MaxLevel, differences.Count,
                 differences.Count == 0 ? "" : ": " + string.Join(", ", differences.Select(d => $"L{d.Level} {d.Client}->{d.Classic}"))));
+    }
+
+    // CLASSIC: Energy, shared by pets and gardening from December 2010: 40 at level 1, +1 at each even level (archived
+    // December 2010 notes; rules.gardening energy). The client's own table (+10 at level 7, 80 at 60) is a later one.
+    internal static void ApplyClassicEnergy(List<MagicLevelInfo> allSchoolInfo) {
+        if (allSchoolInfo is null || Classic.Gardening.ClassicGardening.MaxEnergy(1) is null) {
+            return;
+        }
+
+        for (var level = 1; level < allSchoolInfo.Count; level++) {
+            allSchoolInfo[level].m_petEnergy = Classic.Gardening.ClassicGardening.MaxEnergy(level)!.Value;
+        }
+
+        Logger.Information("Classic Energy (December 2010): {Start} at level 1, {Max} at level {Level}.",
+            Logger.Args(allSchoolInfo.Count > 1 ? allSchoolInfo[1].m_petEnergy : 0, allSchoolInfo[^1].m_petEnergy, allSchoolInfo.Count - 1));
     }
 
     // CLASSIC: writes the profile's rules.level_stats (mana, power pip chance, training points) into the shared level

@@ -77,7 +77,8 @@ internal sealed class InteractVendorComponent(ZoneEntity entity) : ZoneEntityCom
         => template is GameObjectTemplate goTemplate
         && goTemplate.m_behaviors.Any(x => x is NPCBehaviorTemplate)
         && (NpcInventoryCollection.TryGetNpcInventory(goTemplate.m_templateID, out _)
-        || WorldVendorLocations.IsVendor(goTemplate.m_templateID))
+        || WorldVendorLocations.IsVendor(goTemplate.m_templateID)
+        || Classic.Gardening.ClassicGardening.Vendor(goTemplate.m_templateID) is not null) // CLASSIC: gardeners
         && !IsClosedRecipeShop(goTemplate);
 
     /// <summary>
@@ -94,6 +95,12 @@ internal sealed class InteractVendorComponent(ZoneEntity entity) : ZoneEntityCom
         // An intervening resource reload must not leave a newly spawned Roland with an empty shop.
         if (Classic.Arena.ClassicArena.TicketInventory((uint) Entity.ActiveGameObject.m_templateID.Full) is { } ticketInventory) {
             _inventory = ticketInventory.Inventory;
+            return;
+        }
+
+        // CLASSIC: a gardener's dated stock while gardening is on (rules.gardening, wintertusk-2011 only).
+        if (Classic.Gardening.ClassicGardening.Vendor(Entity.ActiveGameObject.m_templateID.Full) is { } gardener) {
+            _inventory = gardener.Stock.Select(item => new GID(item.Template)).ToList();
             return;
         }
 
@@ -175,7 +182,9 @@ internal sealed class InteractVendorComponent(ZoneEntity entity) : ZoneEntityCom
 
             // CLASSIC: Roland's native combined layout includes housing categories. The default gear layout
             // silently filters all ten furniture items. Currency is the independent m_shopType field above.
-            m_furnitureShop = TicketVendor?.Npc == 164327 ? 6 : 0,
+            // CLASSIC: a gardener (pots and seeds are housing items) uses its table's layout.
+            m_furnitureShop = TicketVendor?.Npc == 164327 ? 6
+                : Classic.Gardening.ClassicGardening.Vendor(Entity.ActiveGameObject.m_templateID.Full)?.ShopLayout ?? 0,
 
             // todo: figure this out for QA
             m_CSRTestShop = false,

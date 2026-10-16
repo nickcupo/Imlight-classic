@@ -21,6 +21,11 @@ internal sealed class GardenPlantState {
     public uint HarvestCount { get; set; }
     public uint PestTemplateId { get; set; }
     public uint PestProtectionTemplateId { get; set; }
+    public uint PestCheckAt { get; set; }          // next pest roll (0 = none due)
+    public uint PestWiltAt { get; set; }           // a bad pest wilts the plant at this time (0 = none)
+    public uint ProtectionUntil { get; set; }      // pest protection lasts until (0 = none)
+    public float Modifier { get; set; } = 1f;      // likes and dislikes: the factor on growth and harvest times
+    public ulong PotItemId { get; set; }           // the planter (furniture item) the plant grows in, 0 = soil pile
     public ulong SeedItemId { get; set; }         // the original seed item, kept for audit
     public string SeedItemDocumentId { get; set; } = "";
     public ulong PlantId { get; set; }            // m_plantIdentifierForETL
