@@ -78,6 +78,23 @@ internal sealed class ArenaService(SessionActor sessionActor) : MessageService(s
         }
     }
 
+    // CLASSIC (owner ruling 2026-10-15, "option A, do it like 2009"): once per attach (login and every zone change), a
+    // wizard who is not queued, in a match or watching one gets a state-0 MatchActor, so r806919 hides the HUD PvP icon
+    // until the wizard queues (ArenaMatchmaker.AttachedStatus). Sent on this session's own socket: the online-player
+    // row the matchmaker's world uses may still name the previous session right after a zone change.
+    [MessageHandler(typeof(SERVICE_101_PROTOCOL.MSG_ATTACHCOMPLETE))]
+    private void ReceiveAttachComplete(SERVICE_101_PROTOCOL.MSG_ATTACHCOMPLETE message) {
+        if (!Imlight.Classic.ClassicRuntime.IsInitialized || !Imlight.Classic.ClassicRuntime.IsActive
+            || !ClassicArena.Enabled || GetActiveWizard() is not { } wizard || Matchmaker is not { } arena) {
+            return;
+        }
+
+        if (arena.AttachedStatus(wizard.CharId, ServerArenaWorld.PlayerOf(wizard)) is { } idle) {
+            SendToSocket(idle);
+            Logger.Debug("Arena: {0} attached outside any match; PvP status 0 sent (HUD PvP icon hidden).", Logger.Args(wizard.CharId));
+        }
+    }
+
     // ------------------------------------------------------------ the guards and the window
 
     [MessageHandler(typeof(CLASSIC_FEATURES_PROTOCOL.MSG_ARENAKIOSK))]

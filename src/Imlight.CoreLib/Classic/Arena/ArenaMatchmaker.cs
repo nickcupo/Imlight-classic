@@ -1234,13 +1234,35 @@ internal sealed class ArenaMatchmaker {
         }
     }
 
-    private void SendStatus(ulong charId, ArenaPlayer player, Match? match, int side, int status) {
+    /// <summary>
+    /// CLASSIC (owner ruling 2026-10-15, "option A, do it like 2009"): the HUD PvP icon shows only while the wizard is in
+    /// the arena's queue or a match. r806919 decides the icon from the last MatchActor the server sent
+    /// (PvPClientManager +0x18, predicate 0x142112910): no actor shows it, state 0 hides it, states 1-11 show it. So
+    /// every attach (login and each zone change) of a wizard who is not queued, in a match or watching one gets one
+    /// state-0 actor; state 0 opens no window and prints nothing (MSG_MatchMakerUpdate 0x14210ff90, PVP_StatusUpdate
+    /// 0x140de8720). A queued wizard gets nothing: the client keeps its actor (a process-wide manager) and its state,
+    /// and a repeated non-zero state would pop the status window open again (0x140dece30).
+    /// Null for ambient wizards, while stopping, and for wizards in a match or watching one.
+    /// </summary>
+    public GAME_5_PROTOCOL.MSG_MATCHMAKERUPDATE? AttachedStatus(ulong charId, ArenaPlayer player) {
+        lock (_gate) {
+            if (_stopping || player.Ambient || IsAmbient(charId) || _matchOf.ContainsKey(charId)
+                || _spectators.ContainsKey(charId)) return null;
+
+            return StatusMessage(charId, player, null, -1, 0);
+        }
+    }
+
+    private void SendStatus(ulong charId, ArenaPlayer player, Match? match, int side, int status)
+        => _world.Send(charId, StatusMessage(charId, player, match, side, status));
+
+    private GAME_5_PROTOCOL.MSG_MATCHMAKERUPDATE StatusMessage(ulong charId, ArenaPlayer player, Match? match, int side, int status) {
         var standing = Standing(charId);
         var names = new Dictionary<ulong, byte[]>();
         var actor = ArenaMessages.Actor(player, match is null ? null : View(match), side, status, standing.Rating, RankIndex(standing.Rating));
         names[player.ActorId] = player.NameBlob;
         var team = match is null || side < 0 ? null : Team(match, side, names);
-        _world.Send(charId, new GAME_5_PROTOCOL.MSG_MATCHMAKERUPDATE {
+        return new GAME_5_PROTOCOL.MSG_MATCHMAKERUPDATE {
             CharacterID = player.ActorId,
             MatchTeam = team is null ? new Imcodec.IO.ByteString() : ArenaMessages.Blob(team, names),
             MatchActor = ArenaMessages.Blob(actor, names),
@@ -1248,7 +1270,7 @@ internal sealed class ArenaMatchmaker {
             RegistrationInfo = "",
             UpdateMessage = "",
             Status = (byte) status,
-        });
+        };
     }
 
     private void BroadcastMatch(Match match) {
