@@ -63,6 +63,9 @@ public static class ClassicProfiles {
     /// <summary>The Celestia / level 60 profile (October 2010 with Celestia); extends <see cref="October2010"/>.</summary>
     public const string Celestia2010 = "celestia-2010";
 
+    /// <summary>The May 2011 (Wintertusk) profile; extends <see cref="Celestia2010"/> and inherits its membership.</summary>
+    public const string Wintertusk2011 = "wintertusk-2011";
+
     /// <summary>
     /// The level every 2009 rule was written for (the cap of late-2009 and october-2010-arc1). Code that once said 50
     /// uses <see cref="MaxLevelOf(string)"/>, which answers this for a profile without a cap or one never loaded.
@@ -113,6 +116,18 @@ public static class ClassicProfiles {
 
     /// <summary>True for october-2010-arc1 and every profile that extends it (celestia-2010, ...).</summary>
     public static bool IsOctoberFamily(ClassicProfile? profile) => profile?.IsOrExtends(October2010) == true;
+
+    /// <summary>True for celestia-2010 and every profile that extends it (wintertusk-2011, ...).</summary>
+    public static bool IsCelestiaOrLater(string? profileId) => IsOrExtends(profileId, Celestia2010);
+
+    /// <summary>True for celestia-2010 and every profile that extends it (wintertusk-2011, ...).</summary>
+    public static bool IsCelestiaOrLater(ClassicProfile? profile) => profile?.IsOrExtends(Celestia2010) == true;
+
+    /// <summary>True for wintertusk-2011 and every profile that extends it: the May 2011 rules apply.</summary>
+    public static bool IsWintertuskFamily(string? profileId) => IsOrExtends(profileId, Wintertusk2011);
+
+    /// <summary>True for wintertusk-2011 and every profile that extends it: the May 2011 rules apply.</summary>
+    public static bool IsWintertuskFamily(ClassicProfile? profile) => profile?.IsOrExtends(Wintertusk2011) == true;
 
     internal static bool AnyListed(IEnumerable<string> listed, ImmutableArray<string> members) {
         var set = listed as ICollection<string> ?? listed.ToList();

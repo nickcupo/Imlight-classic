@@ -34,7 +34,7 @@ internal static class ClassicTrainerInventories {
         var stock = inventory?.Spells.ToList() ?? [];
         stock.RemoveAll(spell => spell.TemplateID == ClassicOctoberTraining.Cloak);
         var restored = false;
-        foreach (var record in records.Where(spell => spell.Id == "spell.sun.cloak")) {
+        foreach (var record in records.Where(spell => spell.Id == "spell.sun.cloak" && !ClassicProfiles.IsCelestiaOrLater(ClassicRuntime.Rules.Profile))) { // CLASSIC: no Diego stand-in from celestia-2010 on
             if (!record.IsInProfile(ClassicRuntime.Rules.Profile.Id) || record.ClientTemplate is not { } path
                 || resolveTemplate(path) is not { } templateId || templateId != ClassicOctoberTraining.Cloak) continue;
             var values = record.ValuesFor(ClassicRuntime.Rules.Profile.Lineage);
@@ -59,6 +59,12 @@ internal static class ClassicTrainerInventories {
         }
 
         var values = record.ValuesFor(ClassicRuntime.Rules.Profile.Lineage);
+        if (values.Trainer == "Diego the Duelmaster") { // CLASSIC: wintertusk-2011 (May 2011): only Diego, rank Private.
+            MoveStunBlockToDiego(templateId, values);
+
+            return;
+        }
+
         if (values.Trainer != "Sabrina Greenstar"
             || !SpiralDB.TryGetNpcSpellInventory(Sabrina, out var sabrina)) {
             Logger.Warning("Classic trainer: cannot place {0} with its dated trainer; Sabrina's inventory is unavailable.",
@@ -75,6 +81,35 @@ internal static class ClassicTrainerInventories {
 
         Logger.Information("Classic trainer: {0} taught by Sabrina Greenstar, not Diego ({1}).",
             Logger.Args(record.Name, record.SourceFile));
+    }
+
+    private static void MoveStunBlockToDiego(ulong templateId, SpellValues values) {
+        SpiralDB.TryGetNpcSpellInventory(Sabrina, out var sabrina);
+        SpiralDB.TryGetNpcSpellInventory(Diego, out var diego);
+        var (newSabrina, newDiego) = StunBlockStock(sabrina, diego, templateId, values);
+        if (newSabrina is not null) {
+            SpiralDB.RegisterNpcSpellInventory(newSabrina);
+        }
+
+        SpiralDB.RegisterNpcSpellInventory(newDiego);
+        ClassicOctoberTraining.StunBlock = templateId;
+        Logger.Information("Classic trainer: Stun Block taught only by Diego the Duelmaster at PvP rank Private (May 2011).");
+    }
+
+    // CLASSIC: Sabrina loses the card, Diego gains it; copies, idempotent.
+    internal static (NPCSpellInventory? Sabrina, NPCSpellInventory Diego) StunBlockStock(
+        NPCSpellInventory? sabrina, NPCSpellInventory? diego, ulong templateId, SpellValues values) {
+        var newSabrina = sabrina is null ? null : new NPCSpellInventory {
+            TemplateID = sabrina.TemplateID,
+            Spells = [.. sabrina.Spells.Where(spell => spell.TemplateID != templateId)],
+        };
+        var newDiego = new NPCSpellInventory {
+            TemplateID = Diego,
+            Spells = [.. (diego?.Spells ?? []).Where(spell => spell.TemplateID != templateId), new NPCSpellEntry {
+                TemplateID = templateId, RequiredSpellID = 0, Level = values.LevelLearned ?? 0,
+            }],
+        };
+        return (newSabrina, newDiego);
     }
 
     // CLASSIC: copy lists so existing readers retain their old inventory; replace this one entry idempotently.

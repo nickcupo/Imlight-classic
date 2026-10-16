@@ -2,6 +2,7 @@
 // Exact October eligibility remains unverified in the Cloak record; other profiles and trainers are unchanged.
 
 using Imcodec.ObjectProperty.TypeCache;
+using Imlight.Classic;
 using Imlight.Classic.Pvp;
 using Imlight.CoreLib.Classic.Arena;
 using Imlight.CoreLib.WizardData.Collections;
@@ -13,8 +14,23 @@ internal static class ClassicOctoberTraining {
     internal const ulong Diego = 38226;
     internal const uint Cloak = 76658083;
 
+    /// <summary>
+    /// The Stun Block template id once the trainer refresh has resolved it (0 before). wintertusk-2011 moves the card to
+    /// Diego at rank Private (May 2011 notes, patch 1.140).
+    /// </summary>
+    internal static ulong StunBlock { get; set; }
+
     internal static bool Applies(ulong trainer, ulong spell)
-        => ClassicOctoberRules.Active && trainer == Diego && spell == Cloak;
+        => trainer == Diego && (CloakApplies(spell) || StunBlockApplies(spell));
+
+    // CLASSIC: the owner's Private-rank stand-in for Cloak belongs to october-2010-arc1 only; from celestia-2010 on Cloak
+    // comes from the Sun trainer for training points (owner ruling, 2026-10-16; package C).
+    private static bool CloakApplies(ulong spell)
+        => spell == Cloak && ClassicOctoberRules.Active && !ClassicProfiles.IsCelestiaOrLater(ClassicRuntime.Rules.Profile);
+
+    private static bool StunBlockApplies(ulong spell)
+        => StunBlock != 0 && spell == StunBlock && ClassicRuntime.IsActive
+            && ClassicProfiles.IsWintertuskFamily(ClassicRuntime.Rules.Profile);
 
     internal static string RequiredRank(ulong spell) => "Private";
     internal static int RequiredLevel(ulong spell) => 0;
