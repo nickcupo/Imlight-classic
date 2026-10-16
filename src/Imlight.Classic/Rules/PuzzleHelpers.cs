@@ -21,7 +21,7 @@ public sealed record PuzzleHelpers(string Id, ImmutableArray<string> Profiles, I
     public const string PolicyId = "puzzles-october-2010";
     public const string RelativePath = "rules/puzzles-october-2010.yaml";
     public static PuzzleHelpers Empty { get; } = new("", [], [], [], "");
-    public bool AppliesTo(string? profileId) => profileId == OctoberProfile && Profiles.Contains(profileId, StringComparer.Ordinal);
+    public bool AppliesTo(string? profileId) => ClassicProfiles.IsOctoberFamily(profileId) && ClassicProfiles.Lists(Profiles, profileId);
 }
 
 /// <summary>CLASSIC: strict metadata reader shared by startup and deterministic policy tests.</summary>
@@ -35,7 +35,7 @@ public static class PuzzleHelpersLoader {
 
     /// <summary>Other profiles never inherit these changes. A configured October file must exist and validate.</summary>
     public static PuzzleHelpers LoadForProfile(ClassicProfile profile, string classicDataRoot) {
-        if (profile.Id != PuzzleHelpers.OctoberProfile || profile.Rules.PuzzleHelpers is null) {
+        if (!ClassicProfiles.IsOctoberFamily(profile) || profile.Rules.PuzzleHelpers is null) {
             return PuzzleHelpers.Empty;
         }
         if (profile.Rules.PuzzleHelpers != PuzzleHelpers.RelativePath) {

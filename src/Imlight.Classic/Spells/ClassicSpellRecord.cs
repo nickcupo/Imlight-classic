@@ -91,9 +91,9 @@ public sealed class ClassicSpellRecord {
     /// True when the card exists in <paramref name="profileId"/>.
     /// </summary>
     /// <param name="profileId">A profile id.</param>
-    /// <returns>True if the record lists the profile.</returns>
+    /// <returns>True if the record lists the profile, or a parent it inherits membership from (CLASSIC).</returns>
     public bool IsInProfile(string profileId)
-        => Profiles.Contains(profileId, StringComparer.Ordinal);
+        => ClassicProfiles.Lists(Profiles, profileId);
 
     /// <summary>
     /// The card's numbers in the profile whose extends chain is <paramref name="lineage"/>.

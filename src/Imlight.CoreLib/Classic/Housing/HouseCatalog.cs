@@ -69,7 +69,7 @@ internal static class HouseCatalog {
             throw new InvalidDataException("House catalog identity/license is invalid.");
         if (Node(root, "profiles") is not YamlSequenceNode profiles || Node(root, "houses") is not YamlSequenceNode houses)
             throw new InvalidDataException("House catalog needs profiles and houses lists.");
-        if (!profiles.Children.OfType<YamlScalarNode>().Any(p => p.Value == profile)) return new Dictionary<uint, HouseDefinition>();
+        if (!ClassicProfiles.Lists(profiles.Children.OfType<YamlScalarNode>().Select(p => p.Value ?? ""), profile)) return new Dictionary<uint, HouseDefinition>();
         var result = new Dictionary<uint, HouseDefinition>();
         var allZones = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var node in houses.Children) {
@@ -86,7 +86,7 @@ internal static class HouseCatalog {
                 || !SafeZone(d.ExteriorZone) || !SafeZone(d.InteriorZone) || !SafeZone(d.PreviewZone)
                 || !allZones.Add(d.ExteriorZone) || !allZones.Add(d.InteriorZone)
                 || d.ExteriorCapacity is < 0 or > 400 || d.InteriorCapacity is < 0 or > 400
-                || d.Gold < 0 || d.Crowns < 0 || d.MinimumLevel is < 0 or > 50
+                || d.Gold < 0 || d.Crowns < 0 || d.MinimumLevel < 0 || d.MinimumLevel > ClassicProfiles.MaxLevelOf(profile) // CLASSIC: the cap, not 50
                 || (d.Enabled && !d.Complete) || !result.TryAdd(template, d))
                 throw new InvalidDataException("Duplicate, unsafe or incomplete house definition.");
         }

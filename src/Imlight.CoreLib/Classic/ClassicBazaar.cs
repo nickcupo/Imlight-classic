@@ -112,7 +112,7 @@ public static class ClassicBazaar {
         foreach (var path in Directory.Exists(directory) ? Directory.EnumerateFiles(directory, "bazaar-*.yaml").Order() : Enumerable.Empty<string>()) {
             try {
                 var rules = BazaarRulesLoader.Load(path);
-                if (rules.Profiles.Contains(profileId, StringComparer.Ordinal)) {
+                if (ClassicProfiles.Lists(rules.Profiles, profileId)) {
                     selectedRules = rules;
                     break;
                 }
@@ -233,7 +233,7 @@ public static class ClassicBazaar {
             out (int Buy, int Sell) quote) {
         quote = default;
         if (!ClassicSpellTemplates.HasHistoricalTreasureBase(profileId, prices)
-                || !rules.Profiles.Contains(profileId, StringComparer.Ordinal)
+                || !ClassicProfiles.Lists(rules.Profiles, profileId)
                 || templateId != ClassicSpellTemplates.GlacialTreasureId || path != ClassicSpellTemplates.GlacialTreasurePath
                 || template is null || template.GetType() != typeof(SpellTemplate)
                 || template.m_name != ClassicSpellTemplates.GlacialTreasureName

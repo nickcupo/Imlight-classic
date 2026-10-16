@@ -5,7 +5,7 @@ using Imlight.Classic;
 namespace Imlight.CoreLib.Classic;
 
 internal static class ClassicOctoberRules {
-    internal static bool Active => ClassicRuntime.IsActive && ClassicRuntime.Rules.Profile.Id == "october-2010-arc1";
+    internal static bool Active => ClassicRuntime.IsActive && ClassicProfiles.IsOctoberFamily(ClassicRuntime.Rules.Profile); // CLASSIC: and every profile extending it
 
     // July 2010 archived update notes: a stun in PvP leaves four automatic stun shields instead of one.
     // https://web.archive.org/web/20140122055803/https://www.wizard101.com/game/community/updatenotes/july2010

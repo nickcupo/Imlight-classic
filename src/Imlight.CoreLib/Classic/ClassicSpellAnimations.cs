@@ -38,7 +38,7 @@ internal static class ClassicSpellAnimations {
         var path = Path.Combine(root, RelativePath);
         if (!File.Exists(path)) return;
         var (profiles, templates) = Load(path);
-        if (!profiles.Contains(profile)) return;
+        if (!ClassicProfiles.Lists(profiles, profile)) return; // CLASSIC: a child profile inherits its parent's listing
         s_templates = templates;
         Logger.Information("Classic spell animations: {0} cinematics timed from the 2014 client's stages.",
             Logger.Args(templates.Count));

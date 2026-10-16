@@ -100,7 +100,7 @@ public sealed class CrownShopCatalog {
     /// </summary>
     public FrozenDictionary<ulong, CrownShopEntry> Offered(Func<string, bool> featureEnabled, string? profileId = null)
         => Items.Where(item => (item.Feature is null || featureEnabled(item.Feature))
-                && (item.Profiles.IsDefaultOrEmpty || profileId is not null && item.Profiles.Contains(profileId, StringComparer.Ordinal)))
+                && (item.Profiles.IsDefaultOrEmpty || ClassicProfiles.Lists(item.Profiles, profileId)))
             .ToFrozenDictionary(item => item.Template);
 
 }
@@ -162,7 +162,7 @@ public static class CrownShopCatalogLoader {
                 var crowns = item.Find("crowns") is { } cr ? diagnostics.ReadInt(cr.Value, At("crowns"), 1) : null;
                 var gold = item.Find("gold") is { } g ? diagnostics.ReadInt(g.Value, At("gold"), 1) : null;
                 var days = item.Find("rental_days") is { } d ? diagnostics.ReadInt(d.Value, At("rental_days"), 1, 365) : null;
-                var level = item.Find("min_level") is { } l ? diagnostics.ReadInt(l.Value, At("min_level"), 1, 50) : null;
+                var level = item.Find("min_level") is { } l ? diagnostics.ReadInt(l.Value, At("min_level"), 1, ClassicProfiles.MaxLevelOf(profiles)) : null; // CLASSIC: the profiles' cap, not 50
                 var combat = item.Find("combat_only") is { } co ? diagnostics.ReadBool(co.Value, At("combat_only")) : null;
                 var feature = item.Find("feature") is { } f ? diagnostics.ReadString(f.Value, At("feature")) : null;
                 var itemProfiles = ReadItemProfiles(item, At("profiles"), profiles, diagnostics);

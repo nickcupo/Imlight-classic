@@ -18,7 +18,7 @@ internal static class ArenaPvpLoadout {
         var level = wizard.MagicSchoolBehavior.Level;
         var school = wizard.MagicSchoolBehavior.MagicSchool.ToString();
         var profile = ClassicRuntime.Rules.Profile;
-        if (level is < 1 or > 50 || level > (profile.LevelCap ?? 50)) return false;
+        if (level < 1 || level > ClassicProfiles.MaxLevelOf(profile.Id)) return false; // CLASSIC: the profile's cap (50 without one)
         // No unresearched vendor gear: the already-approved starter deck supports all ranks, 14 cards/3 copies.
         if (CoreObjectFactory.GetCoreTemplate(ClassicStart.StarterDeckTemplateId) is not WizItemTemplate item
             || EquipRules.Check(wizard, item) != EquipRefusal.None

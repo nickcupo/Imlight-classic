@@ -58,13 +58,13 @@ public static class ClassicProfileLoader {
 
     internal static readonly FrozenSet<string> s_rootKeys = FrozenSet.Create(StringComparer.Ordinal,
         "id", "title", "description", "status", "extends", "cutoff", "zone_content_cutoff", "level_cap", "worlds", "features", "rules", "notes",
-        "world_unlocks", "disabled_quests");
+        "world_unlocks", "disabled_quests", "restored_quests", "inherits_membership");
     private static readonly string[] s_requiredKeys = ["id", "title", "cutoff", "status"];
-    private static readonly string[] s_inheritedKeys = ["cutoff", "zone_content_cutoff", "level_cap", "worlds", "features", "rules", "world_unlocks", "disabled_quests"];
+    private static readonly string[] s_inheritedKeys = ["cutoff", "zone_content_cutoff", "level_cap", "worlds", "features", "rules", "world_unlocks", "disabled_quests", "restored_quests"];
     internal static readonly FrozenSet<string> s_worldUnlockKeys = FrozenSet.Create(StringComparer.Ordinal, "any_of", "source", "notes");
     private static readonly FrozenSet<string> s_ruleKeys = FrozenSet.Create(StringComparer.Ordinal,
         "accuracy_table", "xp_table", "player_health", "mob_rewards", "badges", "quest_cards", "treasure_prices", "mob_stats", "crown_shop", "later_objects", "creature_decks", "power_pips_from_rank", "dragonspyre_difficulty", "tutorial",
-        "teleport_stones", "potions", "second_chance", "boss_cheats", "instance_resets", "puzzle_helpers");
+        "teleport_stones", "potions", "second_chance", "boss_cheats", "instance_resets", "puzzle_helpers", "level_stats");
 
     /// <summary>
     /// Loads the profile <paramref name="id"/> from <paramref name="profilesDir"/>, following its extends chain.
@@ -212,8 +212,14 @@ public static class ClassicProfileLoader {
                 case "world_unlocks":
                     ValidateWorldUnlocks(value, diagnostics);
                     break;
-                case "disabled_quests": // CLASSIC
-                    ValidateDisabledQuests(value, diagnostics);
+                case "disabled_quests" or "restored_quests": // CLASSIC
+                    ValidateDisabledQuests(value, diagnostics, entry.Key);
+                    break;
+                case "inherits_membership": // CLASSIC
+                    _ = diagnostics.ReadBool(value, "inherits_membership");
+                    if (map.Find("extends") is null) {
+                        diagnostics.At(value, "inherits_membership", "inherits_membership needs extends: there is no parent to inherit from");
+                    }
                     break;
             }
         }
@@ -247,14 +253,14 @@ public static class ClassicProfileLoader {
     }
 
     // CLASSIC: quest names, each listed once.
-    private static void ValidateDisabledQuests(YNode value, YamlDiagnostics diagnostics) {
-        if (diagnostics.ReadList(value, "disabled_quests") is not { } list) {
+    private static void ValidateDisabledQuests(YNode value, YamlDiagnostics diagnostics, string key) {
+        if (diagnostics.ReadList(value, key) is not { } list) {
             return;
         }
 
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         for (var i = 0; i < list.Items.Length; i++) {
-            var path = YamlTree.Index("disabled_quests", i);
+            var path = YamlTree.Index(key, i);
             if (diagnostics.ReadString(list.Items[i], path) is not { } quest) {
                 continue;
             }
@@ -444,7 +450,14 @@ public static class ClassicProfileLoader {
         var diagnostics = new YamlDiagnostics();
         var rules = merged!.Find("rules")?.Value as YMap;
 
-        return new ClassicProfile {
+        // CLASSIC: membership walks up while each link declares inherits_membership.
+        var members = ImmutableArray.CreateBuilder<string>();
+        members.Add(ScalarOf(child, "id")!);
+        for (var i = 0; i + 1 < chain.Count && IsTrueKey(chain[i].Map, "inherits_membership"); i++) {
+            members.Add(ScalarOf(chain[i + 1].Map, "id")!);
+        }
+
+        var profile = new ClassicProfile {
             Id = ScalarOf(child, "id")!,
             Title = ScalarOf(child, "title")!,
             Description = ScalarOf(child, "description"),
@@ -462,6 +475,7 @@ public static class ClassicProfileLoader {
                 AccuracyTable = ScalarOf(rules, "accuracy_table"),
                 XpTable = ScalarOf(rules, "xp_table"),
                 PlayerHealth = ScalarOf(rules, "player_health"), // CLASSIC
+                LevelStats = ScalarOf(rules, "level_stats"), // CLASSIC
                 MobRewards = ScalarOf(rules, "mob_rewards"),
                 Badges = ScalarOf(rules, "badges"),
                 QuestCards = ScalarOf(rules, "quest_cards"),
@@ -484,12 +498,22 @@ public static class ClassicProfileLoader {
             DisabledQuests = merged.Find("disabled_quests")?.Value is YSeq disabled // CLASSIC
                 ? [.. disabled.Items.Cast<YScalar>().Select(quest => quest.Value)]
                 : [],
+            RestoredQuests = merged.Find("restored_quests")?.Value is YSeq restored // CLASSIC
+                ? [.. restored.Items.Cast<YScalar>().Select(quest => quest.Value)]
+                : [],
+            InheritsMembership = IsTrueKey(child, "inherits_membership"), // CLASSIC
+            MembershipIds = members.ToImmutable(), // CLASSIC
             Notes = child.Find("notes")?.Value is YSeq notes
                 ? [.. notes.Items.Cast<YScalar>().Select(note => note.Value)]
                 : [],
             SourceFiles = [.. chain.Select(link => link.Path)],
         };
+        ClassicProfiles.Register(profile); // CLASSIC: ids in data files resolve through the loaded profiles.
+
+        return profile;
     }
+
+    private static bool IsTrueKey(YMap map, string key) => map.Find(key)?.Value is { } node && IsTrue(node);
 
     private static YMap OnlyKeys(YMap map, string[] keys)
         => new(map.File, map.Line, [.. map.Entries.Where(entry => keys.Contains(entry.Key, StringComparer.Ordinal))]);

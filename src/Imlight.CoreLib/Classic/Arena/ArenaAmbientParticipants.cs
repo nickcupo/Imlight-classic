@@ -31,7 +31,9 @@ internal static class ArenaAmbientParticipants {
     internal const int MaxParticipants = 64;
     private const int VariantsPerSchool = 8;
     private const ulong FirstId = AmbientWizardCollection.CharIdBase + 0x0100_0000;
-    private const int IdentityCount = 50 * 7 * VariantsPerSchool;
+    // CLASSIC: levels 1-50 keep their ids (saved Ranked standings); levels 51+ (a level 60 profile) follow them.
+    private const int IdentitiesPerLevel = 7 * VariantsPerSchool;
+    private const int IdentityCount = ArenaLevels.Supported * IdentitiesPerLevel;
     private static readonly object s_gate = new();
     private static readonly ConcurrentDictionary<ulong, Entry> s_entries = new();
     private static IActorRef? s_server;
@@ -51,7 +53,7 @@ internal static class ArenaAmbientParticipants {
         ClassicArena.Matchmaker(system); // normal clock starts at boot, without a human opening a guard
     }
     internal static ulong IdentityId(int level, int school, int variant)
-        => FirstId + (ulong) ((Math.Clamp(level, 1, 50) - 1) * 7 * VariantsPerSchool + Math.Clamp(school, 0, 6) * VariantsPerSchool + Math.Clamp(variant, 0, VariantsPerSchool - 1));
+        => FirstId + (ulong) ((ArenaLevels.Clamp(level) - 1) * IdentitiesPerLevel + Math.Clamp(school, 0, 6) * VariantsPerSchool + Math.Clamp(variant, 0, VariantsPerSchool - 1));
     internal static bool IsIdentity(ulong id) => id >= FirstId && id < FirstId + IdentityCount;
     internal static bool IsReserved(ulong id) => s_entries.ContainsKey(id);
     internal static AmbientWizard? Wizard(ulong id) => s_entries.TryGetValue(id, out var entry) && Volatile.Read(ref entry.Retiring) == 0 ? entry.Wizard : null;
@@ -81,7 +83,7 @@ internal static class ArenaAmbientParticipants {
     }
     internal static ArenaPlayer? Reserve(ActorSystem system, int level, int preferredSchool, ArenaPvpSkill? friendlySkill = null) {
         if (!Enabled || s_server is null) return null;
-        level = Math.Clamp(level, 1, 50);
+        level = ArenaLevels.Clamp(level);
         preferredSchool = (preferredSchool % 7 + 7) % 7;
         lock (s_gate) {
             if (s_entries.Count >= MaxParticipants) return null;

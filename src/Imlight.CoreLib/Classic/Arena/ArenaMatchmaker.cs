@@ -361,7 +361,7 @@ internal sealed class ArenaMatchmaker {
             var count = Math.Clamp(numberOfElements > 0 ? numberOfElements : ArenaFriendlyRoster.DefaultPageSize,
                 1, ArenaFriendlyRoster.DefaultPageSize);
             var browser = new BrowserWatch(requestType, Math.Max(0, startingIndex), count,
-                qualifiedOnly && qualifiedLevel is >= 1 and <= 50 ? (int) qualifiedLevel : null);
+                qualifiedOnly && qualifiedLevel >= 1 && qualifiedLevel <= ArenaLevels.Cap ? (int) qualifiedLevel : null);
             foreach (var watchers in _watchers.Values) watchers.Remove(charId);
             _watchers[kind][charId] = browser;
             SendBrowserPage(charId, kind, browser, BrowserRows(charId, kind, browser));
@@ -376,7 +376,7 @@ internal sealed class ArenaMatchmaker {
                 : Listed(match) && View(match).Status == 0))
             .OrderBy(match => match.Autonomous).ThenBy(match => match.CreatedUtc).Cast<object>().ToList();
         if (!browser.Watch && Friendly is not null && viewer is not null)
-            matches.AddRange(ArenaFriendlyRoster.Challenges(kind, Math.Clamp(viewer.Level, 1, 50), browser.Level)
+            matches.AddRange(ArenaFriendlyRoster.Challenges(kind, ArenaLevels.Clamp(viewer.Level), browser.Level)
                 .Where(challenge => browser.Size == 0 || challenge.TeamSize == browser.Size));
         var teamRows = kind == ArenaKind.Ranked && !browser.Watch;
         var total = matches.Count * (teamRows ? 2 : 1);
@@ -553,7 +553,7 @@ internal sealed class ArenaMatchmaker {
                 var newSize = size == 0 ? 1 : size;
                 if (Friendly is not null) {
                     var skill = ArenaFriendlyRoster.NearestSkill(rating);
-                    JoinFriendly(player, new ArenaFriendlyChallenge(kind, Math.Clamp(player.Level, 1, 50),
+                    JoinFriendly(player, new ArenaFriendlyChallenge(kind, ArenaLevels.Clamp(player.Level),
                         _ambientSchool++ % 7, skill, newSize), 0);
                     return;
                 }
@@ -960,8 +960,8 @@ internal sealed class ArenaMatchmaker {
             match.FriendlySchool = _ambientSchool++ % 7;
         }
         var humanLevel = (int) Math.Round(match.Members.Where(c => !IsAmbient(c)).Average(c => _players[c].Level));
-        var minimum = Math.Clamp(match.MinLevel > 0 ? match.MinLevel : 1, 1, 50);
-        var maximum = Math.Clamp(match.MaxLevel > 0 ? match.MaxLevel : 50, minimum, 50);
+        var minimum = Math.Clamp(match.MinLevel > 0 ? match.MinLevel : 1, 1, ArenaLevels.Cap);
+        var maximum = Math.Clamp(match.MaxLevel > 0 ? match.MaxLevel : ArenaLevels.Cap, minimum, ArenaLevels.Cap);
         match.NextAmbientUtc = DateTime.UtcNow.AddSeconds(AmbientWaitSeconds);
         if (!ReserveSeats(match, Math.Clamp(humanLevel, minimum, maximum)))
             foreach (var human in match.Members.Where(c => !IsAmbient(c)))
@@ -997,8 +997,8 @@ internal sealed class ArenaMatchmaker {
                      && now >= m.NextAmbientUtc && m.Members.Any(c => !IsAmbient(c))).OrderBy(m => m.CreatedUtc).ToList()) {
             match.NextAmbientUtc = now.AddSeconds(AmbientWaitSeconds);
             var humanLevel = (int) Math.Round(match.Members.Where(c => !IsAmbient(c)).Average(c => _players[c].Level));
-            var minimum = Math.Clamp(match.MinLevel > 0 ? match.MinLevel : 1, 1, 50);
-            var maximum = Math.Clamp(match.MaxLevel > 0 ? match.MaxLevel : 50, minimum, 50);
+            var minimum = Math.Clamp(match.MinLevel > 0 ? match.MinLevel : 1, 1, ArenaLevels.Cap);
+            var maximum = Math.Clamp(match.MaxLevel > 0 ? match.MaxLevel : ArenaLevels.Cap, minimum, ArenaLevels.Cap);
             if (ReserveSeats(match, Math.Clamp(humanLevel, minimum, maximum))) {
                 if (match.Phase == Phase.Confirming) match.ConfirmEndsUtc = now.AddSeconds(_config.ConfirmSeconds);
                 foreach (var human in match.Members.Where(c => !IsAmbient(c)))
@@ -1012,9 +1012,10 @@ internal sealed class ArenaMatchmaker {
         foreach (var kind in new[] { ArenaKind.Practice, ArenaKind.Ranked }) {
             if (_matches.Values.Any(m => m.Autonomous && m.Kind == kind) || _nextAutonomous.GetValueOrDefault(kind) > now) continue;
             var round = _autonomousRounds.GetValueOrDefault(kind);
-            _autonomousRounds[kind] = (round + 1) % 50;
+            var levels = ArenaLevels.Cap; // CLASSIC: every level of the profile's range (1-50 in the 2009 order at cap 50)
+            _autonomousRounds[kind] = (round + 1) % levels;
             var size = 1 + _autonomousSizes.GetValueOrDefault(kind) % 4;
-            var level = 1 + (round % 50) * 11 % 50;
+            var level = 1 + (round % levels) * ArenaLevels.Stride(levels) % levels;
             var match = NewMatch(kind, size, 0, false, level, level);
             match.Autonomous = true;
             if (!ReserveSeats(match, level)) {
