@@ -331,7 +331,10 @@ public class CombatResolver(Duel duel, CombatDuelSubCircle[] actorSubCircles) {
                 // Recheck under the session lock through effects AND costs. Strict Hello may have arrived after queuing.
                 if (!action.SpellCaster._duelActor.RunMonstrologyCast(action.SpellCaster, action.Spell, action.SpellTemplate, () => {
                     // Determine if this spell hits or fizzles.
-                    var spellHits = SpellHits(action.SpellCaster, action.Spell, action.Cheat?.SureHit == true); // CLASSIC: sure_hit cheats
+                    // CLASSIC: a sure_hit cheat skips the accuracy roll; a dispel on the boss still stops it.
+                    var spellHits = action.Cheat?.SureHit == true
+                        ? !ConsumeDispell(action.SpellCaster, action.Spell.m_magicSchoolID)
+                        : SpellHits(action.SpellCaster, action.Spell);
                     if (!spellHits) {
                         cinematicTime += HandleFizzleAction(action, combatActionList);
 
@@ -588,7 +591,7 @@ public class CombatResolver(Duel duel, CombatDuelSubCircle[] actorSubCircles) {
         return SpellCinematics.GetCastWaitTime(spellName, SPELL_CAST_TIME);
     }
 
-    private static bool SpellHits(CombatDuelSubCircle caster, Spell spell, bool sureHit = false) {
+    private static bool SpellHits(CombatDuelSubCircle caster, Spell spell) {
         if (caster is null || spell is null) {
             return false;
         }
@@ -597,7 +600,7 @@ public class CombatResolver(Duel duel, CombatDuelSubCircle[] actorSubCircles) {
             return false;
         }
 
-        if (caster.CheatNoFizzle || sureHit) {
+        if (caster.CheatNoFizzle) {
             return true;
         }
 
