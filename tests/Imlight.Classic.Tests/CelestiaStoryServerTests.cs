@@ -99,7 +99,8 @@ public sealed class CelestiaStoryServerTests : IDisposable {
     private static QuestTemplate LoadQuest(string name)
         => JsonConvert.DeserializeObject<QuestTemplate>(File.ReadAllText(QuestPath(name)), s_json)!;
 
-    private static bool IsSchoolQuest(string name) => name.Contains("-C07-", StringComparison.Ordinal);
+    // CLASSIC: the Professor quests are WC-<school>-C07 / KT-BAL-C07; Celestia side quests also use C07 (CL-).
+    private static bool IsSchoolQuest(string name) => name.Contains("-C07-", StringComparison.Ordinal) && !name.StartsWith("CL-", StringComparison.Ordinal);
 
     private static Wizard WizardIn(string zone, int level = 48, string school = "Fire") => new() {
         CharId = 1,
@@ -195,7 +196,8 @@ public sealed class CelestiaStoryServerTests : IDisposable {
 
     [Fact]
     public void TheStoryOpensOneQuestAfterTheOtherInOrder() {
-        var story = Story.Where(n => !IsSchoolQuest(n)).Select(LoadQuest).ToList();
+        // CLASSIC: the side quests (work package E) are restored too; they are not mainline and are checked below.
+        var story = Story.Where(n => !IsSchoolQuest(n)).Select(LoadQuest).Where(q => q.m_mainline).ToList();
         var done = WizardIn("WizardCity/WC_Hub", level: 50);
         Complete(done, FinalCountdown);
         for (var i = 0; i < story.Count; i++) {
@@ -221,6 +223,25 @@ public sealed class CelestiaStoryServerTests : IDisposable {
             foreach (var later in story.Skip(i + 1).Where(q => zone is null && GrantZone(q) is null).Take(1)) {
                 Assert.False(Meets(later, here), $"{later.m_questName} opens before {quest.m_questName} is done");
             }
+        }
+    }
+
+    [Fact]
+    public void EverySideQuestOpensAfterTheStoryAndTheSideQuestsBeforeIt() {
+        // CLASSIC: work package E. Side quests follow the story and the school quests in restored_quests.
+        var all = Story.Select(LoadQuest).ToList();
+        var side = all.Where(q => !q.m_mainline && !IsSchoolQuest(q.m_questName)).ToList();
+        Assert.True(side.Count >= 50, $"only {side.Count} side quests restored");
+        var before = all.Where(q => q.m_mainline).Select(q => q.m_questName).Append(FinalCountdown).ToList();
+        foreach (var quest in side) {
+            var here = WizardIn("Celestia/CL_Hub", level: 55);
+            foreach (var name in before) {
+                Complete(here, name);
+            }
+
+            Assert.True(Meets(quest, here), $"{quest.m_questName} is not open after the story and the side quests before it");
+            Assert.False(Meets(quest, WizardIn("Celestia/CL_Hub", level: 55)), $"{quest.m_questName} opens with nothing done");
+            before.Add(quest.m_questName);
         }
     }
 
