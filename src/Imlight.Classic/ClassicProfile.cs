@@ -156,6 +156,12 @@ public sealed class ProfileRules {
     public string? Critical { get; init; }
 
     /// <summary>
+    /// CLASSIC: path under classic-data of the Astral schools file (rules.astral, such as rules/astral-2010.yaml in
+    /// celestia-2010): the Sun, Moon and Star trainers, the dated polymorph baseline and the owner's Moon rework.
+    /// </summary>
+    public string? Astral { get; init; }
+
+    /// <summary>
     /// Path under classic-data of the mob reward rules (combat XP, gold, drops), if any.
     /// </summary>
     public string? MobRewards { get; init; }

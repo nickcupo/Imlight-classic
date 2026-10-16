@@ -64,6 +64,11 @@ public enum TemplateEffectKind {
     MaxHealthDamage,
     StunResist,
     CriticalBlock,
+    // CLASSIC: the Astral schools (Celestia).
+    CriticalBoost,
+    PipConversion,
+    Polymorph,
+    UnPolymorph,
 }
 
 /// <summary>

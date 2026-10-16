@@ -87,6 +87,10 @@ public static class SpellTemplateMapping {
         ["kMaxHealthDamage"] = TemplateEffectKind.MaxHealthDamage,
         ["kStunResist"] = TemplateEffectKind.StunResist,
         ["kCritBlock"] = TemplateEffectKind.CriticalBlock,
+        ["kCritBoost"] = TemplateEffectKind.CriticalBoost, // CLASSIC: Astral schools
+        ["kPipConversion"] = TemplateEffectKind.PipConversion,
+        ["kPolymorph"] = TemplateEffectKind.Polymorph,
+        ["kUnPolymorph"] = TemplateEffectKind.UnPolymorph,
     }.ToFrozenDictionary(StringComparer.Ordinal);
 
     private static readonly FrozenDictionary<string, TemplateTarget> s_targets = new Dictionary<string, TemplateTarget> {

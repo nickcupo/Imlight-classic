@@ -8,6 +8,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using Imlight.Classic;
+using Imlight.Classic.Rules;
 using Imlight.Classic.Spells;
 using Imlight.Common;
 using Imlight.CoreLib.Shared.Resources;
@@ -24,6 +25,35 @@ internal static class ClassicTrainerInventories {
         Refresh(ClassicSpellTemplates.Records.SingleOrDefault(spell => spell.Id == "spell.ice.stun_block"),
             CoreObjectFactory.TryGetTemplateIdByPath);
         RefreshOctoberTraining(ClassicSpellTemplates.Records, CoreObjectFactory.TryGetTemplateIdByPath);
+        RefreshAstralTrainers(ClassicCelestiaRules.Astral, ClassicSpellTemplates.Records, CoreObjectFactory.TryGetTemplateIdByPath);
+    }
+
+    /// <summary>
+    /// CLASSIC: the Celestia school trainers (owner ruling D5: Astral spells come from trainers for training points). Each
+    /// trainer of the profile's Astral file teaches its records' cards at their level_learned, replacing whatever the base
+    /// data stocked it with. A record the profile does not list, or whose template is missing, is left out with a warning.
+    /// </summary>
+    internal static int RefreshAstralTrainers(AstralRules astral, IEnumerable<ClassicSpellRecord> records, Func<string, ulong?> resolveTemplate) {
+        if (astral.Trainers.IsDefaultOrEmpty || !ClassicRuntime.IsInitialized) return 0;
+        var byId = records.ToDictionary(record => record.Id, StringComparer.Ordinal);
+        var profile = ClassicRuntime.Rules.Profile;
+        var registered = 0;
+        foreach (var trainer in astral.Trainers) {
+            var stock = new List<NPCSpellEntry>();
+            foreach (var id in trainer.Spells) {
+                if (!byId.TryGetValue(id, out var record) || !record.IsInProfile(profile.Id) || record.ClientTemplate is not { } path
+                    || resolveTemplate(path) is not { } templateId) {
+                    Logger.Warning("Classic Astral trainer {0}: {1} is not a spell of profile {2} with a client template; left out.",
+                        Logger.Args(trainer.Name, id, profile.Id));
+                    continue;
+                }
+                stock.Add(new NPCSpellEntry { TemplateID = templateId, RequiredSpellID = 0, Level = record.ValuesFor(profile.Lineage).LevelLearned ?? 50 });
+            }
+            SpiralDB.RegisterNpcSpellInventory(new NPCSpellInventory { TemplateID = trainer.Npc, Spells = stock });
+            registered++;
+        }
+        Logger.Information("Classic Astral trainers: {0} Celestia trainers stocked from {1}.", Logger.Args(registered, astral.SourceFile));
+        return registered;
     }
 
     // CLASSIC: publish only active researched October additions after every reload. A deferred

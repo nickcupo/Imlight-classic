@@ -128,6 +128,17 @@ public class CombatResolver(Duel duel, CombatDuelSubCircle[] actorSubCircles) {
 
         var cinematicTime = ProcessQueuedActions(combatActionListObj);
 
+        // CLASSIC: Star auras and Moon forms count their rounds down; a form whose time is up reverts at the end of the round.
+        if (ClassicCelestiaRules.Active) {
+            var reverts = CombatPolymorph.EndOfRound(ActiveSubCircles, combatActionListObj);
+            foreach (var circle in ActiveSubCircles) {
+                CombatAuras.EndOfRound(circle);
+            }
+            if (!_subCircles[0]._duelActor.CheatInstantCinematics) {
+                cinematicTime += reverts;
+            }
+        }
+
         return cinematicTime;
     }
 
@@ -617,6 +628,10 @@ public class CombatResolver(Duel duel, CombatDuelSubCircle[] actorSubCircles) {
         spellAccuracy = ClassicRuntime.IsActive
             ? ConsumeAccuracyCharms(spellAccuracy, caster, spell.m_magicSchoolID)
             : ConsumeHangingAccuracyEffects(spellAccuracy, caster, spell.m_magicSchoolID);
+        // CLASSIC: Precision (a Star aura) adds its points to every spell while it lasts; it is not used up.
+        if (ClassicRuntime.IsActive) {
+            spellAccuracy += CombatAuras.AccuracyPoints(caster, schoolName);
+        }
 
         var hitChance = caster._duelActor.Rng.Next(0, 100);
         if (ClassicRuntime.IsActive) {

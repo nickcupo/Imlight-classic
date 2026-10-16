@@ -72,6 +72,12 @@ internal static class CombatActionResolver {
         if (ClassicRuntime.IsActive && RequiresOwnedMinion(action.SpellTemplate.m_effects)
             && (action.SelectedTarget is null || !action.SelectedTarget.IsOwnedMinionOf(action.SpellCaster))) return false;
 
+        // CLASSIC: the Astral cards (Celestia): a Star aura goes in the caster's aura slot, a Moon card polymorphs the caster,
+        // the Revert card ends the form. None of them is a charm, ward or hit, so they skip the rest of resolution.
+        if (ClassicCelestiaRules.Active && ResolveAstral(action, ref combatAction) is { } astral) {
+            return astral;
+        }
+
         var spellWorthCasting = false;
         var effectStack = new CombatEffectStack();
         var charmsAffectingThisSpell = new List<SpellEffect>();
@@ -227,7 +233,46 @@ internal static class CombatActionResolver {
 
         CheckForPolarCombatActionTargets(ref combatAction, action.SpellTemplate);
 
+        // CLASSIC: Empowerment gives a pip to its holder each time a rank 4+ spell is used on them.
+        if (spellWorthCasting && ClassicCelestiaRules.Active && action.Spell is not null) {
+            var rank = IsXPipSpell(action.Spell) ? combatAction.m_xPipCost : action.Spell.m_pipCost?.m_spellRank ?? 0;
+            var slots = combatAction.m_targetSubcircleList;
+            CombatAuras.OnSpellUsed(action.SpellCaster._duelActor.ActiveSubCircles.Where(circle => slots.Contains(circle.SlotIndex)), rank);
+        }
+
         return spellWorthCasting;
+    }
+
+    /// <summary>
+    /// CLASSIC: resolves a Star aura, a Moon polymorph or the Revert card; null for every other card. The result says whether
+    /// the card did anything (false: the cast is shown as a pass and costs nothing).
+    /// </summary>
+    private static bool? ResolveAstral(QueuedCombatAction action, ref CombatAction combatAction) {
+        var template = action.SpellTemplate;
+        var caster = action.SpellCaster;
+        if (CombatAuras.IsAura(template)) {
+            CombatAuras.Apply(caster, template, action.Spell?.m_templateID ?? 0);
+            combatAction.m_targetSubcircleList.Add(caster.SlotIndex);
+            return true;
+        }
+
+        if (CombatPolymorph.PolymorphEffectOf(template) is { } polymorph) {
+            if (!CombatPolymorph.TryBegin(caster, polymorph, action.Spell)) {
+                return false;
+            }
+            combatAction.m_targetSubcircleList.Add(caster.SlotIndex);
+            return true;
+        }
+
+        if (CombatPolymorph.IsRevertCard(template)) {
+            if (!CombatPolymorph.Revert(caster)) {
+                return false;
+            }
+            combatAction.m_targetSubcircleList.Add(caster.SlotIndex);
+            return true;
+        }
+
+        return null;
     }
 
     // CLASSIC: the 2014 client's critable effect types (0x010db940: kDamage, kHeal, kHealPercent, kStealHealth,

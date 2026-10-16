@@ -115,6 +115,12 @@ public sealed class ClassicSpellOverrides {
             return null;
         }
 
+        // CLASSIC: an Astral card (Sun, Moon, Star: Celestia, 2010-10-27) changes its template only in the profiles its
+        // record lists, so the older profiles keep the client's card exactly as before the Astral records existed.
+        if (!AppliesHere(record)) {
+            return null;
+        }
+
         if (match == SpellMatch.ClientTemplate) {
             return (record, match);
         }
@@ -180,7 +186,15 @@ public sealed class ClassicSpellOverrides {
     }
 
     /// <summary>
-    /// The records the active profile does not list; their values still apply.
+    /// CLASSIC: false for an Astral-school record (<see cref="ClassicSpellSchema.AstralSchools"/>) the active profile does
+    /// not list; every other record applies its values everywhere, as before.
+    /// </summary>
+    public bool AppliesHere(ClassicSpellRecord record)
+        => !ClassicSpellSchema.AstralSchools.Contains(record.School, StringComparer.Ordinal) || record.IsInProfile(ProfileId);
+
+    /// <summary>
+    /// The records the active profile does not list; their values still apply (Astral records excepted, see
+    /// <see cref="AppliesHere"/>).
     /// </summary>
     public ImmutableArray<ClassicSpellRecord> RecordsNotInProfile
         => [.. Book.Records.Where(record => !record.IsInProfile(ProfileId))];

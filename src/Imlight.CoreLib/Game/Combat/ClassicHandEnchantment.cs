@@ -39,6 +39,11 @@ internal static class ClassicHandEnchantment {
                 || original.m_effects?.Any(IsDamageBearing) != true) return false;
         } else if (modifiers.Length != 1) return false;
         var effect = modifiers.Length == 0 ? collection[0] : modifiers[0];
+        // CLASSIC: Celestia's Sun cards (archived October 2010 notes): "Sun School cards must be used on damage cards, and
+        // cannot be used on Rank 0 spells." Cloak, the returning Sun card, goes on charms and wards instead (same notes).
+        if (IsSunRuleBreak(enchantment, original, effect)) {
+            return false;
+        }
         if (effect is null || effect.m_effectTarget is not (kEffectTarget.kSpell or kEffectTarget.kSpecificSpells)
             || (enchantment.m_validTargetSpells is { Count: > 0 } valid && !valid.Contains(target.m_templateID))
             || (effect.m_effectTarget == kEffectTarget.kSpecificSpells && enchantment.m_validTargetSpells is not { Count: > 0 })
@@ -112,6 +117,15 @@ internal static class ClassicHandEnchantment {
         enchanted.m_enchantedThisCombat = true;
         return true;
     }
+
+    // CLASSIC: a Sun enchantment (not Cloak) on a rank 0 card, or on a card that deals no damage, in a Celestia profile.
+    // An X-pip card counts as ranked.
+    internal static bool IsSunRuleBreak(SpellTemplate enchantment, SpellTemplate target, SpellEffect effect)
+        => Imlight.CoreLib.Classic.ClassicCelestiaRules.Active
+            && string.Equals(enchantment.m_sMagicSchoolName, "Sun", StringComparison.OrdinalIgnoreCase)
+            && effect.m_effectType != kSpellEffects.kModifyCardCloak
+            && ((target.m_spellRank?.m_spellRank ?? 0) == 0 && target.m_effects?.Any(e => e is VariableSpellEffect) != true
+                || target.m_effects?.Any(IsDamageBearing) != true);
 
     // CLASSIC: do not open the existing PvE enchantment extensions or Monstrology to PvP.
     internal static bool AllowsPvpEnchantment(Spell source)

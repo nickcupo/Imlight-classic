@@ -248,6 +248,12 @@ public static class SpellOverridePlanner {
             [SpellEffectKind.Shield] = [TemplateEffectKind.ModifyIncomingDamage],
             [SpellEffectKind.StunResist] = [TemplateEffectKind.StunResist],
             [SpellEffectKind.CriticalBlock] = [TemplateEffectKind.CriticalBlock],
+            // CLASSIC: Star auras and Moon polymorphs (Celestia).
+            [SpellEffectKind.Aura] = [TemplateEffectKind.ModifyOutgoingDamage, TemplateEffectKind.ModifyIncomingDamage, TemplateEffectKind.ModifyAccuracy],
+            [SpellEffectKind.CriticalBoost] = [TemplateEffectKind.CriticalBoost],
+            [SpellEffectKind.PipConversion] = [TemplateEffectKind.PipConversion],
+            [SpellEffectKind.Polymorph] = [TemplateEffectKind.Polymorph],
+            [SpellEffectKind.UnPolymorph] = [TemplateEffectKind.UnPolymorph],
             [SpellEffectKind.Global] = [
                 TemplateEffectKind.ModifyOutgoingDamage, TemplateEffectKind.ModifyOutgoingHeal, TemplateEffectKind.ModifyAccuracy,
                 TemplateEffectKind.ModifyIncomingDamage, TemplateEffectKind.ModifyIncomingHeal
@@ -256,7 +262,7 @@ public static class SpellOverridePlanner {
 
     private static readonly FrozenSet<SpellEffectKind> s_amountKinds = FrozenSet.Create(
         SpellEffectKind.Damage, SpellEffectKind.Dot, SpellEffectKind.Heal, SpellEffectKind.Hot, SpellEffectKind.Steal,
-        SpellEffectKind.Pip, SpellEffectKind.Ward);
+        SpellEffectKind.Pip, SpellEffectKind.Ward, SpellEffectKind.PipConversion);
 
     /// <summary>
     /// The classic effect kinds the planner applies to templates.
@@ -628,6 +634,7 @@ public static class SpellOverridePlanner {
             var node = slot.Effects[i];
             int? param = values[i] == node.Param ? null : values[i];
             int? rounds = effect.Kind is SpellEffectKind.Dot or SpellEffectKind.Hot or SpellEffectKind.StunResist or SpellEffectKind.CriticalBlock
+                or SpellEffectKind.Aura or SpellEffectKind.CriticalBoost or SpellEffectKind.PipConversion or SpellEffectKind.Polymorph
                 && effect.Rounds is { } r && r != node.Rounds ? r : null;
             float? heal = effect.Kind == SpellEffectKind.Steal && effect.Percent is { } p && Math.Abs(p / 100f - node.HealModifier) > 0.0001f
                 ? p / 100f
@@ -850,6 +857,7 @@ public static class SpellOverridePlanner {
             }
 
             int? rounds = effect.Kind is SpellEffectKind.Dot or SpellEffectKind.Hot or SpellEffectKind.StunResist or SpellEffectKind.CriticalBlock
+                or SpellEffectKind.Aura or SpellEffectKind.CriticalBoost or SpellEffectKind.PipConversion or SpellEffectKind.Polymorph
                 && effect.Rounds is { } r && r != current.Rounds ? r : null;
             float? heal = effect.Kind == SpellEffectKind.Steal && effect.Percent is { } p && Math.Abs(p / 100f - current.HealModifier) > 0.0001f
                 ? p / 100f

@@ -88,7 +88,8 @@ public sealed class SpellTemplateMappingTests {
     [InlineData("kStunResist", TemplateEffectKind.StunResist)]
     [InlineData("kCritBlock", TemplateEffectKind.CriticalBlock)]
     [InlineData("kStun", TemplateEffectKind.Other)]
-    [InlineData("kCritBoost", TemplateEffectKind.Other)]
+    [InlineData("kCritBoost", TemplateEffectKind.CriticalBoost)] // CLASSIC: Vengeance (Celestia)
+    [InlineData("kPolymorph", TemplateEffectKind.Polymorph)]
     [InlineData("kInvalidSpellEffect", TemplateEffectKind.Other)]
     [InlineData(null, TemplateEffectKind.Other)]
     public void EffectTypesMapByName(string? name, TemplateEffectKind kind) {

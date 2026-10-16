@@ -72,6 +72,7 @@ public static class ClassicProgression {
     private static volatile SecondChanceRules? s_secondChance; // CLASSIC
     private static volatile BossCheats s_bossCheats = BossCheats.Empty; // CLASSIC
     private static volatile PuzzleHelpers s_puzzleHelpers = PuzzleHelpers.Empty; // CLASSIC
+    private static volatile AstralRules s_astral = AstralRules.Empty; // CLASSIC: Celestia Astral schools
 
     /// <summary>
     /// The profile's XP table, or null for the client's curve.
@@ -156,6 +157,12 @@ public static class ClassicProgression {
     /// <summary>CLASSIC: October-only puzzle answers and goal-arrow policy; other profiles always receive Empty.</summary>
     public static PuzzleHelpers PuzzleHelpers => s_puzzleHelpers;
 
+    /// <summary>CLASSIC: the Astral schools file (rules.astral: Celestia trainers, dated polymorph, Moon rework); Empty without one.</summary>
+    public static AstralRules Astral => s_astral;
+
+    /// <summary>CLASSIC: tests install an Astral rules file (Empty restores the default).</summary>
+    internal static void SetAstralForTests(AstralRules rules) => s_astral = rules;
+
     /// <summary>CLASSIC: test hook.</summary>
     internal static void UseBossCheatsForTests(BossCheats? cheats) => s_bossCheats = cheats ?? BossCheats.Empty;
 
@@ -174,6 +181,12 @@ public static class ClassicProgression {
     public static void Initialize(ClassicProfile profile, string classicDataRoot) {
         // CLASSIC: unlike optional legacy tables, a configured puzzle policy must exist and validate at startup.
         s_puzzleHelpers = PuzzleHelpersLoader.LoadForProfile(profile, classicDataRoot);
+        // CLASSIC: the Astral schools (celestia-2010); a configured file must exist and validate.
+        s_astral = AstralRulesLoader.LoadForProfile(profile, classicDataRoot);
+        if (s_astral.AppliesTo(profile.Id)) {
+            Logger.Information("Classic Astral schools {Table}: {Trainers} trainers, {Exclusions} polymorph item exclusions, Moon rework {Rework} (owner extra, [Classic] MoonRework).",
+                Logger.Args(s_astral.Id, s_astral.Trainers.Length, s_astral.FormItemExclusions.Count, s_astral.MoonRework is null ? "absent" : "configured"));
+        }
         if (s_puzzleHelpers.AppliesTo(profile.Id)) {
             Logger.Information("Classic puzzle helpers {Table}: {Zones} zones, {Quests} quests.",
                 Logger.Args(s_puzzleHelpers.Id, s_puzzleHelpers.Zones.Length, s_puzzleHelpers.QuestHelpers.Length));

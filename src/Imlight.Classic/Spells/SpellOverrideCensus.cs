@@ -216,7 +216,7 @@ public sealed class SpellOverrideCensus {
             ZeroedTemplateEffects = plans.Sum(plan => plan.ZeroedTemplateEffects),
             KindsChanged = changes.Count(change => change.EffectTypeName is not null),
             PipsInherited = plans.Count(plan => plan.PipsInherited),
-            RecordsWithoutTemplate = [.. overrides.Book.Records.Where(record => !matchedIds.Contains(record.Id)).Select(record => record.Id)],
+            RecordsWithoutTemplate = [.. overrides.Book.Records.Where(record => overrides.AppliesHere(record) && !matchedIds.Contains(record.Id)).Select(record => record.Id)],
             RecordsNotInProfile = [.. overrides.RecordsNotInProfile.Select(record => record.Id)],
             PipsSkipped = plans.Where(plan => plan.PipsSkip != PipsSkip.None)
                 .GroupBy(plan => plan.PipsSkip)

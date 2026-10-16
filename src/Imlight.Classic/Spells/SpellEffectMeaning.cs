@@ -83,6 +83,12 @@ public static class SpellEffectMeaning {
         [SpellEffectKind.Cloak] = ["kModifyCardCloak"],
         [SpellEffectKind.StunResist] = ["kStunResist"],
         [SpellEffectKind.CriticalBlock] = ["kCritBlock"],
+        // CLASSIC: Star auras and Moon polymorphs (Celestia).
+        [SpellEffectKind.Aura] = ["kModifyOutgoingDamage", "kModifyIncomingDamage", "kModifyAccuracy"],
+        [SpellEffectKind.CriticalBoost] = ["kCritBoost"],
+        [SpellEffectKind.PipConversion] = ["kPipConversion"],
+        [SpellEffectKind.Polymorph] = ["kPolymorph"],
+        [SpellEffectKind.UnPolymorph] = ["kUnPolymorph"],
     }.ToFrozenDictionary();
 
     /// <summary>
@@ -91,7 +97,8 @@ public static class SpellEffectMeaning {
     public static FrozenSet<SpellEffectKind> ValueKinds { get; } = FrozenSet.Create(
         SpellEffectKind.Damage, SpellEffectKind.Dot, SpellEffectKind.Heal, SpellEffectKind.Hot, SpellEffectKind.Steal,
         SpellEffectKind.Pip, SpellEffectKind.Ward, SpellEffectKind.Blade, SpellEffectKind.Charm, SpellEffectKind.Trap,
-        SpellEffectKind.Shield, SpellEffectKind.Global, SpellEffectKind.Enchant, SpellEffectKind.StunResist, SpellEffectKind.CriticalBlock);
+        SpellEffectKind.Shield, SpellEffectKind.Global, SpellEffectKind.Enchant, SpellEffectKind.StunResist, SpellEffectKind.CriticalBlock,
+        SpellEffectKind.Aura, SpellEffectKind.CriticalBoost, SpellEffectKind.PipConversion);
 
     /// <summary>
     /// The kSpellEffects members that can carry <paramref name="effect"/>, the one a rebuilt effect gets first.
@@ -139,6 +146,12 @@ public static class SpellEffectMeaning {
                 return ["kDamage"];
             case SpellEffectKind.Pip:
                 return ["kModifyPips"];
+            case SpellEffectKind.Aura when Says("accuracy"):
+                return ["kModifyAccuracy"];
+            case SpellEffectKind.Aura when Says("incoming"):
+                return ["kModifyIncomingDamage"];
+            case SpellEffectKind.Aura:
+                return ["kModifyOutgoingDamage"];
             default:
                 return s_types[effect.Kind];
         }

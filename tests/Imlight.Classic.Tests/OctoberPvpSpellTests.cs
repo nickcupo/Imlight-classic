@@ -111,7 +111,8 @@ public sealed class OctoberPvpSpellTests : IDisposable {
         var field = typeof(SpiralDB).GetField("s_npcSpellInventories", BindingFlags.Static | BindingFlags.NonPublic)!;
         var previous = field.GetValue(null);
         var records = ClassicSpellLoader.Load(Path.Combine(ClassicDataFixture.Root, "spells")).Records;
-        Assert.DoesNotContain(records, record => record.Id == "spell.sun.cloak");
+        // CLASSIC: the Celestia Cloak record (celestia-2010 only, Sun trainer) never lists the October profile.
+        Assert.DoesNotContain(records, record => record.Id == "spell.sun.cloak" && record.IsInProfile("october-2010-arc1"));
         var other = new NPCSpellEntry { TemplateID = 1 };
         var native = new NPCSpellInventory { TemplateID = ClassicOctoberTraining.Diego,
             Spells = [new NPCSpellEntry { TemplateID = ClassicOctoberTraining.Cloak }, other] };
