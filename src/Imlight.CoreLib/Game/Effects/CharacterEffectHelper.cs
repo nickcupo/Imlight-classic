@@ -125,6 +125,7 @@ internal static class CharacterEffectHelper {
         stats.m_healBonusPercentAll = 0; stats.m_healIncBonusPercentAll = 0; stats.m_powerPipBonusPercentAll = 0;
         stats.m_criticalHitRatingBySchool = null; stats.m_blockRatingBySchool = null;
         stats.m_criticalHitRatingAll = 0; stats.m_blockRatingAll = 0;
+        stats.ClassicCritPieces = null; stats.ClassicBlockPieces = null; // CLASSIC: per-piece 2010 model
         stats.m_balanceMastery = 0; stats.m_deathMastery = 0; stats.m_fireMastery = 0; stats.m_iceMastery = 0;
         stats.m_lifeMastery = 0; stats.m_mythMastery = 0; stats.m_stormMastery = 0;
         stats.m_startingPips = 0; stats.m_startingPowerPips = 0;
@@ -374,6 +375,7 @@ internal static class CharacterEffectHelper {
             else {
                 stats.m_criticalHitRatingAll += statistic.m_criticalHitRating;
             }
+            AddPiece(ref stats.ClassicCritPieces, school, statistic.m_criticalHitRating); // CLASSIC
         }
         else if (effectName.Contains("Block")) {
             var school = effectName.Contains("All") ? null : ExtractSchoolName(effectName);
@@ -383,6 +385,7 @@ internal static class CharacterEffectHelper {
             else {
                 stats.m_blockRatingAll += statistic.m_blockRating;
             }
+            AddPiece(ref stats.ClassicBlockPieces, school, statistic.m_blockRating); // CLASSIC
         }
     }
 
@@ -420,6 +423,7 @@ internal static class CharacterEffectHelper {
             else {
                 stats.m_criticalHitRatingAll -= statistic.m_criticalHitRating;
             }
+            RemovePiece(stats.ClassicCritPieces, school, statistic.m_criticalHitRating); // CLASSIC
         }
         else if (effectName.Contains("Block")) {
             var school = effectName.Contains("All") ? null : ExtractSchoolName(effectName);
@@ -429,6 +433,31 @@ internal static class CharacterEffectHelper {
             else {
                 stats.m_blockRatingAll -= statistic.m_blockRating;
             }
+            RemovePiece(stats.ClassicBlockPieces, school, statistic.m_blockRating); // CLASSIC
+        }
+    }
+
+    // CLASSIC: the 2010-2014 critical model converts each stat effect's rating on its own (rules.critical), so the
+    // pieces are kept beside the summed ratings. School -1 is the all-schools bucket.
+    private static int PieceSchool(string school)
+        => school is not null && MagicSchools.GetMagicSchool(school) is { } template ? (int) template.m_schoolIndex : -1;
+
+    private static void AddPiece(ref List<(int School, float Rating)> pieces, string school, float rating) {
+        if (rating == 0) {
+            return;
+        }
+
+        (pieces ??= []).Add((PieceSchool(school), rating));
+    }
+
+    private static void RemovePiece(List<(int School, float Rating)> pieces, string school, float rating) {
+        if (rating == 0 || pieces is null) {
+            return;
+        }
+
+        var index = pieces.IndexOf((PieceSchool(school), rating));
+        if (index >= 0) {
+            pieces.RemoveAt(index);
         }
     }
 

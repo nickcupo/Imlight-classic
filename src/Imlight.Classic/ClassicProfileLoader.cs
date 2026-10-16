@@ -64,7 +64,7 @@ public static class ClassicProfileLoader {
     internal static readonly FrozenSet<string> s_worldUnlockKeys = FrozenSet.Create(StringComparer.Ordinal, "any_of", "source", "notes");
     private static readonly FrozenSet<string> s_ruleKeys = FrozenSet.Create(StringComparer.Ordinal,
         "accuracy_table", "xp_table", "player_health", "mob_rewards", "badges", "quest_cards", "treasure_prices", "mob_stats", "crown_shop", "later_objects", "creature_decks", "power_pips_from_rank", "dragonspyre_difficulty", "tutorial",
-        "teleport_stones", "potions", "second_chance", "boss_cheats", "instance_resets", "puzzle_helpers", "level_stats");
+        "teleport_stones", "potions", "second_chance", "boss_cheats", "instance_resets", "puzzle_helpers", "level_stats", "critical");
 
     /// <summary>
     /// Loads the profile <paramref name="id"/> from <paramref name="profilesDir"/>, following its extends chain.
@@ -476,6 +476,7 @@ public static class ClassicProfileLoader {
                 XpTable = ScalarOf(rules, "xp_table"),
                 PlayerHealth = ScalarOf(rules, "player_health"), // CLASSIC
                 LevelStats = ScalarOf(rules, "level_stats"), // CLASSIC
+                Critical = ScalarOf(rules, "critical"), // CLASSIC
                 MobRewards = ScalarOf(rules, "mob_rewards"),
                 Badges = ScalarOf(rules, "badges"),
                 QuestCards = ScalarOf(rules, "quest_cards"),
