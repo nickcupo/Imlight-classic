@@ -268,6 +268,8 @@ public sealed class GardenTests : IDisposable {
         var room = new HousingLedger { OwnerId = 1, PackageNumber = 40 };
         Assert.False(GardenCodec.AcceptRequest(HousingCodec.Encode(HousingCodec.Manifest(room, 77)), 77, l));
         Assert.Equal(GardenRules.PackageUserData | (9UL << 40) | (0x55UL << 48), GardenCodec.ProxyId(0x55));
+        // ...and the housing service never mistakes a Garden request for furniture.
+        Assert.False(HousingCodec.TryRequests(request, 77, new HousingLedger { OwnerId = 1, PackageNumber = 40 }, out _));
     }
 
     // ---- the real client's templates (private owned extraction; skipped where it is absent) ----------------------
