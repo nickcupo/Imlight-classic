@@ -226,10 +226,10 @@ public sealed class CelestiaProfileTests {
     }
 
     [Fact]
-    public void ManaPipsAndTrainingPointsForFiftyOneToSixtyAreClientValuesFlaggedUnverified() {
+    public void ManaPipsAndTrainingPointsForFiftyOneToSixtyAreClientValuesAcceptedByTheOwner() {
         var stats = LevelStatsLoader.Load(Path.Combine(ClassicDataFixture.Root, "progression", "level-stats-2010.yaml"));
 
-        Assert.Equal("unverified", stats.Status);
+        Assert.Equal("accepted", stats.Status); // owner D7, 2026-10-16: use the client values
         Assert.Contains("D7", stats.Decision);
         Assert.Equal((51, 60), (stats.MinLevel, stats.MaxLevel));
         Assert.Null(stats.Row(50));
