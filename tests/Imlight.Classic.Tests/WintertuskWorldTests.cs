@@ -165,13 +165,16 @@ public sealed class WintertuskWorldTests : IDisposable {
             var quests = Loaded();
             var result = SpiralDB.ApplyTombstoneLines(lines, quests, SpiralDB.RestoredQuests(ClassicDataFixture.LoadProfile(older)));
             Assert.Empty(quests);
-            Assert.Empty(result.Restored);
+            // celestia-2010 restores its own Celestia quests (claude/celestia-d); none of them is a Wintertusk quest.
+            Assert.Empty(result.Restored.Intersect(Quests, StringComparer.OrdinalIgnoreCase));
         }
 
         var mine = Loaded();
         var restored = SpiralDB.ApplyTombstoneLines(lines, mine, SpiralDB.RestoredQuests(ClassicDataFixture.LoadProfile(Wintertusk)));
         Assert.Equal(Quests.Count, mine.Count);
-        Assert.Equal(Quests.Order(StringComparer.Ordinal), restored.Restored.Order(StringComparer.Ordinal));
+        // wintertusk-2011 also inherits Celestia's restored quests; every Wintertusk quest is among the restored ones.
+        Assert.Equal(Quests.Order(StringComparer.Ordinal),
+            restored.Restored.Intersect(Quests, StringComparer.OrdinalIgnoreCase).Order(StringComparer.Ordinal));
     }
 
     [Fact]
