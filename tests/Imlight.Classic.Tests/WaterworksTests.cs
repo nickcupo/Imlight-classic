@@ -331,4 +331,84 @@ public sealed class WaterworksTests : IDisposable {
         Assert.True(ClassicDataFixture.LoadProfile(Wintertusk).IsListedIn(rules.Profiles));
     }
 
+    // ---------------------------------------------------------------- creatures, loot, badge
+
+    private static string RuleFile(string profile, Func<ClassicProfile, string?> rule)
+        => Path.Combine(ClassicDataFixture.Root, rule(ClassicDataFixture.LoadProfile(profile))!);
+
+    private const ulong Sylster = 439075, Luska = 439083;
+
+    [Fact]
+    public void TheWaterworksCreaturesHaveTheirMay2011HealthOnlyUnderWintertusk() {
+        var wintertusk = MobStatsLoader.Load(RuleFile(Wintertusk, p => p.Rules.MobStats), Wintertusk);
+        Assert.Equal(24980, wintertusk.HealthOf(Sylster));
+        Assert.Equal(21150, wintertusk.HealthOf(Luska));
+        Assert.Equal(2095, wintertusk.HealthOf(469335)); // the boss-flagged Rivershell Guard copy
+
+        foreach (var older in new[] { Celestia, October }) {
+            var stats = MobStatsLoader.Load(RuleFile(older, p => p.Rules.MobStats), older);
+            Assert.Null(stats.HealthOf(Sylster));
+            Assert.Null(stats.HealthOf(Luska));
+        }
+    }
+
+    // Hat/Robe/Shoe-T6-TUW-001..007 in school order, and the seven Crown-S03 Mastery Amulets.
+    private static readonly string[] Schools = ["Balance", "Death", "Fire", "Ice", "Life", "Myth", "Storm"];
+    private static readonly ulong[] Amulets = [.. Enumerable.Range(0, 7).Select(i => 468162UL + (ulong) i)];
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(2)]
+    [InlineData(6)]
+    public void TheBossesDropOnlyTheWizardsOwnSchoolGearAndMasteryAmulets(int school) {
+        var rules = MobRewardRulesLoader.Load(RuleFile(Wintertusk, p => p.Rules.MobRewards), Wintertusk);
+        var random = new Random(1234);
+        var luska = new List<ulong>();
+        var sylster = new List<ulong>();
+        for (var i = 0; i < 3000; i++) {
+            luska.AddRange(rules.Roll(new MobInfo(Luska, 12, MobKind.Boss), random, 1.0, Schools[school]).Items);
+            sylster.AddRange(rules.Roll(new MobInfo(Sylster, 12, MobKind.Boss), random, 1.0, Schools[school]).Items);
+        }
+
+        var hat = 455354UL + (ulong) school;
+        Assert.Contains(hat, luska);
+        Assert.All(luska, item => Assert.True(item == hat || Amulets.Contains(item), $"Luska dropped {item}"));
+        var robe = 455361UL + (ulong) school;
+        var boots = 455368UL + (ulong) school;
+        Assert.Contains(robe, sylster);
+        Assert.Contains(boots, sylster);
+        Assert.All(sylster, item => Assert.True(item == robe || item == boots || Amulets.Contains(item), $"Sylster dropped {item}"));
+    }
+
+    [Fact]
+    public void NoOlderProfileDocumentsTheWaterworksBossesAndNoLaterJewelTableIsRolled() {
+        foreach (var older in new[] { Celestia, October }) {
+            var rules = MobRewardRulesLoader.Load(RuleFile(older, p => p.Rules.MobRewards), older);
+            Assert.Null(rules.Find(Sylster));
+            Assert.Null(rules.Find(Luska));
+        }
+
+        var wintertusk = MobRewardRulesLoader.Load(RuleFile(Wintertusk, p => p.Rules.MobRewards), Wintertusk);
+        var gear = Enumerable.Range(0, 21).Select(i => 455354UL + (ulong) i).Concat(Amulets).ToHashSet();
+        foreach (var boss in new[] { Sylster, Luska }) {
+            var mob = wintertusk.Find(boss)!;
+            Assert.All(mob.Items, entry => Assert.Contains(entry.Template, gear));
+            Assert.Empty(mob.TreasureCards);
+            // The client loot-table names (ZF/AV/AZ jewel tables among them) are never a fallback for these bosses.
+            Assert.False(wintertusk.TreasureCardFallback.ContainsKey(boss));
+            Assert.False(wintertusk.ReagentFallback.ContainsKey(boss));
+        }
+    }
+
+    [Fact]
+    public void WaterworksWarriorIsAWintertuskBadgeForYouGoFirst() {
+        var wintertusk = BadgeRulesLoader.Load(RuleFile(Wintertusk, p => p.Rules.Badges), Wintertusk);
+        var badge = Assert.Single(wintertusk.Badges, b => b.Id == "waterworks-warrior");
+        Assert.Equal("Badges_00000492", badge.NameKey);
+
+        foreach (var older in new[] { Celestia, October }) {
+            Assert.DoesNotContain(BadgeRulesLoader.Load(RuleFile(older, p => p.Rules.Badges), older).Badges, b => b.Id == "waterworks-warrior");
+        }
+    }
+
 }
