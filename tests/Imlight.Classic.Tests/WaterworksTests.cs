@@ -352,6 +352,20 @@ public sealed class WaterworksTests : IDisposable {
         }
     }
 
+    // CLASSIC: owner delegated 2026-10-16: the eleven Celestia creatures with a dated Dec 2010 - May 2011 page get that
+    // health under wintertusk-2011 only; celestia-2010 (cutoff 2010-10-31) keeps the r806919 template health.
+    [Theory]
+    [InlineData(267121UL, 7785)] // Queen Calypso, oldid 128083 (2011-02-11)
+    [InlineData(267125UL, 6540)] // Tempus Stormfist, oldid 126501 (2011-01-22)
+    [InlineData(267106UL, 3695)] // Optio Agenor, oldid 124410 (2010-12-29), below the client's 3,825
+    [InlineData(267072UL, 910)]  // Crustacean Clawcutter, corrected revision 131245 (2011-04-01)
+    public void CelestiaCreaturesHaveTheirDatedEarly2011HealthOnlyUnderWintertusk(ulong template, int health) {
+        Assert.Equal(health, MobStatsLoader.Load(RuleFile(Wintertusk, p => p.Rules.MobStats), Wintertusk).HealthOf(template));
+        foreach (var older in new[] { Celestia, October }) {
+            Assert.Null(MobStatsLoader.Load(RuleFile(older, p => p.Rules.MobStats), older).HealthOf(template));
+        }
+    }
+
     // Hat/Robe/Shoe-T6-TUW-001..007 in school order, and the seven Crown-S03 Mastery Amulets.
     private static readonly string[] Schools = ["Balance", "Death", "Fire", "Ice", "Life", "Myth", "Storm"];
     private static readonly ulong[] Amulets = [.. Enumerable.Range(0, 7).Select(i => 468162UL + (ulong) i)];
