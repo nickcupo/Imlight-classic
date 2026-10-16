@@ -77,7 +77,11 @@ public sealed record GardenReward(GardenRewardKind Kind, uint Template, string N
 /// <summary>CLASSIC: the harvest table of one plant: the plant stage templates it applies to and what a mature and an
 /// elder harvest give.</summary>
 public sealed record GardenHarvestTable(string Plant, ImmutableArray<uint> Mature, ImmutableArray<uint> Elder,
-                                        ImmutableArray<GardenReward> MatureRewards, ImmutableArray<GardenReward> ElderRewards);
+                                        ImmutableArray<GardenReward> MatureRewards, ImmutableArray<GardenReward> ElderRewards) {
+    /// <summary>pick: one: a harvest gives its gold lines and ONE of its other lines, chosen evenly (the dated pages list
+    /// what a plant can give, not how much or how often).</summary>
+    public bool PickOne { get; init; }
+}
 
 /// <summary>CLASSIC: how near objects change a plant's growth (client: within 1000 units, modifier clamped 0.1 to 5).</summary>
 public sealed record GardenLikesRule(float Radius, float MinModifier, float MaxModifier);
@@ -135,7 +139,7 @@ public static class GardeningTablesLoader {
     private static readonly FrozenSet<string> s_spellKeys = Keys("template", "name", "rank", "gold", "confidence", "notes");
     private static readonly FrozenSet<string> s_likesKeys = Keys("radius", "min_modifier", "max_modifier", "confidence", "source");
     private static readonly FrozenSet<string> s_pestKeys = Keys("enabled", "chance_scale", "confidence", "source");
-    private static readonly FrozenSet<string> s_harvestKeys = Keys("plant", "mature", "elder", "mature_rewards", "elder_rewards", "confidence", "source", "notes");
+    private static readonly FrozenSet<string> s_harvestKeys = Keys("plant", "pick", "mature", "elder", "mature_rewards", "elder_rewards", "confidence", "source", "notes");
     private static readonly FrozenSet<string> s_rewardKeys = Keys("kind", "template", "name", "chance", "min", "max", "notes");
     private static readonly string[] s_kinds = ["item", "reagent", "card", "snack", "seed", "gold"];
 
@@ -244,7 +248,9 @@ public static class GardeningTablesLoader {
             var mature = Ids(row, "mature", key, d);
             var elder = Ids(row, "elder", key, d);
             var table = new GardenHarvestTable(Text(row, "plant", key, d) ?? "", mature, elder,
-                Rewards(row, "mature_rewards", key, d), Rewards(row, "elder_rewards", key, d));
+                Rewards(row, "mature_rewards", key, d), Rewards(row, "elder_rewards", key, d)) {
+                PickOne = row.Find("pick") is { } pick && d.ReadEnum(pick.Value, key + ".pick", ["one", "each"]) == "one",
+            };
             if (harvests.Any(h => h.Mature.Concat(h.Elder).Intersect(mature.Concat(elder)).Any())) {
                 d.At(row, key, "a plant template is in two harvest tables");
             }

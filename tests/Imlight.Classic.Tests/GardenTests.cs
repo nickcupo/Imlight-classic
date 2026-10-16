@@ -19,9 +19,9 @@ namespace Imlight.Classic.Tests;
 // The plant numbers below are a FIXTURE shaped like the client's Couch Potatoes chain, not historical data.
 [Collection(nameof(ClassicRuntimeCollection))]
 public sealed class GardenTests : IDisposable {
-    private const uint SeedItem = 9001, Seedling = 9002, Young = 9003, Mature = 9004, Elder = 9005, Wilt = 9006, Dead = 9007;
-    private const uint Soil = 8001, BigSeed = 9101, BigSeedling = 9102, SoilSpell = 7001, WaterSpell = 7002;
-    private const uint H = 3600, D = 86400, T0 = 1_300_000_000;
+    internal const uint SeedItem = 9001, Seedling = 9002, Young = 9003, Mature = 9004, Elder = 9005, Wilt = 9006, Dead = 9007;
+    internal const uint Soil = 8001, BigSeed = 9101, BigSeedling = 9102, SoilSpell = 7001, WaterSpell = 7002;
+    internal const uint H = 3600, D = 86400, T0 = 1_300_000_000;
     private readonly IGardenCatalog _previous = GardenCatalog.Test.Value;
 
     public GardenTests() { EquipmentAttachConcurrencyTests.Configure(); GardenCatalog.Test.Value = Catalog(); }
@@ -383,7 +383,7 @@ public sealed class GardenTests : IDisposable {
         Assert.Equal("Only the owner can garden here.", GardenCollection.Harvest(visitor, store.Room, 0, 0, 0).Error);
     }
 
-    private sealed class GardenStore {
+    internal sealed class GardenStore {
         internal const ulong Owner = 724656;
         internal readonly Dictionary<string, object> Documents = new();
         internal bool FailSave;

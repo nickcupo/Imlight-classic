@@ -96,10 +96,12 @@ public sealed class WintertuskWorldTests : IDisposable {
 
     public void Dispose() => ClassicRuntime.ResetForTests();
 
-    /// <summary>The quests wintertusk-2011 restores itself (its own block), in chain order.</summary>
+    /// <summary>The quests wintertusk-2011 restores itself (its own block), in chain order. The gardening tutorial
+    /// (WC-GRDN-*, its own gardening-2011 block) is not a Wintertusk quest.</summary>
     private static IReadOnlyList<string> Quests
         => ClassicDataFixture.LoadProfile(Wintertusk).RestoredQuests
-            .Except(ClassicDataFixture.LoadProfile(Celestia).RestoredQuests, StringComparer.OrdinalIgnoreCase).ToList();
+            .Except(ClassicDataFixture.LoadProfile(Celestia).RestoredQuests, StringComparer.OrdinalIgnoreCase)
+            .Where(name => !name.StartsWith("WC-GRDN-", StringComparison.Ordinal)).ToList();
 
     private static string QuestPath(string name)
         => Path.Combine(ClassicDataFixture.Root, "spiraldb-overlay", "QuestTemplates", name + ".json");
