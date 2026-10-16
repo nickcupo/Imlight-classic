@@ -294,7 +294,8 @@ public class CombatResolver(Duel duel, CombatDuelSubCircle[] actorSubCircles) {
                 // A stun is used up at the stunned wizard's next action: this round's if it landed before they
                 // acted (owner ruling 2026-09-28: it applies immediately), else next round's, when a stunned
                 // wizard can only pass. This is the only place a stun is used up.
-                if (action.SpellCaster.CombatParticipant.m_stunned > 0) {
+                // CLASSIC: a boss's scripted cast (round start, mark, reaction, phase) is not its turn; it leaves the stun.
+                if (action.SpellCaster.CombatParticipant.m_stunned > 0 && action.Cheat?.IgnoresStun != true) {
                     action.SpellCaster.CombatParticipant.m_stunned--;
 
                     cinematicTime += HandlePassAction(action, combatActionList);
@@ -330,7 +331,10 @@ public class CombatResolver(Duel duel, CombatDuelSubCircle[] actorSubCircles) {
                 // Recheck under the session lock through effects AND costs. Strict Hello may have arrived after queuing.
                 if (!action.SpellCaster._duelActor.RunMonstrologyCast(action.SpellCaster, action.Spell, action.SpellTemplate, () => {
                     // Determine if this spell hits or fizzles.
-                    var spellHits = SpellHits(action.SpellCaster, action.Spell);
+                    // CLASSIC: a sure_hit cheat skips the accuracy roll; a dispel on the boss still stops it.
+                    var spellHits = action.Cheat?.SureHit == true
+                        ? !ConsumeDispell(action.SpellCaster, action.Spell.m_magicSchoolID)
+                        : SpellHits(action.SpellCaster, action.Spell);
                     if (!spellHits) {
                         cinematicTime += HandleFizzleAction(action, combatActionList);
 

@@ -144,6 +144,18 @@ public sealed class SchemaDriftTests {
         Assert.Equal(Keys(boss.GetProperty("properties").GetProperty("destroy_traps")), Sorted(BossCheatsLoader.s_trapKeys));
         Assert.Equal(Keys(boss.GetProperty("properties").GetProperty("summons").GetProperty("items")), Sorted(BossCheatsLoader.s_summonKeys));
         Assert.Equal(Keys(boss.GetProperty("properties").GetProperty("free_spells").GetProperty("items")), Sorted(BossCheatsLoader.s_freeKeys));
+        // CLASSIC: the Waterworks primitives.
+        var bp = boss.GetProperty("properties");
+        Assert.Equal(Keys(bp.GetProperty("marks")), Sorted(BossCheatsLoader.s_marksKeys));
+        Assert.Equal(Keys(bp.GetProperty("marks").GetProperty("properties").GetProperty("seats").GetProperty("items")), Sorted(BossCheatsLoader.s_seatKeys));
+        Assert.Equal(Keys(bp.GetProperty("round_start").GetProperty("items")), Sorted(BossCheatsLoader.s_roundStartKeys));
+        Assert.Equal(Keys(defs.GetProperty("reaction")), Sorted(BossCheatsLoader.s_reactionKeys));
+        Assert.Equal(Keys(defs.GetProperty("condition")), Sorted(BossCheatsLoader.s_conditionKeys));
+        Assert.Equal(Keys(defs.GetProperty("step")), Sorted(BossCheatsLoader.s_stepKeys));
+        var cycle = defs.GetProperty("cycle");
+        Assert.Equal(Keys(cycle), Sorted(BossCheatsLoader.s_cycleKeys));
+        Assert.Equal(Keys(cycle.GetProperty("properties").GetProperty("holders").GetProperty("items")), Sorted(BossCheatsLoader.s_holderKeys));
+        Assert.Equal(Keys(cycle.GetProperty("properties").GetProperty("phases").GetProperty("items")), Sorted(BossCheatsLoader.s_phaseKeys));
         var guide = schema.GetProperty("properties").GetProperty("guide");
         Assert.Equal(Keys(guide), Sorted(BossCheatGuideLoader.s_guideKeys));
         Assert.Equal(Keys(guide.GetProperty("properties").GetProperty("spells").GetProperty("items")), Sorted(BossCheatGuideLoader.s_spellKeys));
