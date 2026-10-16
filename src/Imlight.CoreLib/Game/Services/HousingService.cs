@@ -54,7 +54,7 @@ internal sealed class HousingService(SessionActor sessionActor) : MessageService
         if (AtticEnabled() && HousingAtticCollection.Load(wizard.CharId) is { } attic
             && attic.TryFind(message.ObjectID, _attach.DynamicServerProcId, out _, out _)) {
             var placed = HousingAtticCollection.PlaceFromAttic(wizard, wizard.CharId, message.ObjectID,
-                _attach.DynamicServerProcId, HousingRules.ApprovedAtticCapacity, message.LocX, message.LocY, message.LocZ, message.Yaw, Room);
+                _attach.DynamicServerProcId, HousingRules.AtticCapacity, message.LocX, message.LocY, message.LocZ, message.Yaw, Room);
             if (!placed.Saved) { Refuse(placed.Error); return; }
             SendAtticPatches(placed, wizard);
             SendRoomAdd(placed.Room, placed.Entry, placed.RoomSlot);
@@ -137,7 +137,7 @@ internal sealed class HousingService(SessionActor sessionActor) : MessageService
     private void ReceiveMoveToAttic(WIZARDHOUSING_50_PROTOCOL.MSG_MOVETOATTIC message) {
         if (!AtticEditable(out var wizard) || message.GlobalID != wizard.GameObjectID) return;
         var result = HousingAtticCollection.MoveToAttic(wizard, wizard.CharId, message.ItemID, _attach.DynamicServerProcId,
-            HousingRules.ApprovedAtticCapacity, roomIdentity: Room);
+            HousingRules.AtticCapacity, roomIdentity: Room);
         if (!result.Saved) { Refuse(result.Error); return; }
         if (result.FromBackpack) SendToSocket(new GAME_5_PROTOCOL.MSG_INVENTORYBEHAVIOR_REMOVEITEM {
             GlobalID = wizard.GameObjectID, ItemID = result.Entry.ItemId,
@@ -150,7 +150,7 @@ internal sealed class HousingService(SessionActor sessionActor) : MessageService
     private void ReceiveMoveFromAttic(WIZARDHOUSING_50_PROTOCOL.MSG_MOVEFROMATTIC message) {
         if (!AtticEditable(out var wizard) || message.GlobalID != wizard.GameObjectID) return;
         var result = HousingAtticCollection.MoveFromAttic(wizard, wizard.CharId, message.ItemID, _attach.DynamicServerProcId,
-            HousingRules.ApprovedAtticCapacity, Room);
+            HousingRules.AtticCapacity, Room);
         if (!result.Saved) { Refuse(result.Error); return; }
         SendToSocket(new GAME_5_PROTOCOL.MSG_INVENTORYBEHAVIOR_ADDITEM {
             GlobalID = wizard.GameObjectID, SerializedItem = result.ItemData,
@@ -162,7 +162,7 @@ internal sealed class HousingService(SessionActor sessionActor) : MessageService
     private void ReceiveDiscardAttic(WIZARDHOUSING_50_PROTOCOL.MSG_DELETEFROMATTIC message) {
         if (!AtticEditable(out var wizard) || message.GlobalID != wizard.GameObjectID) return;
         var result = HousingAtticCollection.Discard(wizard, wizard.CharId, message.ItemID, _attach.DynamicServerProcId,
-            HousingRules.ApprovedAtticCapacity, Room);
+            HousingRules.AtticCapacity, Room);
         if (!result.Saved) { Refuse(result.Error); return; }
         SendAtticPatches(result, wizard);
     }
@@ -171,7 +171,7 @@ internal sealed class HousingService(SessionActor sessionActor) : MessageService
     private void ReceivePickUpAll(WIZARDHOUSING_50_PROTOCOL.MSG_PICKUPALL message) {
         if (!AtticEditable(out var wizard)) return;
         var result = HousingAtticCollection.PickUpAll(wizard, wizard.CharId, _attach.DynamicServerProcId,
-            HousingRules.ApprovedAtticCapacity, message.Exceptions, Room);
+            HousingRules.AtticCapacity, message.Exceptions, Room);
         if (result.Saved) {
             SendAtticPatches(result, wizard);
             SendRoomDeletes(result);
@@ -227,7 +227,7 @@ internal sealed class HousingService(SessionActor sessionActor) : MessageService
         SendToSocket(new WIZARDHOUSING_50_PROTOCOL.MSG_UPDATEATTICCOUNT { GlobalID = wizard.GameObjectID, ItemCount = result.Attic.Count });
     }
 
-    private static bool AtticEnabled() => HousingRules.ApprovedAtticCapacity > 0;
+    private static bool AtticEnabled() => HousingRules.AtticCapacity > 0;
     private bool AtticEditable(out Wizard wizard) {
         if (!Editable(out wizard)) return false;
         if (AtticEnabled()) return true;

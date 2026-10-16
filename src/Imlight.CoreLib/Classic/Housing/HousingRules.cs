@@ -29,6 +29,9 @@ internal static class HousingRules {
     // Historical allowance awaits dated evidence or an explicit owner ruling. Backend/codec
     // tests use an explicit capacity; the real handlers stay closed while this is zero.
     internal const int ApprovedAtticCapacity = 0;
+    // CLASSIC: the allowance in force. 0 until houses-october-2010.yaml pending_rulings.enabled is true
+    // (dated 100: Vendors and Banking oldid15542 2009-05-22 / oldid104631 2010-09-23), owner to confirm.
+    internal static int AtticCapacity => HouseCatalog.AtticCapacity;
     internal const int AtticPackageCount = 2;
     internal static uint AtticUserData(int packageIndex) => checked((uint)((packageIndex + 1) * PackageSlots));
 
