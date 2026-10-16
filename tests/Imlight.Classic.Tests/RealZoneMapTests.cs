@@ -137,7 +137,7 @@ public sealed class RealZoneMapTests {
         var decision = ClassicDataFixture.RealRules("late-2009").IsZoneAllowed("WizardCity/Interiors/WC_Hatchery");
 
         Assert.Contains("feature pets.hatching is off", decision.Reason);
-        Assert.Equal("overrides-spiraldb.yaml overrides[1]", decision.RuleSource);
+        Assert.Equal("overrides-spiraldb.yaml overrides[3]", decision.RuleSource); // after Wintertusk, the Waterworks and Crab Alley
         Assert.Equal("medium", decision.Confidence);
     }
 

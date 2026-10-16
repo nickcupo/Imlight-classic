@@ -26,7 +26,10 @@
  * spell a round, interrupting a wizard's spell, destroying traps, spells for
  * no pips and scripted summons. The profile rule rules.boss_cheats names the
  * file (classic-data/creatures/boss-cheats-2009.yaml); a profile without the
- * rule has no cheating bosses.
+ * rule has no cheating bosses. CLASSIC (2026-10-16): rules.boss_cheats may list
+ * several files, one per dungeon (wintertusk-2011: Briskbreeze Tower and the
+ * Waterworks); BossCheats.Combine joins them. The Waterworks primitives
+ * (marks, reactions, round-start casts, cycles) are in BossCheatMechanics.cs.
  *
  * USAGE EXAMPLE:
  * var cheats = BossCheatsLoader.Load(path);
@@ -67,6 +70,14 @@ public enum CheatTrigger {
     Shield,
     /// <summary>A blade on the wizards' side.</summary>
     Blade,
+    /// <summary>CLASSIC (reactions): a spell with damage for an enemy (direct, drain or over time).</summary>
+    Attack,
+    /// <summary>CLASSIC (reactions): a trap, hex or prism for an enemy.</summary>
+    Trap,
+    /// <summary>CLASSIC (reactions): a charm or dispel of either sign on anyone (blades, weaknesses, accuracy, healing).</summary>
+    Charm,
+    /// <summary>CLASSIC (reactions): a global spell (a bubble).</summary>
+    Global,
 }
 
 /// <summary>
@@ -137,6 +148,12 @@ public sealed record BossCheat {
     public BossInterrupt? Interrupt { get; init; }
     public BossTrapBreak? DestroyTraps { get; init; }
     public required ImmutableArray<BossSummon> Summons { get; init; }
+    /// <summary>CLASSIC: the seats it marks each round (Luska's ink), or null.</summary>
+    public BossMarks? Marks { get; init; }
+    /// <summary>CLASSIC: its cheats in answer to a wizard's spell.</summary>
+    public ImmutableArray<BossReaction> Reactions { get; init; } = [];
+    /// <summary>CLASSIC: its casts at the start of a round.</summary>
+    public ImmutableArray<BossRoundStart> RoundStart { get; init; } = [];
     public required string Source { get; init; }
     public required DateOnly SourceDate { get; init; }
 
@@ -168,6 +185,10 @@ public sealed class BossCheats {
     public required string SourceFile { get; init; }
     /// <summary>The player-facing guide to the cheats (the guide block), or null when the file has none.</summary>
     public BossCheatGuide? Guide { get; init; }
+    /// <summary>CLASSIC: the timed cycles groups of its bosses share (Sylster's bubbles).</summary>
+    public ImmutableArray<BossCycle> Cycles { get; init; } = [];
+    /// <summary>CLASSIC: the files this table was made of (one for a single file).</summary>
+    public ImmutableArray<BossCheats> Tables { get; init; } = [];
 
     internal FrozenDictionary<uint, BossCheat> _byTemplate { get; init; } = FrozenDictionary<uint, BossCheat>.Empty;
 
@@ -182,14 +203,72 @@ public sealed class BossCheats {
     public bool TryGet(uint template, out BossCheat boss) => _byTemplate.TryGetValue(template, out boss!);
 
     /// <summary>
+    /// CLASSIC: the cycle <paramref name="template"/> is a holder of, if any.
+    /// </summary>
+    public BossCycle? CycleOf(uint template) => Cycles.FirstOrDefault(c => c.Holders.Any(h => h.Template == template));
+
+    /// <summary>
+    /// CLASSIC: one table of several files (a profile's rules.boss_cheats list: Briskbreeze Tower and the Waterworks).
+    /// Each file keeps its own dungeon; a boss in two files is refused. The guide is the first file's that has one.
+    /// </summary>
+    /// <exception cref="ClassicDataException">Two files list the same boss, or more than one has a guide.</exception>
+    public static BossCheats Combine(IReadOnlyList<BossCheats> tables) {
+        if (tables.Count == 0) {
+            return Empty;
+        }
+
+        if (tables.Count == 1) {
+            return tables[0];
+        }
+
+        var seen = new Dictionary<uint, string>();
+        var errors = new List<ClassicDataError>();
+        foreach (var table in tables) {
+            foreach (var boss in table.Bosses) {
+                if (!seen.TryAdd(boss.Template, table.SourceFile)) {
+                    errors.Add(new ClassicDataError(table.SourceFile, "bosses", null,
+                        $"boss {boss.Template} ({boss.Name}) is also in {seen[boss.Template]}; a boss cheats in one file only"));
+                }
+            }
+        }
+
+        if (tables.Count(t => t.Guide is not null) > 1) {
+            errors.Add(new ClassicDataError(tables[0].SourceFile, "guide", null, "only one of a profile's boss-cheat files may have a guide"));
+        }
+
+        if (errors.Count > 0) {
+            throw new ClassicDataException(errors);
+        }
+
+        var bosses = tables.SelectMany(t => t.Bosses).ToImmutableArray();
+        return new BossCheats {
+            Id = string.Join("+", tables.Select(t => t.Id)),
+            Profiles = [.. tables.SelectMany(t => t.Profiles).Distinct(StringComparer.Ordinal)],
+            DungeonZone = tables[0].DungeonZone,
+            Bosses = bosses,
+            SourceFile = string.Join(", ", tables.Select(t => t.SourceFile)),
+            Guide = tables.Select(t => t.Guide).FirstOrDefault(g => g is not null),
+            Cycles = [.. tables.SelectMany(t => t.Cycles)],
+            Tables = [.. tables],
+            _byTemplate = bosses.ToFrozenDictionary(b => b.Template),
+        };
+    }
+
+    /// <summary>
     /// Test hook: a table built in code.
     /// </summary>
-    public static BossCheats ForTests(string dungeonZone, params BossCheat[] bosses) => new() {
+    public static BossCheats ForTests(string dungeonZone, params BossCheat[] bosses) => ForTests(dungeonZone, [], bosses);
+
+    /// <summary>
+    /// Test hook: a table with cycles, built in code.
+    /// </summary>
+    public static BossCheats ForTests(string dungeonZone, ImmutableArray<BossCycle> cycles, params BossCheat[] bosses) => new() {
         Id = "boss-cheats-test",
         Profiles = [],
         DungeonZone = dungeonZone,
         Bosses = [.. bosses],
         SourceFile = "",
+        Cycles = cycles,
         _byTemplate = bosses.ToFrozenDictionary(b => b.Template),
     };
 
@@ -198,15 +277,15 @@ public sealed class BossCheats {
 /// <summary>
 /// Loads and validates the boss-cheat table.
 /// </summary>
-public static class BossCheatsLoader {
+public static partial class BossCheatsLoader {
 
     internal static readonly FrozenSet<string> s_rootKeys = FrozenSet.Create(StringComparer.Ordinal,
-        "kind", "version", "id", "title", "profiles", "license_tag", "provenance", "notes", "dungeon", "floors", "bosses", "guide");
+        "kind", "version", "id", "title", "profiles", "license_tag", "provenance", "notes", "dungeon", "floors", "bosses", "cycles", "guide");
     internal static readonly FrozenSet<string> s_dungeonKeys = FrozenSet.Create(StringComparer.Ordinal,
         "name", "zone", "entry", "source", "source_date", "notes");
     internal static readonly FrozenSet<string> s_bossKeys = FrozenSet.Create(StringComparer.Ordinal,
         "template", "name", "template_name", "floor", "zone", "school", "health", "casts_per_round",
-        "free_spells", "interrupt", "destroy_traps", "summons", "source", "source_date", "notes");
+        "free_spells", "interrupt", "destroy_traps", "summons", "marks", "reactions", "round_start", "source", "source_date", "notes");
     internal static readonly FrozenSet<string> s_freeKeys = FrozenSet.Create(StringComparer.Ordinal,
         "spell", "health_below", "health_at_least", "source", "notes");
     internal static readonly FrozenSet<string> s_interruptKeys = FrozenSet.Create(StringComparer.Ordinal,
@@ -290,6 +369,8 @@ public static class BossCheatsLoader {
         }
 
         var built = bosses.ToImmutable();
+        var cycles = map.Find("cycles") is { } cyclesEntry ? ReadCycles(cyclesEntry.Value, diagnostics) : [];
+        CheckCycles(map, cycles, built, diagnostics);
         var guide = map.Find("guide") is { } guideEntry ? BossCheatGuideLoader.Read(guideEntry.Value, built, diagnostics) : null;
         if (diagnostics.HasErrors) {
             throw diagnostics.ToException();
@@ -302,6 +383,7 @@ public static class BossCheatsLoader {
             Bosses = built,
             SourceFile = display,
             Guide = guide,
+            Cycles = cycles,
             _byTemplate = built.ToFrozenDictionary(b => b.Template),
         };
     }
@@ -427,6 +509,12 @@ public static class BossCheatsLoader {
             }
         }
 
+        // CLASSIC: the Waterworks primitives (marks, reactions, round-start casts).
+        var marks = entry.Find("marks") is { } mke && diagnostics.ReadMap(mke.Value, YamlTree.Join(keyPath, "marks")) is { } mkm
+            ? ReadMarks(mkm, YamlTree.Join(keyPath, "marks"), diagnostics) : null;
+        var reactions = entry.Find("reactions") is { } rce ? ReadReactions(rce.Value, YamlTree.Join(keyPath, "reactions"), true, null, diagnostics) : [];
+        var roundStart = entry.Find("round_start") is { } rse ? ReadRoundStart(rse.Value, YamlTree.Join(keyPath, "round_start"), diagnostics) : [];
+
         if (template is null || name is null || floor is null || zone is null || source is null || date is null || casts is null) {
             return null;
         }
@@ -442,6 +530,9 @@ public static class BossCheatsLoader {
             Interrupt = interrupt,
             DestroyTraps = traps,
             Summons = summons.ToImmutable(),
+            Marks = marks,
+            Reactions = reactions,
+            RoundStart = roundStart,
             Source = source,
             SourceDate = date.Value,
         };

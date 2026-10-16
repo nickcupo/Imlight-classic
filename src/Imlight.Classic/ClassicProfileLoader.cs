@@ -415,6 +415,14 @@ public static class ClassicProfileLoader {
                 case "potions": // CLASSIC
                     _ = diagnostics.ReadString(entry.Value, path);
                     break;
+                case "boss_cheats" when entry.Value is YSeq files: // CLASSIC: several dungeons' files (wintertusk-2011)
+                    if (files.Items.IsEmpty) {
+                        diagnostics.At(files, path, "a list of boss-cheat files needs at least one file (null switches them off)");
+                    }
+                    for (var i = 0; i < files.Items.Length; i++) {
+                        _ = diagnostics.ReadString(files.Items[i], YamlTree.Index(path, i));
+                    }
+                    break;
                 case "second_chance" or "boss_cheats" or "instance_resets" or "puzzle_helpers": // CLASSIC: null switches off an inherited file (arc1-2009h1, before Oct 2009)
                     if (entry.Value is not YNull) {
                         _ = diagnostics.ReadString(entry.Value, path);
@@ -487,7 +495,8 @@ public static class ClassicProfileLoader {
                 CreatureDecks = ScalarOf(rules, "creature_decks"), // CLASSIC
                 Potions = ScalarOf(rules, "potions"), // CLASSIC
                 SecondChance = ScalarOf(rules, "second_chance"), // CLASSIC
-                BossCheats = ScalarOf(rules, "boss_cheats"), // CLASSIC
+                BossCheats = BossCheatFilesOf(rules).FirstOrDefault(), // CLASSIC
+                BossCheatFiles = BossCheatFilesOf(rules), // CLASSIC: one file or a list
                 InstanceResets = ScalarOf(rules, "instance_resets"), // CLASSIC
                 PuzzleHelpers = ScalarOf(rules, "puzzle_helpers"), // CLASSIC
                 Astral = ScalarOf(rules, "astral"), // CLASSIC: Astral trainers, dated polymorph, Moon rework (celestia-2010)
@@ -543,6 +552,13 @@ public static class ClassicProfileLoader {
 
     private static string? ScalarOf(YMap map, string key)
         => map.Find(key)?.Value is YScalar scalar ? scalar.Value : null;
+
+    // CLASSIC: rules.boss_cheats is one path, a list of paths, or null.
+    private static ImmutableArray<string> BossCheatFilesOf(YMap rules) => rules.Find("boss_cheats")?.Value switch {
+        YScalar scalar when scalar.Value is { Length: > 0 } one => [one],
+        YSeq list => [.. list.Items.OfType<YScalar>().Select(s => s.Value).Where(v => !string.IsNullOrEmpty(v))!],
+        _ => [],
+    };
 
     private static Dictionary<string, bool> FlattenFeatures(YMap? features) {
         var values = new Dictionary<string, bool>(StringComparer.Ordinal);

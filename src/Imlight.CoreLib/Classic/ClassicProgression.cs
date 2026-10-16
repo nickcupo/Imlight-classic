@@ -230,7 +230,7 @@ public static class ClassicProgression {
         }
 
         if (profile.Rules.MobRewards is { } mob && File.Exists(Path.Combine(classicDataRoot, mob))) {
-            s_mobRewards = MobRewardRulesLoader.Load(Path.Combine(classicDataRoot, mob));
+            s_mobRewards = MobRewardRulesLoader.Load(Path.Combine(classicDataRoot, mob), profile.Id); // CLASSIC: per-profile mobs
             Logger.Information("Classic mob rewards {Table}: {XpPerPip} XP per pip, gold for {Ranks} ranks, {Mobs} documented mobs ({Templates} templates).",
                 Logger.Args(s_mobRewards.Id, s_mobRewards.CombatXp.XpPerPip, s_mobRewards.GoldByRank.Count,
                     s_mobRewards.Mobs.Length, s_mobRewards.MobCount));
@@ -238,7 +238,7 @@ public static class ClassicProgression {
 
         if (profile.Rules.Badges is { } badges && File.Exists(Path.Combine(classicDataRoot, badges))) {
             // CLASSIC: a quest the profile disables (disabled_quests) cannot be completed, so no badge waits for it.
-            s_badges = BadgeRulesLoader.Load(Path.Combine(classicDataRoot, badges)).WithoutQuests(profile.DisabledQuests);
+            s_badges = BadgeRulesLoader.Load(Path.Combine(classicDataRoot, badges), profile.Id).WithoutQuests(profile.DisabledQuests); // CLASSIC: per-profile badges
             Logger.Information("Classic badges {Table}: {Count} badges, {Granted} awarded by the server.",
                 Logger.Args(s_badges.Id, s_badges.Badges.Length, s_badges.Granted.Count()));
         }
@@ -285,10 +285,18 @@ public static class ClassicProgression {
                 Logger.Args(s_secondChance.Id, s_secondChance.Chests.Length, s_secondChance.FirstCost, s_secondChance.CostStep, s_secondChance.DailyUses));
         }
 
-        if (profile.Rules.BossCheats is { } bossCheats && File.Exists(Path.Combine(classicDataRoot, bossCheats))) {
-            s_bossCheats = BossCheatsLoader.Load(Path.Combine(classicDataRoot, bossCheats)); // CLASSIC
-            Logger.Information("Classic boss cheats {Table}: {Count} scripted bosses in {Dungeon}.",
-                Logger.Args(s_bossCheats.Id, s_bossCheats.Count, s_bossCheats.DungeonZone));
+        // CLASSIC: one file or several (Briskbreeze Tower and the Waterworks), each with its own dungeon.
+        var bossCheatFiles = profile.Rules.BossCheatFiles.IsDefaultOrEmpty
+            ? (profile.Rules.BossCheats is { } single ? [single] : [])
+            : profile.Rules.BossCheatFiles;
+        var bossCheatTables = bossCheatFiles.Where(f => File.Exists(Path.Combine(classicDataRoot, f)))
+            .Select(f => BossCheatsLoader.Load(Path.Combine(classicDataRoot, f))).ToList();
+        if (bossCheatTables.Count > 0) {
+            s_bossCheats = BossCheats.Combine(bossCheatTables);
+            foreach (var table in bossCheatTables) {
+                Logger.Information("Classic boss cheats {Table}: {Count} scripted bosses in {Dungeon}{Cycles}.",
+                    Logger.Args(table.Id, table.Count, table.DungeonZone, table.Cycles.IsEmpty ? "" : $", {table.Cycles.Length} cycle(s)"));
+            }
         }
 
         // CLASSIC: the dungeons and their reset rule; a profile without the file keeps the built-in Golem Tower rule.

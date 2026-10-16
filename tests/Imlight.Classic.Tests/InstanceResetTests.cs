@@ -73,10 +73,11 @@ public sealed class InstanceResetRuleTests {
     }
 
     [Fact]
-    public void TheGauntletsAreTheFourDatedOnes() {
+    public void TheGauntletsAreTheFiveDatedOnes() {
         var gauntlets = Load().Groups.Where(g => g.Kind == InstanceKind.Gauntlet).Select(g => g.Id).Order().ToArray();
 
-        Assert.Equal(["DS_Hatchery_Gauntlet_8Room", "KT_Hall_T2", "WC_Gauntlet_01", "WC_Golem_Tower"], gauntlets);
+        // WC_Triton_Gauntlet1: the Waterworks (May 2011 notes), closed by the zone map before wintertusk-2011.
+        Assert.Equal(["DS_Hatchery_Gauntlet_8Room", "KT_Hall_T2", "WC_Gauntlet_01", "WC_Golem_Tower", "WC_Triton_Gauntlet1"], gauntlets);
     }
 
     [Fact]

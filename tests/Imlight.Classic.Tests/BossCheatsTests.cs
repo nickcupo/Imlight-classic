@@ -447,6 +447,41 @@ public sealed class BossCheatDuelTests : IDisposable {
         Assert.Equal(0, boss.CombatParticipant.m_pipCount.m_genericPips);
     }
 
+    // CLASSIC golden: Orrick's 2009 cheats, as the event log records them, are unchanged by the Waterworks primitives
+    // (no round-start casts, marks or reactions come for a 2009 boss).
+    [Fact]
+    public void GoldenOrrikEventLogIsUnchanged() {
+        var (duel, boss, wizard, summons) = Fight(OrrikTemplate, 4100);
+        duel.BossCheats.NewRound(1);
+        var queue = new List<QueuedCombatAction> { new() { SpellCaster = boss } };
+        duel.BossCheats.AddExtraCasts(queue);
+        Assert.Equal(2, queue.Count);
+
+        var hit = Cast(wizard, boss, "Wizard Bolt");
+        duel.BossCheats.BeforeAction(hit);
+        boss.ParticipantGameStats.m_currentHitpoints = 3700;
+        Assert.Single(duel.BossCheats.AfterAction(hit));
+
+        var trap = Cast(wizard, boss, "Wizard Trap");
+        duel.BossCheats.BeforeAction(trap);
+        boss._hangingEffects.Add(new SpellEffect { m_effectType = kSpellEffects.kModifyIncomingDamage, m_effectParam = 30, m_sDamageType = "Fire" });
+        Assert.Single(duel.BossCheats.AfterAction(trap));
+
+        duel.BossCheats.NewRound(2);
+        var second = new List<QueuedCombatAction> { new() { SpellCaster = boss } };
+        duel.BossCheats.AddExtraCasts(second);
+        Assert.Equal(2, second.Count);
+
+        Assert.Equal([
+            "round 1 | Orrik Nightglider (slot 0, 4100 hp) | extra cast 2 of 2: MeteorStrikeBOSS01 for no pips",
+            "round 1 | Orrik Nightglider (slot 0, 3700 hp) | summons 3 x Stomper (191270) because a hit took it below 4000",
+            "round 1 | Orrik Nightglider (slot 0, 3700 hp) | interrupt (Hit by slot 4): Tower ShieldBOSS01 for no pips",
+            "round 1 | Orrik Nightglider (slot 0, 3700 hp) | interrupt: breaks the trap slot 4 put on slot 0 with Cleanse Ward",
+            "round 2 | Orrik Nightglider (slot 0, 3700 hp) | extra cast 2 of 2: MeteorStrikeBOSS01 for no pips",
+        ], duel.BossCheats.Events);
+        Assert.Single(summons);
+    }
+
     [Fact]
     public void WithoutTheProfileRuleNoBossCheats() {
         ClassicProgression.UseBossCheatsForTests(null);

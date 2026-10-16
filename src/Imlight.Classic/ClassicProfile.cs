@@ -224,6 +224,12 @@ public sealed class ProfileRules {
     public string? BossCheats { get; init; }
 
     /// <summary>
+    /// CLASSIC: every boss-cheat file of the profile, in order (rules.boss_cheats as a list: Briskbreeze Tower plus the
+    /// Waterworks in wintertusk-2011). A single path gives one file, null none. <see cref="BossCheats"/> is the first.
+    /// </summary>
+    public ImmutableArray<string> BossCheatFiles { get; init; } = [];
+
+    /// <summary>
     /// Path under classic-data of the dungeon reset rules (which zones form one dungeon, when a copy starts fresh), if
     /// any; null keeps the built-in Golem Tower rule. CLASSIC.
     /// </summary>

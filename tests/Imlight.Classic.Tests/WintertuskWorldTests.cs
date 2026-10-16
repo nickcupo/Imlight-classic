@@ -101,7 +101,10 @@ public sealed class WintertuskWorldTests : IDisposable {
     private static IReadOnlyList<string> Quests
         => ClassicDataFixture.LoadProfile(Wintertusk).RestoredQuests
             .Except(ClassicDataFixture.LoadProfile(Celestia).RestoredQuests, StringComparer.OrdinalIgnoreCase)
-            .Where(name => !name.StartsWith("WC-GRDN-", StringComparison.Ordinal)).ToList();
+            // The Waterworks chain (package F, WaterworksTests) shares the profile; its dungeon quests have no giver.
+            // The gardening tutorial (WC-GRDN-*, gardening-2011 block) is not a Wintertusk quest either.
+            .Where(name => !name.StartsWith("WC-TUG-", StringComparison.OrdinalIgnoreCase)
+                && !name.StartsWith("WC-GRDN-", StringComparison.Ordinal)).ToList();
 
     private static string QuestPath(string name)
         => Path.Combine(ClassicDataFixture.Root, "spiraldb-overlay", "QuestTemplates", name + ".json");
