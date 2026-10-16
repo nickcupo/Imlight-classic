@@ -567,7 +567,8 @@ internal static class CombatEffectApplicator {
             // CLASSIC: before the July 2009 update a stun left no stun block.
             if (target.TryStun() && ClassicRuntime.Rules.StunGivesStunBlock) {
                 // CLASSIC: July 2010 gives four shields in PvP; the 2009 profiles and PvE still give one.
-                var blocks = Imlight.CoreLib.Classic.ClassicOctoberRules.AutomaticStunBlocks(target._duelActor?.Duel?.m_bPVP == true);
+                var blocks = Imlight.CoreLib.Classic.ClassicOctoberRules.AutomaticStunBlocks(
+                    target._duelActor?.Duel?.m_bPVP == true, OpposingPlayers(target));
                 for (var block = 0; block < blocks; block++) {
                     target._hangingEffects.Add(new SpellEffect {
                         m_effectType = kSpellEffects.kStunBlock,
@@ -579,6 +580,11 @@ internal static class CombatEffectApplicator {
 
         return cinematicTime;
     }
+
+    // CLASSIC: wizards seated on the other side of the circle from the target (May 2011 PvP stun shields).
+    private static int OpposingPlayers(CombatDuelSubCircle target)
+        => target._duelActor?.SubCircles?.Count(circle => circle.Occupied && circle.IsWizard
+            && circle.OccupiedTeam != target.OccupiedTeam) ?? 0;
 
     private static void ApplyGlobalEffect(SpellEffect spellEffect, Duel duel) {
         // todo: not good. some bubbles give two effects.
