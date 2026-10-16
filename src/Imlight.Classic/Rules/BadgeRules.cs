@@ -257,7 +257,7 @@ public static class BadgeRulesLoader {
     internal static readonly FrozenSet<string> s_rootKeys = FrozenSet.Create(StringComparer.Ordinal,
         "id", "title", "profiles", "provenance", "license_tag", "notes", "badges");
     internal static readonly FrozenSet<string> s_badgeKeys = FrozenSet.Create(StringComparer.Ordinal,
-        "id", "name", "name_key", "description_key", "title_key", "filter_key", "world", "award", "confidence", "sources", "notes");
+        "id", "name", "name_key", "description_key", "title_key", "filter_key", "world", "award", "confidence", "sources", "notes", "profiles");
     internal static readonly FrozenSet<string> s_awardKeys = FrozenSet.Create(StringComparer.Ordinal,
         "quest", "all_quests", "area_quests", "kills", "zone_visits", "pvp_rank", "school_spells", "not_granted");
     private static readonly FrozenSet<string> s_areaKeys = FrozenSet.Create(StringComparer.Ordinal, "quests", "by_school");
@@ -274,7 +274,13 @@ public static class BadgeRulesLoader {
     /// Loads the badges at <paramref name="path"/>.
     /// </summary>
     /// <exception cref="ClassicDataException">The file is missing or invalid; every error is reported.</exception>
-    public static BadgeRules Load(string path) {
+    public static BadgeRules Load(string path) => Load(path, null);
+
+    /// <summary>
+    /// CLASSIC: loads the badges for <paramref name="profileId"/>: a badge with its own <c>profiles</c> list (a later
+    /// profile's badge, such as the Waterworks Warrior of wintertusk-2011) counts only for those profiles.
+    /// </summary>
+    public static BadgeRules Load(string path, string? profileId) {
         var fullPath = Path.GetFullPath(path);
         var display = ClassicDataLocator.DisplayPath(fullPath);
         if (!File.Exists(fullPath)) {
@@ -312,6 +318,15 @@ public static class BadgeRulesLoader {
                 var keyPath = YamlTree.Index("badges", i);
                 if (ReadBadge(list.Items[i], keyPath, diagnostics) is not { } badge) {
                     continue;
+                }
+
+                if (list.Items[i] is YMap badgeMap && badgeMap.Find("profiles") is { } only) {
+                    var listed = diagnostics.ReadList(only.Value, YamlTree.Join(keyPath, "profiles"))?.Items
+                        .Select(item => diagnostics.ReadString(item, YamlTree.Join(keyPath, "profiles"))).ToList();
+                    if (listed is null || profileId is null || !ClassicProfiles.Lists(listed, profileId)) {
+                        _ = ids.Add(badge.Id);
+                        continue;
+                    }
                 }
 
                 if (!ids.Add(badge.Id)) {

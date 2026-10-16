@@ -177,7 +177,17 @@ public sealed record CombatXpRule(int XpPerPip, int ZeroPipCountsAs, int? XPipCo
 /// <param name="Template">The client template (an item, a Treasure Card spell or a reagent).</param>
 /// <param name="Chance">The entry's own chance per fight from a drop tally (0: listed but not seen in the tally), or null to
 /// derive it from the kind's rate.</param>
-public sealed record DropEntry(ulong Template, double? Chance);
+/// <param name="School">CLASSIC: the only school that may get it (the Waterworks gear drops for the wizard's own school), or
+/// null for every school.</param>
+public sealed record DropEntry(ulong Template, double? Chance, string? School = null) {
+
+    /// <summary>
+    /// CLASSIC: true when a wizard of <paramref name="school"/> may get this entry (no school given: every entry).
+    /// </summary>
+    public bool IsFor(string? school)
+        => School is null || school is null || string.Equals(School, school, StringComparison.OrdinalIgnoreCase);
+
+}
 
 /// <summary>
 /// One kind of loot (equipment, Treasure Cards or reagents) and how often a mob drops it.
@@ -356,16 +366,20 @@ public sealed class MobRewardRules {
     /// <param name="mob">The defeated mob.</param>
     /// <param name="random">The random source.</param>
     /// <param name="dropMultiplier">CLASSIC: [Classic] DropRateMultiplier (2009: 1).</param>
-    public MobLoot Roll(MobInfo mob, Random random, double dropMultiplier = 1.0) {
+    /// <param name="school">CLASSIC: the wizard's school (Fire, Ice, ...): items listed for another school are left out.</param>
+    public MobLoot Roll(MobInfo mob, Random random, double dropMultiplier = 1.0, string? school = null) {
         var gold = GoldFor(mob).Roll(random);
         var documented = Find(mob.TemplateId);
 
         // A list counts as tallied when the page gave any of its entries a percentage.
         static bool Tallied(ImmutableArray<DropEntry> entries) => entries.Any(entry => entry.Chance is not null);
 
+        // CLASSIC: an entry for another school is not on this wizard's list; the rest share the list's rate.
+        var own = documented is null ? [] : documented.Items.Where(entry => entry.IsFor(school)).ToImmutableArray();
         var items = documented is null
             ? []
-            : ItemDrops.Roll(documented.Items, mob.Kind, documented.ListedItems, Tallied(documented.Items), random, dropMultiplier);
+            : ItemDrops.Roll(own, mob.Kind, documented.ListedItems - (documented.Items.Length - own.Length),
+                Tallied(documented.Items), random, dropMultiplier);
 
         var cards = documented is { TreasureCards.IsEmpty: false }
             ? TreasureCardDrops.Roll(documented.TreasureCards, mob.Kind, documented.TreasureCards.Length, Tallied(documented.TreasureCards), random, dropMultiplier)
@@ -409,8 +423,9 @@ public static class MobRewardRulesLoader {
         "page", "oldid", "date", "first_oldid", "first_date", "kind", "rank", "battles", "items", "treasure_cards", "reagents", "minions", "items_alone",
         "treasure_cards_alone", "notes");
     internal static readonly FrozenSet<string> s_mobKeys = FrozenSet.Create(StringComparer.Ordinal,
-        "name", "templates", "rank", "kind", "gold", "drops", "treasure_cards", "reagents", "tally", "source", "notes");
-    internal static readonly FrozenSet<string> s_itemKeys = FrozenSet.Create(StringComparer.Ordinal, "name", "template", "chance");
+        "name", "templates", "rank", "kind", "gold", "drops", "treasure_cards", "reagents", "tally", "source", "notes", "profiles");
+    internal static readonly FrozenSet<string> s_itemKeys = FrozenSet.Create(StringComparer.Ordinal, "name", "template", "chance", "school");
+    private static readonly string[] s_itemSchools = ["balance", "death", "fire", "ice", "life", "myth", "storm"];
     private static readonly string[] s_fizzle = ["card", "one"];
     private static readonly string[] s_kinds = ["normal", "elite", "boss"];
     private static readonly string[] s_confidences = ["verified", "corroborated", "inferred", "placeholder"];
@@ -422,7 +437,13 @@ public static class MobRewardRulesLoader {
     /// </summary>
     /// <param name="path">The file, such as classic-data/progression/mob-rewards-2009.yaml.</param>
     /// <exception cref="ClassicDataException">The file is missing or invalid; every error is reported.</exception>
-    public static MobRewardRules Load(string path) {
+    public static MobRewardRules Load(string path) => Load(path, null);
+
+    /// <summary>
+    /// CLASSIC: loads the rules for <paramref name="profileId"/>: a mob entry with its own <c>profiles</c> list (a later
+    /// profile's documented mob, such as the Waterworks bosses of wintertusk-2011) counts only for those profiles.
+    /// </summary>
+    public static MobRewardRules Load(string path, string? profileId) {
         var fullPath = Path.GetFullPath(path);
         var display = ClassicDataLocator.DisplayPath(fullPath);
         if (!File.Exists(fullPath)) {
@@ -455,7 +476,7 @@ public static class MobRewardRulesLoader {
         var drops = ReadDropRule(map, "drops", s_dropKeys, diagnostics, out _);
         var cards = ReadDropRule(map, "treasure_cards", s_extraDropKeys, diagnostics, out var cardFallback);
         var reagents = ReadDropRule(map, "reagents", s_extraDropKeys, diagnostics, out var reagentFallback);
-        var mobs = ReadMobs(map, diagnostics);
+        var mobs = ReadMobs(map, diagnostics, profileId);
         if (map.Find("license_tag") is { } license) {
             _ = diagnostics.ReadEnum(license.Value, "license_tag", ClassicSpellSchema.LicenseTags);
         }
@@ -782,15 +803,20 @@ public static class MobRewardRulesLoader {
                 chance = diagnostics.ReadFraction(c.Value, YamlTree.Join(itemPath, "chance"));
             }
 
+            string? school = null;
+            if (item.Find("school") is { } schoolEntry) {
+                school = diagnostics.ReadEnum(schoolEntry.Value, YamlTree.Join(itemPath, "school"), s_itemSchools);
+            }
+
             if (item.Find("template") is { } template && ReadId(template.Value, YamlTree.Join(itemPath, "template"), diagnostics) is { } id) {
-                result.Add(new DropEntry(id, chance));
+                result.Add(new DropEntry(id, chance, school));
             }
         }
 
         return result.ToImmutable();
     }
 
-    private static ImmutableArray<DocumentedMob> ReadMobs(YMap map, YamlDiagnostics diagnostics) {
+    private static ImmutableArray<DocumentedMob> ReadMobs(YMap map, YamlDiagnostics diagnostics, string? profileId) {
         var result = ImmutableArray.CreateBuilder<DocumentedMob>();
         if (map.Find("mobs") is not { } entry || diagnostics.ReadList(entry.Value, "mobs") is not { } list) {
             return result.ToImmutable();
@@ -804,6 +830,11 @@ public static class MobRewardRulesLoader {
             }
 
             diagnostics.CheckKeys(mob, keyPath, s_mobKeys, ["name", "templates", "rank", "kind", "source"]);
+            // CLASSIC: an entry with its own profiles list is read (and checked) always, and kept only for those profiles.
+            var onlyFor = mob.Find("profiles") is { } only
+                ? diagnostics.ReadList(only.Value, YamlTree.Join(keyPath, "profiles"))?.Items
+                    .Select(item => diagnostics.ReadString(item, YamlTree.Join(keyPath, "profiles"))).ToList()
+                : null;
             var name = mob.Find("name") is { } n ? diagnostics.ReadString(n.Value, YamlTree.Join(keyPath, "name")) : null;
             var rank = mob.Find("rank") is { } r ? diagnostics.ReadInt(r.Value, YamlTree.Join(keyPath, "rank"), 1, 100) : null;
             var kind = mob.Find("kind") is { } k ? diagnostics.ReadEnum(k.Value, YamlTree.Join(keyPath, "kind"), s_kinds) : null;
@@ -828,6 +859,10 @@ public static class MobRewardRulesLoader {
             }
 
             if (name is null || rank is null || kind is null) {
+                continue;
+            }
+
+            if (onlyFor is not null && (profileId is null || !ClassicProfiles.Lists(onlyFor, profileId))) {
                 continue;
             }
 
