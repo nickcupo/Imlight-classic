@@ -99,7 +99,9 @@ public sealed class WintertuskWorldTests : IDisposable {
     /// <summary>The quests wintertusk-2011 restores itself (its own block), in chain order.</summary>
     private static IReadOnlyList<string> Quests
         => ClassicDataFixture.LoadProfile(Wintertusk).RestoredQuests
-            .Except(ClassicDataFixture.LoadProfile(Celestia).RestoredQuests, StringComparer.OrdinalIgnoreCase).ToList();
+            .Except(ClassicDataFixture.LoadProfile(Celestia).RestoredQuests, StringComparer.OrdinalIgnoreCase)
+            // The Waterworks chain (package F, WaterworksTests) shares the profile; its dungeon quests have no giver.
+            .Where(name => !name.StartsWith("WC-TUG-", StringComparison.OrdinalIgnoreCase)).ToList();
 
     private static string QuestPath(string name)
         => Path.Combine(ClassicDataFixture.Root, "spiraldb-overlay", "QuestTemplates", name + ".json");

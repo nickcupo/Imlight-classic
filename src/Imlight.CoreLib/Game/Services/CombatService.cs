@@ -359,9 +359,11 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
         };
 
         var random = Random.Shared;
+        var school = GetActiveWizard()?.MagicSchoolBehavior?.MagicSchool is { } own and not MagicSchool.None
+            ? own.ToString() : null; // CLASSIC: own-school gear (the Waterworks)
         foreach (var templateId in defeatedMobTemplateIds ?? []) {
             AddHolidayDrops(rules, templateId, result, random); // CLASSIC: classic-data/holidays boss drops in season
-            AddClassicMobLoot(rules, templateId, result, random);
+            AddClassicMobLoot(rules, templateId, result, random, school);
         }
 
         if (!result.HasRewards) {
@@ -377,12 +379,13 @@ internal class CombatService(SessionActor sessionActor) : MessageService(session
     /// CLASSIC: one defeated mob's gold, equipment, treasure cards and reagents under the profile's mob reward rules,
     /// added to <paramref name="result"/> (also a Second Chance chest's roll).
     /// </summary>
-    internal static void AddClassicMobLoot(MobRewardRules rules, ulong templateId, DropTableResult result, Random random) {
+    internal static void AddClassicMobLoot(MobRewardRules rules, ulong templateId, DropTableResult result, Random random,
+        string school = null) {
         if (ClassicMobInfo.Of(templateId) is not { } mob) {
             return;
         }
 
-        var loot = rules.Roll(mob, random, ClassicSettings.DropRateMultiplier); // CLASSIC: dashboard switch
+        var loot = rules.Roll(mob, random, ClassicSettings.DropRateMultiplier, school); // CLASSIC: dashboard switch
         result.GoldAmount += loot.Gold;
         foreach (var item in loot.Items) {
             if (CoreObjectFactory.GetCoreTemplate(item) is not null) {
