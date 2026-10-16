@@ -64,7 +64,7 @@ public static class ClassicProfileLoader {
     internal static readonly FrozenSet<string> s_worldUnlockKeys = FrozenSet.Create(StringComparer.Ordinal, "any_of", "source", "notes");
     private static readonly FrozenSet<string> s_ruleKeys = FrozenSet.Create(StringComparer.Ordinal,
         "accuracy_table", "xp_table", "player_health", "mob_rewards", "badges", "quest_cards", "treasure_prices", "mob_stats", "crown_shop", "later_objects", "creature_decks", "power_pips_from_rank", "dragonspyre_difficulty", "tutorial",
-        "teleport_stones", "potions", "second_chance", "boss_cheats", "instance_resets", "puzzle_helpers", "level_stats", "critical");
+        "teleport_stones", "potions", "second_chance", "boss_cheats", "instance_resets", "puzzle_helpers", "level_stats", "critical", "astral");
 
     /// <summary>
     /// Loads the profile <paramref name="id"/> from <paramref name="profilesDir"/>, following its extends chain.
@@ -490,6 +490,7 @@ public static class ClassicProfileLoader {
                 BossCheats = ScalarOf(rules, "boss_cheats"), // CLASSIC
                 InstanceResets = ScalarOf(rules, "instance_resets"), // CLASSIC
                 PuzzleHelpers = ScalarOf(rules, "puzzle_helpers"), // CLASSIC
+                Astral = ScalarOf(rules, "astral"), // CLASSIC: Astral trainers, dated polymorph, Moon rework (celestia-2010)
                 PowerPipsFromRank = ScalarOf(rules, "power_pips_from_rank"),
                 DragonspyreDifficulty = ScalarOf(rules, "dragonspyre_difficulty"),
                 Tutorial = ScalarOf(rules, "tutorial"),

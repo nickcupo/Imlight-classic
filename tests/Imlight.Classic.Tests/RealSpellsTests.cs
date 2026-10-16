@@ -173,7 +173,7 @@ public sealed class RealSpellsTests {
     [InlineData("Cloak", "sun", "Spells/Cloak.xml", 0)]
     public void ResearchedDiegoCardIsPreservedButDeferredFromLiveProfiles(string name, string school, string template, int level) {
         var book = LoadBook();
-        Assert.Null(book.FindByTemplate(template));
+        Assert.False(book.FindByTemplate(template)?.IsInProfile("october-2010-arc1") ?? false); // CLASSIC: Celestia's own record only
         var researched = ClassicSpellLoader.Load(Path.Combine(ClassicDataFixture.Root, "research-pending", "spells"));
         var spell = researched.FindByTemplate(template)!;
         Assert.Equal(name, spell.Name);
@@ -212,7 +212,7 @@ public sealed class RealSpellsTests {
         var book = LoadBook();
         var overrides = new ClassicSpellOverrides(book, ClassicDataFixture.LoadProfile("october-2010-arc1"));
 
-        Assert.Null(book.FindByTemplate("Spells/Conviction.xml"));
+        Assert.False(book.FindByTemplate("Spells/Conviction.xml")?.IsInProfile("october-2010-arc1") ?? false); // CLASSIC: celestia-2010 aura
         Assert.False(overrides.IsTrainable("Spells/Conviction.xml"));
         Assert.False(ClassicDataFixture.LoadProfile("october-2010-arc1").Features.IsEnabled(ClassicFeatures.CriticalAndBlock));
     }

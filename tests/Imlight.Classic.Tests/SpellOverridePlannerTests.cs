@@ -454,6 +454,9 @@ public sealed class SpellOverridePlannerTests {
             SpellEffectKind.Damage, SpellEffectKind.Dot, SpellEffectKind.Heal, SpellEffectKind.Hot, SpellEffectKind.Steal,
             SpellEffectKind.Pip, SpellEffectKind.Blade, SpellEffectKind.Charm, SpellEffectKind.Trap, SpellEffectKind.Shield,
             SpellEffectKind.Ward, SpellEffectKind.Global, SpellEffectKind.StunResist, SpellEffectKind.CriticalBlock,
+            // CLASSIC: the Astral schools (Celestia).
+            SpellEffectKind.Aura, SpellEffectKind.CriticalBoost, SpellEffectKind.PipConversion, SpellEffectKind.Polymorph,
+            SpellEffectKind.UnPolymorph,
         }, SpellOverridePlanner.AppliedKinds.ToArray());
     }
 

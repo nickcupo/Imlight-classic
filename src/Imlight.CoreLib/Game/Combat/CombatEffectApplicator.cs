@@ -205,6 +205,7 @@ internal static class CombatEffectApplicator {
         // Calculate damage changes from hanging effects.
         cinematicTime += charms.Length * HANGING_EFFECT_CONSUME_TIME;
         damageFromCaster = CombatCharms.GetOutgoingDamageFromCharms(charms, damageFromCaster);
+        damageFromCaster = WithOutgoingAura(caster, damageFromCaster, effect.m_sDamageType); // CLASSIC: Star aura
 
         // Calculate damage from current bubble
         var duel = caster._duelActor.Duel;
@@ -219,6 +220,7 @@ internal static class CombatEffectApplicator {
             var damageReductionFlat = GetFlatDamageReduction(target, effect.m_sDamageType);
             var damageReductionPercent = GetPercentDamageReduction(target, effect.m_sDamageType);
             var reducedDamage = (int) Math.Floor(targetSpecificDamage * (1 - damageReductionPercent) - damageReductionFlat);
+            reducedDamage = WithIncomingAura(target, reducedDamage, effect.m_sDamageType); // CLASSIC: Star aura
 
             // Ensure that damage isn't negative.
             reducedDamage = Math.Max(reducedDamage, 0);
@@ -309,6 +311,7 @@ internal static class CombatEffectApplicator {
         // Calculate damage changes from hanging effects.
         cinematicTime += charms.Length * HANGING_EFFECT_CONSUME_TIME;
         damageFromCaster = CombatCharms.GetOutgoingDamageFromCharms(charms, damageFromCaster);
+        damageFromCaster = WithOutgoingAura(caster, damageFromCaster, effect.m_sDamageType); // CLASSIC: Star aura
 
         var duel = caster._duelActor.Duel;
         var bubbleDamageIncrease = GetGlobalEffectDamageModifier(duel, effect.m_sDamageType);
@@ -329,6 +332,7 @@ internal static class CombatEffectApplicator {
             wards = CombatWards.GetWardsBySchool([.. wards], effect.m_sDamageType, out var finalSchool);
             cinematicTime += wards.Count * HANGING_EFFECT_CONSUME_TIME;
             damage = CombatWards.GetIncomingDamageFromWards(wards, damage);
+            damage = WithIncomingAura(target, damage, finalSchool); // CLASSIC: Star aura (Fortification)
 
             var dealt = DoDamageToTarget(target, damage, finalSchool);
             damageDealt += dealt;
@@ -573,6 +577,11 @@ internal static class CombatEffectApplicator {
                 continue;
             }
 
+            // CLASSIC: Conviction (and a Moon rework form's stun resistance): the stun may simply fail, and no shield is spent.
+            if (CombatAuras.StunResistPercent(target) is var resist && resist > 0 && target._duelActor.Rng.Next(0, 100) < resist) {
+                continue;
+            }
+
             // Check to see if this target has a stun block.
             var spellBlock = target._hangingEffects.FirstOrDefault(x => x.m_effectType == kSpellEffects.kStunBlock);
             if (spellBlock is not null) {
@@ -655,6 +664,7 @@ internal static class CombatEffectApplicator {
         // Existing HoT resolution skips defeated casters; this boundary also covers team direct heals.
         if (current <= 0 && next > 0 && target.IsWizard) {
             target._hangingEffects?.Clear();
+            CombatAuras.Clear(target); // CLASSIC: a Star aura is a buff too
             if (target.CombatParticipant?.m_pipCount is { } pips) {
                 pips.m_genericPips = 0;
                 pips.m_powerPips = 0;
@@ -664,6 +674,20 @@ internal static class CombatEffectApplicator {
         }
         // Valid participant health is nonnegative, so this delta fits and HealParticipant's sum cannot overflow.
         target.HealParticipant((int) (next - current));
+    }
+
+    // CLASSIC: Amplification raises outgoing damage while it lasts; it is not used up.
+    private static int WithOutgoingAura(CombatDuelSubCircle caster, int damage, string school)
+        => WithPercent(damage, CombatAuras.OutgoingDamage(caster, school));
+
+    // CLASSIC: Fortification lowers incoming damage while it lasts; it is not used up.
+    private static int WithIncomingAura(CombatDuelSubCircle target, int damage, string school)
+        => WithPercent(damage, CombatAuras.IncomingDamage(target, school));
+
+    // Whole percent points, so +15% of 100 is 115 and -15% is 85 (no float rounding below the integer).
+    private static int WithPercent(int damage, float share) {
+        var percent = (long) Math.Round(share * 100f);
+        return percent == 0 ? damage : (int) Math.Clamp((long) damage * (100 + percent) / 100, 0, int.MaxValue);
     }
 
     private static float GetFlatDamageIncrease(CombatDuelSubCircle caster, string damageType) {

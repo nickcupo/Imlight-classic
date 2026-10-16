@@ -86,7 +86,7 @@ internal sealed record CombatElixirEntryReceipt(Wizard Wizard, ImmutableArray<IM
 /// spell effects. Subcircles are assigned to either the player or monster team and positioned within the duel
 /// according to the sigil template.
 /// </remarks>
-public class CombatDuelSubCircle {
+public partial class CombatDuelSubCircle {
     
     private const float AGGRO_TIME_IN_SECONDS = 0.75f;
     internal const byte MAX_PIP_COUNT = 7;
@@ -321,6 +321,7 @@ public class CombatDuelSubCircle {
     internal DateTime DisconnectedAtUtc { get; private set; }
 
     internal void HoldSeat(DateTime nowUtc) {
+        EndPolymorphSilently(); // CLASSIC: a dropped wizard's seat is held as themself
         HeldCharacterId = _wizard?.CharId ?? 0;
         Disconnected = true;
         DisconnectedAtUtc = nowUtc;
@@ -396,6 +397,9 @@ public class CombatDuelSubCircle {
     }
 
     internal void RemoveParticipant() {
+        EndPolymorphSilently(); // CLASSIC: the wizard leaves the duel as themself
+        PolymorphedThisMatch = false;
+        AuraCastThisRound = false;
         ResetDeferredActionIdentity();
         _pendingParticipantNotice = false;
         _pendingElixirReceipt = null;
@@ -428,6 +432,7 @@ public class CombatDuelSubCircle {
     }
 
     internal Hand DrawHand() {
+        if (Polymorph is { } polymorph) return DrawPolymorphHand(polymorph); // CLASSIC: the form's hand
         var newHand = _combatDeck.GetHand();
         CombatParticipant.m_pHand = newHand;
 
@@ -476,6 +481,7 @@ public class CombatDuelSubCircle {
     }
 
     internal bool DiscardCard(Spell spell) {
+        if (Polymorph is { } polymorph) return DiscardPolymorphCard(polymorph, spell); // CLASSIC
         return _combatDeck.Discard(spell);
     }
 
@@ -585,6 +591,14 @@ public class CombatDuelSubCircle {
     }
 
     internal void DamageParticipant(int damage) {
+        // CLASSIC: a polymorphed wizard's form takes the hit; a defeated form leaves a defeated wizard.
+        if (Polymorph is not null) {
+            ParticipantGameStats.m_currentHitpoints = Math.Max(0, ParticipantGameStats.m_currentHitpoints - Math.Max(damage, 0));
+            if (CombatParticipant is { } formParticipant) formParticipant.m_playerHealth = ParticipantGameStats.m_currentHitpoints;
+            if (ParticipantGameStats.m_currentHitpoints <= 0) LeavePolymorph(defeated: true);
+            return;
+        }
+
         // If the participant is a player, update their health.
         if (_wizard is not null) {
             var currentHealth = ParticipantGameStats.m_currentHitpoints;
@@ -611,7 +625,7 @@ public class CombatDuelSubCircle {
 
     internal void HealParticipant(int heal) {
         // If the participant is a player, update their health.
-        if (_wizard is not null) {
+        if (_wizard is not null && Polymorph is null) { // CLASSIC: a form heals its own health
             var currentHealth = ParticipantGameStats.m_currentHitpoints;
             var newHealth = currentHealth + heal;
 
@@ -638,7 +652,7 @@ public class CombatDuelSubCircle {
         // If the participant is a player, update their mana.
         // Creature's don't have mana.
         if (_wizard is not null) {
-            var currentMana = ParticipantGameStats.m_currentMana;
+            var currentMana = (Polymorph?.CasterStats ?? ParticipantGameStats).m_currentMana; // CLASSIC: the wizard's own mana
             var newMana = currentMana - mana;
 
             // Make sure the mana doesn't go below 0.

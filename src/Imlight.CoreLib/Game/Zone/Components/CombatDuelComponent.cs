@@ -1534,6 +1534,7 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
     }
 
     private void HandleFleeAction(CombatDuelSubCircle caster) {
+        caster.EndPolymorphSilently(); // CLASSIC: a wizard flees as themself
         // CLASSIC: leaving an open PvP fight costs nothing; the other side wins once one side is empty.
         if (_pvp && caster.IsWizard) {
             DisableOwnedMinionControl(caster.ParticipantObject);
@@ -1713,6 +1714,11 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
     }
 
     private void EndDuel() {
+        // CLASSIC: every polymorphed wizard is themself again (health converted back) before rewards and results.
+        foreach (var circle in SubCircles?.Where(circle => circle is { Occupied: true }) ?? []) {
+            circle.EndPolymorphSilently();
+        }
+
         // CLASSIC: an open PvP fight ends with no rewards and no penalty.
         if (_pvp) {
             PvpEndDuel();

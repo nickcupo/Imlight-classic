@@ -71,7 +71,8 @@ internal sealed class InteractTrainerComponent(ZoneEntity entity) : ZoneEntityCo
     public static bool ShouldAttachToEntity(CoreTemplate template) 
         // Attach if the template is an NPC and has a spell inventory in Dragon database.
         => template is GameObjectTemplate goTemplate 
-        && goTemplate.m_behaviors.Any(x => x is NPCBehaviorTemplate) 
+        // CLASSIC: Celestia's school trainers are trainer objects (WizTrainingBehavior) without an NPC behavior.
+        && goTemplate.m_behaviors.Any(x => x is NPCBehaviorTemplate || x?.m_behaviorName?.ToString() == "WizTrainingBehavior") 
         && NpcSpellInventoryCollection.TryGetNpcInventory(goTemplate.m_templateID, out _);
 
     public override void OnStart() {

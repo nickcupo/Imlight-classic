@@ -74,6 +74,12 @@ public enum SpellEffectKind {
     Cloak,
     StunResist,
     CriticalBlock,
+    // CLASSIC: the Astral schools (Celestia, archived October 2010 notes).
+    Aura,
+    CriticalBoost,
+    PipConversion,
+    Polymorph,
+    UnPolymorph,
 }
 
 /// <summary>

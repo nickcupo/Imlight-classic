@@ -128,6 +128,13 @@ public static class ClassicSpellTemplates {
             ApplyTreasureBaseCost(spell, path, ClassicRuntime.Rules.Profile.Id, ClassicProgression.TreasurePrices);
         }
 
+        // CLASSIC OWNER EXTRA (Moon rework, [Classic] MoonRework): the Revert card costs no pips. The client card is
+        // "UnPolymorph - Moon" (3 pips in r806919); the Celestia card overlay must show the same (work package G).
+        if (ClassicRuntime.IsInitialized && MoonReworkSettings.Current is { } rework
+            && string.Equals(path, rework.RevertCard, StringComparison.Ordinal)) {
+            spell.m_spellRank = new SpellRank();
+        }
+
         if (s_overrides is not { } overrides) {
             return;
         }

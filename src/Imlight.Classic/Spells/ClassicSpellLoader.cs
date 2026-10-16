@@ -62,8 +62,12 @@ public static class ClassicSpellSchema {
 
     public static ImmutableArray<string> PlayerSchools { get; } = ["fire", "ice", "storm", "myth", "life", "death", "balance"];
 
-    // CLASSIC: October 2010 secondary-school records do not add base player accuracy tables.
-    public static ImmutableArray<string> Schools { get; } = [.. PlayerSchools, "sun", "star"];
+    // CLASSIC: October 2010 secondary-school records do not add base player accuracy tables. Moon (polymorph) came with
+    // the other Astral schools in Celestia (archived October 2010 notes).
+    public static ImmutableArray<string> Schools { get; } = [.. PlayerSchools, "sun", "moon", "star"];
+
+    /// <summary>CLASSIC: the Astral schools (Celestia, 2010-10-27); their records apply only to the profiles they list.</summary>
+    public static ImmutableArray<string> AstralSchools { get; } = ["sun", "moon", "star"];
 
     /// <summary>
     /// The schools an effect may name: every school, and <c>all</c>.
@@ -78,7 +82,8 @@ public static class ClassicSpellSchema {
     public static ImmutableArray<string> EffectTypes { get; } = [
         "damage", "dot", "heal", "hot", "steal", "pip", "minion", "beguile", "stun", "threat",
         "blade", "charm", "enchant", "trap", "shield", "ward", "prism", "global", "mutate",
-        "dispel", "remove_charm", "remove_ward", "reshuffle", "cloak", "stun_resist", "critical_block"
+        "dispel", "remove_charm", "remove_ward", "reshuffle", "cloak", "stun_resist", "critical_block",
+        "aura", "critical_boost", "pip_conversion", "polymorph", "unpolymorph"
     ];
 
     /// <summary>
@@ -121,10 +126,11 @@ public static class ClassicSpellLoader {
     private const int MaxPips = 14;
     private static readonly SpellEffectKind[] s_needsAmount = [SpellEffectKind.Damage, SpellEffectKind.Heal, SpellEffectKind.Dot, SpellEffectKind.Hot];
     private static readonly SpellEffectKind[] s_needsRounds = [SpellEffectKind.Dot, SpellEffectKind.Hot, SpellEffectKind.Stun, SpellEffectKind.Beguile,
-        SpellEffectKind.StunResist, SpellEffectKind.CriticalBlock];
+        SpellEffectKind.StunResist, SpellEffectKind.CriticalBlock,
+        SpellEffectKind.Aura, SpellEffectKind.CriticalBoost, SpellEffectKind.PipConversion, SpellEffectKind.Polymorph];
     private static readonly SpellEffectKind[] s_needsPercent = [
         SpellEffectKind.Blade, SpellEffectKind.Charm, SpellEffectKind.Trap, SpellEffectKind.Shield, SpellEffectKind.Global,
-        SpellEffectKind.StunResist, SpellEffectKind.CriticalBlock
+        SpellEffectKind.StunResist, SpellEffectKind.CriticalBlock, SpellEffectKind.Aura, SpellEffectKind.CriticalBoost
     ];
 
     private static readonly Regex s_slug = new(@"^[a-z0-9]+(-[a-z0-9]+)*\z", RegexOptions.CultureInvariant);

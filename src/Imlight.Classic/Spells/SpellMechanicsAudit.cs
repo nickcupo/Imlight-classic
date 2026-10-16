@@ -225,6 +225,7 @@ public static class SpellMechanicsAudit {
         }
 
         if (effect.Kind is SpellEffectKind.Dot or SpellEffectKind.Hot or SpellEffectKind.StunResist or SpellEffectKind.CriticalBlock
+            or SpellEffectKind.Aura or SpellEffectKind.CriticalBoost or SpellEffectKind.PipConversion or SpellEffectKind.Polymorph
             && effect.Rounds is { } rounds && rounds != unit.Rounds) {
             yield return new(MechanicsIssueKind.Rounds, $"{name}: {rounds} rounds in 2009, {unit.Rounds} on the template");
         }
