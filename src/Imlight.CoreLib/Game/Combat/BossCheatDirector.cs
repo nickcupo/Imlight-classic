@@ -40,6 +40,22 @@
  *     of them fell when the table says so.
  * A creature the table does not list never cheats.
  *
+ * The Waterworks primitives (May 2011, BossCheatMechanics), all data-driven:
+ *   - round start: before every other action of a round, each cycle's
+ *     holder moves its cycle on (a new phase: its bubble and the steps on
+ *     entering it; a new holder starts it again with its own line), each
+ *     marking boss marks its seats (the marked spell on a marked seat and
+ *     the other spell on everyone else, only when the last one is gone),
+ *     and round_start casts come;
+ *   - marks: a wizard's spell that takes the boss below a seat's mark
+ *     marks that seat at once (with the added_message);
+ *   - reactions: right after a wizard's spell, each boss's reactions (and
+ *     its cycle phase's, when it holds the cycle) whose condition holds
+ *     play their steps out of turn, in order, with the message on the
+ *     first cast; a removal step with nothing to remove is skipped;
+ *   - these casts are out of turn and ignore a stun (they are the boss's
+ *     script, not its turn); sure_hit ones skip the accuracy roll.
+ *
  * USAGE EXAMPLE:
  * duel.BossCheats.NewRound(round);                     // CombatDuelComponent, each new round
  * cheats.AddExtraCasts(queue);                         // CombatResolver, after sorting the round
@@ -81,17 +97,30 @@ internal enum BossCheatKind {
     TrapBreak,
     /// <summary>A trap break in the boss's own turn.</summary>
     RoundTrapBreak,
+    /// <summary>CLASSIC: a cast at the start of the round (round_start).</summary>
+    RoundStart,
+    /// <summary>CLASSIC: a seat's mark (or the other wizards' spell).</summary>
+    Mark,
+    /// <summary>CLASSIC: a step of a reaction to a wizard's spell.</summary>
+    Reaction,
+    /// <summary>CLASSIC: a cycle's bubble or a step on entering a phase.</summary>
+    Phase,
 }
 
 /// <summary>
 /// The cheat a queued action carries: it costs no pips, uses no card and may be shown out of turn.
 /// </summary>
-internal sealed record BossCheatCast(BossCheatKind Kind, bool Interrupt, string? Message);
+internal sealed record BossCheatCast(BossCheatKind Kind, bool Interrupt, string? Message, bool SureHit = false) {
+
+    /// <summary>CLASSIC: a scripted cast (round start, mark, reaction, phase) comes even while the boss is stunned and
+    /// leaves the stun for its own turn; the 2009 kinds keep their old behaviour.</summary>
+    internal bool IgnoresStun => Kind is BossCheatKind.RoundStart or BossCheatKind.Mark or BossCheatKind.Reaction or BossCheatKind.Phase;
+}
 
 /// <summary>
 /// One duel's boss cheats.
 /// </summary>
-internal sealed class BossCheatDirector(CombatDuelComponent duel) {
+internal sealed partial class BossCheatDirector(CombatDuelComponent duel) {
 
     // A stream of its own, so a fight without a cheating boss rolls exactly as before.
     private const int CHEAT_STREAM = 0x0B055;
@@ -109,6 +138,21 @@ internal sealed class BossCheatDirector(CombatDuelComponent duel) {
     private readonly Dictionary<(object Boss, int Index), SummonState> _summons = [];
     private readonly Dictionary<CombatDuelSubCircle, int> _healthBefore = [];
     private readonly Dictionary<CombatDuelSubCircle, int> _trapsBefore = [];
+    // CLASSIC: the Waterworks primitives' state.
+    private readonly Dictionary<object, SortedSet<int>> _marked = new(ReferenceEqualityComparer.Instance);
+    private readonly Dictionary<(object Boss, BossReaction Reaction), int> _reactionsThisRound = [];
+    private readonly Dictionary<string, CycleState> _cycles = new(StringComparer.Ordinal);
+    private readonly Dictionary<object, int> _lastAttackedRound = new(ReferenceEqualityComparer.Instance);
+    private int _roundStartDone = int.MinValue;
+    private bool _targetHadTrap;
+    private bool _casterHadBlade;
+
+    private sealed class CycleState {
+        internal uint? Holder;
+        internal int PhaseIndex;
+        internal int RoundsLeft;
+        internal int LastRound = int.MinValue;
+    }
 
     private sealed class SummonState {
         internal bool Done;
@@ -152,6 +196,7 @@ internal sealed class BossCheatDirector(CombatDuelComponent duel) {
     internal void NewRound(int round) {
         _round = round;
         _interruptsThisRound.Clear();
+        _reactionsThisRound.Clear();
         foreach (var (boss, cheat) in LivingBosses().ToList()) {
             for (var i = 0; i < cheat.Summons.Length; i++) {
                 var summon = cheat.Summons[i];
@@ -238,6 +283,12 @@ internal sealed class BossCheatDirector(CombatDuelComponent duel) {
             queue.InsertRange(i + 1, extras);
             i += extras.Count;
         }
+
+        // CLASSIC: the round's scripted casts go before every other action, once a round.
+        if (_roundStartDone != _round) {
+            _roundStartDone = _round;
+            queue.InsertRange(0, RoundStartCasts());
+        }
     }
 
     private CombatDuelSubCircle? TrappedAlly(CombatDuelSubCircle boss)
@@ -256,6 +307,10 @@ internal sealed class BossCheatDirector(CombatDuelComponent duel) {
         if (!IsWizardSpell(action)) {
             return;
         }
+
+        // CLASSIC: a buff only has to be present when the spell is cast, not used by it.
+        _targetHadTrap = action.SelectedTarget is { Occupied: true } target && HasTrap(target);
+        _casterHadBlade = HasBlade(action.SpellCaster);
 
         foreach (var circle in _duel.SubCircles.Where(c => c is { Occupied: true } && c.OccupiedTeam == CombatTeam.Monster)) {
             _healthBefore[circle] = Health(circle);
@@ -312,13 +367,26 @@ internal sealed class BossCheatDirector(CombatDuelComponent duel) {
             }
         }
 
+        // CLASSIC: the Waterworks primitives, after the 2009 ones (whose order stays as it was).
+        responses.AddRange(AfterActionMechanics(action));
+
         return responses;
     }
 
     private static CheatTrigger? Triggers(BossInterrupt interrupt, QueuedCombatAction action, CombatDuelSubCircle boss, int before, int now) {
         var effects = Flatten(action.SpellTemplate?.m_effects).ToList();
         foreach (var trigger in interrupt.On) {
-            var fires = trigger switch {
+            if (Fires(trigger, effects, before, now)) {
+                return trigger;
+            }
+        }
+
+        return null;
+    }
+
+    // Whether a wizard's spell with these effects is of the kind; before/now are the boss's health around it.
+    private static bool Fires(CheatTrigger trigger, List<SpellEffect> effects, int before, int now)
+        => trigger switch {
                 CheatTrigger.Any => true,
                 // A hit: the spell's direct damage took health off this boss. Drains (Life Steal: Wraith, Vampire, ...) do
                 // not count (Wizard101 Central guide, in-text update dated 2010-03-18).
@@ -328,15 +396,17 @@ internal sealed class BossCheatDirector(CombatDuelComponent duel) {
                 CheatTrigger.Shield => effects.Any(e => e.m_effectType == kSpellEffects.kAbsorbDamage
                     || e.m_effectType == kSpellEffects.kModifyIncomingDamage && e.m_effectParam < 0),
                 CheatTrigger.Blade => effects.Any(e => e.m_effectType == kSpellEffects.kModifyOutgoingDamage && e.m_effectParam > 0),
+                // CLASSIC (reactions)
+                CheatTrigger.Attack => effects.Any(e => IsEnemyTarget(e) && e.m_effectType is kSpellEffects.kDamage or kSpellEffects.kDamageNoCrit
+                    or kSpellEffects.kDamagePerTotalPipPower or kSpellEffects.kMaxHealthDamage or kSpellEffects.kStealHealth
+                    or kSpellEffects.kDamageOverTime),
+                CheatTrigger.Trap => effects.Any(e => IsEnemyTarget(e) && (e.m_effectType == kSpellEffects.kModifyIncomingDamageType
+                    || e.m_effectType == kSpellEffects.kModifyIncomingDamage && e.m_effectParam > 0)),
+                CheatTrigger.Charm => effects.Any(e => e.m_effectType is kSpellEffects.kModifyOutgoingDamage or kSpellEffects.kModifyAccuracy
+                    or kSpellEffects.kModifyOutgoingHeal or kSpellEffects.kModifyOutgoingHealFlat or kSpellEffects.kDispel),
+                CheatTrigger.Global => effects.Any(e => e.m_effectTarget == kEffectTarget.kGlobal),
                 _ => false,
             };
-            if (fires) {
-                return trigger;
-            }
-        }
-
-        return null;
-    }
 
     private static IEnumerable<SpellEffect> Flatten(IEnumerable<SpellEffect>? effects) {
         foreach (var effect in effects ?? []) {

@@ -283,10 +283,18 @@ public static class ClassicProgression {
                 Logger.Args(s_secondChance.Id, s_secondChance.Chests.Length, s_secondChance.FirstCost, s_secondChance.CostStep, s_secondChance.DailyUses));
         }
 
-        if (profile.Rules.BossCheats is { } bossCheats && File.Exists(Path.Combine(classicDataRoot, bossCheats))) {
-            s_bossCheats = BossCheatsLoader.Load(Path.Combine(classicDataRoot, bossCheats)); // CLASSIC
-            Logger.Information("Classic boss cheats {Table}: {Count} scripted bosses in {Dungeon}.",
-                Logger.Args(s_bossCheats.Id, s_bossCheats.Count, s_bossCheats.DungeonZone));
+        // CLASSIC: one file or several (Briskbreeze Tower and the Waterworks), each with its own dungeon.
+        var bossCheatFiles = profile.Rules.BossCheatFiles.IsDefaultOrEmpty
+            ? (profile.Rules.BossCheats is { } single ? [single] : [])
+            : profile.Rules.BossCheatFiles;
+        var bossCheatTables = bossCheatFiles.Where(f => File.Exists(Path.Combine(classicDataRoot, f)))
+            .Select(f => BossCheatsLoader.Load(Path.Combine(classicDataRoot, f))).ToList();
+        if (bossCheatTables.Count > 0) {
+            s_bossCheats = BossCheats.Combine(bossCheatTables);
+            foreach (var table in bossCheatTables) {
+                Logger.Information("Classic boss cheats {Table}: {Count} scripted bosses in {Dungeon}{Cycles}.",
+                    Logger.Args(table.Id, table.Count, table.DungeonZone, table.Cycles.IsEmpty ? "" : $", {table.Cycles.Length} cycle(s)"));
+            }
         }
 
         // CLASSIC: the dungeons and their reset rule; a profile without the file keeps the built-in Golem Tower rule.
