@@ -179,7 +179,10 @@ public sealed record CombatXpRule(int XpPerPip, int ZeroPipCountsAs, int? XPipCo
 /// derive it from the kind's rate.</param>
 /// <param name="School">CLASSIC: the only school that may get it (the Waterworks gear drops for the wizard's own school), or
 /// null for every school.</param>
-public sealed record DropEntry(ulong Template, double? Chance, string? School = null) {
+/// <param name="Rare">CLASSIC: a source calls the drop only "rare" with no tally (the May 2011 Mastery Amulets): it rolls at
+/// the kind's <see cref="DropRule.UnseenChance"/>, the established rate of a boss entry too rare to show in a tally. It still
+/// counts as listed and does not make the list tallied.</param>
+public sealed record DropEntry(ulong Template, double? Chance, string? School = null, bool Rare = false) {
 
     /// <summary>
     /// CLASSIC: true when a wizard of <paramref name="school"/> may get this entry (no school given: every entry).
@@ -211,6 +214,10 @@ public sealed record DropRule(ImmutableDictionary<MobKind, double> Expected, int
     /// <param name="listed">How many entries the mob's list has, templates or not.</param>
     /// <param name="tallied">True when the page gave entries of this list their own percentage.</param>
     public double ChanceOf(DropEntry entry, MobKind kind, int listed, bool tallied) {
+        if (entry.Rare) {
+            return UnseenChance;   // CLASSIC: "rare" in the source, no tally
+        }
+
         if (entry.Chance is { } own) {
             return own > 0 ? own : UnseenChance;   // 0: on the tally's list but never seen in its fights
         }
@@ -424,7 +431,7 @@ public static class MobRewardRulesLoader {
         "treasure_cards_alone", "notes");
     internal static readonly FrozenSet<string> s_mobKeys = FrozenSet.Create(StringComparer.Ordinal,
         "name", "templates", "rank", "kind", "gold", "drops", "treasure_cards", "reagents", "tally", "source", "notes", "profiles");
-    internal static readonly FrozenSet<string> s_itemKeys = FrozenSet.Create(StringComparer.Ordinal, "name", "template", "chance", "school");
+    internal static readonly FrozenSet<string> s_itemKeys = FrozenSet.Create(StringComparer.Ordinal, "name", "template", "chance", "school", "rare");
     private static readonly string[] s_itemSchools = ["balance", "death", "fire", "ice", "life", "myth", "storm"];
     private static readonly string[] s_fizzle = ["card", "one"];
     private static readonly string[] s_kinds = ["normal", "elite", "boss"];
@@ -808,8 +815,16 @@ public static class MobRewardRulesLoader {
                 school = diagnostics.ReadEnum(schoolEntry.Value, YamlTree.Join(itemPath, "school"), s_itemSchools);
             }
 
+            var rare = false;
+            if (item.Find("rare") is { } rareEntry) {
+                rare = diagnostics.ReadBool(rareEntry.Value, YamlTree.Join(itemPath, "rare")) ?? false;
+                if (rare && chance is not null) {
+                    diagnostics.At(rareEntry.Value, YamlTree.Join(itemPath, "rare"), "a rare entry has no tallied chance");
+                }
+            }
+
             if (item.Find("template") is { } template && ReadId(template.Value, YamlTree.Join(itemPath, "template"), diagnostics) is { } id) {
-                result.Add(new DropEntry(id, chance, school));
+                result.Add(new DropEntry(id, chance, school, rare));
             }
         }
 

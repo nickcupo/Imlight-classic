@@ -352,6 +352,20 @@ public sealed class WaterworksTests : IDisposable {
         }
     }
 
+    // CLASSIC: owner delegated 2026-10-16: the eleven Celestia creatures with a dated Dec 2010 - May 2011 page get that
+    // health under wintertusk-2011 only; celestia-2010 (cutoff 2010-10-31) keeps the r806919 template health.
+    [Theory]
+    [InlineData(267121UL, 7785)] // Queen Calypso, oldid 128083 (2011-02-11)
+    [InlineData(267125UL, 6540)] // Tempus Stormfist, oldid 126501 (2011-01-22)
+    [InlineData(267106UL, 3695)] // Optio Agenor, oldid 124410 (2010-12-29), below the client's 3,825
+    [InlineData(267072UL, 910)]  // Crustacean Clawcutter, corrected revision 131245 (2011-04-01)
+    public void CelestiaCreaturesHaveTheirDatedEarly2011HealthOnlyUnderWintertusk(ulong template, int health) {
+        Assert.Equal(health, MobStatsLoader.Load(RuleFile(Wintertusk, p => p.Rules.MobStats), Wintertusk).HealthOf(template));
+        foreach (var older in new[] { Celestia, October }) {
+            Assert.Null(MobStatsLoader.Load(RuleFile(older, p => p.Rules.MobStats), older).HealthOf(template));
+        }
+    }
+
     // Hat/Robe/Shoe-T6-TUW-001..007 in school order, and the seven Crown-S03 Mastery Amulets.
     private static readonly string[] Schools = ["Balance", "Death", "Fire", "Ice", "Life", "Myth", "Storm"];
     private static readonly ulong[] Amulets = [.. Enumerable.Range(0, 7).Select(i => 468162UL + (ulong) i)];
@@ -378,6 +392,29 @@ public sealed class WaterworksTests : IDisposable {
         Assert.Contains(robe, sylster);
         Assert.Contains(boots, sylster);
         Assert.All(sylster, item => Assert.True(item == robe || item == boots || Amulets.Contains(item), $"Sylster dropped {item}"));
+    }
+
+    [Fact]
+    public void MasteryAmuletsRollAtTheRareBossRateAndTheGearKeepsItsShare() {
+        // CLASSIC: May 2011 notes say only "rare"; owner delegated 2026-10-16: the loot rules' unseen_chance (inferred).
+        var rules = MobRewardRulesLoader.Load(RuleFile(Wintertusk, p => p.Rules.MobRewards), Wintertusk);
+        Assert.Equal(0.01, rules.ItemDrops.UnseenChance);
+        foreach (var boss in new[] { Luska, Sylster }) {
+            var mob = rules.Find(boss)!;
+            var amulets = mob.Items.Where(e => Amulets.Contains(e.Template)).ToList();
+            Assert.Equal(7, amulets.Count);
+            // Own-school list: the school's gear plus the seven amulets (other schools' gear is not listed for this wizard).
+            var gear = mob.Items.Count(e => !Amulets.Contains(e.Template)) / 7;
+            var listed = gear + 7;
+            Assert.All(amulets, e => {
+                Assert.True(e.Rare);
+                Assert.Null(e.Chance);
+                Assert.Equal(0.01, rules.ItemDrops.ChanceOf(e, MobKind.Boss, listed, tallied: false));
+            });
+            var piece = mob.Items.First(e => !Amulets.Contains(e.Template));
+            Assert.False(piece.Rare);
+            Assert.Equal(rules.ItemDrops.Expected[MobKind.Boss] / listed, rules.ItemDrops.ChanceOf(piece, MobKind.Boss, listed, tallied: false));
+        }
     }
 
     [Fact]

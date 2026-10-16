@@ -5,32 +5,59 @@ using Xunit;
 
 namespace Imlight.Classic.Tests;
 
-// CLASSIC: the owner's pending housing rulings (resale value, attic capacity, attic ownership) sit behind one data
-// switch, houses-october-2010.yaml pending_rulings.enabled. Golden checks: with the switch off (as shipped) today's
-// live behaviour is unchanged; with it on, the recommended values apply to the October family only.
+// CLASSIC: the owner's housing rulings (resale value, attic capacity, attic ownership) sit behind one data switch,
+// houses-october-2010.yaml pending_rulings.enabled. Owner delegated 2026-10-16: the switch ships ON (resale 5% of the
+// gold price, attic 100 per wizard, status owner-approved). The OFF path stays covered through temp data.
 [Collection(nameof(ClassicRuntimeCollection))]
 public sealed class HousePendingRulingsTests {
     private const string October = "october-2010-arc1", Celestia = "celestia-2010";
     private static string RealPath => Path.Combine(ClassicDataFixture.Root, "housing", "houses-october-2010.yaml");
 
-    private static string SwitchedOn(TempClassicData data, string owner = "wizard") {
-        var source = File.ReadAllText(RealPath);
-        Assert.Contains("pending_rulings:\n  enabled: false", source);
+    private const string On = "pending_rulings:\n  enabled: true\n  status: owner-approved";
+    private const string Off = "pending_rulings:\n  enabled: false\n  status: pending-owner-confirmation";
+
+    private static string Write(TempClassicData data, string text) {
         var path = Path.Combine(data.Root, "houses-october-2010.yaml");
-        File.WriteAllText(path, source.Replace("pending_rulings:\n  enabled: false", "pending_rulings:\n  enabled: true")
-            .Replace("attic_owner: wizard", $"attic_owner: {owner}"));
+        File.WriteAllText(path, text);
         return path;
     }
 
+    private static string SwitchedOn(TempClassicData data, string owner = "wizard") {
+        var source = File.ReadAllText(RealPath);
+        Assert.Contains(On, source);
+        return Write(data, source.Replace("attic_owner: wizard", $"attic_owner: {owner}"));
+    }
+
+    private static string SwitchedOff(TempClassicData data) {
+        var source = File.ReadAllText(RealPath);
+        Assert.Contains(On, source);
+        return Write(data, source.Replace(On, Off));
+    }
+
     [Fact]
-    public void AsShippedTheSwitchIsOffAndNothingChanges() {
+    public void AsShippedTheSwitchIsOnWithTheOwnerApprovedValues() {
         var catalog = HouseCatalog.Load(RealPath, October, out var rulings);
+        Assert.True(rulings.Enabled);
+        Assert.Equal(100, rulings.AtticCapacity); // 100 per wizard (owner delegated 2026-10-16)
+        Assert.Equal("wizard", rulings.AtticOwner);
+        Assert.Equal(17, catalog.Count);
+        Assert.All(catalog.Values, house => {
+            Assert.True(house.Complete, house.Name);
+            Assert.Equal(15, house.MinimumLevel); // purchase stays open at the dated level 15
+            Assert.True(house.ResaleAllowed, house.Name);
+        });
+    }
+
+    [Fact]
+    public void SwitchedOffNothingChanges() {
+        using var data = new TempClassicData();
+        var catalog = HouseCatalog.Load(SwitchedOff(data), October, out var rulings);
         Assert.False(rulings.Enabled);
         Assert.Equal(0, rulings.AtticCapacity);
         Assert.Equal(17, catalog.Count);
         Assert.All(catalog.Values, house => {
             Assert.True(house.Complete, house.Name);
-            Assert.Equal(15, house.MinimumLevel); // purchase stays open at the dated level 15
+            Assert.Equal(15, house.MinimumLevel);
             Assert.False(house.ResaleAllowed, house.Name); // resale stays closed
         });
     }
@@ -46,9 +73,8 @@ public sealed class HousePendingRulingsTests {
     }
 
     [Fact]
-    public void SwitchedOnTheRecommendedValuesApply() {
-        using var data = new TempClassicData();
-        var catalog = HouseCatalog.Load(SwitchedOn(data), October, out var rulings);
+    public void AsShippedTheRecommendedValuesApply() {
+        var catalog = HouseCatalog.Load(RealPath, October, out var rulings);
         Assert.True(rulings.Enabled);
         Assert.Equal(100, rulings.AtticCapacity); // dated 2009-05-22 and 2010-09-23
         Assert.Equal("wizard", rulings.AtticOwner);
@@ -58,7 +84,8 @@ public sealed class HousePendingRulingsTests {
         Assert.All(catalog.Values.Where(h => h.Crowns > 0), h => Assert.Equal(5001, h.ResaleGold)); // school houses
         Assert.All(catalog.Values, h => Assert.InRange(h.ResaleGold, 1, h.Gold / 10)); // "a considerable loss"
         // Prices, capacities and the level are untouched by the switch.
-        var off = HouseCatalog.Load(RealPath, October);
+        using var data = new TempClassicData();
+        var off = HouseCatalog.Load(SwitchedOff(data), October);
         Assert.All(catalog.Values, h => Assert.Equal(off[h.TemplateId] with { ResaleAllowed = true }, h));
     }
 
@@ -66,8 +93,7 @@ public sealed class HousePendingRulingsTests {
     public void TheSwitchReachesEveryOctoberFamilyProfileButNoOlderOne() {
         _ = ClassicDataFixture.LoadProfile(Celestia);
         _ = ClassicDataFixture.LoadProfile(October);
-        using var data = new TempClassicData();
-        var path = SwitchedOn(data);
+        var path = RealPath;
         Assert.Equal(HouseCatalog.Load(path, October).Values.OrderBy(h => h.TemplateId),
             HouseCatalog.Load(path, Celestia).Values.OrderBy(h => h.TemplateId));
         foreach (var older in new[] { "late-2009", "arc1-2009h1", "dev-unrestricted" }) {
