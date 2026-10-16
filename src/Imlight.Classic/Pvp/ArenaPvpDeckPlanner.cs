@@ -18,7 +18,7 @@ public static class ArenaPvpDeckPlanner {
 
     public static IReadOnlyList<ArenaDeckEntry> Plan(IEnumerable<ArenaDeckSpell> available, string school, int level,
         string profile, IReadOnlyList<string> lineage, ArenaDeckLimits limits) {
-        if (level is < 1 or > 50 || limits.MaxCards <= 0) return [];
+        if (level < 1 || level > ClassicProfiles.MaxLevelOf(profile) || limits.MaxCards <= 0) return []; // CLASSIC: the profile's cap
         var cards = available.Where(s => s.Supported && s.Record.ClientTemplate is not null && s.Record.IsInProfile(profile)
             && (s.Record.Kind == "trained" && string.Equals(s.Record.School, school, StringComparison.OrdinalIgnoreCase)
                 // Independently taught for one point, with no prerequisite school chain; recorded level20.
