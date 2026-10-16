@@ -395,6 +395,29 @@ public sealed class WaterworksTests : IDisposable {
     }
 
     [Fact]
+    public void MasteryAmuletsRollAtTheRareBossRateAndTheGearKeepsItsShare() {
+        // CLASSIC: May 2011 notes say only "rare"; owner delegated 2026-10-16: the loot rules' unseen_chance (inferred).
+        var rules = MobRewardRulesLoader.Load(RuleFile(Wintertusk, p => p.Rules.MobRewards), Wintertusk);
+        Assert.Equal(0.01, rules.ItemDrops.UnseenChance);
+        foreach (var boss in new[] { Luska, Sylster }) {
+            var mob = rules.Find(boss)!;
+            var amulets = mob.Items.Where(e => Amulets.Contains(e.Template)).ToList();
+            Assert.Equal(7, amulets.Count);
+            // Own-school list: the school's gear plus the seven amulets (other schools' gear is not listed for this wizard).
+            var gear = mob.Items.Count(e => !Amulets.Contains(e.Template)) / 7;
+            var listed = gear + 7;
+            Assert.All(amulets, e => {
+                Assert.True(e.Rare);
+                Assert.Null(e.Chance);
+                Assert.Equal(0.01, rules.ItemDrops.ChanceOf(e, MobKind.Boss, listed, tallied: false));
+            });
+            var piece = mob.Items.First(e => !Amulets.Contains(e.Template));
+            Assert.False(piece.Rare);
+            Assert.Equal(rules.ItemDrops.Expected[MobKind.Boss] / listed, rules.ItemDrops.ChanceOf(piece, MobKind.Boss, listed, tallied: false));
+        }
+    }
+
+    [Fact]
     public void NoOlderProfileDocumentsTheWaterworksBossesAndNoLaterJewelTableIsRolled() {
         foreach (var older in new[] { Celestia, October }) {
             var rules = MobRewardRulesLoader.Load(RuleFile(older, p => p.Rules.MobRewards), older);
