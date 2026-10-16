@@ -55,7 +55,9 @@ public sealed class CelestiaProfileTests {
         var october = ClassicDataFixture.LoadProfile(October);
         Assert.Equal(october.Rules.PuzzleHelpers, profile.Rules.PuzzleHelpers);
         Assert.Equal(october.Rules.Potions, profile.Rules.Potions);
-        Assert.Equal(october.Rules.MobRewards, profile.Rules.MobRewards);
+        // Work package E: the 2009 mob rewards and badges plus Celestia (CelestiaLootTests).
+        Assert.Equal("progression/mob-rewards-2010.yaml", profile.Rules.MobRewards);
+        Assert.Equal("badges/badges-2010.yaml", profile.Rules.Badges);
         Assert.Equal(october.DisabledQuests, profile.DisabledQuests);
         // Work package B: critical and block on, with the 2014 client's percent model (ruling D3); every other switch inherited.
         Assert.Equal(october.Features.Explicit.Where(p => p.Key != ClassicFeatures.CriticalAndBlock).OrderBy(p => p.Key),

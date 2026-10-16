@@ -265,7 +265,7 @@ public static class BadgeRulesLoader {
     private static readonly string[] s_schools = ["fire", "ice", "storm", "myth", "life", "death", "balance"];
     private static readonly FrozenSet<string> s_killKeys = FrozenSet.Create(StringComparer.Ordinal, "adjective", "count");
     private static readonly FrozenSet<string> s_zoneKeys = FrozenSet.Create(StringComparer.Ordinal, "zone", "count");
-    private static readonly string[] s_worlds = ["wizard_city", "krokotopia", "marleybone", "mooshu", "dragonspyre", "grizzleheim", "general"];
+    private static readonly string[] s_worlds = ["wizard_city", "krokotopia", "marleybone", "mooshu", "dragonspyre", "grizzleheim", "celestia", "general"]; // CLASSIC: celestia (work package E)
     private static readonly Regex s_id = new(@"^badges-[a-z0-9][a-z0-9-]*\z", RegexOptions.CultureInvariant);
     private static readonly Regex s_badgeId = new(@"^[a-z0-9][a-z0-9-]*\z", RegexOptions.CultureInvariant);
     private static readonly Regex s_langKey = new(@"^[A-Za-z][A-Za-z0-9]*_[A-Za-z0-9]+\z", RegexOptions.CultureInvariant);
