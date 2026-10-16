@@ -59,7 +59,7 @@ public sealed class WintertuskProfileTests {
         Assert.Equal(celestia.Rules.LevelStats, profile.Rules.LevelStats);
         Assert.Equal(celestia.Rules.Potions, profile.Rules.Potions);
         Assert.Equal(celestia.DisabledQuests, profile.DisabledQuests);
-        Assert.False(profile.Features.IsEnabled(ClassicFeatures.CriticalAndBlock));
+        Assert.True(profile.Features.IsEnabled(ClassicFeatures.CriticalAndBlock)); // inherited from celestia-2010 (claude/celestia-b)
         // Crafting stays off (owner); gardening stays gated until its own package (TODO package K).
         Assert.False(profile.Features.IsEnabled(ClassicFeatures.Crafting));
         Assert.False(profile.Features.IsEnabled(ClassicFeatures.Gardening));
