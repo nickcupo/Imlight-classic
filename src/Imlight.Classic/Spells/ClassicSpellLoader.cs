@@ -108,13 +108,14 @@ public static class ClassicSpellSchema {
 public static class ClassicSpellLoader {
 
     internal static readonly FrozenSet<string> s_recordKeys = FrozenSet.Create(StringComparer.Ordinal,
-        "id", "name", "school", "kind", "client_template", "profiles", "values", "profile_values", "introduced",
+        "id", "name", "school", "kind", "client_template", "profiles", "scoped", "values", "profile_values", "introduced",
         "provenance", "later_changes", "modern_values", "license_tag", "notes");
-    private static readonly string[] s_recordRequired = [.. s_recordKeys.Where(key => key != "profile_values")];
+    private static readonly string[] s_recordRequired = [.. s_recordKeys.Where(key => key is not ("profile_values" or "scoped"))];
     internal static readonly FrozenSet<string> s_valuesKeys = FrozenSet.Create(StringComparer.Ordinal,
         "pips", "accuracy", "level_learned", "training_points", "trainer", "effects");
     internal static readonly FrozenSet<string> s_effectKeys = FrozenSet.Create(StringComparer.Ordinal,
-        "type", "school", "min", "max", "outcomes", "percent", "rounds", "targets", "notes");
+        "type", "school", "min", "max", "outcomes", "backfire", "percent", "rounds", "targets", "notes");
+    internal static readonly FrozenSet<string> s_backfireKeys = FrozenSet.Create(StringComparer.Ordinal, "chance", "amount");
     private static readonly string[] s_effectRequired = ["type", "school"];
     internal static readonly FrozenSet<string> s_modernValuesKeys = FrozenSet.Create(StringComparer.Ordinal,
         "pips", "accuracy", "effects_summary");
@@ -222,6 +223,8 @@ public static class ClassicSpellLoader {
         var kind = map.Find("kind") is { } kindEntry ? diagnostics.ReadEnum(kindEntry.Value, "kind", ClassicSpellSchema.Kinds) : null;
         var clientTemplate = ReadClientTemplate(map, diagnostics);
         var profiles = ReadProfiles(map, diagnostics);
+        // CLASSIC: scoped: true limits the record's values to the profiles it lists (ClassicSpellRecord.Scoped).
+        var scoped = map.Find("scoped") is { } scopedEntry && diagnostics.ReadBool(scopedEntry.Value, "scoped") == true;
         var values = map.Find("values") is { } valuesEntry ? ReadValues(valuesEntry.Value, "values", diagnostics) : null;
         var profileValues = ReadProfileValues(map, profiles, diagnostics);
         CheckIntroduced(map, diagnostics);
@@ -244,6 +247,7 @@ public static class ClassicSpellLoader {
             Kind = kind,
             ClientTemplate = clientTemplate,
             Profiles = profiles,
+            Scoped = scoped,
             Values = values,
             ProfileValues = profileValues,
             SourceFile = display,
@@ -506,6 +510,31 @@ public static class ClassicSpellLoader {
             }
         }
 
+        // CLASSIC: a backfire is the share of casts that hit the caster instead (the 2011 Insane Bolt).
+        SpellBackfire? backfire = null;
+        if (map.Find("backfire") is { } backfireEntry) {
+            var backfirePath = YamlTree.Join(keyPath, "backfire");
+            if (diagnostics.ReadMap(backfireEntry.Value, backfirePath) is { } backfireMap) {
+                diagnostics.CheckKeys(backfireMap, backfirePath, s_backfireKeys, ["chance", "amount"]);
+                var chance = backfireMap.Find("chance") is { } chanceEntry
+                    ? diagnostics.ReadFraction(chanceEntry.Value, YamlTree.Join(backfirePath, "chance"))
+                    : null;
+                var amount = backfireMap.Find("amount") is { } amountEntry
+                    ? diagnostics.ReadInt(amountEntry.Value, YamlTree.Join(backfirePath, "amount"), 0)
+                    : null;
+                if (chance is { } c && (c <= 0 || c >= 1)) {
+                    diagnostics.At(backfireMap, backfirePath, "chance must be above 0 and below 1");
+                }
+                else if (chance is { } share && amount is { } hit) {
+                    backfire = new SpellBackfire(share, hit);
+                }
+            }
+
+            if (kind != SpellEffectKind.Damage || map.Find("outcomes") is not null || min != max) {
+                diagnostics.At(backfireEntry.Value, backfirePath, "a backfire needs a damage effect with one fixed amount and no outcomes");
+            }
+        }
+
         var missing = new List<string>();
         if (s_needsAmount.Contains(kind)) {
             missing.AddRange(new[] { "min", "max", "targets" }.Where(key => map.Find(key) is null));
@@ -528,7 +557,7 @@ public static class ClassicSpellLoader {
         SpellTargets? target = targetName is null ? null : (SpellTargets) ClassicSpellSchema.Targets.IndexOf(targetName);
 
         return diagnostics.Errors.Count > errorsBefore ? null
-            : new SpellEffectValues(kind, school, min, max, percent, rounds, target, notes) { Outcomes = outcomes };
+            : new SpellEffectValues(kind, school, min, max, percent, rounds, target, notes) { Outcomes = outcomes, Backfire = backfire };
     }
 
     private static void CheckIntroduced(YMap map, YamlDiagnostics diagnostics) {

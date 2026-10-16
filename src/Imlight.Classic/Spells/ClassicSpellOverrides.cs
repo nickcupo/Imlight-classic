@@ -115,8 +115,8 @@ public sealed class ClassicSpellOverrides {
             return null;
         }
 
-        // CLASSIC: an Astral card (Sun, Moon, Star: Celestia, 2010-10-27) changes its template only in the profiles its
-        // record lists, so the older profiles keep the client's card exactly as before the Astral records existed.
+        // CLASSIC: a scoped record (every Astral card, and any record with scoped: true, such as the 2011 Insane Bolt) changes
+        // its template only in the profiles it lists, so the other profiles keep the client's card exactly as before.
         if (!AppliesHere(record)) {
             return null;
         }
@@ -186,14 +186,14 @@ public sealed class ClassicSpellOverrides {
     }
 
     /// <summary>
-    /// CLASSIC: false for an Astral-school record (<see cref="ClassicSpellSchema.AstralSchools"/>) the active profile does
-    /// not list; every other record applies its values everywhere, as before.
+    /// CLASSIC: false for a scoped record (<see cref="ClassicSpellRecord.IsScoped"/>: an Astral-school record, or one marked
+    /// <c>scoped: true</c>) the active profile does not list; every other record applies its values everywhere, as before.
     /// </summary>
     public bool AppliesHere(ClassicSpellRecord record)
-        => !ClassicSpellSchema.AstralSchools.Contains(record.School, StringComparer.Ordinal) || record.IsInProfile(ProfileId);
+        => record.AppliesIn(ProfileId);
 
     /// <summary>
-    /// The records the active profile does not list; their values still apply (Astral records excepted, see
+    /// The records the active profile does not list; their values still apply (scoped records excepted, see
     /// <see cref="AppliesHere"/>).
     /// </summary>
     public ImmutableArray<ClassicSpellRecord> RecordsNotInProfile

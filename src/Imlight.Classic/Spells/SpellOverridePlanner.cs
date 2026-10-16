@@ -280,6 +280,11 @@ public static class SpellOverridePlanner {
     /// <returns>The plan; empty changes when the template already carries the classic numbers.</returns>
     public static SpellOverridePlan Plan(ClassicSpellRecord record, SpellMatch match, SpellValues values, SpellTemplateShape shape,
                                          int? inheritedFixedPips = null) {
+        // CLASSIC: a backfiring hit (the 2011 Insane Bolt) is one native random effect whose choices hit the target or the caster.
+        if (values.Effects.Any(effect => effect.Backfire is not null)) {
+            return PlanBackfire(record, match, values, shape, inheritedFixedPips);
+        }
+
         // CLASSIC: dated trained outcomes do not establish a TC/item variant's amounts or branch weighting.
         // Keep the previous canonical overrides for that indirect match until it has its own dated record.
         if (match != SpellMatch.ClientTemplate && values.Effects.Any(effect => !effect.Outcomes.IsEmpty)) {
@@ -311,6 +316,111 @@ public static class SpellOverridePlanner {
         var rebuiltIssues = SpellMechanicsAudit.Compare(values, SpellPlanSimulator.Apply(shape, rebuilt), record.School);
 
         return rebuiltIssues.Length < issues.Length ? rebuilt with { RemainingIssues = rebuiltIssues } : plan;
+    }
+
+    /// <summary>
+    /// CLASSIC: plans a record whose only effect is a backfiring hit (<see cref="SpellBackfire"/>) onto the template's own
+    /// random effect that already rolls between hits on the target and hits on the caster (r806919's Insane Bolt). The
+    /// template keeps that one random effect; its choices become copies of its first hit and its first self-hit in the
+    /// record's proportion, with the record's amounts and school. A template without such an effect keeps its effects;
+    /// the audit then reports the difference.
+    /// </summary>
+    private static SpellOverridePlan PlanBackfire(ClassicSpellRecord record, SpellMatch match, SpellValues values, SpellTemplateShape shape,
+                                                  int? inheritedFixedPips) {
+        var (rank, clearSchoolPips, pipsSkip) = PlanPips(values.Pips, shape, inheritedFixedPips);
+        var accuracy = values.AccuracyPercent;
+        var plan = new SpellOverridePlan {
+            Record = record,
+            Match = match,
+            Rank = rank,
+            ClearSchoolPips = clearSchoolPips,
+            PipsSkip = pipsSkip,
+            PipsInherited = pipsSkip == PipsSkip.XOnFixedCostTemplate && inheritedFixedPips is not null,
+            Accuracy = accuracy == shape.Accuracy ? null : accuracy,
+        };
+
+        var effect = values.Effects[0];
+        var wrapper = values.Effects.Length == 1 && effect.Backfire is not null && pipsSkip == PipsSkip.None
+            ? BackfireWrapper(shape.Effects, effect)
+            : -1;
+        if (wrapper < 0 || BackfireChoices(effect.Backfire!.Chance) is not var (total, selfHits)) {
+            return plan with {
+                SkippedEffects = [new SkippedEffect(effect.Kind, EffectSkipReason.NoMatchingTemplateEffect)],
+                RemainingIssues = SpellMechanicsAudit.Compare(values, SpellPlanSimulator.Apply(shape, plan), record.School),
+            };
+        }
+
+        var children = shape.Effects[wrapper].Children;
+        var hit = children.IndexOf(children.First(child => CategoryOf(child.Target) == CategoryOf(effect)));
+        var self = children.IndexOf(children.First(child => CategoryOf(child.Target) == TargetCategory.Self));
+        ImmutableArray<int> selection = [.. Enumerable.Repeat(hit, total - selfHits), .. Enumerable.Repeat(self, selfHits)];
+        var damageType = SpellEffectMeaning.DamageTypeOf(effect.School);
+        var changes = new List<EffectChange>();
+        for (var i = 0; i < selection.Length; i++) {
+            var node = children[selection[i]];
+            var amount = i < total - selfHits ? effect.Min!.Value : effect.Backfire.Amount;
+            int? param = amount == node.Param ? null : amount;
+            string? school = string.Equals(node.DamageType, damageType, StringComparison.OrdinalIgnoreCase) ? null : damageType;
+            if (param is not null || school is not null) {
+                changes.Add(new EffectChange(new EffectAddress(0, i), param, DamageType: school));
+            }
+        }
+
+        var identity = selection.SequenceEqual(Enumerable.Range(0, children.Length));
+        plan = plan with {
+            Structure = shape.Effects.Length == 1 ? null : [new EffectAddress(wrapper)],
+            RandomChildren = identity
+                ? ImmutableDictionary<int, ImmutableArray<int>>.Empty
+                : ImmutableDictionary<int, ImmutableArray<int>>.Empty.Add(0, selection),
+            EffectChanges = [.. changes],
+            AppliedEffects = [effect.Kind],
+        };
+
+        return plan with { RemainingIssues = SpellMechanicsAudit.Compare(values, SpellPlanSimulator.Apply(shape, plan), record.School) };
+    }
+
+    /// <summary>
+    /// CLASSIC: the first random effect whose choices are all plain damage, some on the effect's targets and some on the caster.
+    /// </summary>
+    private static int BackfireWrapper(ImmutableArray<TemplateEffectNode> effects, SpellEffectValues effect) {
+        for (var i = 0; i < effects.Length; i++) {
+            var children = effects[i].Children;
+            if (effects[i].Composition == TemplateComposition.Random && !children.IsEmpty
+                && children.All(child => child is { Composition: TemplateComposition.Plain, Kind: TemplateEffectKind.Damage })
+                && children.Any(child => CategoryOf(child.Target) == TargetCategory.Self)
+                && children.Any(child => CategoryOf(child.Target) == CategoryOf(effect))
+                && children.All(child => CategoryOf(child.Target) is TargetCategory.Self || CategoryOf(child.Target) == CategoryOf(effect))) {
+                return i;
+            }
+        }
+
+        return -1;
+    }
+
+    /// <summary>
+    /// CLASSIC: how many equally likely choices a backfire needs and how many of them hit the caster. Ten when the chance is
+    /// a whole tenth, as the client's own pre-rework Insane Bolt (its TC and Spells/Insane Bolt - OLD - MOB ONLY.xml) holds
+    /// them, so that card's text (Spell_00001816, whose self-hit is the ninth choice) reads the card; else the fewest choices that
+    /// give the chance exactly, at most 15 (the four-bit choice index). Null when no such count exists.
+    /// </summary>
+    internal static (int Total, int SelfHits)? BackfireChoices(double chance) {
+        static int? Exact(double chance, int total) {
+            var hits = chance * total;
+            var rounded = Math.Round(hits);
+            return Math.Abs(hits - rounded) < 1e-9 && rounded is >= 1 && rounded < total ? (int) rounded : null;
+        }
+
+        if (Exact(chance, 10) is { } tenths) {
+            return (10, tenths);
+        }
+
+        for (var total = 2; total <= 15; total++) {
+            if (Exact(chance, total) is { } hits) {
+                return (total, hits);
+            }
+        }
+
+        return null;
     }
 
     private static bool IsStructural(MechanicsIssue issue)

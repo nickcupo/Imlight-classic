@@ -72,6 +72,18 @@ public sealed class ClassicSpellRecord {
     public required ImmutableArray<string> Profiles { get; init; }
 
     /// <summary>
+    /// CLASSIC: true when the record changes its client template only in the profiles it lists (<c>scoped: true</c>): every
+    /// other profile keeps the client's card exactly as if the record did not exist. Astral-school records are always
+    /// scoped (<see cref="IsScoped"/>).
+    /// </summary>
+    public bool Scoped { get; init; }
+
+    /// <summary>
+    /// CLASSIC: true for a <see cref="Scoped"/> record and for every Astral-school record (Celestia, package C).
+    /// </summary>
+    public bool IsScoped => Scoped || ClassicSpellSchema.AstralSchools.Contains(School, StringComparer.Ordinal);
+
+    /// <summary>
     /// The canonical profile's numbers.
     /// </summary>
     public required SpellValues Values { get; init; }
@@ -94,6 +106,15 @@ public sealed class ClassicSpellRecord {
     /// <returns>True if the record lists the profile, or a parent it inherits membership from (CLASSIC).</returns>
     public bool IsInProfile(string profileId)
         => ClassicProfiles.Lists(Profiles, profileId);
+
+    /// <summary>
+    /// CLASSIC: true when the record's values may reach <paramref name="profileId"/>'s cards and fights: always for an
+    /// unscoped record (its values apply everywhere, as before), and for a scoped one only where it is listed.
+    /// </summary>
+    /// <param name="profileId">A profile id.</param>
+    /// <returns>True if the record applies in the profile.</returns>
+    public bool AppliesIn(string profileId)
+        => !IsScoped || IsInProfile(profileId);
 
     /// <summary>
     /// The card's numbers in the profile whose extends chain is <paramref name="lineage"/>.
