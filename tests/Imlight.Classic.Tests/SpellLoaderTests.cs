@@ -313,4 +313,56 @@ public sealed class SpellLoaderTests : IDisposable {
         Assert.Contains(ex.Errors, error => error.File.EndsWith("frost-beetle.yaml", StringComparison.Ordinal) && error.KeyPath == "license_tag");
     }
 
+
+    // CLASSIC: scoped records and backfiring hits (the 2011 Insane Bolt).
+    private static string BoltValues(string effect) => $$"""
+        values:
+          pips: 2
+          accuracy: 1.0
+          level_learned: 55
+          training_points: null
+          trainer: null
+          effects:
+          - {{effect}}
+        """;
+
+    [Fact]
+    public void ReadsScopedAndABackfire() {
+        _data.WriteSpell("storm", "insane-bolt", SpellFixture.RecordYaml(school: "storm", slug: "insane-bolt", name: "Insane Bolt",
+            clientTemplate: "'Spells/Insane Bolt.xml'", profiles: "[late-2009]", extra: "scoped: true",
+            values: BoltValues("{type: damage, school: moon, min: 1000, max: 1000, targets: single, backfire: {chance: 0.2, amount: 10000}}")));
+
+        var record = Assert.Single(Load().Records);
+        Assert.True(record.Scoped);
+        Assert.Equal(new SpellBackfire(0.2, 10000), Assert.Single(record.Values.Effects).Backfire);
+    }
+
+    [Fact]
+    public void ARecordIsUnscopedUnlessItSaysSo() {
+        _data.WriteSpell("fire", "fire-cat", SpellFixture.RecordYaml());
+        var record = Assert.Single(Load().Records);
+        Assert.False(record.Scoped);
+        Assert.False(record.IsScoped);
+        Assert.True(record.AppliesIn("october-2010-arc1"));
+    }
+
+    [Theory]
+    [InlineData("{type: heal, school: life, min: 100, max: 100, targets: single, backfire: {chance: 0.2, amount: 10}}", "a backfire needs")]
+    [InlineData("{type: damage, school: storm, min: 100, max: 200, targets: single, backfire: {chance: 0.2, amount: 10}}", "a backfire needs")]
+    [InlineData("{type: damage, school: storm, min: 100, max: 100, targets: single, backfire: {chance: 1, amount: 10}}", "chance must be above 0")]
+    [InlineData("{type: damage, school: storm, min: 100, max: 100, targets: single, backfire: {chance: 0.2}}", "amount")]
+    public void ABadBackfireIsAnError(string effect, string message) {
+        _data.WriteSpell("storm", "insane-bolt", SpellFixture.RecordYaml(school: "storm", slug: "insane-bolt", name: "Insane Bolt",
+            clientTemplate: "'Spells/Insane Bolt.xml'", values: BoltValues(effect)));
+
+        var ex = Assert.Throws<ClassicDataException>(() => Load());
+        Assert.Contains(ex.Errors, error => error.Message.Contains(message, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void ScopedMustBeABoolean() {
+        _data.WriteSpell("fire", "fire-cat", SpellFixture.RecordYaml(extra: "scoped: maybe"));
+        Assert.Contains("expected true or false", SingleError("scoped").Message);
+    }
+
 }

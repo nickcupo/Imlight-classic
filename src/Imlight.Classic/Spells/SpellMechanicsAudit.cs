@@ -98,6 +98,9 @@ public static class SpellMechanicsAudit {
 
         public ImmutableArray<int> Outcomes { get; init; } = [];
 
+        /// <summary>CLASSIC: for a roll between hits and self-hits, the share of choices on the caster and their amounts.</summary>
+        public (double Chance, int Min, int Max)? Backfire { get; init; }
+
         public bool IsZero => Composition != TemplateComposition.Other && Min == 0 && Max == 0
             && EffectType is "kDamage" or "kHeal" or "kDamageOverTime" or "kHealOverTime" or "kStealHealth" or "kModifyOutgoingDamage"
                 or "kModifyIncomingDamage" or "kModifyAccuracy" or "kModifyOutgoingHeal" or "kModifyIncomingHeal" or "kAbsorbDamage"
@@ -209,6 +212,24 @@ public static class SpellMechanicsAudit {
                 $"{name} targets {Category(effect)} in 2009, {Category(unit.Target)} ({unit.Node.TargetMemberName}) on the template");
         }
 
+        if (effect.Backfire is { } backfire) {
+            if (unit.Backfire is not { } rolled) {
+                yield return new(MechanicsIssueKind.Composition, $"{name} needs one random effect that sometimes hits the caster instead");
+            }
+            else {
+                if (Math.Abs(rolled.Chance - backfire.Chance) > 1e-9) {
+                    yield return new(MechanicsIssueKind.Amount, $"{name}: hits the caster on {Percent(backfire.Chance)}% of casts, the template on {Percent(rolled.Chance)}%");
+                }
+
+                if (rolled.Min != backfire.Amount || rolled.Max != backfire.Amount) {
+                    yield return new(MechanicsIssueKind.Amount, $"{name}: {backfire.Amount} to the caster, the template has {rolled.Min}-{rolled.Max}");
+                }
+            }
+        }
+        else if (unit.Backfire is not null) {
+            yield return new(MechanicsIssueKind.Composition, $"{name} never hits the caster; the template sometimes does");
+        }
+
         if (!effect.Outcomes.IsEmpty) {
             if (unit.Composition != TemplateComposition.Random) {
                 yield return new(MechanicsIssueKind.Composition, $"{name} needs one random effect with explicit outcomes");
@@ -306,6 +327,15 @@ public static class SpellMechanicsAudit {
                 && child.EffectTypeName == children[0].EffectTypeName && child.Target == children[0].Target);
             var uniform = sameType && children.All(child => string.Equals(child.DamageType, children[0].DamageType, StringComparison.OrdinalIgnoreCase));
 
+            // CLASSIC: a roll between hits on the target and hits on the caster (Insane Bolt) is one effect with a backfire, when
+            // the record has one; it is compared by its target hits, and its self-hits as the backfire.
+            if (node.Composition == TemplateComposition.Random && effects.Any(effect => effect.Backfire is not null)
+                && BackfireUnit(i, node) is { } backfire) {
+                units.Add(backfire);
+
+                continue;
+            }
+
             // A roll between schools (Spectral Blast) is one outcome per record effect when the record lists each outcome.
             if (node.Composition == TemplateComposition.Random && sameType && !uniform
                 && effects.Count(effect => SpellEffectMeaning.CanCarry(effect.Kind, children[0].EffectTypeName)) >= children.Length) {
@@ -354,6 +384,29 @@ public static class SpellMechanicsAudit {
         }
 
         return units;
+    }
+
+    private static int Percent(double share) => (int) Math.Round(share * 100, MidpointRounding.AwayFromZero);
+
+    private static Unit? BackfireUnit(int index, TemplateEffectNode node) {
+        var children = node.Children;
+        if (children.IsEmpty || !children.All(child => child.Composition == TemplateComposition.Plain
+                && child.EffectTypeName == children[0].EffectTypeName
+                && string.Equals(child.DamageType, children[0].DamageType, StringComparison.OrdinalIgnoreCase))) {
+            return null;
+        }
+
+        var self = children.Where(child => child.Target == TemplateTarget.Self).ToList();
+        var hits = children.Where(child => child.Target != TemplateTarget.Self).ToList();
+        if (self.Count == 0 || hits.Count == 0 || hits.Any(hit => Category(hit.Target) != Category(hits[0].Target))) {
+            return null;
+        }
+
+        var first = hits[0];
+        return new Unit(index * 1000, first, TemplateComposition.Random, first.EffectTypeName, first.DamageType, first.Target,
+            hits.Min(hit => hit.Param), hits.Max(hit => hit.Param), first.Rounds, first.HealModifier) {
+            Backfire = (self.Count / (double) children.Length, self.Min(hit => hit.Param), self.Max(hit => hit.Param)),
+        };
     }
 
     private static string Describe(SpellEffectValues effect) {

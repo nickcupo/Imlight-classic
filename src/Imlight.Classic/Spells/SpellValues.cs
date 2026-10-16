@@ -139,11 +139,24 @@ public sealed record SpellEffectValues(SpellEffectKind Kind, string School, int?
     public ImmutableArray<int> Outcomes { get; init; } = [];
 
     /// <summary>
+    /// CLASSIC: a damage effect that instead hits the caster on some casts (the 2011 Insane Bolt), or null. The card rolls
+    /// once per cast between the effect's own hit and this one; the client holds both as children of one random effect.
+    /// </summary>
+    public SpellBackfire? Backfire { get; init; }
+
+    /// <summary>
     /// True when the effect carries an amount.
     /// </summary>
     public bool HasAmount => Min is not null && Max is not null;
 
 }
+
+/// <summary>
+/// CLASSIC: the self-hit of a backfiring damage effect.
+/// </summary>
+/// <param name="Chance">The share of casts that hit the caster instead of the effect's targets (0.2 = 20%).</param>
+/// <param name="Amount">The damage to the caster, in the effect's school.</param>
+public sealed record SpellBackfire(double Chance, int Amount);
 
 /// <summary>
 /// The numbers of a spell card in one profile.

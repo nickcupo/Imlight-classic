@@ -195,11 +195,16 @@ public sealed class WintertuskProfileTests {
 
     [Fact]
     public void NoSpellValueChangesExceptStunBlockComparedWithCelestia() {
-        // Owner ruling 2026-10-16: the May 2011 spell-value changes are not taken.
+        // Owner ruling 2026-10-16: the May 2011 spell-value changes are not taken. The one exception (owner, same day: "new
+        // dark pact and old insane bolt") is Insane Bolt, a scoped wintertusk-2011 record that celestia-2010 never applies.
         var book = Book();
         var celestia = new ClassicSpellOverrides(book, ClassicDataFixture.LoadProfile(Celestia));
         var may = new ClassicSpellOverrides(book, ClassicDataFixture.LoadProfile(Wintertusk));
-        foreach (var record in book.Records.Where(r => r.Id != "spell.ice.stun_block")) {
+        var insaneBolt = book.Records.Single(r => r.Id == "spell.storm.insane_bolt");
+        Assert.True(may.AppliesHere(insaneBolt));
+        Assert.False(celestia.AppliesHere(insaneBolt));
+        Assert.Equal(["spell.storm.insane_bolt"], book.Records.Where(r => r.Scoped).Select(r => r.Id));
+        foreach (var record in book.Records.Where(r => r.Id is not ("spell.ice.stun_block" or "spell.storm.insane_bolt"))) {
             Assert.Equal(record.IsInProfile(Celestia), record.IsInProfile(Wintertusk));
             Assert.Equal(celestia.ValuesOf(record), may.ValuesOf(record));
             Assert.DoesNotContain(Wintertusk, record.ProfileValues.Keys);

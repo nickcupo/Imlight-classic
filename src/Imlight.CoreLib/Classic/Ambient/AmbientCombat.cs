@@ -43,6 +43,7 @@ using System.Collections.Generic;
 using System.Linq;
 using Akka.Actor;
 using Imcodec.ObjectProperty.TypeCache;
+using Imlight.Classic;
 using Imlight.Classic.Ambient;
 using Imlight.Common;
 using Imlight.CoreLib.Game.Combat;
@@ -182,12 +183,21 @@ internal static class AmbientCombat {
     /// (CLASSIC 2026-10-04: was two copies of every trained spell, so a level 30 drew its first bolt as often as its best
     /// hit).
     /// </summary>
+    /// <summary>
+    /// True when an ambient wizard of <paramref name="schoolName"/> and <paramref name="level"/> knows the record's card: a
+    /// trained card of the school learned by that level. CLASSIC: a scoped record (the 2011 Insane Bolt) only in the profiles it
+    /// lists, so no other profile's wizards cast a card that profile does not have.
+    /// </summary>
+    internal static bool InDeckPool(Imlight.Classic.Spells.ClassicSpellRecord r, string schoolName, int level, string? profileId)
+        => r.Kind == "trained" && r.ClientTemplate is not null
+            && string.Equals(r.School, schoolName, StringComparison.OrdinalIgnoreCase)
+            && (r.Values.LevelLearned ?? 99) <= level
+            && (!r.IsScoped || (profileId is not null && r.AppliesIn(profileId)));
+
     internal static List<SpellData> DeckFor(MagicSchool school, int level) {
         var schoolName = school.ToString().ToLowerInvariant();
         var known = ClassicSpellTemplates.Records
-            .Where(r => r.Kind == "trained" && r.ClientTemplate is not null
-                        && string.Equals(r.School, schoolName, StringComparison.OrdinalIgnoreCase)
-                        && (r.Values.LevelLearned ?? 99) <= level)
+            .Where(r => InDeckPool(r, schoolName, level, ClassicRuntime.IsInitialized ? ClassicRuntime.Rules.Profile.Id : null))
             .ToList();
         if (level >= 14 && school != MagicSchool.Life
             && ClassicSpellTemplates.Records.FirstOrDefault(r => r.Name == "Fairy") is { ClientTemplate: not null } fairy) {
