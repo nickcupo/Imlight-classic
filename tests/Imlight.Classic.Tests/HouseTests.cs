@@ -453,17 +453,44 @@ public sealed class HouseTests : IDisposable {
     }
 
     [Fact]
-    public void AuthoredOctoberCatalogEnablesDatedHousesAtFifteenWithoutResale() {
+    public void AuthoredOctoberCatalogEnablesDatedHousesAtFifteenWithResale() {
+        // CLASSIC: owner delegated 2026-10-16: resale 5% of the gold price is ON as shipped.
         var path = Path.Combine(ClassicDataFixture.Root, "housing", "houses-october-2010.yaml");
         var catalog = HouseCatalog.Load(path, "october-2010-arc1");
         Assert.Equal(17, catalog.Count);
         Assert.All(catalog.Values, house => {
             Assert.True(house.Complete, house.Name);
             Assert.Equal(15, house.MinimumLevel);
-            Assert.False(house.ResaleAllowed);
+            Assert.True(house.ResaleAllowed, house.Name);
+            Assert.InRange(house.ResaleGold, 1, house.Gold / 10);
         });
         Assert.Equal(8000, catalog[160431].Gold); // dated Wooded Cottage price
         Assert.Equal(0, catalog[160431].Crowns);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void ShippedResaleStillRequiresAnEmptyHouseAndPaysTheCatalogValue(bool furnished) {
+        // CLASSIC: owner delegated 2026-10-16 (resale ON). The shipped Wooded Cottage offer, mapped onto the fixture
+        // templates, sells only when both rooms are empty, for its 5% resale value (8,000 -> 401 gold).
+        var shipped = HouseCatalog.Load(Path.Combine(ClassicDataFixture.Root, "housing", "houses-october-2010.yaml"),
+            "october-2010-arc1")[160431];
+        Assert.True(shipped.ResaleAllowed);
+        HouseCatalog.TestDefinitions.Value = new Dictionary<uint, HouseDefinition> {
+            [Template] = Definition with { Gold = shipped.Gold, ResaleAllowed = shipped.ResaleAllowed, ResaleGold = shipped.ResaleGold },
+        };
+        var store = new Store(); using var scope = store.Scope(); var live = store.Login(); Assert.True(Buy(live, 9101).Saved);
+        if (furnished) store.Place(HousingCollection.Load(new HousingRoomIdentity(Owner, 9101, Interior), true), 9302);
+        Assert.True(HouseCatalog.TryGet(Template, out var definition));
+        var sale = HouseCollection.Sell(live, 9101, definition.ResaleGold);
+        if (furnished) {
+            Assert.False(sale.Saved); Assert.Contains("empty", sale.Error, StringComparison.OrdinalIgnoreCase);
+            Assert.False(store.House(9101).Sold); Assert.Equal(92000, store.Wizard.GameStats.m_currentGold);
+        } else {
+            Assert.True(sale.Saved, sale.Error); Assert.True(store.House(9101).Sold);
+            Assert.Equal(92000 + 401, store.Wizard.GameStats.m_currentGold);
+        }
     }
 
     [Theory]
