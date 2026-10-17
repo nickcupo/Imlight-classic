@@ -185,6 +185,10 @@ public sealed class QuestArrowMatchTests {
     [InlineData("WC-CLASSIC-SIDE-054", "11_WizardQuestGoals_TalkNPC", 44124u, "WizardCity/WC_Hub")]     // back to Zeke
     [InlineData("WC-BFF-C01-001", "1_WizardQuestGoals_TalkNPC", 39088u, "WizardCity/WC_Golem_Tower")]   // the Registrar
     [InlineData("WC-STRM-C06-002", "1_WizardQuestGoals_TalkNPC", 38147u, "WizardCity/WC_Streets/WC_Triton")]
+    [InlineData("WC-ST01-C04-003", "WC-ST01-C04-003_Goal0", 1451478u, "WizardCity/WC_Streets/WC_Unicorn")]     // a cage by its client tag
+    [InlineData("WC-MYTH-C06-001", "6_WizardQuestGoals_UseItem", 136179u, "WizardCity/Interiors/WC_SchoolMyth")] // the desk, not the NPC
+    [InlineData("WC-FIRE-C01-001", "1_WizardQuestGoals_Explore", 0u, "WizardCity/Interiors/WC_Fire_Cave")]      // a zone-only record
+    [InlineData("GH-MAIN-C03-001", "6_WizardQuestGoals_UseItem", 164524u, "Grizzleheim/GH_AbandCity/GH_HallofKings")] // its area's pedestal
     public void TheArrowPointsAtTheGoalsOwnTarget(string questName, string goalName, uint template, string zone) {
         if (!File.Exists(PoiPath)) {
             Assert.Skip($"no quest-helper table at {PoiPath} (private)");

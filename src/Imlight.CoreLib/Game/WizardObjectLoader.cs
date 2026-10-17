@@ -60,6 +60,7 @@ public static class WizardObjectLoader {
         SetPetOwnerBehavior(clientObject, ref character);
         SetAlchemyBehavior(clientObject, ref character);
         SetStorageBehavior(clientObject, character); // CLASSIC
+        SetJournalBehaviors(clientObject, character.Journal); // CLASSIC
 
         return clientObject;
     }
@@ -104,6 +105,24 @@ public static class WizardObjectLoader {
         var client = (character.StorageBehavior ??= new()).GetClientBehaviorInstance();
         client.m_behaviorTemplateNameID = storageBehavior.m_behaviorTemplateNameID;
         clientObject.m_inactiveBehaviors[idx] = client;
+    }
+
+    /// <summary>
+    /// CLASSIC: the saved hidden quests and finished tutorial tips, in the strings the client wrote them in
+    /// (Classic/ClientJournal.cs). Nothing changes for a wizard with no journal (ambient wizards, tests).
+    /// </summary>
+    internal static void SetJournalBehaviors(WizClientObject clientObject, Classic.ClientJournal journal) {
+        if (journal is null) {
+            return;
+        }
+        if (!string.IsNullOrEmpty(journal.HiddenQuests)
+                && CoreObjectFactory.FindBehaviorInstance<HiddenQuestsBehavior>(clientObject, out var hidden)) {
+            hidden.m_hiddenQuestsData = journal.HiddenQuests;
+        }
+        if (!string.IsNullOrEmpty(journal.TutorialTips)
+                && CoreObjectFactory.FindBehaviorInstance<TutorialLogBehavior>(clientObject, out var tips)) {
+            tips.m_tutorialTipData = journal.TutorialTips;
+        }
     }
 
     public static void SetEquipmentBehavior(WizClientObject clientObject, Wizard character) {
