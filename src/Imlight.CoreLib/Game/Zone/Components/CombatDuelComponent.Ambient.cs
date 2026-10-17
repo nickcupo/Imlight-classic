@@ -124,7 +124,7 @@ internal sealed partial class CombatDuelComponent {
 
         var pvp = SubCircles.Any(c => c is { Occupied: true } && c.OccupiedTeam == CombatTeam.Monster && c.ParticipantObject.m_templateID == 1);
         AmbientWizards.NotifyDuel(Entity.ZoneRef, new AmbientDuelNotice(SigilId, Entity.ActiveGameObject.m_location, players,
-            4 - PlayerCount, active && _isActive, pvp, pvp ? null : AmbientOdds()));
+            4 - PlayerCount, active && _isActive, pvp, pvp ? null : AmbientOdds(), _combatSigilObjectInfo?.m_radius ?? 0));
     }
 
     /// <summary>

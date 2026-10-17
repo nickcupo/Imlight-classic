@@ -431,9 +431,9 @@ public partial class CombatDuelSubCircle {
         }
     }
 
-    internal Hand DrawHand() {
+    internal Hand DrawHand(bool refill = true) {
         if (Polymorph is { } polymorph) return DrawPolymorphHand(polymorph); // CLASSIC: the form's hand
-        var newHand = _combatDeck.GetHand();
+        var newHand = _combatDeck.GetHand(refill);
         CombatParticipant.m_pHand = newHand;
 
         return newHand;

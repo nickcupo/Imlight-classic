@@ -360,4 +360,26 @@ public sealed class AmbientMannersTests {
         Assert.Empty(AmbientDeckPlanner.Plan([s_fire[7]], "fire", 10)); // a shield alone: nothing it would play
     }
 
+
+    // Owner, 2026-10-17: ambient wizards "just stand in the middle of duel circles".
+    [Fact]
+    public void AWizardKeepsOffDuelCirclesAndTheCreaturesPath() {
+        var circle = (Center: new System.Numerics.Vector2(1000, 0), Radius: 250f);
+        Assert.True(StreetManners.InDuelCircle(new(1000, 100), [circle]));
+        Assert.True(StreetManners.InDuelCircle(new(1000 + 250 + StreetManners.PersonalSpace - 1, 0), [circle]));
+        Assert.False(StreetManners.InDuelCircle(new(1000 + 250 + StreetManners.PersonalSpace + 1, 0), [circle]));
+        Assert.True(StreetManners.InDuelCircle(new(1000, StreetManners.DefaultDuelCircleRadius), [(circle.Center, 0f)])); // no radius: the default
+
+        var edge = StreetManners.OutOfCircle(new(1100, 0), circle.Center, circle.Radius);
+        Assert.False(StreetManners.InDuelCircle(edge, [circle]));
+        Assert.Equal(0, edge.Y, 3); // straight out from the middle
+        Assert.False(StreetManners.InDuelCircle(StreetManners.OutOfCircle(circle.Center, circle.Center, circle.Radius), [circle]));
+
+        Assert.True(StreetManners.OnPath(new(50, 50), [new(0, 0)]));
+        Assert.False(StreetManners.OnPath(new(400, 0), [new(0, 0)]));
+        Assert.InRange(StreetManners.PathPause(0).TotalSeconds, 1, 3);
+        Assert.InRange(StreetManners.PathPause(0.999).TotalSeconds, 1, 3);
+        Assert.InRange(StreetManners.HuntPause(0.999).TotalSeconds, 3, 8);
+    }
+
 }

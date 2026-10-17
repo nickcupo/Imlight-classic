@@ -306,4 +306,17 @@ public sealed class AmbientWizardRuntimeTests {
         }
     }
 
+
+    // Owner, 2026-10-17: "bots aren't consuming pips". The ally view priced every card as of the caster's school (a
+    // power pip as two), so a bot cast another school's spell it could not pay for and DeductPips stopped at zero.
+    [Fact]
+    public void AnotherSchoolsCardCostsItsPowerPipsAsOneEach() {
+        // 1 generic + 1 power: the view holds 3 (power counted twice).
+        const int viewPips = 1 + 2 * 1;
+        Assert.True(AmbientCombat.CardCost(3, 1, ownSchool: true, xPip: false) <= viewPips);    // own school: 1 + 2 pays 3
+        Assert.False(AmbientCombat.CardCost(3, 1, ownSchool: false, xPip: false) <= viewPips);  // other school: 1 + 1 < 3
+        Assert.True(AmbientCombat.CardCost(2, 1, ownSchool: false, xPip: false) <= viewPips);   // other school: 1 + 1 pays 2
+        Assert.Equal(0, AmbientCombat.CardCost(0, 3, ownSchool: false, xPip: true));             // X-pip spells take what is there
+        Assert.Equal(4, AmbientCombat.CardCost(4, 0, ownSchool: false, xPip: false));            // no power pips: no change
+    }
 }
