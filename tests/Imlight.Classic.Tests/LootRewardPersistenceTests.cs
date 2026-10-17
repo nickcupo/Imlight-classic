@@ -56,7 +56,7 @@ public sealed class LootRewardPersistenceTests {
             Assert.Equal(acquired, display.m_numItems);
             Assert.Equal(Fixture.Normal, display.m_itemID.Full);
             Assert.Single(f.Packets.OfType<WIZARD_12_PROTOCOL.MSG_REAGENTADD>());
-            Assert.Equal(Fixture.NormalId, Assert.Single(f.Packets.OfType<WIZARD2_53_PROTOCOL.MSG_ITEMACQUISITION>()).ItemGlobalID);
+            Assert.Empty(f.Packets.OfType<WIZARD2_53_PROTOCOL.MSG_ITEMACQUISITION>()); // Crown Shop invoice only
         }
     }
 
@@ -69,7 +69,7 @@ public sealed class LootRewardPersistenceTests {
         Assert.Equal(new[] { 5, 1 }, results.Reagents.Select(drop => drop.Quantity));
         Assert.Equal(new[] { 10, 1 }, f.Reagents.Select(row => row.m_quantity));
         Assert.Equal(new[] { Fixture.NormalId, Fixture.RareId }, f.Saved.AlchemyBehavior.ReagentItemIds);
-        Assert.Equal(new[] { Fixture.NormalId, Fixture.RareId }, f.Packets.OfType<WIZARD2_53_PROTOCOL.MSG_ITEMACQUISITION>().Select(packet => packet.ItemGlobalID));
+        Assert.Empty(f.Packets.OfType<WIZARD2_53_PROTOCOL.MSG_ITEMACQUISITION>());
         Assert.Equal(new[] { 10, 1 }, f.Packets.OfType<WIZARD_12_PROTOCOL.MSG_REAGENTADD>()
             .Select(packet => BitConverter.ToInt32((byte[])packet.Data)));
         Assert.Equal(1, f.SaveAttempts); Assert.Equal(1, f.Reads);
@@ -496,11 +496,11 @@ public sealed class LootRewardPersistenceTests {
         var reward = Roll(1); reward.GoldAmount = 20; reward.ExperienceAmount = 1;
         LootGranter.Grant(ActorRefs.NoSender, live, reward, true);
         Assert.Equal(40, reward.GoldAmount); Assert.Equal(940, f.Store.Saved.GameStats.m_currentGold);
-        var packets = f.Packets.ToArray(); Assert.Equal(5, packets.Length);
+        var packets = f.Packets.ToArray(); Assert.Equal(4, packets.Length);
         Assert.IsType<WIZARD_12_PROTOCOL.MSG_UPDATEGOLD>(packets[0]);
         Assert.IsType<Imlight.CoreLib.Shared.Packets.CHARACTER_103_PROTOCOL.MSG_GAINXP>(packets[1]);
-        Assert.IsType<WIZARD_12_PROTOCOL.MSG_REAGENTADD>(packets[2]); Assert.IsType<WIZARD2_53_PROTOCOL.MSG_ITEMACQUISITION>(packets[3]);
-        Assert.Equal(40, GoldFixture.Popup(Assert.IsType<WIZARD_12_PROTOCOL.MSG_LOOT>(packets[4])).m_goldInfo.m_goldAmount);
+        Assert.IsType<WIZARD_12_PROTOCOL.MSG_REAGENTADD>(packets[2]);
+        Assert.Equal(40, GoldFixture.Popup(Assert.IsType<WIZARD_12_PROTOCOL.MSG_LOOT>(packets[3])).m_goldInfo.m_goldAmount);
         Assert.Equal(2, f.Store.SaveAttempts); // Gold and stacks are separate acknowledged writes; XP remains asynchronous.
     }
 

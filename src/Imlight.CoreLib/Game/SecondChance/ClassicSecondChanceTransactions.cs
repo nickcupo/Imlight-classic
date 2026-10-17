@@ -273,8 +273,7 @@ internal static class ClassicSecondChanceTransactions {
             SpellID = unchecked((int)card.SpellHash), EnchantmentID = 0 });
         foreach (var reagent in rewards.Reagents) {
             messages.Add(new WIZARD_12_PROTOCOL.MSG_REAGENTADD { GlobalID = live.GameObjectID, Data = reagent.Data });
-            messages.Add(new WIZARD2_53_PROTOCOL.MSG_ITEMACQUISITION { ItemGlobalID = reagent.Reagent.m_globalID,
-                ItemTemplateID = (uint)reagent.Reagent.m_templateID, ItemLocation = 1 });
+            // CLASSIC: no MSG_ITEMACQUISITION: r806919 feeds only the Crown Shop delivery invoice with it (0x140492f30), which 2010 lacked.
         }
         if (rewards.BackpackCapacityExceeded) messages.Add(ClassicChat.Line(
             "Your backpack is full, so a reward item could not be added. Make room and try again later."));

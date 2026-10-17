@@ -305,4 +305,17 @@ public sealed class BazaarNativeProtocolTests {
         Assert.Equal(40, stock.ReadInt32());
         Assert.Equal(20, stock.ReadInt32());
     }
+
+    // CLASSIC: Bazaar purchases reach the backpack with MSG_INVENTORYBEHAVIOR_ADDITEM, read with mask 0x18
+    // (0x141777e90). Mask 1 wrote each behavior's m_behaviorTemplateNameID (flags 39) as well, a different stream.
+    [Fact]
+    public void BazaarItemsUseTheMaskTheClientReadsAddItemWith() {
+        Assert.Equal(0x18u, ClassicBazaarTransactions.ItemAddFlags);
+        var item = new WizClientObjectItem { m_globalID = 0x1234, m_templateID = 77, m_characterId = 99,
+            m_inactiveBehaviors = [new ClientTimedItemBehavior { m_behaviorTemplateNameID = 0xABCDEF }] };
+        var serializer = new Imcodec.CoreObject.CoreObjectSerializer(behaviors: Imcodec.ObjectProperty.SerializerFlags.None);
+        Assert.True(serializer.Serialize(item, ClassicBazaarTransactions.ItemAddFlags, out var wire));
+        Assert.True(serializer.Serialize(item, 1, out var save));
+        Assert.NotEqual(((byte[])save).Length, ((byte[])wire).Length);
+    }
 }

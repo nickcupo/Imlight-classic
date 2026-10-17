@@ -346,8 +346,15 @@ internal static class ClassicBazaarTransactions {
     private static CoreObject Create(BazaarTransactionDependencies d, ulong id) => d.Create is null ? CoreObjectFactory.FinalizeCoreObject(id) : d.Create(id);
     private static ByteString Serialize(BazaarTransactionDependencies d, WizClientObjectItem item) {
         if (d.Serialize is not null) return d.Serialize(item);
-        return new CoreObjectSerializer(behaviors: SerializerFlags.None).Serialize(item, 1, out var data) ? data : default;
+        return new CoreObjectSerializer(behaviors: SerializerFlags.None).Serialize(item, ItemAddFlags, out var data) ? data : default;
     }
+
+    /// <summary>
+    /// CLASSIC: the mask ClientInventoryBehavior::MSG_INVENTORYBEHAVIOR_ADDITEM reads with (0x18 at 0x141777e90, as
+    /// every other ADDITEM site). Mask 1 also wrote each behavior's m_behaviorTemplateNameID (flags 39), which the
+    /// client's reader does not expect.
+    /// </summary>
+    internal const uint ItemAddFlags = (uint)(PropertyFlags.Prop_Transmit | PropertyFlags.Prop_AuthorityTransmit);
     private static ByteString SerializeReagent(BazaarTransactionDependencies d, ClientReagentItem reagent) {
         if (d.SerializeReagent is not null) return d.SerializeReagent(reagent);
         return new CoreObjectSerializer(behaviors: SerializerFlags.None).Serialize(reagent, 27, out var data) ? data : default;
