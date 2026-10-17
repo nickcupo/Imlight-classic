@@ -35,7 +35,9 @@ public sealed class SpellAnimationTests : IDisposable {
     [Fact]
     public void TheDataListsTheRestoredCinematicsWithTheirStages() {
         var (profiles, templates) = ClassicSpellAnimations.Load(RealPath);
-        Assert.Equal(["arc1-2009h1", "late-2009", "october-2010-arc1"], profiles.Order());
+        // CLASSIC (2026-10-17): off for the live profile (owner: the restored 2014 animations looked broken, red boxes on
+        // Thunder Snake); only the unused arc1 profile keeps them until they are checked against r806919.
+        Assert.Equal(["arc1-2009h1"], profiles.Order());
         var orthrus = templates["Orthrus"];
         Assert.Equal(["Summon", "Act1", "Act2"], orthrus.m_stages.Select(s => s.m_name));
         Assert.IsType<SummonCinematicStageTemplate>(orthrus.m_stages[0]);
@@ -48,8 +50,6 @@ public sealed class SpellAnimationTests : IDisposable {
     }
 
     [Theory]
-    [InlineData("october-2010-arc1")]
-    [InlineData("late-2009")]
     [InlineData("arc1-2009h1")]
     public void ListedProfilesTimeTheCastFromThe2014Stages(string profile) {
         Use(profile);
@@ -70,32 +70,25 @@ public sealed class SpellAnimationTests : IDisposable {
         Assert.Null(ClassicSpellAnimations.Templates);
         Assert.False(ClassicSpellAnimations.TryGet("Orthrus", out _));
 
-        Use("october-2010-arc1");
+        Use("arc1-2009h1");
         Assert.False(ClassicSpellAnimations.TryGet("Kraken", out _));   // same in both clients: not listed
         Assert.False(ClassicSpellAnimations.TryGet(null, out _));
     }
 
     [Fact]
     public void AProfileTheDataDoesNotNameIsLeftAlone() {
-        var root = Directory.CreateTempSubdirectory("w101c-anims-").FullName;
-        try {
-            Directory.CreateDirectory(Path.Combine(root, "rules"));
-            File.WriteAllText(Path.Combine(root, ClassicSpellAnimations.RelativePath),
-                File.ReadAllText(RealPath).Replace("\"profiles\": [\n    \"late-2009\",\n    \"arc1-2009h1\",\n    \"october-2010-arc1\"\n  ]",
-                    "\"profiles\": [\"late-2009\"]"));
-            Use("october-2010-arc1", root);
-            Assert.Null(ClassicSpellAnimations.Templates);
-            Use("late-2009", root);
-            Assert.NotNull(ClassicSpellAnimations.Templates);
-        }
-        finally {
-            Directory.Delete(root, true);
-        }
+        // The live profile and its parent are not listed (and a listed child would not make its parent listed).
+        Use("october-2010-arc1");
+        Assert.Null(ClassicSpellAnimations.Templates);
+        Use("late-2009");
+        Assert.Null(ClassicSpellAnimations.Templates);
+        Use("arc1-2009h1");
+        Assert.NotNull(ClassicSpellAnimations.Templates);
     }
 
     [Theory]
     [InlineData("\"type\": \"Summon\"", "\"type\": \"Bogus\"")]
-    [InlineData("\"late-2009\",", "\"dev-unrestricted\",")]
+    [InlineData("\"arc1-2009h1\"]", "\"dev-unrestricted\"]")]
     [InlineData("\"duration\": 7.233", "\"duration\": 700")]
     public void MalformedDataIsRefused(string from, string to) {
         var file = Path.Combine(Path.GetTempPath(), "w101c-anims-" + Guid.NewGuid().ToString("N") + ".json");
