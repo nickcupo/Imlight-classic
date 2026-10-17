@@ -149,7 +149,7 @@ internal class AttachService(SessionActor sessionActor) : MessageService(session
         _wizard.GameServerIp = gameServer.IP;
         _wizard.GameServerPort = (ushort) gameServer.Port;
 
-        // CLASSIC: hidden quests and the tutorial-tip log go into the player object (Classic/ClientJournal.cs).
+        // CLASSIC: the saved hidden quests go into the player object (Classic/ClientJournal.cs).
         _wizard.Journal ??= Classic.ClientJournalStore.Load(_wizard.CharId);
 
         // Craft the GameObject for this Wizard.

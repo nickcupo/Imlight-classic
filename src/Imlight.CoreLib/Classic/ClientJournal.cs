@@ -16,24 +16,17 @@
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
  *
  * ========================================================================
- * CLIENT JOURNAL (hidden quests, finished tutorial tips)
+ * CLIENT JOURNAL (hidden quests)
  * ========================================================================
  *
  * PURPOSE:
- * CLASSIC: keeps two strings the r806919 client owns and formats itself, per character, and gives them back at
- * login. The server never parses them.
- *  - Hidden quests: the client's HiddenQuestsBehavior serializes its list into m_hiddenQuestsData and sends
- *    MSG_UPDATEUSERHIDDENQUESTS {Data} when it changes (FUN_140c12dd0). The player object carries the behavior,
- *    so the saved string goes back in m_hiddenQuestsData (WizardObjectLoader).
- *  - Finished tutorial tips: the client keeps them in its CharacterRegistry (a local file per character,
- *    Data/GameData/CharacterRegistry/<char>.xml) and tells the server MSG_READTUTORIALTIP {TutorialTipID}
- *    (CharacterRegistry::AddFinishedTip, FUN_14212b7b0). Its TutorialLogBehavior answers a server
- *    MSG_REQUESTTUTORIALTIPLOG with MSG_UPDATETUTORIALTIPLOG {TutorialTipData}, its whole log (FUN_1413045f0), and at
- *    login asks the server for the log (FUN_1421d5730) and merges the answer (FUN_1413048d0). So a finished tip asks
- *    the client for its log, the log is stored as it is, and it is the answer at the next login: a second Mac or a
- *    fresh install no longer shows tips again.
- * The active quest-helper quest (MSG_SWITCHACTIVEQUEST) also lives in that local registry (m_activeQuestId,
- * m_activeGoalId) and no server message carries it back, so it is not kept here.
+ * CLASSIC: keeps the hidden-quests string the r806919 client owns and formats itself, per character, and gives it
+ * back at login. The server never parses it. The client's HiddenQuestsBehavior serializes its list into
+ * m_hiddenQuestsData and sends MSG_UPDATEUSERHIDDENQUESTS {Data} when it changes (FUN_140c12dd0). The player
+ * object carries the behavior, so the saved string goes back in m_hiddenQuestsData (WizardObjectLoader).
+ * Finished tutorial tips are TutorialTipService's (Imlight.Classic.Net.TutorialTipLog decodes the client's log).
+ * The active quest-helper quest (MSG_SWITCHACTIVEQUEST) lives in the client's local CharacterRegistry file
+ * (m_activeQuestId, m_activeGoalId) and no server message carries it back, so it is not kept here.
  *
  * NOTE:
  * One small document per character (ClientJournals/<char id>), outside the Wizard document: no player-data
@@ -52,12 +45,11 @@ using Raven.Client;
 
 namespace Imlight.CoreLib.Classic;
 
-/// <summary>The client-formatted journal strings of one character.</summary>
+/// <summary>The client-formatted hidden-quests string of one character.</summary>
 internal sealed class ClientJournal {
 
     public ulong CharId { get; set; }
     public string HiddenQuests { get; set; }
-    public string TutorialTips { get; set; }
     public DateTime UpdatedUtc { get; set; }
 
 }
