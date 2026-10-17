@@ -72,7 +72,10 @@ internal sealed class InteractTrainerComponent(ZoneEntity entity) : ZoneEntityCo
         // Attach if the template is an NPC and has a spell inventory in Dragon database.
         => template is GameObjectTemplate goTemplate 
         // CLASSIC: Celestia's school trainers are trainer objects (WizTrainingBehavior) without an NPC behavior.
-        && goTemplate.m_behaviors.Any(x => x is NPCBehaviorTemplate || x?.m_behaviorName?.ToString() == "WizTrainingBehavior") 
+        // CLASSIC: the server's template codec leaves WizTrainingBehavior (and BasicNPCServiceBehavior) null in m_behaviors, so
+        // the Celestia trainer objects (CL_Trainer*) are named by the Astral file instead; their name check never matched.
+        && (goTemplate.m_behaviors.Any(x => x is NPCBehaviorTemplate || x?.m_behaviorName?.ToString() == "WizTrainingBehavior")
+            || ClassicCelestiaRules.Astral.Trainers.Any(trainer => (ulong) trainer.Npc == goTemplate.m_templateID)) 
         && NpcSpellInventoryCollection.TryGetNpcInventory(goTemplate.m_templateID, out _);
 
     public override void OnStart() {

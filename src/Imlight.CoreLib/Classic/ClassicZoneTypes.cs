@@ -249,21 +249,31 @@ public static class KilledMonsterScope {
     [ThreadStatic]
     private static ulong[] t_current;
 
+    [ThreadStatic]
+    private static string t_eventName;
+
+    /// <summary>The zone event being evaluated, or null outside one.</summary>
+    public static string EventName => t_eventName;
+
     /// <summary>The defeated monsters' template IDs of the event being evaluated, or null outside one.</summary>
     public static ulong[] Current => t_current;
 
     /// <summary>Sets the defeated monsters until the returned scope is disposed.</summary>
-    public static IDisposable Enter(ulong[] templateIds) {
+    public static IDisposable Enter(ulong[] templateIds, string eventName = null) {
         var previous = t_current;
+        var previousEvent = t_eventName;
         t_current = templateIds;
+        t_eventName = eventName;
 
-        return new Scope(previous);
+        return new Scope(previous, previousEvent);
     }
 
-    private sealed class Scope(ulong[] previous) : IDisposable {
+    private sealed class Scope(ulong[] previous, string previousEvent) : IDisposable {
 
-        public void Dispose()
-            => t_current = previous;
+        public void Dispose() {
+            t_current = previous;
+            t_eventName = previousEvent;
+        }
 
     }
 

@@ -106,7 +106,7 @@ internal sealed partial class ZoneTriggerSupervisor {
         // Monster_Killed triggers check the defeated monster (ClassicReqMonsterKilled); one whose check did not
         // decode would read as met for every kill, so it stays quiet.
         var isKill = message.EventName == KilledMonster.EventName;
-        using var killed = KilledMonsterScope.Enter(message.KilledTemplateIds);
+        using var killed = KilledMonsterScope.Enter(message.KilledTemplateIds, message.EventName);
         var scope = Scope(message.PlayerActor); // CLASSIC: the instance in a dungeon, the player in a public zone.
         _table?.MarkSeen(message.EventName, scope);
         var fires = _activation.Dispatch(_orderedTriggers, entry => entry.Actor, message.EventName, scope,
