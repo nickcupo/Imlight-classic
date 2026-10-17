@@ -75,6 +75,12 @@ internal sealed partial class ZoneTriggerSupervisor {
             initiallyArmed: InitiallyArmed(trigger)); // CLASSIC: one that waits for its Enable_ event starts disarmed.
     }
 
+    private bool IsStateOnlyTrigger(Trigger trigger) {
+        var index = _plan?.IndexOf(trigger) ?? -1;
+
+        return index >= 0 && _plan.Liveness.Triggers[index].StateOnly;
+    }
+
     private void ReceiveClassicPostEvent(ZONE_102_PROTOCOL.MSG_POSTEVENT message) {
         // A waypoint goal may name the event itself (KT-CRY5-C01-002's "PuzzleComplete").
         message.PlayerActor?.Tell(new ZONE_102_PROTOCOL.MSG_CLASSICZONEEVENT { EventName = message.EventName });
@@ -88,7 +94,8 @@ internal sealed partial class ZoneTriggerSupervisor {
         var fires = _activation.Dispatch(_orderedTriggers, entry => entry.Actor, message.EventName, scope,
             listens: entry => entry.Trigger?.m_fireEvents?.Any(x => x == message.EventName) == true
                 && !(isKill && HasUndecodedRequirement(entry.Trigger.m_requirements))
-                && VolumeArrival.Fires(message.ArrivedInside, HasTeleport(entry.Trigger)), // CLASSIC: arrival never teleports.
+                && VolumeArrival.Fires(message.ArrivedInside, HasTeleport(entry.Trigger)) // CLASSIC: arrival never teleports.
+                && (!message.StateOnlyReplay || IsStateOnlyTrigger(entry.Trigger)), // CLASSIC: a state-only replay wakes only state triggers.
             meetsRequirements: entry => EvaluateRequirements(entry.Trigger, message)
                 && EvaluateTeleportRequirements(entry.Trigger, message),
             teleportsSomewhere: entry => HasTeleportDestination(entry.Trigger),

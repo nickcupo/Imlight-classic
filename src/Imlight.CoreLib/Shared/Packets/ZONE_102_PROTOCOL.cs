@@ -569,6 +569,12 @@ public class ZONE_102_PROTOCOL : IServerProtocol {
         /// </summary>
         public bool ArrivedInside;
 
+        /// <summary>
+        /// CLASSIC: a replay of a quest-progress event to a new instance that only the zone's state-only triggers (show or hide
+        /// an object, arm or disarm a trigger) answer; the fight and spawn triggers on the same event stay quiet.
+        /// </summary>
+        public bool StateOnlyReplay;
+
     }
 
     /// <summary>
