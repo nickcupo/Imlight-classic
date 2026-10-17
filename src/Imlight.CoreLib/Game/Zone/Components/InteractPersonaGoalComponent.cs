@@ -58,12 +58,14 @@ internal class PlayerPersonaGoalState {
     public PersonaGoalTemplate ActiveGoal { get; set; }
     public ulong ActiveQuestId { get; set; }
     public ulong ActiveGoalId { get; set; }
+    // CLASSIC: every active goal of a quest that sends the wizard to this NPC (Active* are the first).
+    public List<(PersonaGoalTemplate Goal, ulong QuestId, ulong GoalId)> Goals { get; } = [];
     public DateTime LastUpdated { get; set; }
 
 }
 
 internal sealed class InteractPersonaGoalComponent(ZoneEntity entity)
-    : ZoneEntityComponent(entity), IServiceComponent, IComponentFactory, IWithTimers {
+    : ZoneEntityComponent(entity), IServiceComponent, IComponentFactory, IWithTimers, IOrdinalServiceComponent {
 
     private const string COMPLETE_NPC_ICON = "Complete";
     private const double WIZBANG_UPDATE_INTERVAL_SECONDS = 1.0;
@@ -124,23 +126,24 @@ internal sealed class InteractPersonaGoalComponent(ZoneEntity entity)
             yield break;
         }
 
-        var qTemplate = QuestTemplateCollection.GetQuestByName(
-            wizard.QuestBehavior.CurrentQuestInstances
-                .FirstOrDefault(q => q.ID == state.ActiveQuestId)?.QuestName);
+        // CLASSIC: one option per active goal at this NPC (two quests can both send the wizard here).
+        foreach (var (goal, questId, goalId) in state.Goals) {
+            var qTemplate = QuestTemplateCollection.GetQuestByName(
+                wizard.QuestBehavior.CurrentQuestInstances.FirstOrDefault(q => q.ID == questId)?.QuestName);
+            if (qTemplate == null) {
+                continue;
+            }
 
-        if (qTemplate == null) {
-            yield break;
+            yield return new GoalEntry {
+                m_questID = questId,
+                m_goalID = goalId,
+                m_goalTitle = goal.m_goalTitle,
+                m_questTitle = qTemplate.m_questTitle,
+                m_displayKey = qTemplate.m_questTitle,
+                m_iconKey = COMPLETE_NPC_ICON,
+                m_serviceName = ServiceName,
+            };
         }
-
-        yield return new GoalEntry {
-            m_questID = state.ActiveQuestId,
-            m_goalID = state.ActiveGoalId,
-            m_goalTitle = state.ActiveGoal.m_goalTitle,
-            m_questTitle = qTemplate.m_questTitle,
-            m_displayKey = qTemplate.m_questTitle,
-            m_iconKey = COMPLETE_NPC_ICON,
-            m_serviceName = ServiceName,
-        };
     }
 
     public override void OnStart() {
@@ -200,11 +203,22 @@ internal sealed class InteractPersonaGoalComponent(ZoneEntity entity)
         WizBang = state.HasActiveGoal ? WizBangs.CompleteQuestGoal : WizBangs.None;
     }
 
-    public void OnServiceInteraction(IActorRef playerActor, Wizard playerCharacter, CoreObject playerObject, uint serviceOptionIndex) {
+    public void OnServiceInteraction(IActorRef playerActor, Wizard playerCharacter, CoreObject playerObject, uint serviceOptionIndex)
+        => OnServiceInteraction(playerActor, playerCharacter, playerObject, serviceOptionIndex, 0);
+
+    public void OnServiceInteraction(IActorRef playerActor, Wizard playerCharacter, CoreObject playerObject, uint serviceOptionIndex,
+                                     int ordinal) {
         var state = GetOrUpdatePlayerState(playerCharacter);
-        if (state.HasActiveGoal) {
-            HandlePersonaGoalCompletion(playerActor, playerCharacter, playerObject, state);
+        if (!state.HasActiveGoal || state.Goals.Count == 0) {
+            return;
         }
+
+        // CLASSIC: the goal of the option that was clicked (the first when the list changed since it was sent).
+        var (goal, questId, goalId) = state.Goals[ordinal >= 0 && ordinal < state.Goals.Count ? ordinal : 0];
+        HandlePersonaGoalCompletion(playerActor, playerCharacter, playerObject, new PlayerPersonaGoalState {
+            HasActiveGoal = true, ActiveGoal = goal, ActiveQuestId = questId, ActiveGoalId = goalId,
+            LastUpdated = state.LastUpdated,
+        });
     }
 
     private PlayerPersonaGoalState GetOrUpdatePlayerState(Wizard wizard, bool forceUpdate = false) {
@@ -219,12 +233,10 @@ internal sealed class InteractPersonaGoalComponent(ZoneEntity entity)
 
         var state = new PlayerPersonaGoalState { LastUpdated = now };
 
-        var activeGoalResult = FindActivePersonaGoal(wizard);
-        if (activeGoalResult.HasValue) {
+        state.Goals.AddRange(FindActivePersonaGoals(wizard)); // CLASSIC: all of them; the first as before
+        if (state.Goals.Count > 0) {
             state.HasActiveGoal = true;
-            state.ActiveGoal = activeGoalResult.Value.Goal;
-            state.ActiveQuestId = activeGoalResult.Value.QuestId;
-            state.ActiveGoalId = activeGoalResult.Value.GoalId;
+            (state.ActiveGoal, state.ActiveQuestId, state.ActiveGoalId) = state.Goals[0];
         }
 
         _cachedPlayerStates[playerId] = state;
@@ -232,7 +244,7 @@ internal sealed class InteractPersonaGoalComponent(ZoneEntity entity)
         return state;
     }
 
-    private (PersonaGoalTemplate Goal, ulong QuestId, ulong GoalId)? FindActivePersonaGoal(Wizard wizard) {
+    private IEnumerable<(PersonaGoalTemplate Goal, ulong QuestId, ulong GoalId)> FindActivePersonaGoals(Wizard wizard) {
         // Find any of the player's current quests that have cached persona goals for this NPC.
         var relevantQuests = wizard.QuestBehavior.CurrentQuestInstances
             .Where(q => _personaGoalsByQuest.ContainsKey(q.QuestName))
@@ -250,11 +262,9 @@ internal sealed class InteractPersonaGoalComponent(ZoneEntity entity)
                     continue;
                 }
 
-                return (goal, quest.ID, gInstance.ID);
+                yield return (goal, quest.ID, gInstance.ID);
             }
         }
-
-        return null;
     }
 
     private void HandlePersonaGoalCompletion(IActorRef playerActor, Wizard playerCharacter, CoreObject playerObject, PlayerPersonaGoalState state) {

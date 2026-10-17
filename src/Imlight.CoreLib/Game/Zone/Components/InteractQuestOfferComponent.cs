@@ -62,11 +62,13 @@ namespace Imlight.CoreLib.Game.Zone.Components;
 internal class PlayerQuestOfferState {
     public bool HasAvailableQuest { get; set; }
     public QuestTemplate AvailableQuest { get; set; }
+    // CLASSIC: every quest the NPC can offer now, story quests first (AvailableQuest is the first).
+    public List<QuestTemplate> AvailableQuests { get; } = [];
     public DateTime LastUpdated { get; set; }
 }
 
 internal sealed class InteractQuestOfferComponent(ZoneEntity entity)
-    : ZoneEntityComponent(entity), IServiceComponent, IComponentFactory {
+    : ZoneEntityComponent(entity), IServiceComponent, IComponentFactory, IOrdinalServiceComponent {
 
     // CLASSIC (REA, 2026-10-17): the option icon key picks the art from the client table at 0x143348660 (built in
     // FUN_140a19ea0): Start = gold "!", Prep = silver "!" (a quest you cannot take yet), Unfinished = silver "?",
@@ -128,11 +130,15 @@ internal sealed class InteractQuestOfferComponent(ZoneEntity entity)
             yield break;
         }
 
-        yield return new PrepEntry {
-            m_displayKey = state.AvailableQuest.m_questTitle,
-            m_iconKey = START_NPC_ICON,
-            m_serviceName = ServiceName,
-        };
+        // CLASSIC (REA, 2026-10-17): one option per quest the NPC can offer now, as the client's NPC options list
+        // shows them; only the first was offered before, so a side quest stayed hidden behind the story quest.
+        foreach (var quest in state.AvailableQuests) {
+            yield return new PrepEntry {
+                m_displayKey = quest.m_questTitle,
+                m_iconKey = START_NPC_ICON,
+                m_serviceName = ServiceName,
+            };
+        }
     }
 
     public override void OnStart() {
@@ -197,12 +203,20 @@ internal sealed class InteractQuestOfferComponent(ZoneEntity entity)
         WizBang = state.HasAvailableQuest ? WizBangs.StartQuest : WizBangs.None;
     }
 
-    public void OnServiceInteraction(IActorRef playerActor, Wizard playerCharacter, CoreObject playerObject, uint serviceOptionIndex) {
+    public void OnServiceInteraction(IActorRef playerActor, Wizard playerCharacter, CoreObject playerObject, uint serviceOptionIndex)
+        => OnServiceInteraction(playerActor, playerCharacter, playerObject, serviceOptionIndex, 0);
+
+    public void OnServiceInteraction(IActorRef playerActor, Wizard playerCharacter, CoreObject playerObject, uint serviceOptionIndex,
+                                     int ordinal) {
         var state = GetOrUpdatePlayerState(playerCharacter);
-        if (state.HasAvailableQuest && state.AvailableQuest != null) {
-            HandleQuestOffer(playerActor, state.AvailableQuest, playerCharacter);
+        if (state.HasAvailableQuest && Pick(state.AvailableQuests, ordinal) is { } quest) {
+            HandleQuestOffer(playerActor, quest, playerCharacter);
         }
     }
+
+    /// <summary>CLASSIC: the <paramref name="ordinal"/>th of the listed items, else the first (a list that changed).</summary>
+    internal static T Pick<T>(IReadOnlyList<T> items, int ordinal) where T : class
+        => items.Count == 0 ? null : items[ordinal >= 0 && ordinal < items.Count ? ordinal : 0];
 
     private PlayerQuestOfferState GetOrUpdatePlayerState(Wizard wizard, bool forceUpdate = false) {
         var playerId = wizard.CharId;
@@ -232,9 +246,8 @@ internal sealed class InteractQuestOfferComponent(ZoneEntity entity)
 
             if (requirementsMet) {
                 state.HasAvailableQuest = true;
-                state.AvailableQuest = quest;
-
-                break; // Take the first available quest.
+                state.AvailableQuest ??= quest; // the first, as before
+                state.AvailableQuests.Add(quest); // CLASSIC: and every other one
             }
         }
 
