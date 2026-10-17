@@ -1215,7 +1215,7 @@ internal partial class ZoneService(SessionActor sessionActor) : MessageService(s
         NamedEffect effect = new NamedEffect {
             m_effectNameID = StringHash.Compute("CantGoHome"),
             m_endTime = (uint) unixTimeStart.AddSeconds(30).ToUnixTimeSeconds(),
-            m_internalID = wizard.GameEffects.Count,
+            m_internalID = Imlight.CoreLib.Classic.Elixirs.ElixirRuntime.NextEffectId(wizard), // CLASSIC: unique; the client removes by id
         };
 
         wizard.GameEffects.Add(effect);
@@ -1244,7 +1244,7 @@ internal partial class ZoneService(SessionActor sessionActor) : MessageService(s
         var effect = new NamedEffect {
             m_effectNameID = StringHash.Compute("RecallHome"),
             m_endTime = (uint) time.AddSeconds(2).ToUnixTimeSeconds(),
-            m_internalID = wizard.GameEffects.Count,
+            m_internalID = Imlight.CoreLib.Classic.Elixirs.ElixirRuntime.NextEffectId(wizard), // CLASSIC: unique; the client removes by id
         };
 
         wizard.GameEffects.Add(effect);
