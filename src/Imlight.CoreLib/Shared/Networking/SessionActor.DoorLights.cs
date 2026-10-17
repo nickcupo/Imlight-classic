@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Threading;
 using Akka.Actor;
 using Imcodec.MessageLayer.Generated;
 using Imlight.CoreLib.Game.Services;
@@ -13,9 +14,13 @@ internal sealed record LegacyDoorSocketBatch(ZoneAttachContext Attach, ulong Own
 
 public sealed partial class SessionActor {
     private readonly Type[] _inProcessServices;
+    private static int s_inProcessSessions;
 
     // Exercise the real session receivers and service registration without a socket.
     internal SessionActor(IActorRef socketSender, params Type[] services) {
+        // CLASSIC: a distinct non-zero id, counted down from the top. Left at 0 it matched every virtual online player
+        // (SessionId 0), so a CloseSession here swept another test's entries and opened the player database.
+        SessionID = (ushort) (ushort.MaxValue - Interlocked.Increment(ref s_inProcessSessions) % ushort.MaxValue);
         _socketSenderRef = socketSender;
         _inProcessServices = services;
         _services = [];
