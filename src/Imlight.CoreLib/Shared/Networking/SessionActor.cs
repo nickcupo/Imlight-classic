@@ -88,6 +88,20 @@ public sealed partial class SessionActor : ReceiveActor, IDisposable {
     internal bool TransferringOut => _transferringOut;
     internal void MarkTransferringOut() => _transferringOut = true;
 
+    // CLASSIC: reattach after a dropped connection (Imlight.Classic.Net.GameSessionKeys.ArmForReattach). The attach
+    // notes the account and the key generation it consumed; the socket listener (peer gone) or the heartbeat (client
+    // silent) says the close is a drop; Dispose then lets the client's own reconnect (MSG_ATTACH.Reattach) use that key.
+    internal const string PeerLost = "PeerLost";
+    internal const string ReattachOnClose = "ReattachOnClose";
+    private long _attachKeyGeneration;
+    private ulong _attachAccountId;
+    private volatile bool _dropped;
+    internal void NoteAttachKey(ulong accountId, long generation) {
+        Interlocked.Exchange(ref _attachKeyGeneration, 0);
+        _attachAccountId = accountId;
+        Interlocked.Exchange(ref _attachKeyGeneration, generation);
+    }
+
     public string Ip;
     public string RemoteIp;
     // CLASSIC: the server address this client connected to (KingsIsle's launcher is sent URLs on it).
@@ -343,6 +357,7 @@ public sealed partial class SessionActor : ReceiveActor, IDisposable {
 
         Logger.Debug("SessionActor {Id} disposing.", Logger.Args(SessionID));
         _isDisposed = true;
+        ArmReattachIfDropped(); // CLASSIC
         RetirePetGamePublication(); // CLASSIC: queued owner-only pet setup cannot publish during shutdown.
 
         // CLASSIC: the session is gone for everyone at once. Zone triggers stop asking it for its wizard (each Ask
@@ -380,6 +395,26 @@ public sealed partial class SessionActor : ReceiveActor, IDisposable {
     // handler, a socket actor's SessionFatalException) is logged here once and closes the session the same way: the
     // failed actor is resumed so its OnPreDispose can run, or stopped when it never started. A ServiceRetryException
     // restarts that service alone; one that keeps failing is stopped by Akka, and the session closes (Terminated).
+    /// <summary>
+    /// CLASSIC: a game session whose connection dropped (not a zone change, kick, newer login or logout) re-arms the key
+    /// its attach consumed, for [Game Server] ReattachWindowSeconds, for the client's own reconnect only.
+    /// </summary>
+    private void ArmReattachIfDropped() {
+        var generation = Interlocked.Read(ref _attachKeyGeneration);
+        if (!_dropped || TransferringOut || generation == 0 || ServerRef is null || !Game.GameServer.Refs.ContainsKey(ServerRef)) {
+            return;
+        }
+        var accountId = _attachAccountId;
+        if (!ReferenceEquals(Game.AccountSessions.HolderOf(accountId), this)) {
+            return;
+        }
+        var window = Auth.SecuritySettings.ReattachWindow;
+        if (Auth.SecuritySettings.GameKeys.Value.ArmForReattach(accountId, generation, RemoteIp, window)) {
+            Logger.Information("SessionActor {Id}: connection of account {Account} dropped; its client may reconnect for {Seconds} s.",
+                Logger.Args(SessionID, accountId, (int) window.TotalSeconds));
+        }
+    }
+
     protected override SupervisorStrategy SupervisorStrategy() =>
         new OneForOneStrategy(
             maxNrOfRetries: _serviceRetryCount,
@@ -445,6 +480,7 @@ public sealed partial class SessionActor : ReceiveActor, IDisposable {
     private void ConfigureReceivers() {
         // Specific message handlers.
         Receive<string>(x => x == "Close", x => Dispose());
+        Receive<string>(x => x == PeerLost || x == ReattachOnClose, x => _dropped = true); // CLASSIC: reattach
         // CLASSIC: closed by a newer login of the account; the notice it was just sent gets half a second to go out.
         Receive<string>(x => x == AccountSessionsCloseSoon, x => Context.System.Scheduler.ScheduleTellOnce(
             TimeSpan.FromMilliseconds(500), Self, "Close", ActorRefs.NoSender));

@@ -163,6 +163,82 @@ public class SecurityAuthTests {
         Assert.Equal(GameKeyResult.Accepted, keys.TryConsume("", 7, "10.0.0.2", transfer.SessionId));
     }
 
+    // ------------------------------------------------------------ reattach after a dropped connection (rea-world)
+    // The r806919 client reconnects by itself after a drop (GameClient::HandleReconnectTimeout) and resends MSG_ATTACH
+    // from its stored record with Reattach = 1 (GameClient::AppSessionEstablished). Live 2026-10-09 01:19:29: refused
+    // NotArmed, 3 s after the drop, with the select key the dropped session had consumed.
+
+    [Fact]
+    public void A_dropped_select_attach_may_reattach_once_with_the_reattach_flag() {
+        var keys = new GameSessionKeys(TimeSpan.FromMinutes(5));
+        var key = keys.Issue(7, "10.0.0.2");
+        Assert.Equal(GameKeyResult.Accepted, keys.TryConsume(key, 7, "10.0.0.2", 0, reattach: false, out var generation));
+        Assert.NotEqual(0, generation);
+        Assert.Equal(GameKeyResult.NotArmed, keys.TryConsume(key, 7, "10.0.0.2", 0, reattach: true, out _)); // before the drop
+
+        Assert.True(keys.ArmForReattach(7, generation, "10.0.0.2", TimeSpan.FromMinutes(2)));
+        // Only the client's own reconnect may use it: a plain attach with the old key is still refused.
+        Assert.Equal(GameKeyResult.NotArmed, keys.TryConsume(key, 7, "10.0.0.2"));
+        Assert.Equal(GameKeyResult.Accepted, keys.TryConsume(key, 7, "10.0.0.2", 0, reattach: true, out var again));
+        Assert.Equal(generation, again);
+        // Single use.
+        Assert.Equal(GameKeyResult.NotArmed, keys.TryConsume(key, 7, "10.0.0.2", 0, reattach: true, out _));
+    }
+
+    [Fact]
+    public void A_dropped_transfer_attach_may_reattach_with_its_session_id() {
+        var keys = new GameSessionKeys(TimeSpan.FromMinutes(5));
+        keys.Issue(7, "10.0.0.2");
+        var transfer = keys.IssueTransfer(7, "10.0.0.2");
+        Assert.Equal(GameKeyResult.Accepted, keys.TryConsume("", 7, "10.0.0.2", transfer.SessionId, reattach: false, out var generation));
+        Assert.True(keys.ArmForReattach(7, generation, "10.0.0.2", TimeSpan.FromMinutes(2)));
+        Assert.Equal(GameKeyResult.Accepted, keys.TryConsume("", 7, "10.0.0.2", transfer.SessionId, reattach: true, out _));
+    }
+
+    [Fact]
+    public void A_reattach_is_not_armed_for_a_replaced_key_another_address_or_an_unused_key() {
+        var keys = new GameSessionKeys(TimeSpan.FromMinutes(5));
+        var key = keys.Issue(7, "10.0.0.2");
+        Assert.False(keys.ArmForReattach(7, 1, "10.0.0.2", TimeSpan.FromMinutes(2))); // still armed: nothing to re-arm
+        Assert.Equal(GameKeyResult.Accepted, keys.TryConsume(key, 7, "10.0.0.2", 0, reattach: false, out var generation));
+
+        Assert.False(keys.ArmForReattach(7, generation, "10.0.0.9", TimeSpan.FromMinutes(2))); // dropped from elsewhere
+        Assert.False(keys.ArmForReattach(7, generation, "10.0.0.2", TimeSpan.Zero)); // turned off
+        Assert.False(keys.ArmForReattach(8, generation, "10.0.0.2", TimeSpan.FromMinutes(2))); // another account
+
+        // A newer login (or a zone change) issued another key: the dropped session's generation is gone.
+        var newer = keys.Issue(7, "10.0.0.2");
+        Assert.Equal(GameKeyResult.Accepted, keys.TryConsume(newer, 7, "10.0.0.2", 0, reattach: false, out var newerGeneration));
+        Assert.NotEqual(generation, newerGeneration);
+        Assert.False(keys.ArmForReattach(7, generation, "10.0.0.2", TimeSpan.FromMinutes(2)));
+        Assert.Equal(GameKeyResult.UnknownKey, keys.TryConsume(key, 7, "10.0.0.2", 0, reattach: true, out _));
+    }
+
+    [Fact]
+    public void A_reattach_window_expires_and_is_capped() {
+        var clock = new ManualClock();
+        var keys = new GameSessionKeys(TimeSpan.FromMinutes(15), time: clock);
+        var key = keys.Issue(7, "10.0.0.2");
+        keys.TryConsume(key, 7, "10.0.0.2", 0, reattach: false, out var generation);
+        Assert.True(keys.ArmForReattach(7, generation, "10.0.0.2", TimeSpan.FromMinutes(2)));
+        clock.Now += TimeSpan.FromMinutes(2) + TimeSpan.FromSeconds(1);
+        Assert.Equal(GameKeyResult.Expired, keys.TryConsume(key, 7, "10.0.0.2", 0, reattach: true, out _));
+
+        Assert.True(keys.ArmForReattach(7, generation, "10.0.0.2", TimeSpan.FromHours(1)));
+        clock.Now += GameSessionKeys.MaxReattachWindow + TimeSpan.FromSeconds(1);
+        Assert.Equal(GameKeyResult.Expired, keys.TryConsume(key, 7, "10.0.0.2", 0, reattach: true, out _));
+    }
+
+    [Fact]
+    public void A_regular_rearm_after_a_failed_attach_clears_the_reattach_only_mark() {
+        var keys = new GameSessionKeys(TimeSpan.FromMinutes(5));
+        var key = keys.Issue(7, "10.0.0.2");
+        keys.TryConsume(key, 7, "10.0.0.2", 0, reattach: false, out var generation);
+        Assert.True(keys.ArmForReattach(7, generation, "10.0.0.2", TimeSpan.FromMinutes(2)));
+        Assert.True(keys.Arm(7));
+        Assert.Equal(GameKeyResult.Accepted, keys.TryConsume(key, 7, "10.0.0.2"));
+    }
+
     [Fact]
     public void The_attach_timeout_fallback_needs_a_transfer_to_the_same_address() {
         var keys = new GameSessionKeys(TimeSpan.FromMinutes(5));
@@ -213,10 +289,26 @@ public class SecurityAuthTests {
         Assert.Equal(3, builds); // ZoneService (zone change, realm transfer), AttachService (attach-timeout fallback)
 
         var attach = System.IO.File.ReadAllText(System.IO.Path.Combine(src, "Imlight.CoreLib", "Game", "Services", "AttachService.cs"));
-        Assert.Contains("ValidateLoginKey(message.LoginKey, message.UserID, message.SessionID, out var account)", attach);
+        Assert.Contains("ValidateLoginKey(message.LoginKey, message.UserID, message.SessionID, message.Reattach != 0, out var account,", attach);
         Assert.Contains("SessionID = sessionId,", attach);
+        Assert.Contains("Reattach = reattach,", attach);
+        Assert.Contains("SessionActor.NoteAttachKey(account.AccountId, keyGeneration);", attach);
         var server = System.IO.File.ReadAllText(System.IO.Path.Combine(src, "Imlight.CoreLib", "Game", "GameServer.cs"));
-        Assert.Contains("Keys.TryConsume(message.Key.ToString(), message.UserID, message.SessionActor?.RemoteIp, message.SessionID)", server);
+        Assert.Contains("Keys.TryConsume(message.Key.ToString(), message.UserID, message.SessionActor?.RemoteIp, message.SessionID,\n            message.Reattach, out var generation)", server);
+        // A reattach is armed only by a dropped connection (socket gone, or the heartbeat found the client silent).
+        var listener = System.IO.File.ReadAllText(System.IO.Path.Combine(src, "Imlight.CoreLib", "Shared", "Networking", "SocketListener.cs"));
+        Assert.Equal(2, CountOf(listener, "_sessionActorRef.Tell(SessionActor.PeerLost);"));
+        var session = System.IO.File.ReadAllText(System.IO.Path.Combine(src, "Imlight.CoreLib", "Shared", "Networking", "SessionActor.cs"));
+        Assert.Contains("if (!_dropped || TransferringOut || generation == 0", session);
+        Assert.Contains("ReferenceEquals(Game.AccountSessions.HolderOf(accountId), this)", session);
+    }
+
+    private static int CountOf(string text, string what) {
+        var count = 0;
+        for (var at = text.IndexOf(what, StringComparison.Ordinal); at >= 0; at = text.IndexOf(what, at + what.Length, StringComparison.Ordinal)) {
+            count++;
+        }
+        return count;
     }
 
     [Fact]

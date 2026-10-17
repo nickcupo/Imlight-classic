@@ -147,6 +147,7 @@ public sealed class SERVER_100_PROTOCOL : IServerProtocol {
         public ByteString Key;
         public ulong UserID;
         public ulong SessionID; // CLASSIC: MSG_ATTACH.SessionID, a transfer's proof (Imlight.Classic.Net.GameSessionKeys)
+        public bool Reattach; // CLASSIC: MSG_ATTACH.Reattach, the client reconnecting after a dropped connection
         public SessionActor SessionActor;
         
     }
@@ -161,6 +162,7 @@ public sealed class SERVER_100_PROTOCOL : IServerProtocol {
         // @todo: make these string IDs instead.
         public int ErrorCode;
         public Account Account;
+        public long KeyGeneration; // CLASSIC: which key the attach consumed (GameSessionKeys.ArmForReattach)
         
     }
 

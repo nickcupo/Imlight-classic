@@ -254,6 +254,7 @@ internal class ControlService : MessageService, IHandshakeService {
         // visible in the log. It only fires outside the game server (_isInGameServer guards it above).
         Logger.Warning("SessionActor {SessionID} heartbeat response timed out after {Silence}s of silence; closing session.",
             Logger.Args(SessionActor.SessionID, (int) (now - lastHeardAt).TotalSeconds)); // CLASSIC: was _keepAliveRspWaitTime.
+        SessionActor.ActorRef.Tell(SessionActor.ReattachOnClose); // CLASSIC: a client that wakes up may reconnect
         CloseSession();
     }
 
