@@ -55,6 +55,7 @@ using Imlight.Common;
 using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.Game.Requirements;
 using Imlight.CoreLib.Game.Requirements.Contexts;
+using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;
 using Imlight.CoreLib.WizardData.Collections;
 
@@ -83,6 +84,11 @@ internal sealed partial class ZoneTriggerSupervisor {
             RequirementList nested => NamesGoal(nested, questName, goalName),
             _ => false,
         }) == true;
+
+    private sealed record DeferredReplay(ZONE_102_PROTOCOL.MSG_POSTEVENT Entry);
+
+    [MessageHandler(typeof(DeferredReplay))]
+    private void ReceiveDeferredReplay(DeferredReplay replay) => ReplayProgressEvents(replay.Entry);
 
     private bool IsStateOnlyTrigger(Trigger trigger) {
         var index = _plan?.IndexOf(trigger) ?? -1;
@@ -140,7 +146,10 @@ internal sealed partial class ZoneTriggerSupervisor {
         }
 
         if (message.EventName == ZoneTriggerPlans.EnterZoneEvent && !goalRepost) { // CLASSIC: a new instance learns the wizard's progress.
-            ReplayProgressEvents(message);
+            // CLASSIC: after the entry's own triggers have settled. Two wizards entering one shared instance together each fire
+            // the zone's hide triggers (Nastrond's 'Hide Da Bears Trigger'); a replay posted at once could be hidden again by the
+            // other wizard's entry.
+            Timers.StartSingleTimer(("replay", message.PlayerActor), new DeferredReplay(message), System.TimeSpan.FromMilliseconds(700));
         }
     }
 
