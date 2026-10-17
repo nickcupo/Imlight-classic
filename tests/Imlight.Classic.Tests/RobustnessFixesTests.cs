@@ -140,6 +140,30 @@ public sealed class RobustnessFixesTests {
         Assert.Equal(new uint[] { 11, 12, 13 }, pending);
     }
 
+    // 2026-10-17: the round table (s_roundGoals) and the client's own goal request each gave the player the card.
+    [Fact]
+    public void ATutorialCardTheRoundTableGaveIsNotGivenAgainByTheClientsRequest() {
+        Assert.Equal(new uint[] { 13 }, TutorialDuelDirector.TakeUnclaimed([12, 13, 12], [12, 12, 99]));
+        var claimed = new System.Collections.Generic.List<uint> { 12 };
+        Assert.Empty(TutorialDuelDirector.TakeUnclaimed([12], claimed));
+        Assert.Empty(claimed); // used up: a later grant of the same card is a new card
+        Assert.Equal(new uint[] { 12 }, TutorialDuelDirector.TakeUnclaimed([12], claimed));
+
+        var duel = CombatRegressionTests.MakeDuel();
+        CombatRegressionTests.SetProperty(duel, "Duel", new Duel { m_duelPhase = kDuelPhase.kPhase_Execution });
+        Occupy(duel, 4, player: true);
+        var director = new TutorialDuelDirector(duel, "WizardCity/Tutorial/Tutorial_Duel");
+        var granted = (System.Collections.Generic.List<uint>) typeof(TutorialDuelDirector).GetField("_roundGranted", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .GetValue(director)!;
+        granted.Add(21);
+        director.ReceiveRebuildDuelHand(ActorRefs.Nobody, new TUTORIAL_108_PROTOCOL.MSG_TUTORIALREBUILDDUELHAND {
+            RecipientTemplateId = 1, SpellIdsToGrant = [21, 22],
+        });
+        var pending = (uint[]) typeof(TutorialDuelDirector).GetField("_pendingHandGrant", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .GetValue(director)!;
+        Assert.Equal(new uint[] { 22 }, pending);
+    }
+
     [Fact]
     public void TutorialGrantSkipsEmptySigilSlots() {
         var duel = CombatRegressionTests.MakeDuel();

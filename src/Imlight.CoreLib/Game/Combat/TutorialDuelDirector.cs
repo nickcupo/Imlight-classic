@@ -72,6 +72,10 @@ internal sealed class TutorialDuelDirector {
     private readonly CombatDuelComponent _duel;
     private readonly bool _isActive;
     private uint[] _pendingHandGrant;
+    // CLASSIC (2026-10-17): the player's cards the round table (s_roundGoals) gave this round. The client asks for the
+    // same goals itself (TutorialCombat.lua, after each ExecutionPhase), and each path used to add the card: with the
+    // hand no longer filled from the deck, a duplicate would show as a second Heal or Meteor.
+    private readonly List<uint> _roundGranted = [];
 
     internal TutorialDuelDirector(CombatDuelComponent duel, string zonePath) {
         _duel = duel;
@@ -98,6 +102,7 @@ internal sealed class TutorialDuelDirector {
 
         // Execute the round's quest-goal grants (rounds 2-6; round 1 is client-driven) so the golems' hands
         // and the player's cards/pips are set before planning begins.
+        _roundGranted.Clear();
         GrantRoundGrants(roundNum);
 
         // Pre-queue the golems' scripted attacks; they never pick moves on their own and without this the
@@ -125,8 +130,10 @@ internal sealed class TutorialDuelDirector {
         ScriptEnemyMoves();
     }
 
-    internal void OnDuelEnded()
-        => _pendingHandGrant = null;
+    internal void OnDuelEnded() {
+        _pendingHandGrant = null;
+        _roundGranted.Clear();
+    }
 
     internal void ReceiveRebuildDuelHand(IActorRef sender, TUTORIAL_108_PROTOCOL.MSG_TUTORIALREBUILDDUELHAND message) {
         if (!_isActive || message.SpellIdsToGrant is null || message.SpellIdsToGrant.Length == 0) {
@@ -145,17 +152,23 @@ internal sealed class TutorialDuelDirector {
             return;
         }
 
+        // CLASSIC (2026-10-17): a card the round table already gave the player this round is not given twice.
+        var spells = message.RecipientTemplateId == 1 ? TakeUnclaimed(message.SpellIdsToGrant, _roundGranted) : message.SpellIdsToGrant;
+        if (spells.Length == 0) {
+            return;
+        }
+
         // Player grants that land mid-execution are queued to the next planning phase so the card does not
         // flash during the current cast; creature grants apply now (the round script reads them at planning).
         if (message.RecipientTemplateId == 1 && _duel.Duel.m_duelPhase != kDuelPhase.kPhase_Planning) {
             // The first pending grant of a phase finds no list yet (spreading null threw: rig-final 2026-10-04,
             // "player damage 1" lost its card).
-            _pendingHandGrant = [.. _pendingHandGrant ?? [], .. message.SpellIdsToGrant];
+            _pendingHandGrant = [.. _pendingHandGrant ?? [], .. spells];
 
             return;
         }
 
-        recipient.AddSpellsToHand(message.SpellIdsToGrant);
+        recipient.AddSpellsToHand(spells);
         _duel.SendCurrentCombatHand(recipient);
     }
 
@@ -202,11 +215,16 @@ internal sealed class TutorialDuelDirector {
                         ? player
                         : _duel.SubCircles.FirstOrDefault(s => s is not null && s.ParticipantObject is not null
                             && s.ParticipantObject.m_templateID == recipientTemplate);
-                    recipient?.AddSpellsToHand([(uint) spellId]);
+                    if (recipientTemplate == 1) {
+                        GrantPlayerOnce(player, (uint) spellId);
+                    }
+                    else {
+                        recipient?.AddSpellsToHand([(uint) spellId]);
+                    }
                 }
                 else if (result is ResDrawHand draw && draw.m_templateID != 0
                          && CoreObjectFactory.GetCoreTemplate(draw.m_templateID) is SpellTemplate) {
-                    player?.AddSpellsToHand([(uint) draw.m_templateID]);
+                    GrantPlayerOnce(player, (uint) draw.m_templateID);
                 }
             }
 
@@ -219,6 +237,38 @@ internal sealed class TutorialDuelDirector {
         if (player is not null) {
             _duel.SendCurrentCombatHand(player);
         }
+    }
+
+    /// <summary>
+    /// The round table's card for the player, unless the client's own request for the goal already queued it (it comes
+    /// at this planning phase); a card given here is remembered so the client's later request does not add it again.
+    /// </summary>
+    private void GrantPlayerOnce(CombatDuelSubCircle player, uint spellId) {
+        if (player is null) {
+            return;
+        }
+
+        if (_pendingHandGrant is { Length: > 0 } pending && Array.IndexOf(pending, spellId) >= 0) {
+            return;
+        }
+
+        player.AddSpellsToHand([spellId]);
+        _roundGranted.Add(spellId);
+    }
+
+    /// <summary>
+    /// <paramref name="grants"/> less one copy of each spell in <paramref name="claimed"/>, which loses the copies it
+    /// gave up.
+    /// </summary>
+    internal static uint[] TakeUnclaimed(uint[] grants, List<uint> claimed) {
+        var left = new List<uint>(grants ?? []);
+        for (var i = left.Count - 1; i >= 0; i--) {
+            if (claimed.Remove(left[i])) {
+                left.RemoveAt(i);
+            }
+        }
+
+        return [.. left];
     }
 
     private void ScriptEnemyMoves() {
