@@ -107,8 +107,7 @@ public sealed class CastWaitTimeTests : IDisposable {
     }
 
     [Theory]
-    [InlineData("october-2010-arc1")]
-    [InlineData("late-2009")]
+    [InlineData("arc1-2009h1")]
     public void Restored2014CinematicsAreTimedFromTheirOwnStages(string profile) {
         Use(profile);
         // Ra (2014): Summon 5.4 + Act 9.133, an Act layout: summon + cast + act (no Weakness stage, no double count).
