@@ -174,8 +174,7 @@ internal partial class QuestService(SessionActor sessionActor) : MessageService(
         }
 
         // Get the goal template for this goal.
-        var qTemplate = _cachedQuestTemplates
-            .FirstOrDefault(q => q.m_questName == qInstance.QuestName);
+        var qTemplate = TemplateFor(qInstance.QuestName);
         if (qTemplate == null) {
             Logger.Error("Failed to find quest template for quest '{0}' when completing goal ID '{1}'",
                 Logger.Args(qInstance.QuestName, goalId));
@@ -229,8 +228,7 @@ internal partial class QuestService(SessionActor sessionActor) : MessageService(
         }
 
         // Get the goal template for this goal.
-        var qTemplate = _cachedQuestTemplates
-            .FirstOrDefault(q => q.m_questName == qInstance.QuestName);
+        var qTemplate = TemplateFor(qInstance.QuestName);
         if (qTemplate == null) {
             Logger.Error("Failed to find quest template for quest '{0}' when completing goal ID '{1}'",
                 Logger.Args(qInstance.QuestName, goalId));
@@ -291,8 +289,7 @@ internal partial class QuestService(SessionActor sessionActor) : MessageService(
         }
 
         // Get the goal template for this goal.
-        var qTemplate = _cachedQuestTemplates
-            .FirstOrDefault(q => q.m_questName == qInstance.QuestName);
+        var qTemplate = TemplateFor(qInstance.QuestName);
         if (qTemplate == null) {
             Logger.Error("Failed to find quest template for quest '{0}' when completing proximity goal ID '{1}'",
                 Logger.Args(qInstance.QuestName, message.GoalID));
@@ -384,7 +381,9 @@ internal partial class QuestService(SessionActor sessionActor) : MessageService(
                 continue;
             }
 
-            var qTemplate = _cachedQuestTemplates.FirstOrDefault(q => q.m_questName == qInstance.QuestName);
+            // CLASSIC: TemplateFor, not the cache alone: TutorialService adds WC-TUT-* quests without caching their
+            // templates here ("Failed to find quest template for quest 'WC-TUT-C03-001'", live 2026-10-17).
+            var qTemplate = TemplateFor(qInstance.QuestName);
             if (qTemplate == null) {
                 Logger.Error("Failed to find quest template for quest '{0}' when processing combat victory.",
                     Logger.Args(qInstance.QuestName));
@@ -731,7 +730,7 @@ internal partial class QuestService(SessionActor sessionActor) : MessageService(
         );
         PostGoalCompleteEvents(questInstance, goalTemplate); // CLASSIC: QuestService.GoalEvents.cs.
 
-        var qTemplate = _cachedQuestTemplates.FirstOrDefault(q => q.m_questName == questInstance.QuestName);
+        var qTemplate = TemplateFor(questInstance.QuestName);
         if (qTemplate == null) {
             Logger.Error("Failed to find quest template for quest '{0}' when completing goal '{1}'",
                 Logger.Args(questInstance.QuestName, goalTemplate.m_goalName));
@@ -768,7 +767,7 @@ internal partial class QuestService(SessionActor sessionActor) : MessageService(
 
         SendCompleteQuest(questInstance.ID);
 
-        var qTemplate = _cachedQuestTemplates.FirstOrDefault(q => q.m_questName == questInstance.QuestName);
+        var qTemplate = TemplateFor(questInstance.QuestName);
         if (qTemplate == null) {
             Logger.Error("Failed to find quest template for quest '{0}' when completing quest",
                 Logger.Args(questInstance.QuestName));

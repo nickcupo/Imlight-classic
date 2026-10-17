@@ -64,7 +64,10 @@ internal class PlayerQuestUnderwayState {
 internal sealed class InteractQuestUnderwayComponent(ZoneEntity entity)
     : ZoneEntityComponent(entity), IServiceComponent, IComponentFactory {
 
-    private const string PREP_NPC_ICON = "Prep";
+    // CLASSIC (REA, 2026-10-17): the option icon key picks the art from the client table at 0x143348660 (built in
+    // FUN_140a19ea0): Start = gold "!", Prep = silver "!" (a quest you cannot take yet), Unfinished = silver "?",
+    // Complete = gold "?". An underway quest is "Unfinished" (silver "?"), matching the wizbang; "Prep" showed a silver "!".
+    internal const string UNFINISHED_NPC_ICON = "Unfinished";
     private const double WIZBANG_UPDATE_INTERVAL_SECONDS = 1.0;
 
     public string ServiceName => "QuestUnderwayService";
@@ -132,7 +135,7 @@ internal sealed class InteractQuestUnderwayComponent(ZoneEntity entity)
 
         yield return new PrepEntry {
             m_displayKey = state.UnderwayQuest.m_questTitle,
-            m_iconKey = PREP_NPC_ICON,
+            m_iconKey = UNFINISHED_NPC_ICON,
             m_serviceName = ServiceName,
         };
     }

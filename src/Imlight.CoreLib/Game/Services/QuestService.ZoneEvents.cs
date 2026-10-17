@@ -185,7 +185,7 @@ internal partial class QuestService {
         }
 
         foreach (var qInstance in wizard.QuestBehavior.CurrentQuestInstances.ToArray()) {
-            var qTemplate = _cachedQuestTemplates.FirstOrDefault(q => q.m_questName == qInstance.QuestName);
+            var qTemplate = TemplateFor(qInstance.QuestName);
             if (qTemplate is null) {
                 continue;
             }
