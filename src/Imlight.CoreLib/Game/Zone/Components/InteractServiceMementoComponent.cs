@@ -146,6 +146,35 @@ internal sealed class InteractServiceMementoComponent(ZoneEntity entity)
         Timers.StartPeriodicTimer(WIZBANG_UPDATE_TIMER_KEY, updateMsg, updateInterval);
     }
 
+    // CLASSIC: a wizard who logs in or arrives standing inside an object's range only got its options on the first move, and a
+    // wizard who never moves (a login beside the Ravenwood Spiral Door) never got them. Range is checked on join too, and once
+    // more a few seconds later in case the client was not yet ready for the first message.
+    private static readonly TimeSpan JoinResendDelay = TimeSpan.FromSeconds(4);
+
+    internal sealed record ResendJoinRange(IActorRef PlayerActor) : IServerMessage {
+        public byte MessageOrder => 0;
+        public byte ServiceID => 102;
+    }
+
+    public override void OnPlayerJoin(CoreObject playerObj, IActorRef playerActor, Wizard playerWizard) {
+        if (_serviceComponents.Count <= 0) {
+            return;
+        }
+
+        OnPlayerMove(playerObj, playerActor, playerWizard);
+        Timers?.StartSingleTimer($"join-range-{playerActor.Path.Name}-{Entity.ActiveGameObject.m_globalID.Full}", new ResendJoinRange(playerActor), JoinResendDelay);
+    }
+
+    [MessageHandler(typeof(ResendJoinRange))]
+    private void ReceiveResendJoinRange(ResendJoinRange message) {
+        if (!_playersInInteractionRange.Contains(message.PlayerActor) || _lastInteraction.ContainsKey(message.PlayerActor)) {
+            return;
+        }
+
+        SendLeaveServiceRange(message.PlayerActor);
+        SendActorServiceOptions(message.PlayerActor);
+    }
+
     public override void OnPlayerLeave(IActorRef playerActor, ulong id) {
         _sentTeleportOptions.Remove(playerActor); // CLASSIC
         _playerOptionIndex.Remove(playerActor); // CLASSIC
