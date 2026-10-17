@@ -67,7 +67,9 @@ internal static class PostCombatEffects {
         var messages = Take(wizard, gameObjectId);
         var effect = new NamedEffect {
             m_effectNameID = StringHash.Compute(effectName),
-            m_internalID = wizard.GameEffects.Count + 1,
+            // CLASSIC: the client removes by internal id alone (RemoveExistingEffect 0x141736a00), so a reused id
+            // takes off another effect: Count + 1 equalled the mount's SpeedBuff after one duel.
+            m_internalID = Elixirs.ElixirRuntime.NextEffectId(wizard),
             m_endTime = (uint) new DateTimeOffset(endUtc, TimeSpan.Zero).ToUnixTimeSeconds(),
         };
 

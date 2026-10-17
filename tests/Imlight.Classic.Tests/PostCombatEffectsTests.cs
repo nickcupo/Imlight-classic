@@ -25,6 +25,7 @@ using Imcodec.MessageLayer.Generated;
 using Imcodec.Cryptography;
 using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.WizardData.Models.Player;
+using Imcodec.ObjectProperty.TypeCache;
 using Xunit;
 
 namespace Imlight.Classic.Tests;
@@ -58,6 +59,40 @@ public sealed class PostCombatEffectsTests {
         Assert.Equal(0, wizard.GameEffects.Count);
         Assert.False(wizard.IsInCombatGrace);
         Assert.Empty(PostCombatEffects.Take(wizard, id));
+    }
+
+    // CLASSIC: "my speed is inconsistent" after battles (owner, mounted, 2026-10-17). r806919 removes an effect by
+    // internal id alone (RemoveExistingEffect 0x141736a00), and the mount's SpeedBuff stacks (STACKING_ALLOWED). Gear
+    // 1..11 and a mount at 12: the duel stow removes 12, the restore takes 13, and PostCombatEffect used Count + 1 = 13,
+    // so the fade's removal took the mount speed off and the next stow's removal of 13 found nothing.
+    [Fact]
+    public void TheFadeAfterADuelNeverReusesTheRestoredMountSpeedId() {
+        var wizard = new Wizard { CharId = 0xA3B1E000000001F2 };
+        var next = () => Imlight.CoreLib.Classic.Elixirs.ElixirRuntime.NextEffectId(wizard);
+        wizard.GameEffects.Add(new WizStatisticEffect { m_internalID = next() }); // 0: the sequence starts at max + 1
+        for (var i = 1; i <= 11; i++) wizard.GameEffects.Add(new WizStatisticEffect { m_internalID = next() });
+        wizard.GameEffects.Remove(wizard.GameEffects.Snapshot()[0]);
+        var mount = new SpeedEffect { m_internalID = next(), m_speedMultiplier = 40 };
+        Assert.Equal(12, mount.m_internalID);
+        wizard.GameEffects.Add(mount);
+
+        wizard.GameEffects.Remove(mount); // stowed for the duel
+        var restored = new SpeedEffect { m_internalID = next(),
+            m_speedMultiplier = 40 };
+        wizard.GameEffects.Add(restored); // worn again after it
+        Assert.Equal(13, restored.m_internalID);
+
+        var add = PostCombatEffects.Put(wizard, wizard.GameObjectID, "PostCombatEffect", DateTime.UtcNow.AddSeconds(30));
+        var swap = PostCombatEffects.Put(wizard, wizard.GameObjectID, "PostCombatEffect2", DateTime.UtcNow.AddSeconds(6));
+        var end = PostCombatEffects.Take(wizard, wizard.GameObjectID);
+
+        var removedIds = swap.Concat(end).OfType<GAME_5_PROTOCOL.MSG_REMOVEEFFECT>().Select(m => m.InternalID).ToList();
+        Assert.Equal(2, removedIds.Count);
+        Assert.DoesNotContain(restored.m_internalID, removedIds);
+        var ids = wizard.GameEffects.Snapshot().Select(e => e.m_internalID).ToList();
+        Assert.Equal(ids.Count, ids.Distinct().Count());
+        Assert.Contains(restored, wizard.GameEffects.Snapshot());
+        Assert.Single(add);
     }
 
 }
