@@ -7,7 +7,6 @@ using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.Game;
 using Imlight.CoreLib.Game.Services;
 using Imlight.CoreLib.Shared.Networking;
-using Imlight.CoreLib.WizardData.Models.Player;
 using Xunit;
 
 namespace Imlight.Classic.Tests;
@@ -43,9 +42,7 @@ public sealed class ClientJournalTests {
         var hidden = new HiddenQuestsBehavior();
         var tips = new TutorialLogBehavior();
         var player = new WizClientObject { m_inactiveBehaviors = new List<BehaviorInstance> { hidden, tips } };
-        var wizard = new Wizard { CharId = 7, Journal = new ClientJournal { CharId = 7, HiddenQuests = "h", TutorialTips = "t" } };
-
-        WizardObjectLoader.SetJournalBehaviors(player, wizard);
+        WizardObjectLoader.SetJournalBehaviors(player, new ClientJournal { CharId = 7, HiddenQuests = "h", TutorialTips = "t" });
 
         Assert.Equal("h", hidden.m_hiddenQuestsData);
         Assert.Equal("t", tips.m_tutorialTipData);
@@ -56,7 +53,7 @@ public sealed class ClientJournalTests {
         var hidden = new HiddenQuestsBehavior { m_hiddenQuestsData = "template" };
         var player = new WizClientObject { m_inactiveBehaviors = new List<BehaviorInstance> { hidden } };
 
-        WizardObjectLoader.SetJournalBehaviors(player, new Wizard { CharId = 8 });
+        WizardObjectLoader.SetJournalBehaviors(player, null);
 
         Assert.Equal("template", hidden.m_hiddenQuestsData);
     }
