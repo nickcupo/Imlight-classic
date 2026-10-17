@@ -216,4 +216,21 @@ public sealed class OrthrusCombatRegressionTests : IDisposable {
         circle.AddedToDuel = true;
         return circle;
     }
+
+    // Owner, 2026-10-17: an orange diamond on his wizard's nameplate and no school icon. The symbol was SlotIndex + 9 for
+    // players, but player circles are slots 4-7: 13 drew r806919's Type_Shadow_Self, 14-16 its Art_Target_Stub diamond.
+    [Fact]
+    public void EachCircleShowsTheSymbolOfItsOwnKind() {
+        Assert.Equal(DynamicSigilSymbol.Sun, CombatDuelSubCircle.SymbolFor(CombatSlotType.Player, 0));
+        Assert.Equal(DynamicSigilSymbol.Moon, CombatDuelSubCircle.SymbolFor(CombatSlotType.Player, 3));
+        Assert.Equal(DynamicSigilSymbol.Dagger, CombatDuelSubCircle.SymbolFor(CombatSlotType.Creature, 0));
+        Assert.Equal(DynamicSigilSymbol.Spiral, CombatDuelSubCircle.SymbolFor(CombatSlotType.Creature, 3));
+        Assert.Equal(DynamicSigilSymbol.NotSet, CombatDuelSubCircle.SymbolFor(CombatSlotType.Player, 4)); // the client's slot default
+
+        var duel = CombatRegressionTests.MakeDuel();
+        for (var i = 0; i < 8; i++) duel.SubCircles[i].SlotType = i < 4 ? CombatSlotType.Creature : CombatSlotType.Player;
+        Assert.Equal([DynamicSigilSymbol.Dagger, DynamicSigilSymbol.Key, DynamicSigilSymbol.Gem, DynamicSigilSymbol.Spiral,
+                      DynamicSigilSymbol.Sun, DynamicSigilSymbol.Eye, DynamicSigilSymbol.Star, DynamicSigilSymbol.Moon],
+            duel.SubCircles.Select(c => c.SymbolForCircle()).ToArray());
+    }
 }

@@ -241,6 +241,33 @@ public partial class CombatDuelSubCircle {
         SlotIndex = index;
     }
 
+    /// <summary>
+    /// CLASSIC (2026-10-17): the symbol over this circle's participant (its nameplate's Source sprite and the duel's
+    /// circle art). r806919's table (0x140097db0, read by 0x14077e700 from the participant's m_dynamicSymbol):
+    /// 1-4 Dagger, Key, Gem, Spiral (the monster circles), 5-8 Book, Chalice, Wand, Potion, 9-12 Sun, Eye, Star,
+    /// Moon (the player circles), 13 Type_Shadow_Self, any other value Art_Target_Stub (an orange diamond).
+    /// The symbol was SlotIndex + 9 for players and SlotIndex + 1 for creatures, but a sigil numbers its circles
+    /// monsters first (0-3), players after (4-7): every wizard got 13-16, the shadow face or the orange diamond
+    /// (owner, 2026-10-17: "an orange diamond on my wizard, no school icon"). Now each circle counts among the
+    /// circles of its own kind.
+    /// </summary>
+    internal DynamicSigilSymbol SymbolForCircle() {
+        // An arena sigil's circles are all player circles; its two sides are the circles' PvP teams.
+        var kind = SymbolKind(this);
+        var ordinal = _duelActor?.SubCircles is { } circles
+            ? circles.Count(c => c is not null && SymbolKind(c) == kind && c.SlotIndex < SlotIndex)
+            : SlotIndex;
+        return SymbolFor(kind, ordinal);
+    }
+
+    private static CombatSlotType SymbolKind(CombatDuelSubCircle circle)
+        => circle.PvpTeam is { } team ? team == CombatTeam.Player ? CombatSlotType.Player : CombatSlotType.Creature : circle.SlotType;
+
+    internal static DynamicSigilSymbol SymbolFor(CombatSlotType slotType, int ordinal) {
+        var first = slotType == CombatSlotType.Player ? DynamicSigilSymbol.Sun : DynamicSigilSymbol.Dagger;
+        return ordinal is >= 0 and < 4 ? (DynamicSigilSymbol) ((int) first + ordinal) : DynamicSigilSymbol.NotSet;
+    }
+
     internal CombatParticipant AssignParticipant(IActorRef actor, CoreObject participantObject, bool isSummonedMinion = false,
                                                  int minionOwnerSubCircle = 0, bool deferNotification = false) {
         ResetDeferredActionIdentity();
@@ -766,8 +793,7 @@ public partial class CombatDuelSubCircle {
 
     private void InitializePlayerSubCircleState() {
 
-        // Dyanmic symbols start at 9 for players.
-        var dynamicSymbol = (DynamicSigilSymbol) (SlotIndex + 9);
+        var dynamicSymbol = SymbolForCircle();
 
         ParticipantGameStats = _wizard.GameStats;
         var combatStats = ParticipantGameStats.GetCombatGameStats();
@@ -880,8 +906,7 @@ public partial class CombatDuelSubCircle {
                 .Ask<COMBAT_106_PROTOCOL.MSG_CREATURESTATS>(new COMBAT_106_PROTOCOL.MSG_QUERYCREATURESTATS(), PlayerQuery.Timeout) // CLASSIC: timeout
                 .Result;
 
-        // Dynamic symbols start 1-4 for creatures.
-        var dynamicSymbol = (DynamicSigilSymbol) (SlotIndex + 1);
+        var dynamicSymbol = SymbolForCircle();
 
         // Convert the creature stats to a combat deck.
         var spellData = new List<CombatDeckSpellData>();
