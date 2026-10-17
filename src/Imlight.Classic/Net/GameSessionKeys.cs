@@ -52,9 +52,19 @@
  * History: 2026-10-05 re-armed the select key (the client attached with
  * "0"); the first fix relied on Key alone (the client attached with "").
  *
+ * Reattach (2026-10-17): when its game connection drops, the r806919 client
+ * reconnects by itself (GameClient::HandleReconnectTimeout 0x141715a10, up to
+ * 3 tries) and sends MSG_ATTACH again from the same stored record with
+ * Reattach = 1 (GameClient::AppSessionEstablished 0x1416e0570). That key was
+ * consumed by the attach the dropped session made, so it was refused (live
+ * 2026-10-09 01:19:29, a friend: NotArmed 3 s after the drop) and the player
+ * got the disconnect dialog. ArmForReattach re-arms exactly the key the
+ * dropped session consumed (its Generation), for a short window, for an
+ * attach that says Reattach = 1, from the address bound to the key.
+ *
  * Created by: Nick with Claude Code (claude-opus-5-5)
  * Version: KALI 1.0
- * Last Updated: 10/06/2026
+ * Last Updated: 10/17/2026
  */
 
 using System;
@@ -94,6 +104,8 @@ public sealed class GameSessionKeys {
         public int Failures;
         public string? AltHash; // a transfer's SessionID proof; the same entry as its Key
         public byte[]? AltKey;
+        public long Generation; // which issue this is (Issue/IssueTransfer); a reattach names it
+        public bool ReattachOnly; // armed by ArmForReattach: only an attach with Reattach = 1 may use it
     }
 
     /// <summary>A transfer's proofs: MSG_SERVERTRANSFER.SessionID (echoed in MSG_ATTACH.SessionID) and Key/FallbackKey.</summary>
@@ -106,6 +118,7 @@ public sealed class GameSessionKeys {
     private readonly Lock _lock = new();
     private readonly Dictionary<string, Entry> _byKeyHash = new(StringComparer.Ordinal);
     private readonly Dictionary<ulong, string> _byAccount = new();
+    private long _nextGeneration;
 
     /// <param name="validity">How long a key accepts its next attach after it is issued or re-armed.</param>
     /// <param name="bindAddress">Whether the attach must come from the address the key was issued to.</param>
@@ -172,6 +185,7 @@ public sealed class GameSessionKeys {
                 Address = NormalizeAddress(address),
                 ArmedUntil = _time.GetUtcNow() + Validity,
                 LastActivity = _time.GetUtcNow(),
+                Generation = ++_nextGeneration,
             };
             _byAccount[accountId] = hash;
         }
@@ -210,6 +224,7 @@ public sealed class GameSessionKeys {
                 ArmedUntil = _time.GetUtcNow() + Validity,
                 LastActivity = _time.GetUtcNow(),
                 IsTransfer = true,
+                Generation = ++_nextGeneration,
                 AltHash = proofHash,
                 AltKey = Encoding.UTF8.GetBytes(proof),
             };
@@ -252,6 +267,44 @@ public sealed class GameSessionKeys {
 
             entry.ArmedUntil = _time.GetUtcNow() + Validity;
             entry.LastActivity = _time.GetUtcNow();
+            entry.ReattachOnly = false;
+            return true;
+        }
+    }
+
+    /// <summary>The longest window <see cref="ArmForReattach"/> accepts.</summary>
+    public static readonly TimeSpan MaxReattachWindow = TimeSpan.FromMinutes(5);
+
+    /// <summary>
+    /// After an attached game connection dropped: allows one attach with Reattach = 1 and the key that session
+    /// consumed, within <paramref name="window"/>, from the address the key is bound to. Does nothing when the account's
+    /// key is no longer that one (a newer login or a transfer issued another), when it is still armed, or when the
+    /// drop came from another address.
+    /// </summary>
+    /// <param name="accountId">The account.</param>
+    /// <param name="generation">The generation the dropped session's attach consumed (from <see cref="TryConsume"/>).</param>
+    /// <param name="address">The dropped connection's address.</param>
+    /// <param name="window">How long the reattach is accepted; clamped to <see cref="MaxReattachWindow"/>, 0 or less does nothing.</param>
+    /// <returns>True when the key was re-armed.</returns>
+    public bool ArmForReattach(ulong accountId, long generation, string? address, TimeSpan window) {
+        if (window <= TimeSpan.Zero || generation == 0) {
+            return false;
+        }
+        if (window > MaxReattachWindow) {
+            window = MaxReattachWindow;
+        }
+        lock (_lock) {
+            if (!_byAccount.TryGetValue(accountId, out var hash) || !_byKeyHash.TryGetValue(hash, out var entry)
+                    || entry.Generation != generation || entry.ArmedUntil is not null) {
+                return false;
+            }
+            if (BindAddress && entry.Address is not null && entry.Address != NormalizeAddress(address)) {
+                return false;
+            }
+            entry.ArmedUntil = _time.GetUtcNow() + window;
+            entry.LastActivity = _time.GetUtcNow();
+            entry.ReattachOnly = true;
+            entry.Failures = 0;
             return true;
         }
     }
@@ -272,7 +325,18 @@ public sealed class GameSessionKeys {
     /// <param name="accountId">MSG_ATTACH.UserID.</param>
     /// <param name="address">The connection's address.</param>
     /// <param name="sessionId">MSG_ATTACH.SessionID (0 when not sent).</param>
-    public GameKeyResult TryConsume(string? key, ulong accountId, string? address, ulong sessionId = 0) {
+    public GameKeyResult TryConsume(string? key, ulong accountId, string? address, ulong sessionId = 0)
+        => TryConsume(key, accountId, address, sessionId, reattach: false, out _);
+
+    /// <summary>
+    /// <see cref="TryConsume(string?, ulong, string?, ulong)"/> for an attach that may be a reattach, giving the
+    /// generation it consumed (for <see cref="ArmForReattach"/>).
+    /// </summary>
+    /// <param name="reattach">MSG_ATTACH.Reattach was set: the client is reconnecting after a dropped connection.</param>
+    /// <param name="generation">The consumed key's generation; 0 when refused.</param>
+    public GameKeyResult TryConsume(string? key, ulong accountId, string? address, ulong sessionId, bool reattach,
+        out long generation) {
+        generation = 0;
         lock (_lock) {
             var entry = Find(key);
             if (entry is null && sessionId != 0) {
@@ -289,7 +353,7 @@ public sealed class GameSessionKeys {
                 return GameKeyResult.WrongAccount;
             }
 
-            if (entry.ArmedUntil is not { } until) {
+            if (entry.ArmedUntil is not { } until || (entry.ReattachOnly && !reattach)) {
                 return GameKeyResult.NotArmed;
             }
 
@@ -303,7 +367,9 @@ public sealed class GameSessionKeys {
             }
 
             entry.ArmedUntil = null;
+            entry.ReattachOnly = false;
             entry.LastActivity = _time.GetUtcNow();
+            generation = entry.Generation;
             return GameKeyResult.Accepted;
         }
     }

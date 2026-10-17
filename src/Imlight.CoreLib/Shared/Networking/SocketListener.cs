@@ -162,6 +162,7 @@ internal sealed class SocketListener : ReceiveActor, IDisposable {
                     Logger.Args(_sessionid, result.Error.Message));
             }
 
+            _sessionActorRef.Tell(SessionActor.PeerLost); // CLASSIC: the connection dropped; the client may reattach
             Dispose();
             return;
         }
@@ -194,6 +195,7 @@ internal sealed class SocketListener : ReceiveActor, IDisposable {
         try {
             if (bytesReceived <= 0) {
                 // If the bytes transferred is 0, the socket has disconnected.
+                _sessionActorRef.Tell(SessionActor.PeerLost); // CLASSIC: the client may reattach
                 this.Dispose();
                 
                 return;

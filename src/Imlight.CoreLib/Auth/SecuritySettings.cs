@@ -86,6 +86,13 @@ internal static class SecuritySettings {
         Bool("Game Server.SessionKeyBindIp", true)));
 
     /// <summary>
+    /// CLASSIC: how long after an attached game connection drops the client may reconnect by itself with the key it
+    /// attached with (MSG_ATTACH.Reattach, GameSessionKeys.ArmForReattach). [Game Server] ReattachWindowSeconds,
+    /// default 120 (the seat a dropped wizard keeps in a fight), 0 turns it off, at most 300.
+    /// </summary>
+    internal static TimeSpan ReattachWindow => TimeSpan.FromSeconds(Math.Clamp(Int("Game Server.ReattachWindowSeconds", 120), 0, 300));
+
+    /// <summary>
     /// CLASSIC (go-live): the login port's own message bucket. [Advanced] LoginSessionTokenBucketMax,
     /// LoginSessionTokenBucketPerSecond and LoginSessionTokenBucketFailedAcquisitionLimit apply to connections on
     /// [Login Server] LoginServerPort only (the game port keeps SessionTokenBucket*, which the client's movement

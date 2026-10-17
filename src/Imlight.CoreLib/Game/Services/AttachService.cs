@@ -285,7 +285,8 @@ internal class AttachService(SessionActor sessionActor) : MessageService(session
 
     private void ValidateAttach(GAME_5_PROTOCOL.MSG_ATTACH message) {
         var loadedAtUtc = DateTime.UtcNow; // CLASSIC: the key check below loads the account (Game/AccountSessions.cs)
-        if (!ValidateLoginKey(message.LoginKey, message.UserID, message.SessionID, out var account)) {
+        if (!ValidateLoginKey(message.LoginKey, message.UserID, message.SessionID, message.Reattach != 0, out var account,
+                out var keyGeneration)) {
             // CLASSIC: what the client sent in place of a valid proof (never the key itself).
             Logger.Debug("Refused MSG_ATTACH: user {User} char {Char} zone {Zone} ({ZoneId}) slot {Slot} session slot {SessionSlot} " +
                          "target {Target} reattach {Reattach} retry {Retry}; login key {KeyLength} chars, pass key {PassLength} chars, " +
@@ -329,6 +330,9 @@ internal class AttachService(SessionActor sessionActor) : MessageService(session
                                             $"they did not have.");
         }
 
+        // CLASSIC: a drop of this session may re-arm the key it consumed for the client's own reconnect.
+        SessionActor.NoteAttachKey(account.AccountId, keyGeneration);
+
         // CLASSIC: playing keeps the login key alive (back to character select validates with it again).
         var playingAccountId = account.AccountId;
         System.Threading.Tasks.Task.Run(() => ClientKeyCollection.Touch(playingAccountId));
@@ -339,18 +343,21 @@ internal class AttachService(SessionActor sessionActor) : MessageService(session
         SetCharacterInternally(wizard);
     }
 
-    private bool ValidateLoginKey(ByteString key, ulong userId, ulong sessionId, out Account account) {
+    private bool ValidateLoginKey(ByteString key, ulong userId, ulong sessionId, bool reattach, out Account account,
+        out long keyGeneration) {
         account = null;
 
         var msg = new SERVER_100_PROTOCOL.MSG_VALIDATESESSIONKEY() {
             Key = key,
             UserID = userId,
             SessionID = sessionId, // CLASSIC: a transfer's proof (GameSessionKeys)
+            Reattach = reattach, // CLASSIC: MSG_ATTACH.Reattach
             SessionActor = SessionActor
         };
         var rsp = AskServer<SERVER_100_PROTOCOL.MSG_VALIDATESESSIONKEYRSP>(msg);
 
         account = rsp.Account;
+        keyGeneration = rsp.KeyGeneration;
 
         return rsp.ErrorCode == 0;
     }

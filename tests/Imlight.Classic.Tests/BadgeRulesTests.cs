@@ -44,8 +44,11 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
+using Imcodec.IO;
 using Imcodec.MessageLayer;
 using Imcodec.MessageLayer.Generated;
+using Imcodec.ObjectProperty;
+using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Classic.Rules;
 using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.Shared.Behaviors;
@@ -306,21 +309,103 @@ public sealed class BadgeRulesTests {
         }
     }
 
+    // How the r806919 client reads MSG_BADGES (rea-world 2026-10-17; WizardGraphicalClient 0x1413482d0, GameClient
+    // 0x14170f040): BadgeInfo and BadgeFilterInfo are SerializerBinary::Uncompress'd (0x141454f80: int32 length, zlib)
+    // and loaded as BadgeInfoList / BadgeFilterInfoList with property mask 0x18; Add = 0 adds nothing.
+
+    private static byte[] Uncompress(ByteString blob) {
+        byte[] bytes = blob;
+        Assert.True(bytes.Length >= 4, "SerializerBinary::Uncompress refuses a buffer under 4 bytes");
+        var length = BitConverter.ToInt32(bytes, 0);
+        Assert.True(length >= 0, "the top bit marks an uncompressed buffer; ours are compressed");
+        using var input = new MemoryStream(bytes, 4, bytes.Length - 4);
+        using var zlib = new System.IO.Compression.ZLibStream(input, System.IO.Compression.CompressionMode.Decompress);
+        using var output = new MemoryStream();
+        zlib.CopyTo(output);
+        Assert.Equal(length, (int) output.Length);
+        return output.ToArray();
+    }
+
+    private static T Load<T>(ByteString blob) where T : PropertyClass {
+        var serializer = new ObjectSerializer(Versionable: false); // the client's SerializerBinary(…, 0, 0)
+        Assert.True(serializer.Deserialize<T>(Uncompress(blob), (uint) (PropertyFlags.Prop_Transmit | PropertyFlags.Prop_AuthorityTransmit), out var value));
+        return value!;
+    }
+
+    private sealed class FilterNames : IDisposable {
+        private readonly Func<string, string?> _saved = ClassicBadges.FilterName;
+        public FilterNames() => ClassicBadges.FilterName = key => key switch {
+            "BadgeFilterNames_00000002" => "WizardCity", "BadgeFilterNames_00000001" => "Unfiltered", _ => null,
+        };
+        public void Dispose() => ClassicBadges.FilterName = _saved;
+    }
+
     [Fact]
-    public void TheBadgeListIsOneMessagePerBadge() {
+    public void TheBadgeListIsOneFullUpdateTheClientAdds() {
+        using var names = new FilterNames();
         var rules = RealBadges();
         var earned = new[] { rules.Find("hero-of-unicorn-way")!, rules.Find("gobbler-chaser")! };
 
-        var messages = ClassicBadges.ListMessages(earned);
+        var message = Assert.Single(ClassicBadges.ListMessages(earned, earned[1].TitleKey));
 
-        Assert.Equal([0u, 1u], messages.Select(m => m.CurrentBadge));
-        Assert.All(messages, m => Assert.Equal(2u, m.TotalBadges));
-        Assert.Equal([1, 0], messages.Select(m => (int) m.UpdateAll));
-        Assert.Equal([0, 1], messages.Select(m => (int) m.LastSegment));
-        Assert.NotEqual(messages[0].BadgeNameID, messages[1].BadgeNameID);
-        Assert.Equal(ClassicBadges.NameId(earned[0]), messages[0].BadgeNameID);
+        Assert.Equal(1, (int) message.UpdateAll);
+        Assert.Equal(1, (int) message.Add); // Add = 0 is ignored by the client
+        Assert.Equal(0, (int) message.Remove);
+        Assert.Equal(0, (int) message.Display); // no popups for the list
+        Assert.Equal(1, (int) message.LastSegment);
+        Assert.Equal(2u, message.TotalBadges);
+        Assert.Equal(ClassicBadges.NameId(earned[1]), message.CurrentBadge); // the selected badge, by its id
+
+        var list = Load<BadgeInfoList>(message.BadgeInfo);
+        Assert.Equal(earned.Select(ClassicBadges.NameId), list.m_badges.Select(b => b.m_badgeNameID));
+        Assert.Equal(earned.Select(b => b.TitleKey), list.m_badges.Select(b => (string) b.m_badgeTitle));
+        Assert.All(list.m_badges, b => Assert.True(b.m_badgeComplete));
+        Assert.Equal([0u, 1u], list.m_badges.Select(b => b.m_index));
+
+        var filters = Load<BadgeFilterInfoList>(message.BadgeFilterInfo);
+        var wizardCity = Imcodec.Cryptography.StringHash.Compute("WizardCity");
+        Assert.Contains(filters.m_badgeFilterInfoList, f => f.m_badgeFilterNameID == wizardCity && f.m_numberOfBadges >= 1);
+        Assert.Contains(list.m_badges, b => b.m_badgeFilterID == wizardCity);
+    }
+
+    [Fact]
+    public void AnEmptyBadgeListAddsNothingAndStillSendsAReadableFilterList() {
+        using var names = new FilterNames();
         var none = Assert.Single(ClassicBadges.ListMessages([]));
         Assert.Equal(0u, none.TotalBadges);
+        Assert.Equal(0, (int) none.Add);
+        Assert.Empty(Load<BadgeFilterInfoList>(none.BadgeFilterInfo).m_badgeFilterInfoList);
+    }
+
+    [Fact]
+    public void ANewBadgeIsOneAddOutsideAFullUpdateSoTheClientShowsItsPopup() {
+        using var names = new FilterNames();
+        var badge = RealBadges().Find("hero-of-unicorn-way")!;
+
+        var message = ClassicBadges.AddMessage(badge);
+
+        Assert.Equal(0, (int) message.UpdateAll);
+        Assert.Equal(1, (int) message.Add);
+        Assert.Equal(1, (int) message.Display);
+        var info = Assert.Single(Load<BadgeInfoList>(message.BadgeInfo).m_badges);
+        Assert.Equal(badge.TitleKey, (string) info.m_badgeTitle); // the popup's text (BadgeInfo +0x50)
+        Assert.Equal(ClassicBadges.NameId(badge), info.m_badgeNameID);
+    }
+
+    [Fact]
+    public void ALongBadgeListIsSplitIntoWholeLists() {
+        using var names = new FilterNames();
+        var saved = ClassicBadges.MaxBlobBytes;
+        try {
+            ClassicBadges.MaxBlobBytes = 64;
+            var earned = RealBadges().Badges.Take(12).ToArray();
+            var messages = ClassicBadges.ListMessages(earned);
+            Assert.True(messages.Count > 1);
+            Assert.All(messages, m => Assert.Equal(1, (int) m.UpdateAll)); // no popups while splitting
+            Assert.All(messages, m => Assert.Equal(1, (int) m.LastSegment)); // each a whole list, never a client-joined part
+            Assert.Equal(earned.Select(ClassicBadges.NameId), messages.SelectMany(m => Load<BadgeInfoList>(m.BadgeInfo).m_badges).Select(b => b.m_badgeNameID));
+        }
+        finally { ClassicBadges.MaxBlobBytes = saved; }
     }
 
     private static Wizard NewWizard() => new() { CharId = 77, QuestBehavior = new ServerQuestBehavior() };
