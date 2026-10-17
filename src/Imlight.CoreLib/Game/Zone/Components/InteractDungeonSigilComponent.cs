@@ -332,6 +332,14 @@ internal sealed partial class InteractDungeonSigilComponent(ZoneEntity entity)
 
     // The zone teleport whose trigger name is the sigil's tag (case, spaces and punctuation ignored), or null.
     private static WizardTeleportData ExactTeleport(string tag, WizardZoneData zoneData) {
+        // CLASSIC (cel playthrough): an entry whose trigger name IS the tag wins over one that only matches once punctuation is
+        // dropped. Science Center has two sigils, "To_Conservatory" (Conservatory, CL-SCI-C02-007) and "ToConservatory" (Gate
+        // Control Room), that normalise alike; the first entry in the file took both.
+        if (ClassicQuestEngine.IsActive && !string.IsNullOrEmpty(tag)
+            && zoneData.Teleports.FirstOrDefault(t => string.Equals(t.TriggerName, tag, StringComparison.OrdinalIgnoreCase)) is { } literal) {
+            return literal;
+        }
+
         var tagNorm = NormalizeSigilToken(tag);
 
         return zoneData.Teleports.FirstOrDefault(t => {

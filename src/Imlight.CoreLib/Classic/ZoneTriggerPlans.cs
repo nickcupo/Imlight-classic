@@ -186,8 +186,9 @@ internal static class ZoneTriggerPlans {
 
     // Results that only arm or disarm triggers, change trigger objects or wait: safe to run again for a wizard whose
     // quest progress posted the event in an earlier instance.
-    private static bool IsStateResult(Result result) => result switch {
+    internal static bool IsStateResult(Result result) => result switch {
         ResPostEvent or ClassicResModifyTriggerObject or ClassicResStateChange or ClassicResTriggerObjectPresence or ResWait => true,
+        ResAddDynaMod or ResRemoveDynaMod => true, // CLASSIC: an object state tag, idempotent (Nastrond "Reveal Seals" also drops the chest mod)
         ResActorDialog dialog => dialog.m_dialog?.m_dialogEntries is not { Count: > 0 },
         _ => false,
     };

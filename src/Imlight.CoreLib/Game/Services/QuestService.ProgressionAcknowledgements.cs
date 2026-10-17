@@ -102,7 +102,7 @@ internal partial class QuestService {
                     }
                 }
                 foreach (var goal in template.m_goals.Where(goal => template.m_startGoals.Contains(goal.m_goalName))) {
-                    if (GoalRequirementsMet(wizard, candidate, goal)) QueueZoneEntryCheck(goal);
+                    if (GoalRequirementsMet(wizard, candidate, goal)) { QueueZoneEntryCheck(goal); PostGoalActivatedToZone(candidate.QuestName, goal.m_goalName); }
                 }
                 if (!ExecuteAcknowledgedQuestResults(wizard, template.m_startResults, candidate.QuestName)) return;
                 _cachedQuestOffers.Remove(template.m_questName);
@@ -145,6 +145,7 @@ internal partial class QuestService {
                 if (!ExecuteAcknowledgedQuestResults(wizard, template.m_activateResults, quest.QuestName, template.m_goalName)) return;
                 PublishQuestMessages(messages.Skip(1).ToArray());
                 QueueZoneEntryCheck(template);
+                PostGoalActivatedToZone(quest.QuestName, template.m_goalName);
             }, validateFresh: saved => GoalRequirementsMet(saved,
                 WizardQuestTransactions.Held(saved, quest.QuestName), template)), out var status)) {
             // CLASSIC: the saved goal had begun already (a write this session missed). A refusal is usually the goal's

@@ -55,6 +55,7 @@ using Imlight.Common;
 using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.Game.Requirements;
 using Imlight.CoreLib.Game.Requirements.Contexts;
+using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;
 using Imlight.CoreLib.WizardData.Collections;
 
@@ -75,6 +76,20 @@ internal sealed partial class ZoneTriggerSupervisor {
             initiallyArmed: InitiallyArmed(trigger)); // CLASSIC: one that waits for its Enable_ event starts disarmed.
     }
 
+    // CLASSIC: true when the requirement list (nested lists too) has a HasGoal check of this quest's goal.
+    internal static bool NamesGoal(RequirementList requirements, string questName, string goalName)
+        => requirements?.m_requirements?.Any(requirement => requirement switch {
+            ReqHasGoal goal => string.Equals(goal.m_questName?.ToString(), questName, System.StringComparison.Ordinal)
+                && string.Equals(goal.m_goalName?.ToString(), goalName, System.StringComparison.Ordinal),
+            RequirementList nested => NamesGoal(nested, questName, goalName),
+            _ => false,
+        }) == true;
+
+    private sealed record DeferredReplay(ZONE_102_PROTOCOL.MSG_POSTEVENT Entry);
+
+    [MessageHandler(typeof(DeferredReplay))]
+    private void ReceiveDeferredReplay(DeferredReplay replay) => ReplayProgressEvents(replay.Entry);
+
     private bool IsStateOnlyTrigger(Trigger trigger) {
         var index = _plan?.IndexOf(trigger) ?? -1;
 
@@ -83,7 +98,10 @@ internal sealed partial class ZoneTriggerSupervisor {
 
     private void ReceiveClassicPostEvent(ZONE_102_PROTOCOL.MSG_POSTEVENT message) {
         // A waypoint goal may name the event itself (KT-CRY5-C01-002's "PuzzleComplete").
-        message.PlayerActor?.Tell(new ZONE_102_PROTOCOL.MSG_CLASSICZONEEVENT { EventName = message.EventName });
+        var goalRepost = !string.IsNullOrEmpty(message.GoalName);
+        if (!goalRepost) {
+            message.PlayerActor?.Tell(new ZONE_102_PROTOCOL.MSG_CLASSICZONEEVENT { EventName = message.EventName });
+        }
 
         // Monster_Killed triggers check the defeated monster (ClassicReqMonsterKilled); one whose check did not
         // decode would read as met for every kill, so it stays quiet.
@@ -95,7 +113,8 @@ internal sealed partial class ZoneTriggerSupervisor {
             listens: entry => entry.Trigger?.m_fireEvents?.Any(x => x == message.EventName) == true
                 && !(isKill && HasUndecodedRequirement(entry.Trigger.m_requirements))
                 && VolumeArrival.Fires(message.ArrivedInside, HasTeleport(entry.Trigger)) // CLASSIC: arrival never teleports.
-                && (!message.StateOnlyReplay || IsStateOnlyTrigger(entry.Trigger)), // CLASSIC: a state-only replay wakes only state triggers.
+                && (!message.StateOnlyReplay || IsStateOnlyTrigger(entry.Trigger)) // CLASSIC: a state-only replay wakes only state triggers.
+                && (!goalRepost || NamesGoal(entry.Trigger.m_requirements, message.GoalQuestName, message.GoalName)),
             meetsRequirements: entry => EvaluateRequirements(entry.Trigger, message)
                 && EvaluateTeleportRequirements(entry.Trigger, message),
             teleportsSomewhere: entry => HasTeleportDestination(entry.Trigger),
@@ -126,8 +145,11 @@ internal sealed partial class ZoneTriggerSupervisor {
             });
         }
 
-        if (message.EventName == ZoneTriggerPlans.EnterZoneEvent) { // CLASSIC: a new instance learns the wizard's progress.
-            ReplayProgressEvents(message);
+        if (message.EventName == ZoneTriggerPlans.EnterZoneEvent && !goalRepost) { // CLASSIC: a new instance learns the wizard's progress.
+            // CLASSIC: after the entry's own triggers have settled. Two wizards entering one shared instance together each fire
+            // the zone's hide triggers (Nastrond's 'Hide Da Bears Trigger'); a replay posted at once could be hidden again by the
+            // other wizard's entry.
+            Timers.StartSingleTimer(("replay", message.PlayerActor), new DeferredReplay(message), System.TimeSpan.FromMilliseconds(700));
         }
     }
 

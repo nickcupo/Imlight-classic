@@ -97,4 +97,20 @@ public sealed class SigilEntryMatchTests : IDisposable {
             InteractDungeonSigilComponent.MatchEntranceTeleport("Street 6 Tower 1 Instance Sigil", Colossus())?.Teleport?.m_destinationZone);
     }
 
+    [Fact]
+    public void TwoSigilsThatNormaliseAlikeEachTakeTheirOwnEntry() {
+        // Science Center: "ToConservatory" (Gate Control Room, i5) is listed before "To_Conservatory" (Conservatory, i4).
+        ClassicRuntime.ResetForTests();
+        ClassicRuntime.Initialize(ClassicDataFixture.RealRules("late-2009"));
+        var zone = new WizardZoneData { Teleports = [
+            Entry("ToConservatory", "Celestia/Interiors/CL_Z09i5_Science_Center"),
+            Entry("To_Conservatory", "Celestia/Interiors/CL_Z09i4_Science_Center"),
+        ] };
+
+        Assert.Equal("Celestia/Interiors/CL_Z09i4_Science_Center",
+            InteractDungeonSigilComponent.MatchEntranceTeleport("To_Conservatory", zone)?.Teleport?.m_destinationZone);
+        Assert.Equal("Celestia/Interiors/CL_Z09i5_Science_Center",
+            InteractDungeonSigilComponent.MatchEntranceTeleport("ToConservatory", zone)?.Teleport?.m_destinationZone);
+    }
+
 }

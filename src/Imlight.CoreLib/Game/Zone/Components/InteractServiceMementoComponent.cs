@@ -368,8 +368,19 @@ internal sealed class InteractServiceMementoComponent(ZoneEntity entity)
     private readonly Dictionary<IActorRef, int> _sentTeleportOptions = [];
 
     private void ResendTeleportOptionsIfChanged(IActorRef playerActor, Wizard wizard) {
-        if (!ClassicQuestEngine.IsActive || !_playersInInteractionRange.Contains(playerActor)
-                || !_serviceComponents.OfType<InteractTeleportObjectComponent>().Any()) {
+        if (!ClassicQuestEngine.IsActive || !_playersInInteractionRange.Contains(playerActor)) {
+            return;
+        }
+
+        if (!_serviceComponents.OfType<InteractTeleportObjectComponent>().Any()) {
+            // CLASSIC: any other object (a sigil, a quest object): a wizard who stands in range when the quest step that
+            // opens it is done had an empty list sent on coming into range; send it again once something is on offer.
+            if (_sentTeleportOptions.TryGetValue(playerActor, out var before) && before == 0
+                    && _serviceComponents.Sum(component => component.GetServiceOptions(wizard).Count()) > 0) {
+                SendLeaveServiceRange(playerActor);
+                SendActorServiceOptions(playerActor);
+            }
+
             return;
         }
 
