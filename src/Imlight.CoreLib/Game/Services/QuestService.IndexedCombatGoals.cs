@@ -59,7 +59,7 @@ internal partial class QuestService {
 
         // Iterate a copy: completing a goal can complete or grant quests.
         foreach (var qInstance in wizard.QuestBehavior.CurrentQuestInstances.ToArray()) {
-            var qTemplate = _cachedQuestTemplates.FirstOrDefault(q => q.m_questName == qInstance.QuestName);
+            var qTemplate = TemplateFor(qInstance.QuestName);
             if (qTemplate == null) {
                 continue;
             }

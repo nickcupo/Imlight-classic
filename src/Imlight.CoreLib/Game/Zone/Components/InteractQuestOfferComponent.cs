@@ -68,7 +68,10 @@ internal class PlayerQuestOfferState {
 internal sealed class InteractQuestOfferComponent(ZoneEntity entity)
     : ZoneEntityComponent(entity), IServiceComponent, IComponentFactory {
 
-    private const string PREP_NPC_ICON = "Prep";
+    // CLASSIC (REA, 2026-10-17): the option icon key picks the art from the client table at 0x143348660 (built in
+    // FUN_140a19ea0): Start = gold "!", Prep = silver "!" (a quest you cannot take yet), Unfinished = silver "?",
+    // Complete = gold "?". An available quest is "Start" (gold "!"), matching the wizbang; "Prep" showed a silver "!".
+    internal const string START_NPC_ICON = "Start";
     private const double WIZBANG_UPDATE_INTERVAL_SECONDS = 1.0;
 
     public string ServiceName => "QuestOfferService";
@@ -127,7 +130,7 @@ internal sealed class InteractQuestOfferComponent(ZoneEntity entity)
 
         yield return new PrepEntry {
             m_displayKey = state.AvailableQuest.m_questTitle,
-            m_iconKey = PREP_NPC_ICON,
+            m_iconKey = START_NPC_ICON,
             m_serviceName = ServiceName,
         };
     }

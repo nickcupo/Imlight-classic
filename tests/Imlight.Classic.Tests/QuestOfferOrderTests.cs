@@ -20,4 +20,13 @@ public sealed class QuestOfferOrderTests {
         Assert.Equal(["WC-MAIN-C01-006", "WC-MISC-C02-001", "WC-CLASSIC-SIDE-025"], quests.Select(q => q.m_questName));
     }
 
+    [Fact]
+    public void QuestOptionIconsMatchTheClientsIconTable() {
+        // r806919 FUN_140a19ea0 fills the option icon table (0x143348660): Start = gold "!", Prep = silver "!"
+        // (a quest that cannot be taken yet), Unfinished = silver "?", Complete = gold "?". Zeke's available
+        // "Find the Smiths" showed a silver "!" because both the offer and the underway option sent "Prep".
+        Assert.Equal("Start", InteractQuestOfferComponent.START_NPC_ICON);
+        Assert.Equal("Unfinished", InteractQuestUnderwayComponent.UNFINISHED_NPC_ICON);
+    }
+
 }
