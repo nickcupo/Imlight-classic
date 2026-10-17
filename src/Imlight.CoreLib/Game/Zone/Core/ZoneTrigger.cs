@@ -85,7 +85,7 @@ public sealed class ZoneTrigger(IActorRef zoneRef, Zone zone, Trigger trigger)
             return;
         }
 
-        using var killed = KilledMonsterScope.Enter(message.KilledTemplateIds); // CLASSIC: Monster_Killed checks.
+        using var killed = KilledMonsterScope.Enter(message.KilledTemplateIds, message.EventName); // CLASSIC: Monster_Killed checks.
 
         // Evaluate requirements when present.
         if (   TriggerData.m_requirements is not null

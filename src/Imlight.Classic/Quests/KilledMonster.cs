@@ -55,6 +55,14 @@ public static class KilledMonster {
     /// <summary>The zone event KingsIsle's triggers listen for after a monster dies.</summary>
     public const string EventName = "Monster_Killed";
 
+    /// <summary>
+    /// True for an "ActivateFrom_&lt;trigger&gt;" event, which one authored trigger posts to wake another: a mob-watcher
+    /// that also listens for it (CL_Z10i3's Mobwatcher_Calypso, woken by QuestCheckCL-CRAB-C04-001Trigger to put the
+    /// Queen Calypso NPC back when a wizard returns after CL-CRAB-C03-004) has no defeated monster to check then.
+    /// </summary>
+    public static bool IsAuthoredActivation(string eventName)
+        => eventName is not null && eventName.StartsWith("ActivateFrom_", StringComparison.Ordinal);
+
     /// <summary>The suffix that makes an entry name a monster template (by object name) rather than an adjective.</summary>
     public const string TemplateReferenceSuffix = ".AdjRef";
 

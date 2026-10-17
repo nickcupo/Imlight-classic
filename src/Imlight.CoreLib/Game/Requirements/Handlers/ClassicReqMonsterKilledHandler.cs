@@ -51,6 +51,10 @@ namespace Imlight.CoreLib.Game.Requirements.Handlers;
 internal sealed class ClassicReqMonsterKilledHandler : BaseRequirementHandler<ClassicReqMonsterKilled> {
 
     public override bool Evaluate(IRequirementContext context) {
+        if (ClassicQuestEngine.IsActive && KilledMonster.IsAuthoredActivation(KilledMonsterScope.EventName)) {
+            return true; // CLASSIC: a mob-watcher another trigger wakes by name is not waiting on a kill (Calypso's NPC).
+        }
+
         if (!ClassicQuestEngine.IsActive || KilledMonsterScope.Current is not { Length: > 0 } killed) {
             return false;
         }
