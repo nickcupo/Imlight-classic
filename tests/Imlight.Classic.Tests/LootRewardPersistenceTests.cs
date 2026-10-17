@@ -14,6 +14,7 @@ using Imcodec.MessageLayer.Generated;
 using Imcodec.MessageLayer;
 using Imcodec.ObjectProperty;
 using Imcodec.ObjectProperty.TypeCache;
+using Imcodec.Types;
 using Imlight.CoreLib.Game.DropTables;
 using Imlight.CoreLib.Game.Commands;
 using Imlight.CoreLib.Game.Commands.Protocols;
@@ -267,6 +268,43 @@ public sealed class LootRewardPersistenceTests {
         var packet = Assert.Single(f.Packets.OfType<GAME_5_PROTOCOL.MSG_INVENTORYBEHAVIOR_ADDITEM>());
         Assert.Equal(Fixture.GearId, BitConverter.ToUInt64((byte[])packet.SerializedItem));
         Assert.Equal(3, DropTableConverter.ToLootInfoList(results).m_loot.Count);
+    }
+
+    // CLASSIC: drops said "was placed in your bank" (owner, 2026-10-17). r806919's loot popup finds the new backpack
+    // item by comparing its 64-bit m_templateID with ItemLootInfo.m_itemID after setting byte 5 to 9.
+    [Fact]
+    public void DroppedGearReachesTheClientWithTheTemplateGidTheLootPopupMatches() {
+        var f = new Fixture(0); using var scope = f.Scope(); var live = f.Live();
+        var wire = new List<WizClientObjectItem>();
+        f.Dependencies.SerializeItem = item => { wire.Add(item); return new ByteString(BitConverter.GetBytes(item.m_globalID.Full)); };
+        var results = new DropTableResult { Items = [Drop(Fixture.Gear, 1)] };
+        LootGranter.Grant(ActorRefs.NoSender, live, results, true);
+
+        var sent = Assert.Single(wire);
+        Assert.Equal(Fixture.Gear | (9UL << 40), sent.m_templateID.Full);
+        Assert.Equal(9, sent.m_templateID.MParts.Type);
+        Assert.Equal((uint)Fixture.Gear, sent.m_templateID.MParts.TemplateId);
+        // The saved and live items keep the plain id every server comparison uses.
+        Assert.Equal(Fixture.Gear, Assert.Single(f.Items).m_templateID.Full);
+        Assert.Equal(Fixture.Gear, Assert.Single(live.InventoryBehavior.Items).m_templateID.Full);
+        Assert.Single(f.Packets.OfType<GAME_5_PROTOCOL.MSG_INVENTORYBEHAVIOR_ADDITEM>());
+
+        // What the client compares: the popup's m_itemID with byte 5 forced to 9.
+        var loot = Assert.IsType<ItemLootInfo>(Assert.Single(DropTableConverter.ToLootInfoList(results).m_loot));
+        var popupKey = (loot.m_itemID.Full & ~(0xFFUL << 40)) | (9UL << 40);
+        Assert.Equal(popupKey, sent.m_templateID.Full);
+    }
+
+    [Theory]
+    [InlineData(0x12345UL, 0x0000_0900_0001_2345UL)]
+    [InlineData(0x0000_0900_0001_2345UL, 0x0000_0900_0001_2345UL)]
+    [InlineData(0x0000_0300_0001_2345UL, 0x0000_0900_0001_2345UL)]
+    [InlineData(0xFFFF_FFFFUL, 0x0000_0900_FFFF_FFFFUL)]
+    public void ClientTemplateGidSetsOnlyTheTypeByte(ulong templateId, ulong expected) {
+        Assert.Equal(expected, ClassicStackRewards.ClientTemplateGid(templateId));
+        GID gid = ClassicStackRewards.ClientTemplateGid(templateId);
+        Assert.Equal(9, gid.MParts.Type);
+        Assert.Equal((uint)templateId, gid.MParts.TemplateId);
     }
 
     [Theory]

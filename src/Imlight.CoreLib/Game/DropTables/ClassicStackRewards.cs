@@ -189,8 +189,25 @@ internal static class ClassicStackRewards {
     private static ByteString Serialize(StackRewardDependencies d, ClientReagentItem reagent)
         => d.SerializeReagent is not null ? d.SerializeReagent(reagent)
             : new CoreObjectSerializer(behaviors: SerializerFlags.None).Serialize(reagent, 27, out var data) ? data : default;
-    private static ByteString SerializeItem(StackRewardDependencies d, WizClientObjectItem item)
-        => d.SerializeItem is not null ? d.SerializeItem(item)
-            : new CoreObjectSerializer(behaviors: SerializerFlags.None).Serialize(item,
+    // CLASSIC: the copy sent with MSG_INVENTORYBEHAVIOR_ADDITEM carries the client's template GID (ClientTemplateGid);
+    // the saved item keeps the plain template id the server compares against.
+    private static ByteString SerializeItem(StackRewardDependencies d, WizClientObjectItem item) {
+        var wire = ForClient(item);
+        return d.SerializeItem is not null ? d.SerializeItem(wire)
+            : new CoreObjectSerializer(behaviors: SerializerFlags.None).Serialize(wire,
                 (uint)(PropertyFlags.Prop_Transmit | PropertyFlags.Prop_AuthorityTransmit), out var data) ? data : default;
+    }
+
+    /// <summary>
+    /// CLASSIC: r806919 tags template GIDs with type 9 in byte 5 (GID.MParts.Type). The loot popup
+    /// (DisplayRewardMessages 0x141196a00 sets byte +0x5d of ItemLootInfo.m_itemID to 9; tip init 0x14090b990 →
+    /// FUN_1415893e0 0x141589451 `cmp rax, r12` against the item's 64-bit m_templateID, vtable +0xe0 = 0x1413cad60)
+    /// says "was placed in your backpack" only when the new backpack item matches that tagged id; a plain id fails and
+    /// it says "was placed in your bank". Template lookups key on the low 32 bits (0x14153d4cd), so names and icons
+    /// are unaffected.
+    /// </summary>
+    internal static ulong ClientTemplateGid(ulong templateId) => (templateId & ~(0xFFUL << 40)) | (9UL << 40);
+
+    internal static WizClientObjectItem ForClient(WizClientObjectItem item)
+        => item with { m_templateID = ClientTemplateGid(item.m_templateID.Full) };
 }
