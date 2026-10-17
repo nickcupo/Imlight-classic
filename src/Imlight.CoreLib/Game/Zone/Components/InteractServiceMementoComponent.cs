@@ -81,6 +81,17 @@ public interface IServiceComponent {
 /// the indexes of one wizard's list must not decide where another wizard's click goes (two friends at the same NPC, one just handed in a
 /// goal and offered the next quest, the other clicking the hand-in: the click reached the offer service and did nothing).
 /// </summary>
+/// <summary>
+/// CLASSIC: a service component that lists several options (the quests an NPC offers, has underway, or a goal of);
+/// the memento tells it which of its own options was clicked.
+/// </summary>
+internal interface IOrdinalServiceComponent {
+
+    void OnServiceInteraction(IActorRef playerActor, Wizard playerCharacter, CoreObject playerObject, uint serviceOptionIndex,
+                              int ordinal);
+
+}
+
 internal sealed class PlayerOptionIndex {
 
     private readonly Dictionary<IActorRef, Dictionary<int, IServiceComponent>> _maps = [];
@@ -92,6 +103,14 @@ internal sealed class PlayerOptionIndex {
     /// <summary>The component for <paramref name="index"/> in the list this wizard was sent. CLASSIC: none when it was
     /// sent no list (or has left the NPC's range); the NPC's last-built list was a fallback any wizard could click
     /// through from anywhere (security audit 2026-10-04).</summary>
+    /// <summary>CLASSIC: the position of option <paramref name="index"/> among its own component's options in the list
+    /// this wizard was sent (an NPC with two quests to offer lists two QuestOfferService options); 0 when unknown.</summary>
+    internal int OrdinalOf(IActorRef player, int index)
+        => _maps.TryGetValue(player, out var map) ? Ordinal(map, index) : 0;
+
+    internal static int Ordinal(IReadOnlyDictionary<int, IServiceComponent> map, int index)
+        => map.TryGetValue(index, out var owner) ? map.Count(entry => entry.Key < index && ReferenceEquals(entry.Value, owner)) : 0;
+
     internal bool TryResolve(IActorRef player, int index, out IServiceComponent component) {
         if (_maps.TryGetValue(player, out var map) && map.TryGetValue(index, out var found)) {
             component = found;
@@ -255,8 +274,12 @@ internal sealed class InteractServiceMementoComponent(ZoneEntity entity)
         // Using FirstOrDefault by ServiceName is unsafe when multiple components share
         // the same service name (e.g. InteractQuestSelectComponent shadowing WoodenChestComponent).
         // CLASSIC: in the list this wizard was sent, not the one the NPC built for whoever asked last.
-        if (!_playerOptionIndex.TryResolve(playerActor, (int) serviceIndex, out var serviceComponent)
-                && !TryResolveFromCurrentOptions(playerActor, playerCharacter, ref serviceIndex, serviceName, out serviceComponent)) {
+        var ordinal = 0; // CLASSIC: which of the component's own options (IOrdinalServiceComponent)
+        if (_playerOptionIndex.TryResolve(playerActor, (int) serviceIndex, out var serviceComponent)) {
+            ordinal = _playerOptionIndex.OrdinalOf(playerActor, (int) serviceIndex);
+        } else if (TryResolveFromCurrentOptions(playerActor, playerCharacter, ref serviceIndex, serviceName, out serviceComponent)) {
+            ordinal = PlayerOptionIndex.Ordinal(_optionIndexToComponent, (int) serviceIndex);
+        } else {
             // CLASSIC: the click names an option of a list this wizard no longer has. Send the current list instead of
             // dropping the click silently (the dialog then shows what the NPC offers now).
             Logger.Debug("No component owns service index {0} for NPC {1} with service name {2}; re-sent the options.",
@@ -270,7 +293,11 @@ internal sealed class InteractServiceMementoComponent(ZoneEntity entity)
         _lastInteraction[playerActor] = DateTime.UtcNow; // CLASSIC
 
         // Call the service component's interaction method.
-        serviceComponent.OnServiceInteraction(playerActor, playerCharacter, playerObject, serviceIndex);
+        if (serviceComponent is IOrdinalServiceComponent several) {
+            several.OnServiceInteraction(playerActor, playerCharacter, playerObject, serviceIndex, ordinal);
+        } else {
+            serviceComponent.OnServiceInteraction(playerActor, playerCharacter, playerObject, serviceIndex);
+        }
     }
 
     /// <summary>

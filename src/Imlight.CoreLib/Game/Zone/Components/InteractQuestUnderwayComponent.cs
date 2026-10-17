@@ -57,12 +57,14 @@ internal class PlayerQuestUnderwayState {
 
     public bool HasUnderwayQuest { get; set; }
     public QuestTemplate UnderwayQuest { get; set; }
+    // CLASSIC: every quest of this NPC the wizard has underway (UnderwayQuest is the first).
+    public List<QuestTemplate> UnderwayQuests { get; } = [];
     public DateTime LastUpdated { get; set; }
 
 }
 
 internal sealed class InteractQuestUnderwayComponent(ZoneEntity entity)
-    : ZoneEntityComponent(entity), IServiceComponent, IComponentFactory {
+    : ZoneEntityComponent(entity), IServiceComponent, IComponentFactory, IOrdinalServiceComponent {
 
     // CLASSIC (REA, 2026-10-17): the option icon key picks the art from the client table at 0x143348660 (built in
     // FUN_140a19ea0): Start = gold "!", Prep = silver "!" (a quest you cannot take yet), Unfinished = silver "?",
@@ -133,11 +135,13 @@ internal sealed class InteractQuestUnderwayComponent(ZoneEntity entity)
             yield break;
         }
 
-        yield return new PrepEntry {
-            m_displayKey = state.UnderwayQuest.m_questTitle,
-            m_iconKey = UNFINISHED_NPC_ICON,
-            m_serviceName = ServiceName,
-        };
+        foreach (var quest in state.UnderwayQuests) { // CLASSIC: one option per underway quest of this NPC
+            yield return new PrepEntry {
+                m_displayKey = quest.m_questTitle,
+                m_iconKey = UNFINISHED_NPC_ICON,
+                m_serviceName = ServiceName,
+            };
+        }
     }
 
     public override void OnStart() {
@@ -193,10 +197,14 @@ internal sealed class InteractQuestUnderwayComponent(ZoneEntity entity)
         WizBang = state.HasUnderwayQuest ? WizBangs.UnfinishedQuest : WizBangs.None;
     }
 
-    public void OnServiceInteraction(IActorRef playerActor, Wizard playerCharacter, CoreObject playerObject, uint serviceOptionIndex) {
+    public void OnServiceInteraction(IActorRef playerActor, Wizard playerCharacter, CoreObject playerObject, uint serviceOptionIndex)
+        => OnServiceInteraction(playerActor, playerCharacter, playerObject, serviceOptionIndex, 0);
+
+    public void OnServiceInteraction(IActorRef playerActor, Wizard playerCharacter, CoreObject playerObject, uint serviceOptionIndex,
+                                     int ordinal) {
         var state = GetOrUpdatePlayerState(playerCharacter);
-        if (state.HasUnderwayQuest && state.UnderwayQuest != null) {
-            ShowQuestUnderwayDialog(playerActor, state.UnderwayQuest);
+        if (state.HasUnderwayQuest && InteractQuestOfferComponent.Pick(state.UnderwayQuests, ordinal) is { } quest) {
+            ShowQuestUnderwayDialog(playerActor, quest);
         }
     }
 
@@ -220,9 +228,8 @@ internal sealed class InteractQuestUnderwayComponent(ZoneEntity entity)
             // Only show underway wizbang if player has the quest but hasn't completed it.
             if (hasQuest && !hasCompleted) {
                 state.HasUnderwayQuest = true;
-                state.UnderwayQuest = quest;
-
-                break; // Take the first underway quest.
+                state.UnderwayQuest ??= quest; // the first, as before
+                state.UnderwayQuests.Add(quest); // CLASSIC: and every other one
             }
         }
 
