@@ -29,7 +29,7 @@
  *
  * NOTE:
  * The table and the SpiralDB cache are private (never in git): the test reads
- * W101C_POI (default ~/w101c-private/overlay/poi/poi.oryan.dat) and W101C_SPIRALDB
+ * W101C_POI (default ~/w101c-private/overlay/poi/poi.classic.dat, the shipped quest-arrow build) and W101C_SPIRALDB
  * (default ~/w101c-private/run/imlight/spiraldb-cache) and is skipped without them.
  * Table layout: u32 zone count, zone strings (u32 length + UTF-8), u32 record count,
  * 33-byte records <u64 key = goalId << 32 | questHash, u8, u16 zone, u32 template,
@@ -56,7 +56,7 @@ public sealed class QuestArrowMatchTests {
     private static string Home => Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
 
     private static string PoiPath => Environment.GetEnvironmentVariable("W101C_POI")
-        ?? Path.Combine(Home, "w101c-private", "overlay", "poi", "poi.oryan.dat");
+        ?? Path.Combine(Home, "w101c-private", "overlay", "poi", "poi.classic.dat"); // the table we ship (tools/classic-quests/poi_arrows.py)
 
     private static string SpiralDbPath => Environment.GetEnvironmentVariable("W101C_SPIRALDB")
         ?? Path.Combine(Home, "w101c-private", "run", "imlight", "spiraldb-cache");
@@ -146,17 +146,20 @@ public sealed class QuestArrowMatchTests {
     }
 
     /// <summary>The template ids the table's usable records (flag byte 0) point at, by (quest hash, goal id).</summary>
-    internal static Dictionary<(uint Quest, uint Goal), List<uint>> ReadTargets(string path) {
+    internal static Dictionary<(uint Quest, uint Goal), List<(uint Template, string Zone)>> ReadTargets(string path) {
         var data = File.ReadAllBytes(path);
         var offset = 0;
-        var zones = BitConverter.ToUInt32(data, offset);
+        var zoneCount = BitConverter.ToUInt32(data, offset);
         offset += 4;
-        for (var i = 0; i < zones; i++) {
-            offset += 4 + (int) BitConverter.ToUInt32(data, offset);
+        var zones = new List<string>();
+        for (var i = 0; i < zoneCount; i++) {
+            var length = (int) BitConverter.ToUInt32(data, offset);
+            zones.Add(System.Text.Encoding.Latin1.GetString(data, offset + 4, length));
+            offset += 4 + length;
         }
         var records = BitConverter.ToUInt32(data, offset);
         offset += 4;
-        var targets = new Dictionary<(uint, uint), List<uint>>();
+        var targets = new Dictionary<(uint, uint), List<(uint, string)>>();
         for (var i = 0; i < records; i++) {
             var at = offset + i * RecordSize;
             if (data[at + 8] != 0) {
@@ -166,17 +169,23 @@ public sealed class QuestArrowMatchTests {
             if (!targets.TryGetValue(key, out var list)) {
                 targets[key] = list = [];
             }
-            list.Add(BitConverter.ToUInt32(data, at + 11));
+            list.Add((BitConverter.ToUInt32(data, at + 11), zones[BitConverter.ToUInt16(data, at + 9)]));
         }
         return targets;
     }
 
     // REA audit 2026-10-17: these goals' ids used to find a record of another goal (Dorothy's "return to Dorothy"
     // pointed at Private Connelly in the street: the later client's quest had an extra goal there).
+    // Then poi_arrows.py: the Smiths' volumes, the Registrar's classic zone, Triton NPCs instead of a hidden later one.
     [Theory]
-    [InlineData("WC-ST01-C05-001", "2_WizardQuestGoals_TalkNPC", 81280u)] // Not In Kansas Anymore -> Dorothy Gale
-    [InlineData("WC-ST01-C05-001", "1_WizardQuestGoals_TalkNPC", 1700u)]  // -> the trigger in Mr. Toto's house
-    public void TheArrowPointsAtTheGoalsOwnTarget(string questName, string goalName, uint template) {
+    [InlineData("WC-ST01-C05-001", "2_WizardQuestGoals_TalkNPC", 81280u, "WizardCity/WC_Streets/Interiors/WC_Unicorn_H2")]
+    [InlineData("WC-ST01-C05-001", "1_WizardQuestGoals_TalkNPC", 1700u, "WizardCity/WC_Streets/Interiors/WC_Unicorn_H3")]
+    [InlineData("WC-CLASSIC-SIDE-054", "1_WizardQuestGoals_Explore", 1700u, "WizardCity/WC_Hub")]        // The Commons Smith
+    [InlineData("WC-CLASSIC-SIDE-054", "10_WizardQuestGoals_Explore", 1700u, "WizardCity/WC_Golem_Tower")] // Golem Court Smith
+    [InlineData("WC-CLASSIC-SIDE-054", "11_WizardQuestGoals_TalkNPC", 44124u, "WizardCity/WC_Hub")]     // back to Zeke
+    [InlineData("WC-BFF-C01-001", "1_WizardQuestGoals_TalkNPC", 39088u, "WizardCity/WC_Golem_Tower")]   // the Registrar
+    [InlineData("WC-STRM-C06-002", "1_WizardQuestGoals_TalkNPC", 38147u, "WizardCity/WC_Streets/WC_Triton")]
+    public void TheArrowPointsAtTheGoalsOwnTarget(string questName, string goalName, uint template, string zone) {
         if (!File.Exists(PoiPath)) {
             Assert.Skip($"no quest-helper table at {PoiPath} (private)");
         }
@@ -185,8 +194,8 @@ public sealed class QuestArrowMatchTests {
         var goal = quest["m_goals"]!.Single(g => (string) g["m_goalName"]! == goalName);
         var targets = ReadTargets(PoiPath);
 
-        Assert.True(targets.TryGetValue((StringHash(questName), (uint) goal["m_goalNameID"]!), out var tids), "no record");
-        Assert.Contains(template, tids);
+        Assert.True(targets.TryGetValue((StringHash(questName), (uint) goal["m_goalNameID"]!), out var found), "no record");
+        Assert.Equal([(template, zone)], found.Distinct());
     }
 
     [Fact]
