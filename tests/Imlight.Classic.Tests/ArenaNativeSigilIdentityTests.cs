@@ -91,7 +91,10 @@ public sealed class ArenaNativeSigilIdentityTests : IDisposable {
             Assert.Equal(0u, participant.m_isMonster);
             Assert.Equal(slot == 0 ? 1 : 0, participant.m_teamID);
             Assert.Equal(0, participant.m_originalTeam);
-            Assert.Equal(slot + 9, (int)participant.m_dynamicSymbol);
+            // CLASSIC (2026-10-17): the symbol of the circle's own kind (slot 4 is the first player circle: Sun),
+            // never 13+ (the shadow face or the orange stub diamond in r806919's table).
+            Assert.Equal(slot == 0 ? DynamicSigilSymbol.Dagger : DynamicSigilSymbol.Sun, participant.m_dynamicSymbol);
+            Assert.InRange((int)participant.m_dynamicSymbol, 1, 12);
             Assert.Equal(9000UL + (ulong)slot, participant.m_ownerID.Full);
         }
     }
