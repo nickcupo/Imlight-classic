@@ -70,6 +70,13 @@ internal static class AmbientCombat {
         if (duel.IsArenaPvp) return Pvp.ArenaPvpCombat.Choose(duel, me, out move);
         var view = ViewFor(duel, me);
         move = AllyBrain.Choose(view);
+        // CLASSIC (2026-10-17): never a card the duel could not pay for (DeductPips stops at zero and the spell still went
+        // off: the owner's "bots aren't consuming pips").
+        var hand = me.GetCurrentHand()?.m_spellList;
+        if (move.Kind == AllyMoveKind.Cast && hand is not null && move.HandIndex < hand.Count
+            && hand[move.HandIndex] is { } picked && !me.HasPipsForSpell(picked)) {
+            move = AllyMove.Pass($"cannot pay for {picked.m_templateID}");
+        }
 
         return move.Kind == AllyMoveKind.Cast
             ? new COMBAT_106_PROTOCOL.MSG_ACTORCOMBATMOVE {
@@ -87,11 +94,14 @@ internal static class AmbientCombat {
     internal static AllyView ViewFor(CombatDuelComponent duel, CombatDuelSubCircle me) {
         var participant = me.CombatParticipant;
         var pips = participant?.m_pipCount is { } count ? count.m_genericPips + count.m_powerPips * 2 : 0;
+        var power = participant?.m_pipCount?.m_powerPips ?? 0;
         var hand = me.GetCurrentHand()?.m_spellList ?? [];
         var cards = new List<AllyCard>(hand.Count);
         for (var i = 0; i < hand.Count; i++) {
             if (hand[i] is { } spell && CardFor(i, spell) is { } card) {
-                cards.Add(card);
+                cards.Add(card with {
+                    Pips = CardCost(card.Pips, power, me.HasSchoolMastery(spell.m_magicSchoolID), CombatActionResolver.IsXPipSpell(spell)),
+                });
             }
         }
 
@@ -117,6 +127,16 @@ internal static class AmbientCombat {
 
     private static int Count(CombatDuelSubCircle circle, kSpellEffects type)
         => circle.CombatParticipant?.m_hangingEffects?.Count(e => e?.m_effectType == type && e.m_effectParam > 0) ?? 0;
+
+    /// <summary>
+    /// CLASSIC (2026-10-17): a card's cost in the view's pips, where a power pip counts two (AllyView.Pips). A power pip
+    /// counts two only for the caster's own school (CombatDuelSubCircle.HasPipsForSpell, DeductPips); for another
+    /// school's card each power pip is worth one, so the card needs <paramref name="rank"/> + power pips in view terms:
+    /// rank + power &lt;= generic + 2 * power exactly when rank &lt;= generic + power. Before, every card was priced as if
+    /// of the caster's school, and the bots cast other schools' spells they could not pay for.
+    /// </summary>
+    internal static int CardCost(int rank, int powerPips, bool ownSchool, bool xPip)
+        => xPip || ownSchool || rank <= 0 ? rank : rank + powerPips;
 
     /// <summary>What a hand card is for, from its template's effects.</summary>
     internal static AllyCard CardFor(int index, Spell spell) {
