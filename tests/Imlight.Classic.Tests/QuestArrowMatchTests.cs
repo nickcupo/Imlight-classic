@@ -145,6 +145,50 @@ public sealed class QuestArrowMatchTests {
         return quests;
     }
 
+    /// <summary>The template ids the table's usable records (flag byte 0) point at, by (quest hash, goal id).</summary>
+    internal static Dictionary<(uint Quest, uint Goal), List<uint>> ReadTargets(string path) {
+        var data = File.ReadAllBytes(path);
+        var offset = 0;
+        var zones = BitConverter.ToUInt32(data, offset);
+        offset += 4;
+        for (var i = 0; i < zones; i++) {
+            offset += 4 + (int) BitConverter.ToUInt32(data, offset);
+        }
+        var records = BitConverter.ToUInt32(data, offset);
+        offset += 4;
+        var targets = new Dictionary<(uint, uint), List<uint>>();
+        for (var i = 0; i < records; i++) {
+            var at = offset + i * RecordSize;
+            if (data[at + 8] != 0) {
+                continue; // the client skips a record whose flag byte is set (QuestHelperThread, FUN_141662bd0)
+            }
+            var key = ((uint) BitConverter.ToUInt64(data, at), (uint) (BitConverter.ToUInt64(data, at) >> 32));
+            if (!targets.TryGetValue(key, out var list)) {
+                targets[key] = list = [];
+            }
+            list.Add(BitConverter.ToUInt32(data, at + 11));
+        }
+        return targets;
+    }
+
+    // REA audit 2026-10-17: these goals' ids used to find a record of another goal (Dorothy's "return to Dorothy"
+    // pointed at Private Connelly in the street: the later client's quest had an extra goal there).
+    [Theory]
+    [InlineData("WC-ST01-C05-001", "2_WizardQuestGoals_TalkNPC", 81280u)] // Not In Kansas Anymore -> Dorothy Gale
+    [InlineData("WC-ST01-C05-001", "1_WizardQuestGoals_TalkNPC", 1700u)]  // -> the trigger in Mr. Toto's house
+    public void TheArrowPointsAtTheGoalsOwnTarget(string questName, string goalName, uint template) {
+        if (!File.Exists(PoiPath)) {
+            Assert.Skip($"no quest-helper table at {PoiPath} (private)");
+        }
+        var quest = JObject.Parse(File.ReadAllText(Path.Combine(ClassicDataFixture.Root, "spiraldb-overlay", "QuestTemplates",
+            questName + ".json")));
+        var goal = quest["m_goals"]!.Single(g => (string) g["m_goalName"]! == goalName);
+        var targets = ReadTargets(PoiPath);
+
+        Assert.True(targets.TryGetValue((StringHash(questName), (uint) goal["m_goalNameID"]!), out var tids), "no record");
+        Assert.Contains(template, tids);
+    }
+
     [Fact]
     public void TheHashIsKingsIsles() {
         Assert.Equal(2559431U, StringHash("Goal"));
