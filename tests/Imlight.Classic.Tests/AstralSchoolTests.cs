@@ -11,6 +11,7 @@ using Imlight.Classic.Rules;
 using Imlight.Classic.Spells;
 using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.Game.Combat;
+using Imlight.CoreLib.Game.Zone.Components;
 using Imlight.CoreLib.Shared.Behaviors;
 using Imlight.CoreLib.WizardData;
 using Imlight.CoreLib.WizardData.Models.World;
@@ -148,6 +149,28 @@ public sealed class AstralSchoolTests : IDisposable {
             Assert.Equal(50, Assert.Single(moon.Spells, entry => entry.TemplateID == ids["Spells/Transform - Gobbler.xml"]).Level);
             Assert.True(SpiralDB.TryGetNpcSpellInventory(311087, out var sun));
             Assert.Contains(sun.Spells, entry => entry.TemplateID == ids["Spells/Cloak.xml"]);
+        } finally {
+            field.SetValue(null, previous);
+        }
+    }
+
+    [Fact]
+    public void CelestiaTrainerObjectsAttachTheTrainerComponentDespiteTheirNullBehaviorEntries() {
+        // The server's template codec leaves WizTrainingBehavior null in m_behaviors (found by the rig-cel playthrough: the Sun,
+        // Moon and Star trainers had no TrainerComponent, so MSG_TRAIN was refused).
+        var field = typeof(SpiralDB).GetField("s_npcSpellInventories", BindingFlags.Static | BindingFlags.NonPublic)!;
+        var previous = field.GetValue(null);
+        try {
+            field.SetValue(null, new System.Collections.Concurrent.ConcurrentDictionary<ulong, NPCSpellInventory>());
+            SpiralDB.RegisterNpcSpellInventory(new NPCSpellInventory { TemplateID = 311087, Spells = [new NPCSpellEntry { TemplateID = 1, Level = 50 }] });
+            SpiralDB.RegisterNpcSpellInventory(new NPCSpellInventory { TemplateID = 999999, Spells = [new NPCSpellEntry { TemplateID = 1, Level = 50 }] });
+            var sun = new GameObjectTemplate { m_templateID = 311087, m_behaviors = [null, null] };
+            var other = new GameObjectTemplate { m_templateID = 999999, m_behaviors = [null, null] };
+            Profile("celestia-2010");
+            Assert.True(InteractTrainerComponent.ShouldAttachToEntity(sun));
+            Assert.False(InteractTrainerComponent.ShouldAttachToEntity(other));
+            Profile("late-2009");
+            Assert.False(InteractTrainerComponent.ShouldAttachToEntity(sun));
         } finally {
             field.SetValue(null, previous);
         }
