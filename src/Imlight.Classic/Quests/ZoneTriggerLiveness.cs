@@ -163,6 +163,14 @@ public sealed class ZoneTriggerLiveness {
     /// <summary>The events that are safe to post again (only state results follow from them).</summary>
     public IReadOnlySet<string> ReplaySafe { get; private set; } = new HashSet<string>();
 
+    /// <summary>
+    /// CLASSIC (cel playthrough): events that are not <see cref="ReplaySafe"/> because some listener starts a fight or spawns
+    /// (Nastrond's RevealDaBears also fires the despawner and spawners of the bear fight), but that have at least one
+    /// state-only listener (the trigger that shows the NPCs again). A new instance replays them to the state-only
+    /// listeners alone, so a wizard who reloads the zone after the quest step still finds the NPC it revealed.
+    /// </summary>
+    public IReadOnlySet<string> StateReplay { get; private set; } = new HashSet<string>();
+
     /// <summary>Every event a trigger of the zone listens to (activate, fire or deactivate).</summary>
     public IReadOnlySet<string> Listened { get; private set; } = new HashSet<string>();
 
@@ -192,6 +200,7 @@ public sealed class ZoneTriggerLiveness {
         plan.Listened = triggers.SelectMany(t => t.ActivateEvents.Concat(t.FireEvents).Concat(t.DeactivateEvents))
             .Where(e => !string.IsNullOrEmpty(e)).ToHashSet(StringComparer.Ordinal);
         plan.ReplaySafe = ReplaySafeEvents(triggers, plan.Listened);
+        plan.StateReplay = StateReplayEvents(triggers, plan.Listened, plan.ReplaySafe);
         var roots = new HashSet<string>(rootEvents ?? [], StringComparer.Ordinal);
         roots.UnionWith((questEvents ?? []).Where(plan.ReplaySafe.Contains));
         var placed = new HashSet<string>(placedTags ?? [], StringComparer.Ordinal);
@@ -277,6 +286,23 @@ public sealed class ZoneTriggerLiveness {
         }
 
         return plans;
+    }
+
+    private static HashSet<string> StateReplayEvents(IReadOnlyList<TriggerFacts> triggers, IReadOnlySet<string> listened, IReadOnlySet<string> safe) {
+        var partial = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var eventName in listened) {
+            if (safe.Contains(eventName)) {
+                continue;
+            }
+
+            var stateListeners = triggers.Where(t => t.FireEvents.Contains(eventName, StringComparer.Ordinal) && t.StateOnly).ToList();
+            // The state-only listeners must not lead on to a fight: every event they post that a trigger listens to is itself replay-safe.
+            if (stateListeners.Count > 0 && stateListeners.All(t => t.PostedEvents.All(p => !listened.Contains(p) || safe.Contains(p)))) {
+                partial.Add(eventName);
+            }
+        }
+
+        return partial;
     }
 
     private static HashSet<string> ReplaySafeEvents(IReadOnlyList<TriggerFacts> triggers, IReadOnlySet<string> listened) {

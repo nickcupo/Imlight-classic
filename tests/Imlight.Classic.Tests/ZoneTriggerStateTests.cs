@@ -223,6 +223,25 @@ public sealed class ZoneTriggerStateTests {
     }
 
     [Fact]
+    public void AnEventThatAlsoStartsASpawnReplaysToItsStateTriggersOnly() {
+        // Nastrond (GH-NAS-C03-002): killing the bears posts RevealDaBears. One trigger shows the NPCs again (state only), another
+        // despawns and spawns (not state only). A wizard who loads a new instance after the kill still needs the NPCs back.
+        List<TriggerFacts> zone = [
+            new() { Name = "Hide Da Bears Trigger", ActivateEvents = [StartZone], FireEvents = ["EnterZone"], PostedEvents = ["Disable_Hide Da Bears Trigger"], RemovedObjects = ["NPC07"], StateOnly = true },
+            new() { Name = "Trigger-Despawner", ActivateEvents = [StartZone], FireEvents = ["RevealDaBears"] },
+            new() { Name = "RevealDaBears", ActivateEvents = [StartZone], FireEvents = ["RevealDaBears"], AddedObjects = ["NPC07"], StateOnly = true },
+            new() { Name = "Fight", ActivateEvents = [StartZone], FireEvents = ["Fight"] },
+            new() { Name = "StartFight", ActivateEvents = [StartZone], FireEvents = ["QuestB"], PostedEvents = ["Fight"], StateOnly = true },
+        ];
+        var plan = ZoneTriggerLiveness.Analyze(zone, ["EnterZone"], ["RevealDaBears", "QuestB"], []);
+
+        Assert.DoesNotContain("RevealDaBears", plan.ReplaySafe);
+        Assert.Contains("RevealDaBears", plan.StateReplay);
+        Assert.DoesNotContain("QuestB", plan.StateReplay); // its state-only listener leads on to a fight
+        Assert.DoesNotContain("Fight", plan.StateReplay);  // no state-only listener
+    }
+
+    [Fact]
     public void TheGateOfPaulsonStaysGoneWhenItsTriggerDisablesItself() {
         var plan = Street();
         var presence = new TriggerObjectPresence<string>(plan.Objects);

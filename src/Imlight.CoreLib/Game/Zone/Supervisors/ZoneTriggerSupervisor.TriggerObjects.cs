@@ -114,7 +114,7 @@ internal sealed partial class ZoneTriggerSupervisor {
 
     // The quest result lists that post one of this zone's replay-safe events, by event.
     private static Dictionary<string, List<(string, QuestResultSource)>> ReplayableQuestEvents(ZoneTriggerPlan plan) {
-        var wanted = plan.Liveness.ReplaySafe;
+        var wanted = plan.Liveness.ReplaySafe.Concat(plan.Liveness.StateReplay).ToHashSet(StringComparer.Ordinal); // CLASSIC: state-only replay too
         var found = new Dictionary<string, List<(string, QuestResultSource)>>(StringComparer.Ordinal);
         if (wanted.Count == 0) {
             return found;
@@ -245,6 +245,7 @@ internal sealed partial class ZoneTriggerSupervisor {
                 EventName = eventName,
                 PlayerActor = entry.PlayerActor,
                 PlayerGameObject = entry.PlayerGameObject,
+                StateOnlyReplay = !_plan.Liveness.ReplaySafe.Contains(eventName),
             });
         }
     }
