@@ -238,8 +238,7 @@ internal static class GardenCollection {
                 SpellID = (int)card.SpellHash, EnchantmentID = 0 });
             foreach (var reagent in staged.Receipt.Reagents) {
                 messages.Add(new WIZARD_12_PROTOCOL.MSG_REAGENTADD { GlobalID = live.GameObjectID, Data = reagent.Data });
-                messages.Add(new WIZARD2_53_PROTOCOL.MSG_ITEMACQUISITION {
-                    ItemGlobalID = reagent.Reagent.m_globalID, ItemTemplateID = (uint)reagent.Reagent.m_templateID, ItemLocation = 1 });
+                // CLASSIC: no MSG_ITEMACQUISITION: r806919 feeds only the Crown Shop delivery invoice with it (0x140492f30), which 2010 lacked.
             }
             if (staged.Receipt.BackpackCapacityExceeded)
                 messages.Add(ClassicChat.Line("Your backpack is full, so part of the harvest could not be added."));

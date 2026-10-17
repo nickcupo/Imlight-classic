@@ -156,8 +156,7 @@ internal static partial class ClassicQuestClaims {
                 if (!reagentPackets.Add(id)) continue;
                 var admitted = stackReceipt.Reagents.Single(reagent => reagent.Reagent.m_templateID.Full == id);
                 source.StackMessages.Add(new WIZARD_12_PROTOCOL.MSG_REAGENTADD { GlobalID = live.GameObjectID, Data = admitted.Data });
-                source.StackMessages.Add(new WIZARD2_53_PROTOCOL.MSG_ITEMACQUISITION {
-                    ItemGlobalID = admitted.Reagent.m_globalID, ItemTemplateID = (uint)admitted.Reagent.m_templateID, ItemLocation = 1 });
+                // CLASSIC: no MSG_ITEMACQUISITION: r806919 feeds only the Crown Shop delivery invoice with it (0x140492f30), which 2010 lacked.
             }
         }
 

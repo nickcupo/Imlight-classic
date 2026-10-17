@@ -204,11 +204,7 @@ public static class LootGranter {
                 GlobalID = wizard.GameObjectID,
                 Data = acquired.Data,
             });
-            Send(playerActor, new WIZARD2_53_PROTOCOL.MSG_ITEMACQUISITION {
-                ItemGlobalID = acquired.Reagent.m_globalID,
-                ItemTemplateID = (uint) acquired.Reagent.m_templateID,
-                ItemLocation = 1,
-            });
+            // CLASSIC: no MSG_ITEMACQUISITION: r806919 feeds only the Crown Shop delivery invoice with it (0x140492f30), which 2010 lacked.
         }
         if (receipt.BackpackCapacityExceeded) Send(playerActor, Classic.ClassicChat.Line(
             "Your backpack is full, so a reward item could not be added. Make room and try again later."));

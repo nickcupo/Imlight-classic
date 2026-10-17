@@ -85,7 +85,7 @@ public sealed class SecondChanceTransactionTests {
         Assert.Equal(1.25f, f.Saved.GameStats.m_potionCharge);
         Assert.Equal(new[] { typeof(WIZARD_12_PROTOCOL.MSG_UPDATEGOLD), typeof(GAME_5_PROTOCOL.MSG_INVENTORYBEHAVIOR_ADDITEM),
             typeof(WIZARD_12_PROTOCOL.MSG_ADDTREASURESPELLTOBOOK), typeof(WIZARD_12_PROTOCOL.MSG_REAGENTADD),
-            typeof(WIZARD2_53_PROTOCOL.MSG_ITEMACQUISITION), typeof(WIZARD_12_PROTOCOL.MSG_CROWNBALANCE),
+            typeof(WIZARD_12_PROTOCOL.MSG_CROWNBALANCE),
             typeof(WIZARD_12_PROTOCOL.MSG_PAID_LOOT_ROLL_RESULT) }, f.Sent.Select(packet => packet.GetType()));
         Assert.Equal(Fixture.Owner + 2, ((GAME_5_PROTOCOL.MSG_INVENTORYBEHAVIOR_ADDITEM)f.Sent[1]).GlobalID);
         var crown = Assert.Single(f.Sent.OfType<WIZARD_12_PROTOCOL.MSG_CROWNBALANCE>()); Assert.Equal(Fixture.Owner, crown.CharacterID); Assert.Equal(950, crown.TotalCrowns);
