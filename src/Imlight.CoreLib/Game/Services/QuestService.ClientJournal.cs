@@ -22,7 +22,7 @@ using Imlight.CoreLib.Shared.Networking;
 
 namespace Imlight.CoreLib.Game.Services;
 
-// CLASSIC: the client's hidden quests and finished tutorial tips, kept per character (Classic/ClientJournal.cs).
+// CLASSIC: the client's hidden quests, kept per character (Classic/ClientJournal.cs). Tutorial tips: TutorialTipService.
 internal partial class QuestService {
 
     [MessageHandler(typeof(QUEST_MESSAGES_52_PROTOCOL.MSG_UPDATEUSERHIDDENQUESTS))]
@@ -32,32 +32,6 @@ internal partial class QuestService {
         if (wizard is null || data is null) return;
         if (ClientJournalStore.Save(wizard.CharId, journal => journal.HiddenQuests = data)) {
             (wizard.Journal ??= new ClientJournal { CharId = wizard.CharId }).HiddenQuests = data;
-        }
-    }
-
-    // A tip was finished: ask the client's TutorialLogBehavior for its whole log (it answers MSG_UPDATETUTORIALTIPLOG).
-    [MessageHandler(typeof(WIZARD2_53_PROTOCOL.MSG_READTUTORIALTIP))]
-    private void ReceiveReadTutorialTip(WIZARD2_53_PROTOCOL.MSG_READTUTORIALTIP message)
-        => SendToSocket(new WIZARD2_53_PROTOCOL.MSG_REQUESTTUTORIALTIPLOG { GlobalID = message.GlobalID, TutorialTipCount = 0 });
-
-    [MessageHandler(typeof(WIZARD2_53_PROTOCOL.MSG_UPDATETUTORIALTIPLOG))]
-    private void ReceiveUpdateTutorialTipLog(WIZARD2_53_PROTOCOL.MSG_UPDATETUTORIALTIPLOG message) {
-        var wizard = GetActiveWizard();
-        var data = ClientJournalStore.Accept(message.TutorialTipData);
-        if (wizard is null || data is null) return;
-        if (ClientJournalStore.Save(wizard.CharId, journal => journal.TutorialTips = data)) {
-            (wizard.Journal ??= new ClientJournal { CharId = wizard.CharId }).TutorialTips = data;
-        }
-    }
-
-    // At login the client asks for the saved log; nothing saved yet means no answer (as before).
-    [MessageHandler(typeof(WIZARD2_53_PROTOCOL.MSG_REQUESTTUTORIALTIPLOG))]
-    private void ReceiveRequestTutorialTipLog(WIZARD2_53_PROTOCOL.MSG_REQUESTTUTORIALTIPLOG message) {
-        var wizard = GetActiveWizard();
-        if (wizard is null) return;
-        var tips = (wizard.Journal ??= ClientJournalStore.Load(wizard.CharId)).TutorialTips;
-        if (!string.IsNullOrEmpty(tips)) {
-            SendToSocket(new WIZARD2_53_PROTOCOL.MSG_UPDATETUTORIALTIPLOG { GlobalID = message.GlobalID, TutorialTipData = tips });
         }
     }
 

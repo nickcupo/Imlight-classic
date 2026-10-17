@@ -108,7 +108,7 @@ public static class WizardObjectLoader {
     }
 
     /// <summary>
-    /// CLASSIC: the saved hidden quests and finished tutorial tips, in the strings the client wrote them in
+    /// CLASSIC: the saved hidden quests, in the string the client wrote them in
     /// (Classic/ClientJournal.cs). Nothing changes for a wizard with no journal (ambient wizards, tests).
     /// </summary>
     internal static void SetJournalBehaviors(WizClientObject clientObject, Classic.ClientJournal journal) {
@@ -118,10 +118,6 @@ public static class WizardObjectLoader {
         if (!string.IsNullOrEmpty(journal.HiddenQuests)
                 && CoreObjectFactory.FindBehaviorInstance<HiddenQuestsBehavior>(clientObject, out var hidden)) {
             hidden.m_hiddenQuestsData = journal.HiddenQuests;
-        }
-        if (!string.IsNullOrEmpty(journal.TutorialTips)
-                && CoreObjectFactory.FindBehaviorInstance<TutorialLogBehavior>(clientObject, out var tips)) {
-            tips.m_tutorialTipData = journal.TutorialTips;
         }
     }
 

@@ -163,7 +163,7 @@ public class Wizard {
     [JsonIgnore] public string QueuedZoneLocation;
     [JsonIgnore] internal DynamodSet DynamodSet { get; set; }
     [JsonIgnore] internal bool IsInCombatGrace { get; set; }
-    // CLASSIC: the client-formatted hidden quests and tutorial-tip log (Classic/ClientJournal.cs), loaded at attach.
+    // CLASSIC: the client-formatted hidden quests (Classic/ClientJournal.cs), loaded at attach.
     [JsonIgnore] internal Classic.ClientJournal Journal { get; set; }
     // CLASSIC: potion eligibility and runtime stat changes share the character lane.
     [JsonIgnore] private bool _isInDuel;

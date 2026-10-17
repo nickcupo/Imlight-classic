@@ -11,20 +11,24 @@ using Xunit;
 
 namespace Imlight.Classic.Tests;
 
-// REA audit 2026-10-17: hidden quests and finished tutorial tips are kept in the strings the client writes
-// (Classic/ClientJournal.cs) and go back into the player object at login.
+// REA audit 2026-10-17: hidden quests are kept in the string the client writes (Classic/ClientJournal.cs) and go
+// back into the player object at login.
 public sealed class ClientJournalTests {
 
-    private static bool Handles(System.Type message)
-        => typeof(QuestService).GetMethods(BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public)
+    private static bool Handles(System.Type message) => Handles(typeof(QuestService), message);
+
+    private static bool Handles(System.Type service, System.Type message)
+        => service.GetMethods(BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public)
             .Any(m => m.GetCustomAttributes<MessageHandlerAttribute>().Any(a => a.MessageType == message));
 
     [Fact]
     public void TheJournalMessagesHaveHandlers() {
         Assert.True(Handles(typeof(QUEST_MESSAGES_52_PROTOCOL.MSG_UPDATEUSERHIDDENQUESTS)));
-        Assert.True(Handles(typeof(WIZARD2_53_PROTOCOL.MSG_READTUTORIALTIP)));
-        Assert.True(Handles(typeof(WIZARD2_53_PROTOCOL.MSG_UPDATETUTORIALTIPLOG)));
-        Assert.True(Handles(typeof(WIZARD2_53_PROTOCOL.MSG_REQUESTTUTORIALTIPLOG)));
+        // The tutorial-tip log is TutorialTipService's alone (it decodes the client's log format).
+        Assert.True(Handles(typeof(TutorialTipService), typeof(WIZARD2_53_PROTOCOL.MSG_READTUTORIALTIP)));
+        Assert.False(Handles(typeof(WIZARD2_53_PROTOCOL.MSG_READTUTORIALTIP)));
+        Assert.False(Handles(typeof(WIZARD2_53_PROTOCOL.MSG_UPDATETUTORIALTIPLOG)));
+        Assert.False(Handles(typeof(WIZARD2_53_PROTOCOL.MSG_REQUESTTUTORIALTIPLOG)));
     }
 
     [Fact]
@@ -38,14 +42,12 @@ public sealed class ClientJournalTests {
     }
 
     [Fact]
-    public void TheLoaderPutsTheSavedStringsIntoTheBehaviors() {
+    public void TheLoaderPutsTheSavedStringIntoTheBehavior() {
         var hidden = new HiddenQuestsBehavior();
-        var tips = new TutorialLogBehavior();
-        var player = new WizClientObject { m_inactiveBehaviors = new List<BehaviorInstance> { hidden, tips } };
-        WizardObjectLoader.SetJournalBehaviors(player, new ClientJournal { CharId = 7, HiddenQuests = "h", TutorialTips = "t" });
+        var player = new WizClientObject { m_inactiveBehaviors = new List<BehaviorInstance> { hidden } };
+        WizardObjectLoader.SetJournalBehaviors(player, new ClientJournal { CharId = 7, HiddenQuests = "h" });
 
         Assert.Equal("h", hidden.m_hiddenQuestsData);
-        Assert.Equal("t", tips.m_tutorialTipData);
     }
 
     [Fact]
