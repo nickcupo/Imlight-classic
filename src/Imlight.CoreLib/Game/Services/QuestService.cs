@@ -730,7 +730,7 @@ internal partial class QuestService(SessionActor sessionActor) : MessageService(
         );
         PostGoalCompleteEvents(questInstance, goalTemplate); // CLASSIC: QuestService.GoalEvents.cs.
 
-        var qTemplate = TemplateFor(questInstance.QuestName);
+        var qTemplate = _cachedQuestTemplates.FirstOrDefault(q => q.m_questName == questInstance.QuestName);
         if (qTemplate == null) {
             Logger.Error("Failed to find quest template for quest '{0}' when completing goal '{1}'",
                 Logger.Args(questInstance.QuestName, goalTemplate.m_goalName));
@@ -767,7 +767,7 @@ internal partial class QuestService(SessionActor sessionActor) : MessageService(
 
         SendCompleteQuest(questInstance.ID);
 
-        var qTemplate = TemplateFor(questInstance.QuestName);
+        var qTemplate = _cachedQuestTemplates.FirstOrDefault(q => q.m_questName == questInstance.QuestName);
         if (qTemplate == null) {
             Logger.Error("Failed to find quest template for quest '{0}' when completing quest",
                 Logger.Args(questInstance.QuestName));
