@@ -25,41 +25,55 @@ public class SessionServiceConstructionTests {
         Assert.True(missing.Length == 0, "No (SessionActor) constructor: " + string.Join(", ", missing));
     }
     /// <summary>
-    /// CLASSIC (2026-10-17): every session service gets each client message it handles. Two services handling the same
-    /// message type both answer it: the tutorial-tip log was answered twice at login after two branches each added a
-    /// handler. One message type, one session service.
+    /// CLASSIC (2026-10-17): every session service gets each message it handles, so two services handling one
+    /// message type both act on it. The tutorial-tip log was answered twice at login after two branches each added a
+    /// handler. These are the message types several services share on purpose, as of 2026-10-17; a new shared type
+    /// fails here until it is listed with its reason. A handler a base class declares counts once.
     /// </summary>
-    // Client messages several services read on purpose (movement, logout, attach, shop close ...), as of 2026-10-17.
-    // A new entry here needs a reason: each of these services must act on the message without answering it twice.
-    private static readonly System.Collections.Generic.Dictionary<string, System.Collections.Generic.HashSet<string>> s_fanOut = new() {
-        ["Imcodec.MessageLayer.Generated.GAME_5_PROTOCOL+MSG_CLIENTMOVE"] = ["ControlService", "CombatService", "MoveService", "WizardService", "ZoneService"],
-        ["Imcodec.MessageLayer.Generated.PATCH_8_PROTOCOL+MSG_LATEST_FILE_LIST_V2"] = ["PatchService", "LauncherPatchService"],
-        ["Imcodec.MessageLayer.Generated.GAME_5_PROTOCOL+MSG_REQUESTDIRECTEDCHAT"] = ["AmbientGroupService", "ChatService"],
-        ["Imcodec.MessageLayer.Generated.GAME_5_PROTOCOL+MSG_BUDDYREQUESTLIST"] = ["AmbientGroupService", "FriendsService"],
-        ["Imcodec.MessageLayer.Generated.GAME_5_PROTOCOL+MSG_ATTACH"] = ["AttachService", "TutorialService"],
-        ["Imcodec.MessageLayer.Generated.WIZARD_12_PROTOCOL+MSG_DONESHOPPING"] = ["BankService", "ShopService", "TreasureShopService"],
-        ["Imcodec.MessageLayer.Generated.GAME_5_PROTOCOL+MSG_BUDDYSTATS"] = ["ChatService", "CommandService", "FriendsService"],
-        ["Imcodec.MessageLayer.Generated.GAME_5_PROTOCOL+MSG_CLIENT_DISCONNECT"] = ["ClientService", "CombatService", "FriendsService"],
-        ["Imcodec.MessageLayer.Generated.GAME_5_PROTOCOL+MSG_QUERY_LOGOUT"] = ["ClientService", "CombatService", "FriendsService"],
-        ["Imcodec.MessageLayer.Generated.WIZARDHOUSING_50_PROTOCOL+MSG_REQUEST_BLOBS"] = ["GardeningService", "HousingService"],
+    private static readonly System.Collections.Generic.Dictionary<string, string> s_shared = new() {
+        // Client protocol
+        ["GAME_5_PROTOCOL+MSG_ATTACH"] = "attach plus the tutorial's start-of-session hook",
+        ["GAME_5_PROTOCOL+MSG_BUDDYREQUESTLIST"] = "friends list, plus ambient wizards answering as friends",
+        ["GAME_5_PROTOCOL+MSG_BUDDYSTATS"] = "friend stats feed chat, command replies and the friends list",
+        ["GAME_5_PROTOCOL+MSG_CLIENTMOVE"] = "every movement: position, zone triggers, duel range, wizard state, idle control",
+        ["GAME_5_PROTOCOL+MSG_CLIENT_DISCONNECT"] = "leaving: session, duel and friends-online cleanup",
+        ["GAME_5_PROTOCOL+MSG_QUERY_LOGOUT"] = "logging out: session, duel and friends-online cleanup",
+        ["GAME_5_PROTOCOL+MSG_REQUESTDIRECTEDCHAT"] = "whispers to players, and to ambient wizards in a group",
+        ["PATCH_8_PROTOCOL+MSG_LATEST_FILE_LIST_V2"] = "the game client's and the launcher's patch services",
+        ["WIZARDHOUSING_50_PROTOCOL+MSG_REQUEST_BLOBS"] = "house blobs: furniture and garden",
+        ["WIZARD_12_PROTOCOL+MSG_DONESHOPPING"] = "closing any shop window: bank, shop, treasure shop",
+        // Server-internal (each service reacts to the event)
+        ["CLASSIC_FEATURES_PROTOCOL+MSG_PVPRELEASE"] = "end of a PvP match: combat, crown shop, elixirs, gear",
+        ["COMBAT_106_PROTOCOL+MSG_ACTORADDEDTODUEL"] = "joining a duel: combat, crown shop, elixirs, gear",
+        ["COMBAT_106_PROTOCOL+MSG_COMBATDEFEAT"] = "a lost duel: combat, crown shop, elixirs, gear",
+        ["COMBAT_106_PROTOCOL+MSG_COMBATWIN"] = "a won duel: combat, crown shop, elixirs, gear, quest credit",
+        ["SERVICE_101_PROTOCOL+MSG_ATTACHCOMPLETE"] = "each service sends its state once the client is attached",
+        ["SERVICE_101_PROTOCOL+MSG_OPCODE_HALT"] = "control and AFK timers pause",
+        ["SERVICE_101_PROTOCOL+MSG_OPCODE_RESUME"] = "control and AFK timers resume",
+        ["ZONE_102_PROTOCOL+MSG_ADDPLAYERRSP"] = "zone entry: the wizard and the zone service",
+        ["ZONE_102_PROTOCOL+MSG_PRELOGIN"] = "before login: attach, control, held quests",
+        ["ZONE_102_PROTOCOL+MSG_ZONETRANSFER"] = "zone change: zone service and the cantrip teleport",
     };
 
     [Fact]
-    public void NoTwoSessionServicesHandleTheSameMessage() {
+    public void NoNewMessageTypeIsHandledByTwoSessionServices() {
         var services = typeof(MessageService).Assembly.GetTypes()
             .Where(t => !t.IsAbstract && typeof(MessageService).IsAssignableFrom(t));
-        var handled = services
+        var shared = services
             .SelectMany(service => service.GetMethods(BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic)
-                .SelectMany(method => method.GetCustomAttributes<MessageHandlerAttribute>())
-                .Select(attribute => (Message: attribute.MessageType, Service: service)))
+                .SelectMany(method => method.GetCustomAttributes<MessageHandlerAttribute>()
+                    .Select(attribute => (Message: attribute.MessageType, Declarer: method.DeclaringType!))))
             .Distinct()
-            // Client protocol only: the server's own messages (attach, combat results, dispose ...) fan out on purpose.
-            .Where(entry => entry.Message.Namespace == "Imcodec.MessageLayer.Generated")
             .GroupBy(entry => entry.Message)
-            .Where(group => group.Count() > 1 && !(s_fanOut.TryGetValue(group.Key.FullName!, out var allowed)
-                && allowed.SetEquals(group.Select(entry => entry.Service.Name))))
-            .Select(group => $"{group.Key.FullName}: {string.Join(", ", group.Select(entry => entry.Service.Name))}")
+            .Where(group => group.Count() > 1)
             .ToArray();
-        Assert.True(handled.Length == 0, "Handled by more than one session service:\n" + string.Join("\n", handled));
+        Assert.NotEmpty(shared); // the scan sees the known shared types
+
+        var unlisted = shared
+            .Where(group => !s_shared.ContainsKey(group.Key.FullName![(group.Key.FullName!.LastIndexOf('.') + 1)..]))
+            .Select(group => $"{group.Key.FullName}: {string.Join(", ", group.Select(entry => entry.Declarer.Name).OrderBy(n => n))}")
+            .ToArray();
+        Assert.True(unlisted.Length == 0, "Handled by more than one session service (list it with a reason only if both"
+            + " must act on it):\n" + string.Join("\n", unlisted));
     }
 }
