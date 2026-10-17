@@ -23,6 +23,7 @@ using System.IO;
 using System.Linq;
 using System.Net.Http;
 using System.Xml;
+using System.Threading;
 using System.Threading.Tasks;
 using Akka.Actor;
 using Imlight.CoreLib.Shared.Networking;
@@ -61,7 +62,17 @@ public class PatchServer : Server {
         = ConfigurationManager.Settings["Patch Server.PatchServerInternalUrl"];
 
     public static IActorRef Instance { get; private set; }
-    public static bool EndpointReached { get; set; }
+
+    // CLASSIC: volatile, because the background retry can turn this on while zone loads on other threads read it.
+    private static volatile bool s_endpointReached;
+    public static bool EndpointReached { get => s_endpointReached; set => s_endpointReached = value; }
+
+    // CLASSIC: the background search for a patch endpoint that was not there at start (PatchEndpointRetry).
+    private CancellationTokenSource _endpointRetry;
+    private Stopwatch _sinceStart;
+
+    /// <summary>CLASSIC: the background retry reached the patch endpoint on this attempt.</summary>
+    private sealed record PatchEndpointFound(int Attempt);
 
     private PatchCacheProperties _patchCacheProperties;
     private LatestFileList _latestFileList;
@@ -82,6 +93,19 @@ public class PatchServer : Server {
     public static Props Props(string serverName, ushort serverPort)
         => Akka.Actor.Props.Create(() => new PatchServer(serverName, serverPort, PatchServiceFactory.Props()));
 
+    // CLASSIC: the late-found message is internal to this actor, so it gets a plain receiver.
+    protected override void ConfigureReceivers() {
+        Receive<PatchEndpointFound>(OnPatchEndpointFound);
+        base.ConfigureReceivers();
+    }
+
+    protected override void PostStop() {
+        _endpointRetry?.Cancel();
+        _endpointRetry?.Dispose();
+        _endpointRetry = null;
+        base.PostStop();
+    }
+
     protected override void PreRestart(Exception reason, object message) {
         Logger.Error($"Patch server actor has restarted due to {reason.Message}");
 
@@ -94,6 +118,7 @@ public class PatchServer : Server {
         // status pseudo-synchronously as to block the main thread for following services that may depend on
         // the patch server. This function also has a stopwatch to diagnose any issues.
         _diagnosticStopwatch = new Stopwatch();
+        _sinceStart = Stopwatch.StartNew();
 
         // Check patch server endpoint status and record the diagnostics.
         _diagnosticStopwatch.Restart();
@@ -105,6 +130,7 @@ public class PatchServer : Server {
         // Only perform the following if the patch server is available.
         if (!EndpointReached) {
             Logger.Error("Patch server endpoint is not available! Continuing without patch server.");
+            StartEndpointRetry();
 
             Sender.Tell(new SERVER_100_PROTOCOL.MSG_INITIALIZE_COMPLETE());
 
@@ -222,6 +248,60 @@ public class PatchServer : Server {
         }
     }
 
+    // CLASSIC: look for the endpoint in the background (every 15 s for 10 minutes, then every 3 minutes) and switch the
+    // patch server on when it answers, instead of running without it until someone restarts the game server.
+    private void StartEndpointRetry() {
+        if (_endpointRetry is not null) {
+            return;
+        }
+
+        var workingUrl = $"{_patchServerInternalUrl}/V_{_revision}";
+        var self = Self;
+        var cancellation = new CancellationTokenSource();
+        _endpointRetry = cancellation;
+        Logger.Warning("Will keep checking for the patch server at {Url}: every {Fast} s for {Phase} min, then every " +
+                "{Slow} min.",
+            Logger.Args(workingUrl, PatchEndpointRetry.FastInterval.TotalSeconds, PatchEndpointRetry.FastPhase.TotalMinutes,
+                PatchEndpointRetry.SlowInterval.TotalMinutes));
+
+        _ = Task.Run(async () => {
+            var attempt = await PatchEndpointRetry.RunAsync(
+                _ => GetServerUrlStatus(workingUrl, quiet: true),
+                (wait, token) => Task.Delay(wait, token),
+                cancellation.Token,
+                (miss, next) => {
+                    if (PatchEndpointRetry.ShouldLogMiss(miss)) {
+                        Logger.Warning("Patch server at {Url} still not available (check {Attempt}); next check in {Next} s.",
+                            Logger.Args(workingUrl, miss, next.TotalSeconds));
+                    }
+                }).ConfigureAwait(false);
+            if (attempt > 0) {
+                self.Tell(new PatchEndpointFound(attempt), ActorRefs.NoSender);
+            }
+        });
+    }
+
+    private void OnPatchEndpointFound(PatchEndpointFound found) {
+        _endpointRetry?.Dispose();
+        _endpointRetry = null;
+        if (EndpointReached) {
+            return;
+        }
+
+        var workingUrl = $"{_patchServerInternalUrl}/V_{_revision}";
+        _patchServerWorkingUrl = workingUrl;
+        EndpointReached = true;
+        Logger.Information("Patch server at URL {Url} found later, {Seconds} s after start (check {Attempt}); the patch " +
+                "server is now available.",
+            Logger.Args(workingUrl, (long) (_sinceStart?.Elapsed.TotalSeconds ?? 0), found.Attempt));
+
+        // Same as a normal start: the client's file list comes from the endpoint. Zone packages missing from the local
+        // cache now download on demand; the cache's stale-file refresh still runs only at start.
+        if (SetLatestFileList()) {
+            Logger.Information("Downloaded and parsed LatestFileList after the patch server was found.");
+        }
+    }
+
     private bool GetPatchServerStatus() {
         var workingUrl = $"{_patchServerInternalUrl}/V_{_revision}";
 
@@ -242,7 +322,7 @@ public class PatchServer : Server {
         return true;
     }
 
-    private async Task<bool> GetServerUrlStatus(string url) {
+    private async Task<bool> GetServerUrlStatus(string url, bool quiet = false) {
         using var client = new HttpClient();
         client.DefaultRequestHeaders.UserAgent.ParseAdd(_userAgentValue);
         client.Timeout = TimeSpan.FromSeconds(_patchServerTimeout);
@@ -254,9 +334,14 @@ public class PatchServer : Server {
             // we only care that the endpoint exists, not that the path is valid.
             return true;
         }
-        catch (HttpRequestException ex) {
+        catch (Exception ex) when (ex is HttpRequestException || (quiet && ex is TaskCanceledException)) {
             // Network-level failure (DNS, connection refused, TLS error) or
             // 5xx server error — the endpoint is not reachable.
+            // CLASSIC: the background retry (quiet) also treats a timeout as a miss and logs only sparsely itself.
+            if (quiet) {
+                return false;
+            }
+
             Logger.Warning("Patch server at URL {Url} is not reachable: {Reason}",
                 Logger.Args(url, ex.Message));
 
