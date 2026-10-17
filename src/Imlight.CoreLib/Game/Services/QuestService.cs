@@ -692,6 +692,7 @@ internal partial class QuestService(SessionActor sessionActor) : MessageService(
         ShowGoalStartDialogue(goalTemplate, questInstance.ID, goalId);
 
         QueueZoneEntryCheck(goalTemplate); // CLASSIC: QuestService.ZoneEvents.cs.
+        PostGoalActivatedToZone(questInstance.QuestName, goalTemplate.m_goalName);
     }
 
     private void CompleteGoal(QuestInstance questInstance, GoalTemplate goalTemplate) {

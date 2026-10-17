@@ -575,6 +575,14 @@ public class ZONE_102_PROTOCOL : IServerProtocol {
         /// </summary>
         public bool StateOnlyReplay;
 
+        /// <summary>
+        /// CLASSIC: set (with GoalName) when this EnterZone is posted because a goal of this quest just became active
+        /// for a wizard already in the zone: only the EnterZone triggers whose requirements name that goal answer
+        /// (Mimir Winterbane's "Trigger During Quest" checks Goal 2, which starts after the entry waypoint).
+        /// </summary>
+        public string GoalQuestName;
+        public string GoalName;
+
     }
 
     /// <summary>

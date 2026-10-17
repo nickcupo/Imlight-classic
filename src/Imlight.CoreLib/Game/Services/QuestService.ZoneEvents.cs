@@ -138,6 +138,23 @@ internal partial class QuestService {
         });
     }
 
+    // CLASSIC: a goal became active for a wizard who is already in the zone: the zone's EnterZone triggers that wait for
+    // this very goal (a boss spawn "during the quest") get the wizard's entry posted again, for them alone. Without it
+    // the boss appears only after the wizard leaves and comes back.
+    private void PostGoalActivatedToZone(string questName, string goalName) {
+        if (!ClassicQuestEngine.IsActive || string.IsNullOrEmpty(questName) || string.IsNullOrEmpty(goalName)) {
+            return;
+        }
+
+        SessionActor.GetZoneActor()?.Tell(new ZONE_102_PROTOCOL.MSG_POSTEVENT {
+            EventName = "EnterZone",
+            PlayerActor = SessionActor.ActorRef,
+            PlayerGameObject = GetActiveGameObject(),
+            GoalQuestName = questName,
+            GoalName = goalName,
+        });
+    }
+
     private void QueueZoneEntryCheck(GoalTemplate goalTemplate) {
         if (!ClassicQuestEngine.IsActive || _zoneEntryCheckQueued
             || goalTemplate is not WaypointGoalTemplate { m_zoneEntry: true } waypointGoal
