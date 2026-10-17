@@ -63,7 +63,7 @@ internal sealed class BadgeService(SessionActor sessionActor) : MessageService(s
 
         if (WizardCollection.IsInventorySnapshotUncertain(wizard)) { CloseSession(); return; }
         var earned = ClassicBadges.Earned(rules, wizard);
-        foreach (var badgeMessage in ClassicBadges.ListMessages(earned)) {
+        foreach (var badgeMessage in ClassicBadges.ListMessages(earned, wizard.PlayerNameBehavior?.BadgeTitle)) {
             SendToSocket(badgeMessage);
         }
 

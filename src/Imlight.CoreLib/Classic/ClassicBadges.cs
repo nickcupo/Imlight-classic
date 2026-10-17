@@ -36,11 +36,25 @@
  * awarded once. A new badge is sent as GAME MSG_BADGES with Add and
  * Display set; the whole list goes out on attach (BadgeService). The badge
  * id the client echoes back (BadgeNameID) is the string hash of the name
- * key. How the official client lays out MSG_BADGES is inferred from its
- * field names, not from a capture.
+ * key.
+ *
+ * MSG_BADGES as the r806919 client reads it (2026-10-17, Ghidra:
+ * WizardGraphicalClient handler 0x1413482d0, GameClient 0x14170f040):
+ * BadgeFilterInfo is always passed through SerializerBinary::Uncompress
+ * (0x141454f80: int32 length, then zlib) and loaded as a BadgeFilterInfoList.
+ * With Add = 1 and Remove = 0, BadgeInfo is uncompressed the same way and
+ * loaded as a BadgeInfoList; each BadgeInfo is added to the badge page, and
+ * with UpdateAll = 0 the client also shows the earned popup from its
+ * m_badgeTitle. Add = 0 with Remove = 0 adds nothing. UpdateAll = 1 sets
+ * TotalBadges and CurrentBadge, which is the m_badgeNameID the page marks as
+ * selected (BadgeButton::SetBadge 0x14067b9a0). Filter ids are the string
+ * hash of BadgeFilterDescriptions.xml's m_filterName (0x1417837c0). Until
+ * then the list went out as one Add = 0 message per badge with text keys,
+ * which this client ignored: the badge page stayed empty and no popup showed.
  *
  * TODO:
- * - Verify MSG_BADGES against the official client's badge page.
+ * - Unverified: m_numberOfBadges (sent as the earned count per filter) and
+ *   the empty m_badgeImage/m_badgeOutline (the badge button does not read them).
  *
  * Created by: Nick with Claude Code (claude-opus-5-5)
  * Version: KALI 1.0
@@ -55,6 +69,8 @@ using System.Linq;
 using Imcodec.Cryptography;
 using Imcodec.MessageLayer;
 using Imcodec.MessageLayer.Generated;
+using Imcodec.IO;
+using Imcodec.ObjectProperty;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Classic;
 using Imlight.Classic.Rules;
@@ -98,6 +114,92 @@ internal static class ClassicBadges {
     /// The id the client uses for a badge (MSG_BADGES.BadgeNameID, MSG_SELECT_BADGE.BadgeNameID).
     /// </summary>
     internal static uint NameId(Badge badge) => StringHash.Compute(badge.NameKey);
+
+    /// <summary>
+    /// CLASSIC: the client's badge filter name for a filter display key (BadgeFilterDescriptions.xml in Root.wad), or null;
+    /// tests replace it.
+    /// </summary>
+    internal static Func<string, string?> FilterName { get; set; } = DefaultFilterName;
+
+    private static readonly Lazy<IReadOnlyDictionary<string, string>> s_filterNames = new(LoadFilterNames);
+
+    // Only once the server has opened Root.wad (at startup, CoreObjectFactory): never opens it itself.
+    private static string? DefaultFilterName(string displayKey)
+        => displayKey is not null && RootArchiveLoader.IsLoaded && s_filterNames.Value.TryGetValue(displayKey, out var name) ? name : null;
+
+    private static IReadOnlyDictionary<string, string> LoadFilterNames() {
+        var names = new Dictionary<string, string>(StringComparer.Ordinal);
+        try {
+            if (RootArchiveLoader.GetFile<BadgeFilterDescriptionList>("BadgeFilterDescriptions.xml") is { } list) {
+                foreach (var filter in list.m_badgeFilterDescriptionList ?? []) {
+                    if (!string.IsNullOrEmpty(filter?.m_displayKey) && !string.IsNullOrEmpty(filter.m_filterName)) {
+                        names.TryAdd(filter.m_displayKey, filter.m_filterName);
+                    }
+                }
+            }
+        }
+        catch (Exception ex) {
+            try { Logger.Warning("Badges: could not read BadgeFilterDescriptions.xml: {0}", Logger.Args(ex.Message)); }
+            catch (Exception) { /* no server configuration (tests) */ }
+        }
+
+        return names;
+    }
+
+    /// <summary>
+    /// The client's id of a badge's filter (BadgeInfo.m_badgeFilterID, BadgeFilterInfo.m_badgeFilterNameID): the string
+    /// hash of the filter's name; 0 when the client does not know the filter.
+    /// </summary>
+    internal static uint FilterId(Badge badge)
+        => FilterName(badge.FilterKey) is { Length: > 0 } name ? StringHash.Compute(name) : 0;
+
+    /// <summary>
+    /// One earned badge as the client's badge page holds it.
+    /// </summary>
+    internal static BadgeInfo Info(Badge badge, uint index, uint filterIndex) => new() {
+        m_badgeNameID = NameId(badge),
+        m_badgeTitle = string.IsNullOrEmpty(badge.TitleKey) ? badge.NameKey : badge.TitleKey,
+        m_badgeInfo = badge.DescriptionKey ?? "",
+        m_badgeProgressInfo = "",
+        m_badgeProgress = 0,
+        m_badgeMax = 0,
+        m_badgeComplete = true,
+        m_index = index,
+        m_badgeOutline = "",
+        m_badgeImage = "",
+        m_dynamicBadge = false,
+        m_badgeFilterID = FilterId(badge),
+        m_filterIndex = filterIndex,
+        m_overcount = false,
+        m_hasLoot = false,
+        m_badgeLoot = "",
+        m_extraCredit = false,
+        m_overcountInterval = 0,
+        m_recurringRewardsDescription = "",
+        m_overcountLoot = "",
+        m_originalProgress = 0,
+        m_rewardOverrideDescription = "",
+    };
+
+    /// <summary>
+    /// An object as MSG_BADGES carries it: binary (no flags), compressed the way SerializerBinary::Uncompress reads it.
+    /// </summary>
+    internal static ByteString Blob(PropertyClass value) {
+        var serializer = new ObjectSerializer(Versionable: false, Behaviors: SerializerFlags.Compress);
+        if (!serializer.Serialize(value, (uint) (PropertyFlags.Prop_Transmit | PropertyFlags.Prop_AuthorityTransmit), out var data)) {
+            throw new InvalidOperationException($"Badges: could not serialize {value?.GetType().Name}.");
+        }
+
+        return data;
+    }
+
+    private static BadgeFilterInfoList FilterInfo(IReadOnlyList<Badge> earned) => new() {
+        m_badgeFilterInfoList = [.. earned.GroupBy(FilterId).Where(group => group.Key != 0).Select(group => new BadgeFilterInfo {
+            m_badgeFilterNameID = group.Key,
+            m_numberOfBadges = group.Count(),
+            m_numberOfExtraCreditBadges = 0,
+        })],
+    };
 
     /// <summary>
     /// The wizard's badges, in data order.
@@ -303,39 +405,79 @@ internal static class ClassicBadges {
     /// </summary>
     internal static GAME_5_PROTOCOL.MSG_BADGES AddMessage(Badge badge) => new() {
         CurrentBadge = 0,
-        UpdateAll = 0,
+        UpdateAll = 0, // the client shows the earned popup for each badge it adds outside a full update
         TotalBadges = 1,
         Add = 1,
         Remove = 0,
         BadgeName = badge.NameKey,
-        BadgeInfo = badge.DescriptionKey ?? "",
+        BadgeInfo = Blob(new BadgeInfoList { m_badges = [Info(badge, 0, 0)] }),
         BadgeNameID = NameId(badge),
-        BadgeFilterInfo = badge.FilterKey,
+        BadgeFilterInfo = Blob(FilterInfo([badge])),
         Display = 1,
         LastSegment = 1,
     };
 
     /// <summary>
-    /// The MSG_BADGES that list every earned badge, one per badge (an empty list is one message).
+    /// The MSG_BADGES that list every earned badge: one full update (UpdateAll = 1, Add = 1) carrying them all, with the
+    /// selected badge's id as CurrentBadge; with no badges, one update that adds nothing.
     /// </summary>
-    internal static List<GAME_5_PROTOCOL.MSG_BADGES> ListMessages(IReadOnlyList<Badge> earned) {
+    /// <param name="earned">The wizard's badges, in data order.</param>
+    /// <param name="selectedTitle">The title the wizard chose (PlayerNameBehavior.BadgeTitle), or null.</param>
+    internal static List<GAME_5_PROTOCOL.MSG_BADGES> ListMessages(IReadOnlyList<Badge> earned, string? selectedTitle = null) {
+        var selected = string.IsNullOrEmpty(selectedTitle) ? null : earned.FirstOrDefault(badge => badge.TitleKey == selectedTitle);
+        var current = selected is null ? 0u : NameId(selected);
+        var filters = Blob(FilterInfo(earned));
         if (earned.Count == 0) {
-            return [new() { UpdateAll = 1, TotalBadges = 0, BadgeName = "", BadgeInfo = "", BadgeFilterInfo = "", LastSegment = 1 }];
+            return [new() {
+                UpdateAll = 1, TotalBadges = 0, CurrentBadge = 0, Add = 0, Remove = 0, BadgeName = "", BadgeInfo = "",
+                BadgeFilterInfo = filters, Display = 0, LastSegment = 1,
+            }];
         }
 
-        return [.. earned.Select((badge, index) => new GAME_5_PROTOCOL.MSG_BADGES {
-            CurrentBadge = (uint) index,
-            UpdateAll = (sbyte) (index == 0 ? 1 : 0),
-            TotalBadges = (uint) earned.Count,
-            Add = 0,
-            Remove = 0,
-            BadgeName = badge.NameKey,
-            BadgeInfo = badge.DescriptionKey ?? "",
-            BadgeNameID = NameId(badge),
-            BadgeFilterInfo = badge.FilterKey,
-            Display = 0,
-            LastSegment = (byte) (index == earned.Count - 1 ? 1 : 0),
-        })];
+        var inFilter = new Dictionary<uint, uint>();
+        var infos = new List<BadgeInfo>(earned.Count);
+        for (var i = 0; i < earned.Count; i++) {
+            var filter = FilterId(earned[i]);
+            var position = inFilter.GetValueOrDefault(filter);
+            inFilter[filter] = position + 1;
+            infos.Add(Info(earned[i], (uint) i, position));
+        }
+
+        // MSG fields are STR (16-bit length): a list too long for one message goes out in several full updates, each a
+        // whole BadgeInfoList (never a partial segment: the client joins those with a buffer it keeps).
+        var messages = new List<GAME_5_PROTOCOL.MSG_BADGES>();
+        foreach (var part in Chunks(infos)) {
+            messages.Add(new GAME_5_PROTOCOL.MSG_BADGES {
+                CurrentBadge = current,
+                UpdateAll = 1,
+                TotalBadges = (uint) earned.Count,
+                Add = 1,
+                Remove = 0,
+                BadgeName = "",
+                BadgeInfo = part,
+                BadgeNameID = 0,
+                BadgeFilterInfo = filters,
+                Display = 0,
+                LastSegment = 1,
+            });
+        }
+
+        return messages;
+    }
+
+    /// <summary>The longest compressed BadgeInfoList one MSG_BADGES carries; tests lower it.</summary>
+    internal static int MaxBlobBytes { get; set; } = 60_000;
+
+    private static IEnumerable<ByteString> Chunks(List<BadgeInfo> infos) {
+        var blob = Blob(new BadgeInfoList { m_badges = infos });
+        if (blob.Length <= MaxBlobBytes || infos.Count < 2) {
+            yield return blob;
+            yield break;
+        }
+
+        var half = infos.Count / 2;
+        foreach (var part in Chunks(infos[..half])) yield return part;
+        foreach (var part in Chunks(infos[half..])) yield return part;
     }
 
     // CLASSIC: wizard holds the (saved) quest registry; live supplies the spellbook and school; rating the Ranked rating.
