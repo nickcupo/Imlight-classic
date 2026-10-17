@@ -1195,7 +1195,10 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
                 return;
             }
 
-            var newHand = circle.DrawHand();
+            // CLASSIC: the tutorial duel's player draws nothing from the deck; the hand is the tutorial's grants only. The
+            // client's TutorialUtility.lua DisplayArrowsOnCards arrows every filled Card1..7 slot, and a new wizard's
+            // starter deck and wand filled all seven (owner, 2026-10-17: arrows over every card).
+            var newHand = circle.DrawHand(refill: !IsScriptedDuel() || circle.OccupiedTeam != CombatTeam.Player);
 
             if (!_serializer.Serialize(newHand, _combatParticipantHandFlags, out var buffer)) {
                 Logger.Error("Failed to serialize combat hand for duel {0}",

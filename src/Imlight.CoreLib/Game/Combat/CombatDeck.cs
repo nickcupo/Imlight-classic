@@ -141,7 +141,7 @@ internal class CombatDeck {
     /// </summary>
     /// <returns>A new hand of spells.</returns>
     /// <exception cref="InvalidOperationException">Thrown when a spell cannot be created from the template id.</exception>
-    internal Hand GetHand() {
+    internal Hand GetHand(bool refill = true) {
         var newCards = new List<Spell>();
         // Discard the cards that were used up or discarded.
         foreach (var spell in _cardsDiscardedThisTurn) {
@@ -163,8 +163,9 @@ internal class CombatDeck {
         }
         _cardsDiscardedThisTurn.Clear();
 
-        // Refill the hand with new cards.
-        var cardsToRefill = _handSize - LastGivenHand.Count;
+        // Refill the hand with new cards. CLASSIC: a scripted tutorial duel does not refill (refill false): the hand holds
+        // only the cards the tutorial grants.
+        var cardsToRefill = refill ? _handSize - LastGivenHand.Count : 0;
         for (var i = 0; i < cardsToRefill; i++) {
             if (RemainingCardCount <= 0) {
                 break; // No more spells available.

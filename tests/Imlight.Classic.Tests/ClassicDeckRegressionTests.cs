@@ -8,6 +8,7 @@ using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
 using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.Game.Combat;
+using Imlight.CoreLib.Game.Spells;
 using Imlight.CoreLib.Game.Zone.Components;
 using Imlight.CoreLib.Shared.Behaviors;
 using Imlight.CoreLib.Shared.Resources;
@@ -69,6 +70,23 @@ public sealed class ClassicDeckRegressionTests : IDisposable {
         Assert.Equal(3, deck.RemainingCardCount);
         deck.Reshuffle();
         Assert.Equal(3, deck.RemainingCardCount);
+    }
+
+    // The tutorial duel's player hand is only the tutorial's grants: a no-refill draw keeps the deck whole, keeps a
+    // granted card that was not cast, and drops the one that was (owner, 2026-10-17: arrows over every card).
+    [Fact]
+    public void NoRefillHandHoldsOnlyGrantedCards() {
+        var deck = new CombatDeck([Card(Regular, 7)], [], 7);
+        Assert.Empty(deck.GetHand(refill: false).m_spellList);
+        Assert.Equal(7, deck.RemainingCardCount);
+        var cast = SpellFactory.GetSpell(Regular)!;
+        var kept = SpellFactory.GetSpell(Regular)!;
+        deck.AddCardToHand(cast);
+        deck.AddCardToHand(kept);
+        deck.Discard(cast);
+        Assert.Same(kept, Assert.Single(deck.GetHand(refill: false).m_spellList));
+        Assert.Equal(7, deck.RemainingCardCount);
+        Assert.Equal(7, deck.GetHand().m_spellList.Count);
     }
 
     [Fact]
