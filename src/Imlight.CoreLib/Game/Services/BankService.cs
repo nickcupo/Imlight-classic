@@ -110,6 +110,15 @@ internal class BankService(SessionActor sessionActor) : MessageService(sessionAc
             Logger.Args(wizard.CharId, wizard.StorageBehavior.Items.Count, shared.Count));
     }
 
+    // CLASSIC (rea-world 2026-10-17): the crown shop window asks for the bank's item count when it opens
+    // (PermanentShop sender 0x140a6a8d0) and keeps the reply for delivering to the bank (handler 0x140a5a2c0, +0xe8).
+    [MessageHandler(typeof(WIZARD2_53_PROTOCOL.MSG_BANKCOUNT))]
+    private void ReceiveBankCount(WIZARD2_53_PROTOCOL.MSG_BANKCOUNT message) {
+        if (GetActiveWizard() is { } wizard) {
+            SendToSocket(new WIZARD2_53_PROTOCOL.MSG_BANKCOUNT { BankCount = (uint) (wizard.StorageBehavior?.Items.Count ?? 0) });
+        }
+    }
+
     [MessageHandler(typeof(WIZARD_12_PROTOCOL.MSG_DONESHOPPING))]
     private void ReceiveDoneShopping(WIZARD_12_PROTOCOL.MSG_DONESHOPPING message) {
         if (GetActiveWizard() is { } wizard) {
