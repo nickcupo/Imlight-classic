@@ -48,6 +48,16 @@ internal sealed class ResAddSpellHandler : BaseResultHandler<ResAddSpell> {
             return false;
         }
         var wizard = queryResponse.Wizard;
+        // CLASSIC (2026-10-17): in a duel the card belongs to that duel, not to the wizard's session. The only 2009-2010
+        // use is the tutorial duel's "player damage 1", whose own ResDrawHand results put the two cards in the hand
+        // (TUTORIAL_108 MSG_TUTORIALREBUILDDUELHAND). Adding them here as session temporary spells dealt both tutorial
+        // cards into every later duel until relog, and this MSG_COMBATHAND (the temporary-spell list, deck counters 0/0)
+        // replaced the duel hand on the client (r806919 ClientDuelManager::MSG_CombatHand 0x1420d5580 reads all five
+        // fields).
+        if (wizard.IsInDuel) {
+            return true;
+        }
+
         wizard.AddTemporarySpell(spell);
         var spells = wizard.SpellbookBehavior.TemporarySpells;
         Hand hand = new Hand {
