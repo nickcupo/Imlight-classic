@@ -113,6 +113,61 @@ public static class StreetManners {
     }
 
     /// <summary>
+    /// CLASSIC (2026-10-17): a duel circle's radius when its sigil names none. Unverified estimate; the sigil's own
+    /// m_radius is used when the duel reports it.
+    /// </summary>
+    public const float DefaultDuelCircleRadius = 300f;
+
+    /// <summary>Closer than this to a creature path node is on the creatures' path (where street duels open).</summary>
+    public const float PathClearance = 160f;
+
+    /// <summary>
+    /// CLASSIC (2026-10-17): true when <paramref name="spot"/> is inside a duel circle or within <see cref="PersonalSpace"/>
+    /// of its edge (owner: wizards "just stand in the middle of duel circles"). A radius of 0 is the default radius.
+    /// </summary>
+    public static bool InDuelCircle(Vector2 spot, IEnumerable<(Vector2 Center, float Radius)> circles) {
+        foreach (var (center, radius) in circles) {
+            if (Vector2.Distance(spot, center) < CircleReach(radius)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>The nearest spot just outside the circle, straight out from its middle through <paramref name="from"/>.</summary>
+    public static Vector2 OutOfCircle(Vector2 from, Vector2 center, float radius) {
+        var away = from - center;
+        if (away.LengthSquared() < 1f) {
+            away = Vector2.UnitX;
+        }
+
+        return center + Vector2.Normalize(away) * (CircleReach(radius) + PersonalSpace);
+    }
+
+    private static float CircleReach(float radius) => (radius > 0 ? radius : DefaultDuelCircleRadius) + PersonalSpace;
+
+    /// <summary>True when <paramref name="spot"/> is on the creatures' path (within <see cref="PathClearance"/> of a node).</summary>
+    public static bool OnPath(Vector2 spot, IEnumerable<Vector2> pathNodes) {
+        foreach (var node in pathNodes) {
+            if (Vector2.Distance(spot, node) < PathClearance) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// CLASSIC (2026-10-17): a stroll's stop on the creatures' path is a moment, 1 to 3 seconds by <paramref name="roll"/>
+    /// in [0, 1): a player walks along a street; it does not stand where the mobs walk and the duels open.
+    /// </summary>
+    public static TimeSpan PathPause(double roll) => TimeSpan.FromSeconds(1 + Math.Clamp(roll, 0, 1) * 2);
+
+    /// <summary>A hunter's wait on the path before it walks on to another node: 3 to 8 seconds by <paramref name="roll"/>.</summary>
+    public static TimeSpan HuntPause(double roll) => TimeSpan.FromSeconds(3 + Math.Clamp(roll, 0, 1) * 5);
+
+    /// <summary>
     /// A small turn while standing: -0.6 to 0.6 radians, or none, from a roll in [0, 1). About one stand in three
     /// stays still.
     /// </summary>

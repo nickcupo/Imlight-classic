@@ -74,7 +74,7 @@ namespace Imlight.CoreLib.Classic.Ambient;
 
 /// <summary>A real player's duel in a zone, as ambient wizards hear of it (from CombatDuelComponent).</summary>
 internal sealed record AmbientDuelNotice(ulong SigilId, Vector3 Location, ulong[] PlayerCharIds, int FreePlayerSlots,
-                                         bool Active, bool Pvp, DuelOdds? Odds = null);
+                                         bool Active, bool Pvp, DuelOdds? Odds = null, float Radius = 0);
 
 /// <summary>Drives one zone's ambient wizards (see the file header).</summary>
 internal sealed partial class AmbientZone : ReceiveActor, IWithTimers {
@@ -446,6 +446,9 @@ internal sealed partial class AmbientZone : ReceiveActor, IWithTimers {
             else if (now >= wizard.Until) {
                 Decide(wizard, now);
             }
+            else if (StepOutOfDuelCircle(wizard)) {
+                // CLASSIC (2026-10-17): a duel opened where it stood: it steps off the circle.
+            }
 
             if (wizard.Grace.Protected) {
                 TickGrace(wizard, now); // CLASSIC: still translucent after its duel?
@@ -665,12 +668,17 @@ internal sealed partial class AmbientZone : ReceiveActor, IWithTimers {
                 wizard.Until = now.AddSeconds(15 + _rng.Next(45));
                 break;
             case AmbientActivity.Walking when wizard.DuelSigil == ulong.MaxValue:
-                // Hunting: wait on the creatures' path a while (the tick keeps asking for a duel target).
-                wizard.Until = now.AddSeconds(15 + _rng.Next(20));
+                // Hunting: a short wait on the creatures' path (the tick keeps asking for a duel target), then the next
+                // choice, often another node down the path. CLASSIC (2026-10-17): was 15-35 s standing where duels open.
+                wizard.Until = now + StreetManners.HuntPause(_rng.NextDouble());
                 break;
             default:
                 wizard.Activity = AmbientActivity.Idle;
-                wizard.Until = now.AddSeconds(4 + _rng.Next(20));
+                // CLASSIC (2026-10-17): a stroll's stop on the creatures' path is a moment; it walks on (owner: wizards
+                // "just stand in the middle of duel circles": street duels open on the mobs' path).
+                wizard.Until = OnPath(wizard.Position)
+                    ? now + StreetManners.PathPause(_rng.NextDouble())
+                    : now.AddSeconds(4 + _rng.Next(20));
                 break;
         }
     }

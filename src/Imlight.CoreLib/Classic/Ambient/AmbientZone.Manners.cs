@@ -347,6 +347,7 @@ internal sealed partial class AmbientZone {
             var at = new Vector3(wizard.Position.X + (float) (Math.Cos(angle) * reach),
                 wizard.Position.Y + (float) (Math.Sin(angle) * reach), wizard.Position.Z);
             if (_nav.Snap(Num(at), 200f) is { } open && InArea(new Vector3(open.X, open.Y, open.Z))
+                && !StreetManners.InDuelCircle(new System.Numerics.Vector2(open.X, open.Y), DuelCircles(wizard))
                 && WalkTo(wizard, new Vector3(open.X, open.Y, open.Z), AmbientActivity.Walking)) {
                 return true;
             }
@@ -425,7 +426,8 @@ internal sealed partial class AmbientZone {
                 at = StreetManners.StandOff(at, _rng.NextDouble() * Math.PI * 2, StreetManners.StandOffDistance + _rng.Next(120));
             }
 
-            if (StreetManners.Crowded(at, taken) || (!spot.Npc && StreetManners.InDoorway(at, doorways))) {
+            if (StreetManners.Crowded(at, taken) || (!spot.Npc && StreetManners.InDoorway(at, doorways))
+                || StreetManners.InDuelCircle(at, DuelCircles(wizard))) {
                 continue;
             }
 
@@ -482,6 +484,54 @@ internal sealed partial class AmbientZone {
         Send([Move(wizard), new GAME_5_PROTOCOL.MSG_MOVESTATE { GlobalID = wizard.Wizard.GameObjectID, NewState = 0 }]);
         return true;
     }
+
+    /// <summary>
+    /// CLASSIC (2026-10-17): the zone's open duel circles as <paramref name="wizard"/> should keep off them: the real
+    /// players' duels (with their sigil's radius) and the spots of other wizards in a duel of their own. A wizard's own
+    /// duel is never in the way of itself.
+    /// </summary>
+    private List<(System.Numerics.Vector2 Center, float Radius)> DuelCircles(AmbientWizard wizard) {
+        var circles = _duels.Values.Where(d => d.Active && d.SigilId != wizard.DuelSigil)
+            .Select(d => (Flat(d.Location), d.Radius)).ToList();
+        circles.AddRange(_wizards.Where(w => w != wizard && w.Present
+                && w.Activity is AmbientActivity.Fighting or AmbientActivity.Sparring
+                && (w.DuelSigil == 0 || w.DuelSigil != wizard.DuelSigil) && !_duels.ContainsKey(w.DuelSigil))
+            .Select(w => (Flat(w.Position), 0f)));
+        return circles;
+    }
+
+    /// <summary>
+    /// CLASSIC (2026-10-17): a wizard standing about (idle, shopping, strolling, not hunting) inside a duel circle it is
+    /// not part of walks just outside it. False when it is not in one, or no ground out of it is found.
+    /// </summary>
+    private bool StepOutOfDuelCircle(AmbientWizard wizard) {
+        if (wizard.Moving || _nav is null || wizard.DuelSigil != 0
+            || wizard.Activity is not (AmbientActivity.Idle or AmbientActivity.Shopping or AmbientActivity.Walking)) {
+            return false;
+        }
+
+        var here = Flat(wizard.Position);
+        foreach (var (center, radius) in DuelCircles(wizard)) {
+            if (!StreetManners.InDuelCircle(here, [(center, radius)])) {
+                continue;
+            }
+
+            var edge = StreetManners.OutOfCircle(here, center, radius);
+            if (_nav.Snap(new System.Numerics.Vector3(edge.X, edge.Y, wizard.Position.Z), 250f) is { } open
+                && WalkTo(wizard, new Vector3(open.X, open.Y, open.Z), AmbientActivity.Walking)) {
+                Logger.Debug("Ambient wizard {Name}: steps off a duel circle.", Logger.Args(wizard.Name));
+                return true;
+            }
+
+            return false;
+        }
+
+        return false;
+    }
+
+    /// <summary>True when <paramref name="at"/> is on the zone's creature path (where street duels open).</summary>
+    private bool OnPath(Vector3 at)
+        => _mobNodes is { Count: > 0 } && StreetManners.OnPath(Flat(at), _mobNodes.Select(Flat));
 
     /// <summary>The zone's doorways: its named arrival spots and its start.</summary>
     private List<System.Numerics.Vector2> Doorways() {
