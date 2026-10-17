@@ -1,4 +1,5 @@
 using Imcodec.ObjectProperty.TypeCache;
+using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.Game.Zone.Supervisors;
 using Xunit;
 
@@ -31,6 +32,14 @@ public sealed class GoalActivationZoneTests {
     public void ANestedListCounts() {
         var outer = new RequirementList { m_operator = Operator.ROP_AND, m_requirements = [During("Q", "Goal 1")] };
         Assert.True(ZoneTriggerSupervisor.NamesGoal(outer, "Q", "Goal 1"));
+    }
+
+    [Fact]
+    public void ObjectStateTagsCountAsStateResults() {
+        // Nastrond "Reveal Seals": four AddTriggerObject results and a RemoveDynaMod; it must replay after a zone reload.
+        Assert.True(ZoneTriggerPlans.IsStateResult(new ResRemoveDynaMod()));
+        Assert.True(ZoneTriggerPlans.IsStateResult(new ResAddDynaMod()));
+        Assert.False(ZoneTriggerPlans.IsStateResult(new ResSpawn()));
     }
 
 }
