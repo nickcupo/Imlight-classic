@@ -72,6 +72,16 @@ public sealed class SchoolWeavingTests : IDisposable {
     }
 
     [Fact]
+    public void TheSchoolsDemoProfileTurnsOnWeavingAndMasteryAndUsesTheWeavingTable() {
+        var rules = ClassicDataFixture.RealRules("schools-demo");
+        Assert.True(rules.IsFeatureEnabled(ClassicFeatures.ExperimentsWeaving));
+        Assert.True(rules.IsFeatureEnabled(ClassicFeatures.ExperimentsMastery));
+        Assert.True(rules.IsRestricted);
+        Assert.True(Real().AppliesTo("schools-demo"));          // through inherits_membership of october-2010-arc1
+        Assert.False(ClassicDataFixture.RealRules("october-2010-arc1").IsFeatureEnabled(ClassicFeatures.ExperimentsMastery));
+    }
+
+    [Fact]
     public void AnExperimentIsOffUnlessSetTrueUnlikeADatedSwitch() {
         Assert.False(new FeatureSwitches(new Dictionary<string, bool>()).IsEnabled(ClassicFeatures.ExperimentsWeaving));
         Assert.True(new FeatureSwitches(new Dictionary<string, bool>()).IsEnabled(ClassicFeatures.Housing));
