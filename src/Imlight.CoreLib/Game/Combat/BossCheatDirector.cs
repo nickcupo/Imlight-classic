@@ -105,6 +105,9 @@ internal enum BossCheatKind {
     Reaction,
     /// <summary>CLASSIC: a cycle's bubble or a step on entering a phase.</summary>
     Phase,
+    /// <summary>CLASSIC: a School Mastery proc (experiments.mastery, MasteryDirector): a wizard's free cast of an
+    /// existing client spell right after the action that set it off. No accuracy roll, and it never uses up a Dispel.</summary>
+    Mastery,
 }
 
 /// <summary>
@@ -114,7 +117,11 @@ internal sealed record BossCheatCast(BossCheatKind Kind, bool Interrupt, string?
 
     /// <summary>CLASSIC: a scripted cast (round start, mark, reaction, phase) comes even while the boss is stunned and
     /// leaves the stun for its own turn; the 2009 kinds keep their old behaviour.</summary>
-    internal bool IgnoresStun => Kind is BossCheatKind.RoundStart or BossCheatKind.Mark or BossCheatKind.Reaction or BossCheatKind.Phase;
+    internal bool IgnoresStun => Kind is BossCheatKind.RoundStart or BossCheatKind.Mark or BossCheatKind.Reaction or BossCheatKind.Phase
+        or BossCheatKind.Mastery;
+
+    /// <summary>CLASSIC: a School Mastery proc: it always lands and leaves the caster's Dispels and Beguile alone.</summary>
+    internal bool IsMastery => Kind is BossCheatKind.Mastery;
 }
 
 /// <summary>

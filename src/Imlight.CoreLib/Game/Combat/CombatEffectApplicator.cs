@@ -169,6 +169,11 @@ internal static class CombatEffectApplicator {
             case kSpellEffects.kStealWard:
                 cinematicTime += ApplyStealWardEffect(effect, caster, targets);
                 break;
+            case kSpellEffects.kDetonateOverTime when ClassicRuntime.Rules.MasteryEnabled:
+                // CLASSIC: only the School Mastery experiment resolves Detonate (Fire's Kindling); every historical
+                // profile keeps the effect inert as before.
+                cinematicTime += ApplyDetonateOverTime(effect, targets);
+                break;
             default:
                 break;
         }
@@ -381,6 +386,35 @@ internal static class CombatEffectApplicator {
     // CLASSIC: the landed critical's multiplier for one target; 1 when it blocked (2010 model).
     private static float CritFor(float critMultiplier, IReadOnlySet<int> critBlockedSlots, CombatDuelSubCircle target)
         => critBlockedSlots is not null && critBlockedSlots.Contains(target.SlotIndex) ? 1f : critMultiplier;
+
+    /// <summary>
+    /// CLASSIC (experiments.mastery): Detonate. Each target's newest damage-over-time effects (m_effectParam of them, -1
+    /// for all) deal every tick they have left at once, through the target's wards as a tick would, and are gone.
+    /// "Newest" is the prototype's reading of the client's Detonate and must be checked against the client
+    /// (design-mastery.md, risks).
+    /// </summary>
+    internal static float ApplyDetonateOverTime(SpellEffect effect, CombatDuelSubCircle[] targets) {
+        var cinematicTime = 0.0f;
+        var count = effect.m_effectParam < 0 ? int.MaxValue : Math.Max(effect.m_effectParam, 1);
+        foreach (var target in targets) {
+            if (target is null || !target.IsAlive || target._hangingEffects is not { } hanging) {
+                continue;
+            }
+
+            var burns = hanging.Where(x => x.m_effectType == kSpellEffects.kDamageOverTime).Reverse().Take(count).ToList();
+            foreach (var burn in burns) {
+                var remaining = (int) Math.Clamp((long) burn.m_paramPerRound * Math.Max(burn.m_numRounds, 0), 0, int.MaxValue);
+                var wards = CombatWards.GetWardsBySchool([.. CombatWards.FindAppliedWards(target, burn)], burn.m_sDamageType, out _);
+                var damage = CombatWards.GetIncomingDamageFromWards(wards, remaining);
+                cinematicTime += wards.Count * HANGING_EFFECT_CONSUME_TIME;
+                target.DamageParticipant(damage);
+                foreach (var ward in wards.Where(w => w.m_paramPerRound <= 0)) hanging.Remove(ward);
+                hanging.Remove(burn);
+            }
+        }
+
+        return cinematicTime;
+    }
 
     private static void ApplyReshuffleEffect(CombatDuelSubCircle caster) 
         => caster.Reshuffle();

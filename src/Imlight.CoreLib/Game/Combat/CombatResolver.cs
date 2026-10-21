@@ -248,10 +248,14 @@ public class CombatResolver(Duel duel, CombatDuelSubCircle[] actorSubCircles) {
     // CLASSIC: the duel's boss cheats; null for a duel with no duel actor.
     private BossCheatDirector BossCheats => _subCircles.Length > 0 ? _subCircles[0]._duelActor?.BossCheats : null;
 
+    // CLASSIC: the duel's School Mastery director; null for a duel with no duel actor.
+    private MasteryDirector Mastery => _subCircles.Length > 0 ? _subCircles[0]._duelActor?.Mastery : null;
+
     private float ProcessQueuedActions(CombatActionListObj combatActionList) {
         var cinematicTime = 0.0f;
         var instantCinematics = _subCircles[0]._duelActor.CheatInstantCinematics;
         var bossCheats = ClassicRuntime.IsInitialized && ClassicRuntime.IsActive ? BossCheats : null; // CLASSIC
+        var mastery = MasteryDirector.Active ? Mastery : null; // CLASSIC: School Mastery (experiment)
 
         // CLASSIC: an index loop, because a boss's out-of-turn casts go in right after the spell that set them off.
         for (var actionIndex = 0; actionIndex < _queuedCombatActions.Count; actionIndex++) {
@@ -285,7 +289,8 @@ public class CombatResolver(Duel duel, CombatDuelSubCircle[] actorSubCircles) {
 
             // Beguile: a combatant beguiled before this action takes it for the other side (like a stun, it applies
             // at the next action, this round's if the combatant has not acted yet), and the action uses it up.
-            var beguiled = action.SpellCaster.BeguiledActions > 0;
+            // CLASSIC: a School Mastery proc is not the caster's action; it neither uses nor follows a Beguile.
+            var beguiled = action.SpellCaster.BeguiledActions > 0 && action.Cheat?.IsMastery != true;
             try {
                 if (beguiled && action.Spell is not null) {
                     action.SelectedTarget = BeguiledTarget(action);
@@ -327,14 +332,18 @@ public class CombatResolver(Duel duel, CombatDuelSubCircle[] actorSubCircles) {
                 }
 
                 bossCheats?.BeforeAction(action); // CLASSIC
+                mastery?.BeforeAction(action); // CLASSIC
                 List<QueuedCombatAction> cheatResponses = null;
+                List<QueuedCombatAction> masteryProcs = null;
                 // Recheck under the session lock through effects AND costs. Strict Hello may have arrived after queuing.
                 if (!action.SpellCaster._duelActor.RunMonstrologyCast(action.SpellCaster, action.Spell, action.SpellTemplate, () => {
                     // Determine if this spell hits or fizzles.
                     // CLASSIC: a sure_hit cheat skips the accuracy roll; a dispel on the boss still stops it.
-                    var spellHits = action.Cheat?.SureHit == true
-                        ? !ConsumeDispell(action.SpellCaster, action.Spell.m_magicSchoolID)
-                        : SpellHits(action.SpellCaster, action.Spell);
+                    // CLASSIC: a School Mastery proc always lands and never uses up the caster's Dispel.
+                    var spellHits = action.Cheat?.IsMastery == true
+                        || (action.Cheat?.SureHit == true
+                            ? !ConsumeDispell(action.SpellCaster, action.Spell.m_magicSchoolID)
+                            : SpellHits(action.SpellCaster, action.Spell));
                     if (!spellHits) {
                         cinematicTime += HandleFizzleAction(action, combatActionList);
 
@@ -349,10 +358,15 @@ public class CombatResolver(Duel duel, CombatDuelSubCircle[] actorSubCircles) {
                         action.SpellCaster._duelActor.CurrentActionCinematicOffsetSeconds = cinematicTime;
                         cinematicTime += HandleSuccessfulAction(action, combatActionList);
                         cheatResponses = bossCheats?.AfterAction(action); // CLASSIC
+                        masteryProcs = mastery?.AfterAction(action); // CLASSIC
                     }
                 })) cinematicTime += HandlePassAction(action, combatActionList);
                 if (cheatResponses is { Count: > 0 }) {
                     _queuedCombatActions.InsertRange(actionIndex + 1, cheatResponses);
+                }
+                // CLASSIC: a School Mastery proc comes right after the spell that set it off, before a boss's answer.
+                if (masteryProcs is { Count: > 0 }) {
+                    _queuedCombatActions.InsertRange(actionIndex + 1, masteryProcs);
                 }
             }
             finally {

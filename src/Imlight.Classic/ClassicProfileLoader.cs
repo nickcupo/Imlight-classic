@@ -372,7 +372,8 @@ public static class ClassicProfileLoader {
 
         foreach (var entry in features.Entries) {
             var path = YamlTree.Join("features", entry.Key);
-            if (entry.Key is ClassicFeatures.PetsGroup or ClassicFeatures.ExperimentsGroup) { // CLASSIC: nested switch groups
+            // CLASSIC: pets and experiments are groups of switches.
+            if (ClassicFeatures.IsGroup(entry.Key)) {
                 if (diagnostics.ReadMap(entry.Value, path) is not { } pets) {
                     continue;
                 }
