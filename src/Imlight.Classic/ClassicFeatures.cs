@@ -75,11 +75,20 @@ public static class ClassicFeatures {
     public const string Monstrology = "monstrology";
     public const string TeamUp = "team_up";
     public const string UntargetedAreaSpells = "untargeted_area_spells";
+    /// <summary>CLASSIC OWNER EXTRA: School Weaving (rules.weaving). Experiments are off unless a profile sets them true.</summary>
+    public const string ExperimentsWeaving = "experiments.weaving";
 
     /// <summary>
     /// The name of the nested switch group; its members are the <c>pets.*</c> paths.
     /// </summary>
     internal const string PetsGroup = "pets";
+
+    /// <summary>CLASSIC: the owner-extra experiments group; its members are the <c>experiments.*</c> paths.</summary>
+    internal const string ExperimentsGroup = "experiments";
+
+    /// <summary>CLASSIC: true for an <c>experiments.*</c> path: such a switch is off unless a profile sets it true.</summary>
+    public static bool IsExperiment(string? path)
+        => path is not null && path.StartsWith(ExperimentsGroup + ".", StringComparison.Ordinal);
 
     /// <summary>
     /// Every feature path, in schema order.
@@ -88,7 +97,7 @@ public static class ClassicFeatures {
         TrainingPoints, TreasureCards, Housing, PvpArena, Crafting, Bazaar, Mounts, Henchmen,
         Elixirs, Seamstress, HubTeleporters, PetsEnabled, PetsLeveling, PetsTalents, PetsHatching,
         PetsEnergy, CriticalAndBlock, ArmorPiercing, ShadowMagic, Archmastery, Gardening, Fishing,
-        Jewels, Cantrips, Monstrology, TeamUp, UntargetedAreaSpells
+        Jewels, Cantrips, Monstrology, TeamUp, UntargetedAreaSpells, ExperimentsWeaving
     ];
 
     private static readonly FrozenSet<string> s_known = All.ToFrozenSet(StringComparer.Ordinal);

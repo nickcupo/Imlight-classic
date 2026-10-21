@@ -113,6 +113,11 @@ public sealed class FeatureSwitches {
             throw new ArgumentException($"unknown feature path '{path}'", nameof(path));
         }
 
+        // CLASSIC: an experiment (owner extra) is off unless the profile sets it true; dated switches default to on.
+        if (ClassicFeatures.IsExperiment(path)) {
+            return _explicit.TryGetValue(path, out var experiment) && experiment;
+        }
+
         return !_explicit.TryGetValue(path, out var on) || on;
     }
 
@@ -160,6 +165,10 @@ public sealed class ProfileRules {
     /// celestia-2010): the Sun, Moon and Star trainers, the dated polymorph baseline and the owner's Moon rework.
     /// </summary>
     public string? Astral { get; init; }
+
+    /// <summary>CLASSIC OWNER EXTRA: path under classic-data of the School Weaving table (rules.weaving), used only while
+    /// features.experiments.weaving is on.</summary>
+    public string? Weaving { get; init; }
 
     /// <summary>
     /// CLASSIC: path under classic-data of the gardening tables (rules.gardening, such as rules/gardening-2011.yaml in

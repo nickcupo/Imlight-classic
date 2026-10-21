@@ -73,6 +73,7 @@ public static class ClassicProgression {
     private static volatile BossCheats s_bossCheats = BossCheats.Empty; // CLASSIC
     private static volatile PuzzleHelpers s_puzzleHelpers = PuzzleHelpers.Empty; // CLASSIC
     private static volatile AstralRules s_astral = AstralRules.Empty; // CLASSIC: Celestia Astral schools
+    private static volatile WeavingRules s_weaving = WeavingRules.Empty; // CLASSIC OWNER EXTRA: School Weaving
 
     /// <summary>
     /// The profile's XP table, or null for the client's curve.
@@ -163,6 +164,11 @@ public static class ClassicProgression {
     /// <summary>CLASSIC: tests install an Astral rules file (Empty restores the default).</summary>
     internal static void SetAstralForTests(AstralRules rules) => s_astral = rules;
 
+    /// <summary>CLASSIC OWNER EXTRA: the School Weaving table (rules.weaving); Empty without one.</summary>
+    public static WeavingRules Weaving => s_weaving;
+
+    internal static void SetWeavingForTests(WeavingRules rules) => s_weaving = rules;
+
     /// <summary>CLASSIC: test hook.</summary>
     internal static void UseBossCheatsForTests(BossCheats? cheats) => s_bossCheats = cheats ?? BossCheats.Empty;
 
@@ -183,6 +189,12 @@ public static class ClassicProgression {
         s_puzzleHelpers = PuzzleHelpersLoader.LoadForProfile(profile, classicDataRoot);
         // CLASSIC: the Astral schools (celestia-2010); a configured file must exist and validate.
         s_astral = AstralRulesLoader.LoadForProfile(profile, classicDataRoot);
+        // CLASSIC OWNER EXTRA: School Weaving; a configured file must exist and validate even while the experiment is off.
+        s_weaving = WeavingRulesLoader.LoadForProfile(profile, classicDataRoot);
+        if (s_weaving.AppliesTo(profile.Id)) {
+            Logger.Information("Classic School Weaving {Table}: {Weaves} weaves over 7 schools; experiments.weaving is {State}.",
+                Logger.Args(s_weaving.Id, s_weaving.Weaves.Sum(weave => weave.Inputs.Length), profile.Features.IsEnabled(ClassicFeatures.ExperimentsWeaving) ? "on" : "off"));
+        }
         // CLASSIC: the gardening tables (wintertusk-2011); a configured file must exist and validate.
         Gardening.ClassicGardening.Initialize(profile, classicDataRoot);
         if (s_astral.AppliesTo(profile.Id)) {
