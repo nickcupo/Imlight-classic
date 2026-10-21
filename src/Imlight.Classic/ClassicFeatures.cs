@@ -75,11 +75,29 @@ public static class ClassicFeatures {
     public const string Monstrology = "monstrology";
     public const string TeamUp = "team_up";
     public const string UntargetedAreaSpells = "untargeted_area_spells";
+    // CLASSIC: our own optional twists, never historical; off unless a profile turns one on (design-mastery, 2026-10-20).
+    public const string ExperimentsMastery = "experiments.mastery";
 
     /// <summary>
     /// The name of the nested switch group; its members are the <c>pets.*</c> paths.
     /// </summary>
     internal const string PetsGroup = "pets";
+
+    /// <summary>
+    /// CLASSIC: the nested switch group of the experiments; its members are the <c>experiments.*</c> paths.
+    /// </summary>
+    internal const string ExperimentsGroup = "experiments";
+
+    /// <summary>
+    /// The nested switch groups a profile's features block may hold.
+    /// </summary>
+    internal static bool IsGroup(string? name) => name is PetsGroup or ExperimentsGroup;
+
+    /// <summary>
+    /// CLASSIC: true for an <c>experiments.*</c> path; an experiment is off unless a profile turns it on.
+    /// </summary>
+    public static bool IsExperiment(string? path)
+        => path is not null && path.StartsWith(ExperimentsGroup + ".", StringComparison.Ordinal);
 
     /// <summary>
     /// Every feature path, in schema order.
@@ -88,7 +106,7 @@ public static class ClassicFeatures {
         TrainingPoints, TreasureCards, Housing, PvpArena, Crafting, Bazaar, Mounts, Henchmen,
         Elixirs, Seamstress, HubTeleporters, PetsEnabled, PetsLeveling, PetsTalents, PetsHatching,
         PetsEnergy, CriticalAndBlock, ArmorPiercing, ShadowMagic, Archmastery, Gardening, Fishing,
-        Jewels, Cantrips, Monstrology, TeamUp, UntargetedAreaSpells
+        Jewels, Cantrips, Monstrology, TeamUp, UntargetedAreaSpells, ExperimentsMastery
     ];
 
     private static readonly FrozenSet<string> s_known = All.ToFrozenSet(StringComparer.Ordinal);

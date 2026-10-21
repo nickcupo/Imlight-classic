@@ -372,13 +372,14 @@ public static class ClassicProfileLoader {
 
         foreach (var entry in features.Entries) {
             var path = YamlTree.Join("features", entry.Key);
-            if (entry.Key == ClassicFeatures.PetsGroup) {
+            // CLASSIC: pets and experiments are groups of switches.
+            if (ClassicFeatures.IsGroup(entry.Key)) {
                 if (diagnostics.ReadMap(entry.Value, path) is not { } pets) {
                     continue;
                 }
 
                 foreach (var pet in pets.Entries) {
-                    var feature = $"{ClassicFeatures.PetsGroup}.{pet.Key}";
+                    var feature = $"{entry.Key}.{pet.Key}";
                     var petPath = YamlTree.Join(path, pet.Key);
                     if (!ClassicFeatures.IsKnown(feature)) {
                         diagnostics.AtKey(pets, pet, petPath, $"unknown feature '{feature}'");

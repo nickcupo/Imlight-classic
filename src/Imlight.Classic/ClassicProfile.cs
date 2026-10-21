@@ -104,6 +104,7 @@ public sealed class FeatureSwitches {
 
     /// <summary>
     /// Returns the switch value for <paramref name="path"/>, or true when the profile does not set it.
+    /// CLASSIC: an experiment (<c>experiments.*</c>) is false when the profile does not set it.
     /// </summary>
     /// <param name="path">A <see cref="ClassicFeatures"/> path.</param>
     /// <returns>True if the feature is enabled.</returns>
@@ -113,7 +114,11 @@ public sealed class FeatureSwitches {
             throw new ArgumentException($"unknown feature path '{path}'", nameof(path));
         }
 
-        return !_explicit.TryGetValue(path, out var on) || on;
+        if (_explicit.TryGetValue(path, out var on)) {
+            return on;
+        }
+
+        return !ClassicFeatures.IsExperiment(path); // CLASSIC: experiments are off unless a profile turns them on
     }
 
 }

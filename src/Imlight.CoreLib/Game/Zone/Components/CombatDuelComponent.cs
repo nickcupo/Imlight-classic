@@ -435,6 +435,7 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
         Duel.m_duelPhase = kDuelPhase.kPhase_PrePlanning;
         Duel.m_roundNum++;
         BeginBossCheatRound(Duel.m_roundNum); // CLASSIC: Briskbreeze Tower's scripted bosses
+        BeginMasteryRound(Duel.m_roundNum); // CLASSIC: School Mastery (experiment, off unless the profile turns it on)
         ApplyFullTeamGoesFirst();
         SendCombatPhase((byte) Duel.m_duelPhase);
         SendUpFirst(Duel.m_roundNum);

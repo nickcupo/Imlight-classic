@@ -121,6 +121,12 @@ public sealed class ClassicRules {
     public bool UntargetedAreaSpells { get; }
 
     /// <summary>
+    /// CLASSIC: the <c>experiments.mastery</c> switch (School Mastery, an experiment; no historical profile sets it). Read
+    /// on every check, so an owner extra feature can turn it on too.
+    /// </summary>
+    public bool MasteryEnabled => IsFeatureEnabled(ClassicFeatures.ExperimentsMastery);
+
+    /// <summary>
     /// The July 2009 update (1.90, 2009-07-01) that gives a stunned target one stun block.
     /// </summary>
     public static readonly DateOnly StunBlockRuleDate = new(2009, 7, 1);
