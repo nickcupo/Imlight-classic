@@ -49,4 +49,11 @@ internal sealed partial class CombatDuelComponent {
         Mastery.NewRound(round);
     }
 
+    /// <summary>CLASSIC: true while a summon by <paramref name="caster"/> would find a free seat (Myth's Monster Mash).</summary>
+    internal bool HasFreeSummonSeat(CombatDuelSubCircle caster)
+        => (_pvp && caster.SlotIndex < 4 ? GetAvailableSubCircleTeamCreature() : GetAvailableSubCircleTeamPlayer()) is not null;
+
+    /// <summary>CLASSIC: School Mastery is PvE-only in the prototype (design-mastery.md, PvP notes).</summary>
+    internal bool IsPvpDuel => _pvp || Duel?.m_bPVP == true;
+
 }
