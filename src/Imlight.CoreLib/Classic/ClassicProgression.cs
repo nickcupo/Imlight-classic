@@ -192,7 +192,7 @@ public static class ClassicProgression {
         // CLASSIC OWNER EXTRA: School Weaving; a configured file must exist and validate even while the experiment is off.
         s_weaving = WeavingRulesLoader.LoadForProfile(profile, classicDataRoot);
         if (s_weaving.AppliesTo(profile.Id)) {
-            Logger.Information("Classic School Weaving {Table}: {Weaves} weaves over 7 schools; experiments.weaving is {State}.",
+            Logger.Information("Classic School Weaving {Table}: {Weaves} weaves over 7 schools; the profile sets experiments.weaving {State} ([Classic] SchoolWeaving can also turn it on).",
                 Logger.Args(s_weaving.Id, s_weaving.Weaves.Sum(weave => weave.Inputs.Length), profile.Features.IsEnabled(ClassicFeatures.ExperimentsWeaving) ? "on" : "off"));
         }
         // CLASSIC: the gardening tables (wintertusk-2011); a configured file must exist and validate.
