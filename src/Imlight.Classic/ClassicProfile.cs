@@ -294,6 +294,9 @@ public sealed class ClassicProfile {
     public ImmutableArray<string>? Worlds { get; init; }
 
     public required FeatureSwitches Features { get; init; }
+
+    /// <summary>CLASSIC (2026-10-20): owner-extra fun twists; unset means off, never part of IsUnrestricted.</summary>
+    public ExperimentSwitches Experiments { get; init; } = ExperimentSwitches.None;
     public required ProfileRules Rules { get; init; }
 
     /// <summary>
@@ -380,7 +383,9 @@ public sealed class ClassicProfile {
         var off = disabled.IsEmpty ? "none" : string.Join(", ", disabled);
         var status = Status.ToString().ToLowerInvariant();
 
-        return $"{Id} ({status}): cutoff {cutoff}{zoneCutoff}, level cap {cap}, worlds {worlds}; features off: {off}";
+        var experiments = Experiments.Enabled.IsEmpty ? "" : $"; experiments on: {string.Join(", ", Experiments.Enabled)}"; // CLASSIC (2026-10-20)
+
+        return $"{Id} ({status}): cutoff {cutoff}{zoneCutoff}, level cap {cap}, worlds {worlds}; features off: {off}{experiments}";
     }
 
 }

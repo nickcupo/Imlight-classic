@@ -98,6 +98,7 @@ public static class ClassicSettingKeys {
     public const string PvpCountdownSeconds = "PvpCountdownSeconds";
     public const string ArenaMatches = "ArenaMatches";
     public const string PetPavilion = "PetPavilion";
+    public const string SchoolFlavor = "SchoolFlavor"; // CLASSIC (2026-10-20): experiments.schoolflavor override
     public const string MovementGuard = "MovementGuard";
     public const string MovementMaxSpeed = "MovementMaxSpeed";
     public const string DefeatedGetNoRewards = "DefeatedGetNoRewards"; // CLASSIC: owner ruling 2026-10-10
@@ -162,6 +163,10 @@ public sealed class ClassicSettingsStore {
         new(ClassicSettingKeys.PetPavilion, ClassicSettingKind.Bool, "true", "Owner extras",
             "The Pet Pavilion (May 2010, after the 2009 cutoff; owner request): opens the pet park and turns on pet "
             + "leveling, talents, energy and hatching. Zone changes apply at the next zone entry."),
+        new(ClassicSettingKeys.SchoolFlavor, ClassicSettingKind.Bool, "false", "Owner extras",
+            "CLASSIC (2026-10-20, design-flavor): school identity in the world, a fun twist that is not historical: ambient "
+            + "wizards greet and tease by the player's school and keep to their own school's tree in Ravenwood. Same as "
+            + "experiments.schoolflavor in the profile. Off by default; zone changes apply at the next server start."),
         new(ClassicSettingKeys.MovementGuard, ClassicSettingKind.Bool, "true", "Security",
             "Refuse impossible movement (a speed or teleport hack): the wizard is put back where the server last saw "
             + "them, never kicked. Turn off if legitimate players are pulled back."),

@@ -124,6 +124,11 @@ internal sealed class AmbientDirector : ReceiveActor {
     /// <summary>The zones and their wizards: stored ones first, new ones made and stored for the rest.</summary>
     private static List<(string, List<AmbientWizard>)> Prepare(AmbientSettings settings) {
         var zones = settings.Zones.ToList();
+        if (settings.UsesDefaultZones && AmbientWizards.SchoolFlavor()
+            && zones.All(z => !string.Equals(z.Zone, SchoolPride.RavenwoodZone, StringComparison.OrdinalIgnoreCase))) {
+            zones.Add((SchoolPride.RavenwoodZone, settings.PerZone)); // CLASSIC (2026-10-20): school tree crowds (experiments.schoolflavor)
+        }
+
         if (settings.UsesDefaultZones) {
             foreach (var world in new[] { "Krokotopia", "Marleybone", "MooShu", "DragonSpire", "Grizzleheim" }) {
                 if (WorldHubZones.GetHubForZone(world)?.m_hubZone is { Length: > 0 } hub

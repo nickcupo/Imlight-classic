@@ -62,16 +62,16 @@ namespace Imlight.Classic.Tests;
 /// <summary>Every line the ambient wizards can say, for the tests.</summary>
 internal static class AmbientChatCorpus {
 
-    private static readonly Type[] s_lineTypes = [typeof(AmbientLinePool), typeof(AmbientLines), typeof(DungeonLines), typeof(GroupLines), typeof(AmbientPets)];
+    private static readonly Type[] s_lineTypes = [typeof(AmbientLinePool), typeof(AmbientLines), typeof(DungeonLines), typeof(GroupLines), typeof(AmbientPets), typeof(SchoolPride)]; // CLASSIC (2026-10-20)
 
     // Zone keys and other names inside the pools that are lookups, not lines.
-    private static readonly HashSet<string> s_notLines = new(StringComparer.Ordinal) { "morning", "afternoon", "evening", "night", "weekend" };
+    private static readonly HashSet<string> s_notLines = new(StringComparer.Ordinal) { "morning", "afternoon", "evening", "night", "weekend", SchoolPride.RavenwoodZone };
 
     /// <summary>Slot values for filling templates in tests (all dictionary words).</summary>
     public static Dictionary<string, string> Slots() => new() {
         ["boss"] = "rattlebones", ["mob"] = "lost souls", ["pet"] = "fire cat", ["a"] = "Duncan", ["b"] = "Ryan", ["aschool"] = "fire",
         ["bschool"] = "storm", ["me"] = "Duncan Ashfriend", ["what"] = "Lady Blackhope", ["where"] = "Unicorn Way", ["spell"] = "meteor",
-        ["last"] = "need gold", ["quest"] = "Rattlebones", ["ago"] = "earlier", ["stage"] = "adult", ["name"] = "Nick",
+        ["last"] = "need gold", ["quest"] = "Rattlebones", ["ago"] = "earlier", ["stage"] = "adult", ["name"] = "Nick", ["you"] = "ice", ["title"] = "thaumaturge",
     };
 
     /// <summary>Every template of every line pool (public or private), the exchanges' turns and the threads' steps.</summary>

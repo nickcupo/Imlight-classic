@@ -342,6 +342,53 @@ public sealed class ProfileLoaderTests : IDisposable {
     }
 
     [Fact]
+    public void UnknownExperiment() { // CLASSIC (2026-10-20)
+        _data.WriteProfile("p", """
+            id: p
+            title: P
+            status: optional
+            cutoff: null
+            experiments:
+              schoolflavor: true
+              jetpacks: true
+            """);
+
+        var error = ZoneFixture.SingleError(() => ClassicProfileLoader.Load(_data.ProfilesPath, "p"), "experiments.jetpacks");
+
+        Assert.Equal(7, error.Line);
+        Assert.Equal("unknown experiment 'jetpacks'", error.Message);
+    }
+
+    [Fact]
+    public void ExperimentsAreOffUnlessSetAndInherit() { // CLASSIC (2026-10-20)
+        Assert.False(ClassicProfileLoader.Load(_data.ProfilesPath, "base").Experiments.IsEnabled(ClassicExperiments.SchoolFlavor));
+        Assert.DoesNotContain("experiments", ClassicProfileLoader.Load(_data.ProfilesPath, "base").Describe());
+
+        _data.WriteProfile("flavor", """
+            id: flavor
+            title: Flavor
+            status: optional
+            cutoff: 2010-05-25
+            extends: base
+            experiments:
+              schoolflavor: true
+            """);
+        _data.WriteProfile("child", """
+            id: child
+            title: Child
+            status: optional
+            cutoff: 2010-05-25
+            extends: flavor
+            """);
+
+        var child = ClassicProfileLoader.Load(_data.ProfilesPath, "child");
+        Assert.True(child.Experiments.IsEnabled(ClassicExperiments.SchoolFlavor));
+        Assert.Equal([ClassicExperiments.SchoolFlavor], child.Experiments.Enabled);
+        Assert.EndsWith("; experiments on: schoolflavor", child.Describe());
+        Assert.Equal(ClassicProfileLoader.Load(_data.ProfilesPath, "base").IsUnrestricted, child.IsUnrestricted);
+    }
+
+    [Fact]
     public void UnknownPetsSubkey() {
         _data.WriteProfile("p", """
             id: p

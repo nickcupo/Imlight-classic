@@ -367,6 +367,18 @@ public sealed class ClassicRules {
     /// </summary>
     public Func<IReadOnlySet<string>> OwnerExtraFeatures { get; set; } = () => EmptyFeatures;
 
+    /// <summary>
+    /// CLASSIC (2026-10-20): the profile's experiment switch <paramref name="name"/> (off unless the profile sets it), or an
+    /// owner override from the dashboard ([Classic] SchoolFlavor and friends, <see cref="OwnerExtraExperiments"/>).
+    /// </summary>
+    /// <param name="name">A <see cref="ClassicExperiments"/> name.</param>
+    /// <exception cref="ArgumentException">The name is not a known experiment.</exception>
+    public bool IsExperimentEnabled(string name)
+        => Profile.Experiments.IsEnabled(name) || OwnerExtraExperiments().Contains(name);
+
+    /// <summary>CLASSIC (2026-10-20): experiments switched on from the dashboard, read on every check. Empty by default.</summary>
+    public Func<IReadOnlySet<string>> OwnerExtraExperiments { get; set; } = () => EmptyFeatures;
+
     private static readonly IReadOnlySet<string> EmptyFeatures = new HashSet<string>();
 
     private string? FallbackHubKey() {

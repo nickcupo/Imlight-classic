@@ -45,7 +45,7 @@ internal static class AmbientChatVocabulary {
 
     /// <summary>The words (lower case).</summary>
     public static readonly IReadOnlySet<string> Words = new HashSet<string>(StringComparer.Ordinal) {
-        "a", "above", "actually", "add", "added", "adult", "afford", "afk", "after", "again", "ages", "ago", "ahead",
+        "a", "above", "myth", "life", "rules", "beats", "buddies", "sorcerer", "necromancer", "theurgist", "conjurer", "diviner", "thaumaturge", "pyromancer", "actually", "add", "added", "adult", "afford", "afk", "after", "again", "ages", "ago", "ahead",
         "akilles", "all", "alley", "almost", "already", "always", "am", "an", "and", "annoying", "another", "any",
         "anyone", "anything", "anyway", "are", "arena", "arent", "armor", "around", "arrow", "arthur", "ashfriend",
         "ashthorn", "ask", "asleep", "at", "ate", "atheneum", "attack", "avenue", "aw", "awesome", "aww", "awww",

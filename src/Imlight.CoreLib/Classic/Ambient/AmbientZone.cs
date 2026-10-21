@@ -91,7 +91,7 @@ internal sealed partial class AmbientZone : ReceiveActor, IWithTimers {
     private sealed record LegEnd(AmbientWizard Wizard, int LegId);
     private sealed record Stream;
     private sealed record FriendAccepted(AmbientWizard Wizard, ulong Requester, Relationship Relationship, string Name);
-    private sealed record Spot(Vector3 At, float FaceYaw, bool Npc);
+    private sealed record Spot(Vector3 At, float FaceYaw, bool Npc, ulong Tid = 0); // CLASSIC (2026-10-20): Tid = the NPC template
     private sealed record NavReady(NavGrid Grid);
 
     private const double TickSeconds = 0.3;
@@ -823,7 +823,7 @@ internal sealed partial class AmbientZone : ReceiveActor, IWithTimers {
             // A few steps in front of the NPC, facing it (the object's yaw is the client's; Heading turns it back).
             var facing = AmbientWizards.Heading(info.m_orientation.Z);
             var at = new Vector3(info.m_location.X + MathF.Cos(facing) * 90, info.m_location.Y + MathF.Sin(facing) * 90, info.m_location.Z);
-            spots.Add(new Spot(at, facing + MathF.PI, true));
+            spots.Add(new Spot(at, facing + MathF.PI, true, (ulong) info.m_templateID));
         }
 
         foreach (var location in data.m_locationList ?? []) {

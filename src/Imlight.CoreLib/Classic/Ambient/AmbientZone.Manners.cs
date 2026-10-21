@@ -407,6 +407,15 @@ internal sealed partial class AmbientZone {
         var near = _spots.Where(s => Distance(s.At, wizard.Position) < Neighbourhood).ToList();
         var npcs = near.Where(s => s.Npc).ToList();
         var pool = npcs.Count > 0 && roll < 0.65 ? npcs : near;
+        // CLASSIC (2026-10-20, experiments.schoolflavor): in Ravenwood, mostly the spot by its own school's tree.
+        if (AmbientWizards.SchoolFlavor() && string.Equals(_zone, SchoolPride.RavenwoodZone, StringComparison.OrdinalIgnoreCase)
+            && _rng.NextDouble() < SchoolPride.OwnTreeChance) {
+            var tree = _spots.Where(s => s.Npc && s.Tid == SchoolPride.TreeTemplate(wizard.Identity.School)).ToList();
+            if (tree.Count > 0) {
+                pool = tree;
+            }
+        }
+
         if (pool.Count == 0) {
             return false;
         }

@@ -84,6 +84,15 @@ public sealed class SchemaDriftTests {
     }
 
     [Fact]
+    public void ExperimentNamesMatchProfileSchema() { // CLASSIC (2026-10-20)
+        var schema = ReadSchema("profile.schema.json");
+        var names = schema.GetProperty("properties").GetProperty("experiments").GetProperty("properties").EnumerateObject()
+            .Select(e => e.Name).ToArray();
+
+        Assert.Equal(names, ClassicExperiments.All.ToArray());
+    }
+
+    [Fact]
     public void FeaturePathsMatchZonesSchema() {
         var schema = ReadSchema("zones.schema.json");
         var paths = EnumValues(schema.GetProperty("$defs").GetProperty("featurePath"));

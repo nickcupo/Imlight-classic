@@ -58,9 +58,9 @@ public static class ClassicProfileLoader {
 
     internal static readonly FrozenSet<string> s_rootKeys = FrozenSet.Create(StringComparer.Ordinal,
         "id", "title", "description", "status", "extends", "cutoff", "zone_content_cutoff", "level_cap", "worlds", "features", "rules", "notes",
-        "world_unlocks", "disabled_quests", "restored_quests", "inherits_membership");
+        "world_unlocks", "disabled_quests", "restored_quests", "inherits_membership", "experiments"); // CLASSIC (2026-10-20): experiments
     private static readonly string[] s_requiredKeys = ["id", "title", "cutoff", "status"];
-    private static readonly string[] s_inheritedKeys = ["cutoff", "zone_content_cutoff", "level_cap", "worlds", "features", "rules", "world_unlocks", "disabled_quests", "restored_quests"];
+    private static readonly string[] s_inheritedKeys = ["cutoff", "zone_content_cutoff", "level_cap", "worlds", "features", "rules", "world_unlocks", "disabled_quests", "restored_quests", "experiments"];
     internal static readonly FrozenSet<string> s_worldUnlockKeys = FrozenSet.Create(StringComparer.Ordinal, "any_of", "source", "notes");
     private static readonly FrozenSet<string> s_ruleKeys = FrozenSet.Create(StringComparer.Ordinal,
         "accuracy_table", "xp_table", "player_health", "mob_rewards", "badges", "quest_cards", "treasure_prices", "mob_stats", "crown_shop", "later_objects", "creature_decks", "power_pips_from_rank", "dragonspyre_difficulty", "tutorial",
@@ -202,6 +202,9 @@ public static class ClassicProfileLoader {
                     break;
                 case "features":
                     ValidateFeatures(value, diagnostics);
+                    break;
+                case "experiments": // CLASSIC (2026-10-20)
+                    ValidateExperiments(value, diagnostics);
                     break;
                 case "rules":
                     ValidateRules(value, diagnostics);
@@ -365,6 +368,23 @@ public static class ClassicProfileLoader {
         return builder.ToImmutable();
     }
 
+    /// <summary>CLASSIC (2026-10-20): the experiments block, flat booleans named in <see cref="ClassicExperiments"/>.</summary>
+    private static void ValidateExperiments(YNode value, YamlDiagnostics diagnostics) {
+        if (diagnostics.ReadMap(value, "experiments") is not { } experiments) {
+            return;
+        }
+
+        foreach (var entry in experiments.Entries) {
+            var path = YamlTree.Join("experiments", entry.Key);
+            if (!ClassicExperiments.IsKnown(entry.Key)) {
+                diagnostics.AtKey(experiments, entry, path, $"unknown experiment '{entry.Key}'");
+                continue;
+            }
+
+            _ = diagnostics.ReadBool(entry.Value, path);
+        }
+    }
+
     private static void ValidateFeatures(YNode value, YamlDiagnostics diagnostics) {
         if (diagnostics.ReadMap(value, "features") is not { } features) {
             return;
@@ -479,6 +499,7 @@ public static class ClassicProfileLoader {
                 ? worlds.Items.Cast<YScalar>().Select(world => world.Value).ToImmutableArray()
                 : null,
             Features = new FeatureSwitches(FlattenFeatures(merged.Find("features")?.Value as YMap)),
+            Experiments = new ExperimentSwitches(FlattenFeatures(merged.Find("experiments")?.Value as YMap)), // CLASSIC (2026-10-20)
             Rules = rules is null ? ProfileRules.None : new ProfileRules {
                 AccuracyTable = ScalarOf(rules, "accuracy_table"),
                 XpTable = ScalarOf(rules, "xp_table"),

@@ -123,6 +123,9 @@ public static class ClassicStartup {
             };
             IReadOnlySet<string> none = new HashSet<string>();
             rules.OwnerExtraFeatures = () => ClassicSettings.PetPavilion ? petPavilion : none;
+            // CLASSIC (2026-10-20): experiments the owner switches on from the dashboard (design-flavor).
+            var schoolFlavor = new HashSet<string>(StringComparer.Ordinal) { ClassicExperiments.SchoolFlavor };
+            rules.OwnerExtraExperiments = () => ClassicSettings.SchoolFlavor ? schoolFlavor : none;
 
             ClassicRuntime.Initialize(rules, new LoggerAuditSink(), auditVerbose);
             s_classicDataRoot = classicDataRoot;

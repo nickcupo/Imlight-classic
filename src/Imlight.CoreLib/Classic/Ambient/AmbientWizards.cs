@@ -54,6 +54,7 @@ using Akka.Actor;
 using Imcodec.Math;
 using Imcodec.ObjectProperty.Bit;
 using Imcodec.ObjectProperty.TypeCache;
+using Imlight.Classic;
 using Imlight.Classic.Ambient;
 using Imlight.CoreLib.Shared.Behaviors;
 using Imlight.CoreLib.Shared.Resources;
@@ -282,6 +283,17 @@ internal static class AmbientWizards {
         AmbientSchool.Myth => MagicSchool.Myth, AmbientSchool.Life => MagicSchool.Life, AmbientSchool.Death => MagicSchool.Death,
         _ => MagicSchool.Balance,
     };
+
+    /// <summary>CLASSIC (2026-10-20): the ambient school of a player's school of focus; null for Sun, Star, Moon, Shadow, None.</summary>
+    internal static AmbientSchool? SchoolFrom(MagicSchool school) => school switch {
+        MagicSchool.Fire => AmbientSchool.Fire, MagicSchool.Ice => AmbientSchool.Ice, MagicSchool.Storm => AmbientSchool.Storm,
+        MagicSchool.Myth => AmbientSchool.Myth, MagicSchool.Life => AmbientSchool.Life, MagicSchool.Death => AmbientSchool.Death,
+        MagicSchool.Balance => AmbientSchool.Balance, _ => null,
+    };
+
+    /// <summary>CLASSIC (2026-10-20): experiments.schoolflavor (profile or dashboard), read on every check.</summary>
+    internal static Func<bool> SchoolFlavor { get; set; }
+        = () => ClassicRuntime.IsInitialized && ClassicRuntime.Rules.IsExperimentEnabled(ClassicExperiments.SchoolFlavor);
 
     /// <summary>
     /// Builds the in-memory Wizard for a record (never saved: WizardCollection ignores ambient character ids).

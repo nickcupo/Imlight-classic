@@ -66,6 +66,7 @@ using Imcodec.Math;
 using Imlight.Classic.Ambient;
 using Imlight.Common;
 using Imlight.CoreLib.Classic;
+using Imlight.CoreLib.Shared.Behaviors;
 
 namespace Imlight.CoreLib.Classic.Ambient;
 
@@ -293,8 +294,11 @@ internal sealed class AmbientChatter {
                 continue;
             }
 
-            var wizard = _wizards.Where(w => Free(w) && StateOf(w).BackAt == default && Distance(w.Position, at) < NearForGreeting)
-                .OrderBy(w => Distance(w.Position, at)).FirstOrDefault();
+            // CLASSIC (2026-10-20, experiments.schoolflavor): a same-school wizard greets first, and knows the player's school.
+            var playerSchool = AmbientWizards.SchoolFlavor() ? AmbientWizards.SchoolFrom(who.MagicSchoolBehavior?.MagicSchool ?? MagicSchool.None) : null;
+            var nearby = _wizards.Where(w => Free(w) && StateOf(w).BackAt == default && Distance(w.Position, at) < NearForGreeting)
+                .Select(w => (Wizard: w, w.Identity.School, Distance: Distance(w.Position, at)));
+            var wizard = playerSchool is { } ps ? SchoolPride.PickGreeter(nearby, ps) : nearby.OrderBy(n => n.Distance).Select(n => n.Wizard).FirstOrDefault();
             if (wizard is null) {
                 continue;
             }
@@ -314,7 +318,9 @@ internal sealed class AmbientChatter {
             var facts = AmbientKnowledge.Facts(player);
             var speaker = Speaker(wizard, state, player, facts);
             var pool = state.Persona.Channel == ChatChannel.Menu ? AmbientLinePool.MenuIdle.Take(3).ToArray()
-                : speaker.Context.Friend is not null ? AmbientLines.FriendGreetings : AmbientLinePool.GreetNear;
+                : speaker.Context.Friend is not null ? AmbientLines.FriendGreetings
+                : playerSchool is { } yours && SchoolPride.Greetings(wizard.Identity.School, yours, _rng) is { } pride ? pride // CLASSIC (2026-10-20)
+                : AmbientLinePool.GreetNear;
             if (AmbientChatPlanner.Answer(pool, speaker, _rng, ChatWordFilter.Current) is { } line) {
                 state.TalkingWith = player;
                 state.TalkingUntil = now + TalkingFor;
