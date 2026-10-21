@@ -37,20 +37,21 @@
  *   - Storm, Chain Lightning: a Storm wizard's single-target Storm spell defeats
  *     its target: the same spell leaps, free, to the enemy with the most health.
  *     A leap can leap again, at most twice a round.
- *   - Myth, Monster Mash: a Myth wizard with no minion lands a Myth attack: the
- *     monster stays to fight (a free Golem/Troll/Cyclops/Minotaur Minion). Once a round.
- *   - Life, Lifeline: the first time in a fight that a friend (or the Life wizard)
- *     falls to a quarter of their health or below, a free Fairy (420; Satyr 860
- *     from level 26) answers. A defeated friend comes back. Once a fight.
+ *   - Myth, Evolution: an owned minion that has acted twice grows into the next
+ *     monster (Golem -> Troll -> Cyclops -> Minotaur): a free Draw Power
+ *     sacrifices it (+2 pips) and the next minion card is cast free. Needs the
+ *     owner's level for that card and a free seat.
+ *   - Life, Overgrowth: a Life heal that tops a friend up with 150 or more to
+ *     spare grows the spare into a free Spirit Armor (absorb 400). Once a round.
  *   - Death, Puppeteer: a Death drain leaves a creature at half health or below:
  *     a free Beguile takes its next action for the wizard's side. Once a round,
  *     once per creature in a fight.
- *   - Balance, Echo: a Balance wizard's trap on an enemy spreads to the whole
- *     enemy side (free Mass Hex), a blade on a friend to the whole team (free
- *     Bladestorm). Once a round.
+ *   - Balance, Equilibrium: a Balance attack that uses up both a blade on the
+ *     wizard and a trap on the enemy tips the scales: a free Hydra (Fire, Ice and
+ *     Storm, 190 each). Once a round.
  * Only wizards of the school, from the level of the keystone spell their
  * professor teaches (Fire Elf 5, Tower Shield 16, Storm Shark 10, Troll Minion 7,
- * Sprite 10, Ghoul 5, Balanceblade 12).
+ * Spirit Armor 16, Ghoul 5, Balanceblade 12).
  *
  * USAGE EXAMPLE:
  * duel.Mastery.NewRound(round);                       // CombatDuelComponent, each new round
@@ -103,24 +104,35 @@ internal static class MasteryRules {
     /// <summary>Leaps a Storm wizard's spells may make in one round.</summary>
     internal const int ChainLeapsPerRound = 2;
 
-    /// <summary>Troll Minion (level 7).</summary>
-    internal const int MonsterMashLevel = 7;
+    /// <summary>Troll Minion (level 7): the first evolution, Golem to Troll.</summary>
+    internal const int EvolutionLevel = 7;
+
+    /// <summary>A minion evolves after this many actions of its own.</summary>
+    internal const int EvolutionActions = 2;
+
+    /// <summary>The creatures the classic Myth minion cards summon, by tier (Golem 0, Troll 1, Cyclops 2, Minotaur 3).</summary>
+    internal static readonly IReadOnlyDictionary<ulong, int> MinionTier = new Dictionary<ulong, int> {
+        [35972] = 0, [35680] = 1, [36059] = 1, [36060] = 1, [35681] = 2, [36061] = 2, [36062] = 2, [36063] = 2, [35682] = 3,
+    };
+
+    /// <summary>The next tier's card and the level its trainer teaches it at (Troll 7, Cyclops 18, Minotaur 38).</summary>
+    internal static readonly (string Card, int Level)[] NextMinion = [("Minion Myth 001", 7), ("Minion Myth 002", 18), ("Minion Myth 003", 38)];
 
     /// <summary>The classic Myth minion cards: Golem, Troll, Cyclops, Minotaur.</summary>
     internal const string GolemMinion = "Minion Myth 000", TrollMinion = "Minion Myth 001",
         CyclopsMinion = "Minion Myth 002", MinotaurMinion = "Minion Myth 003";
 
-    /// <summary>Sprite (Moolinda Wu, level 10).</summary>
-    internal const int LifelineLevel = 10;
+    /// <summary>The client's Draw Power: sacrifices the caster's minion and gives 2 pips.</summary>
+    internal const string EvolutionSacrifice = "PetPower-Combat-DrawPower-01";
 
-    /// <summary>Satyr's level: from here the Lifeline is a Satyr.</summary>
-    internal const int LifelineSatyrLevel = 26;
+    /// <summary>Spirit Armor (Life, level 16): Overgrowth's shield, and its level.</summary>
+    internal const int OvergrowthLevel = 16;
 
-    /// <summary>A friend at or below this share of their health calls the Lifeline.</summary>
-    internal const float LifelineShare = 0.25f;
+    /// <summary>Spare healing (the card's heal past full health) that grows the shield.</summary>
+    internal const int OvergrowthSpare = 150;
 
-    /// <summary>The client's Fairy (420, a friend) and Satyr (860, a friend).</summary>
-    internal const string LifelineFairy = "Pixie Life", LifelineSatyr = "Satyr";
+    /// <summary>The client's Spirit Armor: absorb 400 on a friend.</summary>
+    internal const string OvergrowthSpell = "Spirit Armor";
 
     /// <summary>Ghoul (Dworgyn, level 5).</summary>
     internal const int PuppeteerLevel = 5;
@@ -132,10 +144,10 @@ internal static class MasteryRules {
     internal const string PuppeteerSpell = "Pet - Beguile";
 
     /// <summary>Balanceblade (level 12).</summary>
-    internal const int EchoLevel = 12;
+    internal const int EquilibriumLevel = 12;
 
-    /// <summary>The client's Mass Hex (+30% trap on every enemy) and Bladestorm (+20% blade on every friend).</summary>
-    internal const string EchoTrap = "Mass Hex", EchoBlade = "Bladestorm";
+    /// <summary>The client's free Hydra: 190 Fire, 190 Ice and 190 Storm at one enemy.</summary>
+    internal const string EquilibriumSpell = "PetPower-Combat-Hydra-01";
 
 }
 
@@ -149,13 +161,15 @@ internal sealed class MasteryDirector {
 
     private readonly CombatDuelComponent _duel;
     private readonly HashSet<CombatDuelSubCircle> _permafrostThisRound = [];
-    private readonly HashSet<CombatDuelSubCircle> _mashThisRound = [];
+    private readonly HashSet<CombatDuelSubCircle> _overgrowthThisRound = [];
     private readonly HashSet<CombatDuelSubCircle> _puppeteerThisRound = [];
-    private readonly HashSet<CombatDuelSubCircle> _echoThisRound = [];
+    private readonly HashSet<CombatDuelSubCircle> _equilibriumThisRound = [];
     private readonly Dictionary<CombatDuelSubCircle, int> _leapsThisRound = [];
-    private readonly HashSet<CombatDuelSubCircle> _lifelineUsed = [];
+    private readonly Dictionary<object, int> _minionActions = new(ReferenceEqualityComparer.Instance);
     private readonly HashSet<object> _beguiledByMastery = new(ReferenceEqualityComparer.Instance);
-    private readonly Dictionary<CombatDuelSubCircle, (int Health, int Shields)> _before = [];
+    private readonly Dictionary<CombatDuelSubCircle, Snapshot> _before = [];
+
+    private readonly record struct Snapshot(int Health, int Shields, int Blades, int Traps);
 
     internal MasteryDirector(CombatDuelComponent duel) => _duel = duel;
 
@@ -165,9 +179,9 @@ internal sealed class MasteryDirector {
     /// <summary>A new round: the once-a-round mechanics may fire again.</summary>
     internal void NewRound(int round) {
         _permafrostThisRound.Clear();
-        _mashThisRound.Clear();
+        _overgrowthThisRound.Clear();
         _puppeteerThisRound.Clear();
-        _echoThisRound.Clear();
+        _equilibriumThisRound.Clear();
         _leapsThisRound.Clear();
     }
 
@@ -175,7 +189,7 @@ internal sealed class MasteryDirector {
     internal void BeforeAction(QueuedCombatAction action) {
         _before.Clear();
         foreach (var circle in _duel.SubCircles.Where(c => c is { Occupied: true, AddedToDuel: true, ParticipantGameStats: not null })) {
-            _before[circle] = (circle.ParticipantGameStats.m_currentHitpoints, Shields(circle));
+            _before[circle] = new Snapshot(circle.ParticipantGameStats.m_currentHitpoints, Shields(circle), Blades(circle), Traps(circle));
         }
     }
 
@@ -191,9 +205,10 @@ internal sealed class MasteryDirector {
         var ownCast = action.Cheat is null;
         if (ownCast) {
             Add(procs, Kindling(action));
-            Add(procs, MonsterMash(action));
+            Add(procs, Overgrowth(action));
             Add(procs, Puppeteer(action));
-            Add(procs, Echo(action));
+            Add(procs, Equilibrium(action));
+            procs.AddRange(Evolution(action));
         }
 
         if (ownCast || action.Cheat?.IsMastery == true) {
@@ -201,7 +216,6 @@ internal sealed class MasteryDirector {
         }
 
         procs.AddRange(Permafrost(action));
-        Add(procs, Lifeline());
         return procs;
     }
 
@@ -288,63 +302,62 @@ internal sealed class MasteryDirector {
             && !effects.Any(e => e.m_effectTarget is kEffectTarget.kEnemyTeam or kEffectTarget.kEnemyTeamAllAtOnce);
     }
 
-    // ------------------------------------------------------------ Myth: Monster Mash
+    // ------------------------------------------------------------ Myth: Evolution
 
-    private QueuedCombatAction? MonsterMash(QueuedCombatAction action) {
+    private IEnumerable<QueuedCombatAction> Evolution(QueuedCombatAction action) {
+        var minion = action.SpellCaster;
+        if (!minion.IsSummonedMinion || !minion.IsAlive || minion.ParticipantObject is not { } creature
+            || !MasteryRules.MinionTier.TryGetValue(creature.m_templateID.Full, out var tier)) {
+            yield break;
+        }
+
+        var owner = _duel.SubCircles.FirstOrDefault(c => c.IsWizard && minion.IsOwnedMinionOf(c));
+        var acted = _minionActions[creature] = _minionActions.GetValueOrDefault(creature) + 1;
+        if (owner is null || tier >= MasteryRules.NextMinion.Length || acted < MasteryRules.EvolutionActions
+            || !Masters(owner, MagicSchool.Myth, MasteryRules.NextMinion[tier].Level) || !_duel.HasFreeSummonSeat(owner)) {
+            yield break;
+        }
+
+        if (Proc(owner, minion, MasteryRules.EvolutionSacrifice) is not { } sacrifice
+            || Proc(owner, owner, MasteryRules.NextMinion[tier].Card) is not { } summon) {
+            yield break;
+        }
+
+        yield return sacrifice;
+        yield return summon;
+    }
+
+    // ------------------------------------------------------------ Life: Overgrowth
+
+    private QueuedCombatAction? Overgrowth(QueuedCombatAction action) {
         var caster = action.SpellCaster;
-        if (!Masters(caster, MagicSchool.Myth, MasteryRules.MonsterMashLevel) || !IsSchool(action, MagicSchool.Myth)
-            || !Deals(action, kSpellEffects.kDamage) || !IsEnemyOf(action.SelectedTarget, caster)
-            || _mashThisRound.Contains(caster) || !caster.IsAlive
-            || _duel.SubCircles.Any(c => c.IsOwnedMinionOf(caster)) || !_duel.HasFreeSummonSeat(caster)) {
+        if (!Masters(caster, MagicSchool.Life, MasteryRules.OvergrowthLevel) || !IsSchool(action, MagicSchool.Life)
+            || _overgrowthThisRound.Contains(caster)) {
             return null;
         }
 
-        var proc = Proc(caster, caster, MinionFor(action.SpellTemplate));
+        var heals = Flatten(action.SpellTemplate?.m_effects).Where(e => e.m_effectType == kSpellEffects.kHeal && e.m_effectParam > 0).ToList();
+        if (heals.Count == 0) {
+            return null;
+        }
+
+        var friend = heals.Any(e => e.m_effectTarget is kEffectTarget.kSelf) ? caster : action.SelectedTarget;
+        if (friend is not { IsWizard: true, IsAlive: true } || friend.OccupiedTeam != caster.ActingTeam
+            || HealthBefore(friend) <= 0 || friend.ParticipantGameStats.m_currentHitpoints < friend.ParticipantGameStats.m_baseHitpoints) {
+            return null;
+        }
+
+        var spare = HealthBefore(friend) + heals.Max(e => e.m_effectParam) - friend.ParticipantGameStats.m_baseHitpoints;
+        if (spare < MasteryRules.OvergrowthSpare) {
+            return null;
+        }
+
+        var proc = Proc(caster, friend, MasteryRules.OvergrowthSpell);
         if (proc is not null) {
-            _mashThisRound.Add(caster);
+            _overgrowthThisRound.Add(caster);
         }
 
         return proc;
-    }
-
-    /// <summary>The minion that stays after a Myth attack: the monster's own where the classic deck has one.</summary>
-    internal static string MinionFor(SpellTemplate? attack) {
-        var name = $"{attack?.m_name} {attack?.m_spellBase}";
-        return name.Contains("Troll", StringComparison.OrdinalIgnoreCase) ? MasteryRules.TrollMinion
-            : name.Contains("Cyclops", StringComparison.OrdinalIgnoreCase) ? MasteryRules.CyclopsMinion
-            : name.Contains("Minotaur", StringComparison.OrdinalIgnoreCase) || name.Contains("Orthrus", StringComparison.OrdinalIgnoreCase)
-                ? MasteryRules.MinotaurMinion
-            : MasteryRules.GolemMinion;
-    }
-
-    // ------------------------------------------------------------ Life: Lifeline
-
-    private QueuedCombatAction? Lifeline() {
-        foreach (var life in _duel.SubCircles.Where(c => !_lifelineUsed.Contains(c) && c.IsAlive
-                     && Masters(c, MagicSchool.Life, MasteryRules.LifelineLevel))) {
-            var friend = _duel.SubCircles
-                .Where(c => c is { Occupied: true, AddedToDuel: true, IsWizard: true } && c.OccupiedTeam == life.OccupiedTeam
-                    && FellToLifeline(c))
-                .OrderBy(c => c.ParticipantGameStats.m_currentHitpoints).ThenBy(c => c.SlotIndex)
-                .FirstOrDefault();
-            if (friend is null) {
-                continue;
-            }
-
-            var spell = life.ParticipantGameStats.Level >= MasteryRules.LifelineSatyrLevel ? MasteryRules.LifelineSatyr : MasteryRules.LifelineFairy;
-            if (Proc(life, friend, spell) is { } heal) {
-                _lifelineUsed.Add(life);
-                return heal;
-            }
-        }
-
-        return null;
-    }
-
-    private bool FellToLifeline(CombatDuelSubCircle circle) {
-        var max = circle.ParticipantGameStats.m_baseHitpoints;
-        var line = (int) Math.Floor(max * MasteryRules.LifelineShare);
-        return max > 0 && HealthBefore(circle) > line && circle.ParticipantGameStats.m_currentHitpoints <= line;
     }
 
     // ------------------------------------------------------------ Death: Puppeteer
@@ -369,32 +382,39 @@ internal sealed class MasteryDirector {
         return proc;
     }
 
-    // ------------------------------------------------------------ Balance: Echo
+    // ------------------------------------------------------------ Balance: Equilibrium
 
-    private QueuedCombatAction? Echo(QueuedCombatAction action) {
+    private QueuedCombatAction? Equilibrium(QueuedCombatAction action) {
         var caster = action.SpellCaster;
         var target = action.SelectedTarget;
-        if (!Masters(caster, MagicSchool.Balance, MasteryRules.EchoLevel) || !IsSchool(action, MagicSchool.Balance)
-            || _echoThisRound.Contains(caster) || target is not { Occupied: true }) {
+        if (!Masters(caster, MagicSchool.Balance, MasteryRules.EquilibriumLevel) || !IsSchool(action, MagicSchool.Balance)
+            || !Deals(action, kSpellEffects.kDamage) || !IsEnemyOf(target, caster) || _equilibriumThisRound.Contains(caster)
+            || !_before.TryGetValue(caster, out var mine) || !_before.TryGetValue(target!, out var theirs)
+            || Blades(caster) >= mine.Blades || Traps(target!) >= theirs.Traps) {
             return null;
         }
 
-        var effects = Flatten(action.SpellTemplate?.m_effects).ToList();
-        var trap = IsEnemyOf(target, caster) && effects.Any(e => e.m_effectType == kSpellEffects.kModifyIncomingDamage && e.m_effectParam > 0
-            && e.m_effectTarget == kEffectTarget.kEnemySingle);
-        var blade = !IsEnemyOf(target, caster) && effects.Any(e => e.m_effectType == kSpellEffects.kModifyOutgoingDamage && e.m_effectParam > 0
-            && e.m_effectTarget == kEffectTarget.kFriendlySingle);
-        if (!trap && !blade) {
+        var at = target!.IsAlive ? target : _duel.SubCircles
+            .Where(c => c is { Occupied: true, AddedToDuel: true, IsAlive: true } && IsEnemyOf(c, caster))
+            .OrderByDescending(c => c.ParticipantGameStats.m_currentHitpoints).ThenBy(c => c.SlotIndex).FirstOrDefault();
+        if (at is null) {
             return null;
         }
 
-        var proc = Proc(caster, target, trap ? MasteryRules.EchoTrap : MasteryRules.EchoBlade);
+        var proc = Proc(caster, at, MasteryRules.EquilibriumSpell);
         if (proc is not null) {
-            _echoThisRound.Add(caster);
+            _equilibriumThisRound.Add(caster);
         }
 
         return proc;
     }
+
+    // A blade on the circle (a positive outgoing-damage charm) and a trap on it (a positive incoming-damage ward).
+    private static int Blades(CombatDuelSubCircle circle)
+        => circle._hangingEffects?.Count(effect => effect.m_effectType == kSpellEffects.kModifyOutgoingDamage && effect.m_effectParam > 0) ?? 0;
+
+    private static int Traps(CombatDuelSubCircle circle)
+        => circle._hangingEffects?.Count(effect => effect.m_effectType == kSpellEffects.kModifyIncomingDamage && effect.m_effectParam > 0) ?? 0;
 
     // A protective ward on the circle: a negative incoming-damage ward (Tower Shield, Volcanic Shield, ...).
     private static int Shields(CombatDuelSubCircle circle)
