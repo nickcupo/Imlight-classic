@@ -279,6 +279,7 @@ public sealed class SchoolWeavingTests : IDisposable {
         var two = new List<SpellData> { new() { m_templateID = WeaveCard, m_quantity = 2 } };
         Assert.Equal(DeckAddRefusal.TooManyCopies, ClassicDeckRules.CanAdd(fireDeck, two, WeaveCard, Lookup));
         Assert.NotEqual(DeckAddRefusal.None, ClassicDeckRules.CanAdd(stormDeck, [], WeaveCard, Lookup));
+        Assert.Equal(DeckAddRefusal.None, ClassicDeckRules.CanAdd(fireDeck with { m_primarySchoolName = "" }, [], WeaveCard, Lookup)); // starter deck
         TurnOn(on: false); // off: the card is the client's ordinary card again
         Assert.Equal(DeckAddRefusal.None, ClassicDeckRules.CanAdd(fireDeck, two, WeaveCard, Lookup));
     }
