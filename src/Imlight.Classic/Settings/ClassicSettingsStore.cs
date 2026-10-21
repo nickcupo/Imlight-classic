@@ -98,6 +98,7 @@ public static class ClassicSettingKeys {
     public const string PvpCountdownSeconds = "PvpCountdownSeconds";
     public const string ArenaMatches = "ArenaMatches";
     public const string PetPavilion = "PetPavilion";
+    public const string SchoolWeaving = "SchoolWeaving"; // CLASSIC OWNER EXTRA (design-weaving), off by default
     public const string MovementGuard = "MovementGuard";
     public const string MovementMaxSpeed = "MovementMaxSpeed";
     public const string DefeatedGetNoRewards = "DefeatedGetNoRewards"; // CLASSIC: owner ruling 2026-10-10
@@ -162,6 +163,10 @@ public sealed class ClassicSettingsStore {
         new(ClassicSettingKeys.PetPavilion, ClassicSettingKind.Bool, "true", "Owner extras",
             "The Pet Pavilion (May 2010, after the 2009 cutoff; owner request): opens the pet park and turns on pet "
             + "leveling, talents, energy and hatching. Zone changes apply at the next zone entry."),
+        new(ClassicSettingKeys.SchoolWeaving, ClassicSettingKind.Bool, "false", "Owner extras",
+            "School Weaving (an experiment, not 2010; rules/weaving-*.yaml): each professor teaches a Weave card at level 20 "
+            + "that turns a trained off-school damage card into the wizard's own school with that school's rider. Off by "
+            + "default; trainers are restocked at the next server start."),
         new(ClassicSettingKeys.MovementGuard, ClassicSettingKind.Bool, "true", "Security",
             "Refuse impossible movement (a speed or teleport hack): the wizard is put back where the server last saw "
             + "them, never kicked. Turn off if legitimate players are pulled back."),

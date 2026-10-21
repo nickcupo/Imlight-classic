@@ -78,7 +78,8 @@ public sealed class FeatureSwitches {
         }
 
         _explicit = explicitValues.ToFrozenDictionary(StringComparer.Ordinal);
-        AllEnabled = !_explicit.Values.Contains(false);
+        // CLASSIC: experiments (owner extras, off unless set) are not era switches: they never make a profile "restricted".
+        AllEnabled = !_explicit.Where(entry => !ClassicFeatures.IsExperiment(entry.Key)).Any(entry => !entry.Value);
     }
 
     /// <summary>
@@ -100,7 +101,7 @@ public sealed class FeatureSwitches {
     /// The paths that are switched off, in schema order.
     /// </summary>
     public ImmutableArray<string> Disabled
-        => [.. ClassicFeatures.All.Where(path => _explicit.TryGetValue(path, out var on) && !on)];
+        => [.. ClassicFeatures.All.Where(path => !ClassicFeatures.IsExperiment(path) && _explicit.TryGetValue(path, out var on) && !on)];
 
     /// <summary>
     /// Returns the switch value for <paramref name="path"/>, or true when the profile does not set it.
