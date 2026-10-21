@@ -28,10 +28,10 @@ internal partial class QuestService {
     [MessageHandler(typeof(QUEST_MESSAGES_52_PROTOCOL.MSG_UPDATEUSERHIDDENQUESTS))]
     private void ReceiveUpdateUserHiddenQuests(QUEST_MESSAGES_52_PROTOCOL.MSG_UPDATEUSERHIDDENQUESTS message) {
         var wizard = GetActiveWizard();
-        var data = ClientJournalStore.Accept(message.Data);
+        var data = ClientJournalStore.Accept((byte[]) message.Data); // the bytes as sent: binary, never a string
         if (wizard is null || data is null) return;
-        if (ClientJournalStore.Save(wizard.CharId, journal => journal.HiddenQuests = data)) {
-            (wizard.Journal ??= new ClientJournal { CharId = wizard.CharId }).HiddenQuests = data;
+        if (ClientJournalStore.Save(wizard.CharId, journal => journal.HiddenQuestsData = data)) {
+            (wizard.Journal ??= new ClientJournal { CharId = wizard.CharId }).HiddenQuestsData = data;
         }
     }
 
