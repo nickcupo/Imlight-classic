@@ -78,7 +78,8 @@ public sealed class FeatureSwitches {
         }
 
         _explicit = explicitValues.ToFrozenDictionary(StringComparer.Ordinal);
-        AllEnabled = !_explicit.Values.Contains(false);
+        // CLASSIC: experiments (owner extras, off unless set) are not era switches: they never make a profile "restricted".
+        AllEnabled = !_explicit.Where(entry => !ClassicFeatures.IsExperiment(entry.Key)).Any(entry => !entry.Value);
     }
 
     /// <summary>
@@ -100,7 +101,7 @@ public sealed class FeatureSwitches {
     /// The paths that are switched off, in schema order.
     /// </summary>
     public ImmutableArray<string> Disabled
-        => [.. ClassicFeatures.All.Where(path => _explicit.TryGetValue(path, out var on) && !on)];
+        => [.. ClassicFeatures.All.Where(path => !ClassicFeatures.IsExperiment(path) && _explicit.TryGetValue(path, out var on) && !on)];
 
     /// <summary>
     /// Returns the switch value for <paramref name="path"/>, or true when the profile does not set it.
@@ -111,6 +112,11 @@ public sealed class FeatureSwitches {
     public bool IsEnabled(string path) {
         if (!ClassicFeatures.IsKnown(path)) {
             throw new ArgumentException($"unknown feature path '{path}'", nameof(path));
+        }
+
+        // CLASSIC: an experiment (owner extra) is off unless the profile sets it true; dated switches default to on.
+        if (ClassicFeatures.IsExperiment(path)) {
+            return _explicit.TryGetValue(path, out var experiment) && experiment;
         }
 
         return !_explicit.TryGetValue(path, out var on) || on;
@@ -160,6 +166,10 @@ public sealed class ProfileRules {
     /// celestia-2010): the Sun, Moon and Star trainers, the dated polymorph baseline and the owner's Moon rework.
     /// </summary>
     public string? Astral { get; init; }
+
+    /// <summary>CLASSIC OWNER EXTRA: path under classic-data of the School Weaving table (rules.weaving), used only while
+    /// features.experiments.weaving is on.</summary>
+    public string? Weaving { get; init; }
 
     /// <summary>
     /// CLASSIC: path under classic-data of the gardening tables (rules.gardening, such as rules/gardening-2011.yaml in

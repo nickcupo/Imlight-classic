@@ -95,6 +95,12 @@ internal static class ClassicDeckRules {
             && StringHash.Compute(template.m_sMagicSchoolName) == StringHash.Compute(deck.m_primarySchoolName);
         if (template.m_spellFusion != 0) return DeckAddRefusal.FusionCard;
         var limit = schoolCard ? deck.m_schoolMaxInstances : deck.m_genericMaxInstances;
+        // CLASSIC OWNER EXTRA: a Weave card goes only in a deck of its own school, at most deck_copies times.
+        if (ClassicWeaving.DeckLimit(templateId) is { } weaveLimit) {
+            if (string.IsNullOrEmpty(deck.m_primarySchoolName)
+                || StringHash.Compute(weaveLimit.School) != StringHash.Compute(deck.m_primarySchoolName)) return DeckAddRefusal.FusionCard;
+            limit = Math.Min(limit, weaveLimit.Copies);
+        }
         if (template.m_maxCopies > 0 && template.m_maxCopies < limit) limit = (int) template.m_maxCopies;
         if (copies >= limit) return DeckAddRefusal.TooManyCopies;
 

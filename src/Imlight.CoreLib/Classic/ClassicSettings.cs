@@ -72,6 +72,7 @@ public static class ClassicSettings {
     public static int PvpCountdownSeconds => Store.Int(ClassicSettingKeys.PvpCountdownSeconds);
     public static bool ArenaMatches => Store.Bool(ClassicSettingKeys.ArenaMatches);
     public static bool PetPavilion => Store.Bool(ClassicSettingKeys.PetPavilion);
+    public static bool SchoolWeaving => Store.Bool(ClassicSettingKeys.SchoolWeaving); // CLASSIC OWNER EXTRA
     public static bool MovementGuard => Store.Bool(ClassicSettingKeys.MovementGuard);
     public static int MovementMaxSpeed => Store.Int(ClassicSettingKeys.MovementMaxSpeed);
     public static bool DefeatedGetNoRewards => Store.Bool(ClassicSettingKeys.DefeatedGetNoRewards); // CLASSIC: 2026-10-10

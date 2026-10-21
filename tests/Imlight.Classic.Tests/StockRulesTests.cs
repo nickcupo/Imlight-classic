@@ -89,7 +89,8 @@ public sealed class StockRulesTests {
         var rules = Resolve(which);
 
         foreach (var feature in ClassicFeatures.All) {
-            Assert.True(rules.IsFeatureEnabled(feature), feature);
+            // CLASSIC: an experiment (owner extra) stays off unless a profile or [Classic] switch turns it on.
+            Assert.Equal(!ClassicFeatures.IsExperiment(feature), rules.IsFeatureEnabled(feature));
         }
     }
 

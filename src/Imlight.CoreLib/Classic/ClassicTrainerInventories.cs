@@ -26,6 +26,32 @@ internal static class ClassicTrainerInventories {
             CoreObjectFactory.TryGetTemplateIdByPath);
         RefreshOctoberTraining(ClassicSpellTemplates.Records, CoreObjectFactory.TryGetTemplateIdByPath);
         RefreshAstralTrainers(ClassicCelestiaRules.Astral, ClassicSpellTemplates.Records, CoreObjectFactory.TryGetTemplateIdByPath);
+        RefreshWeavingTrainers(CoreObjectFactory.TryGetTemplateIdByPath);
+    }
+
+    /// <summary>
+    /// CLASSIC OWNER EXTRA: while School Weaving is on, each school's professors also teach that school's Weave card at
+    /// the table's level, on top of whatever they already teach. Idempotent: a professor never lists the card twice.
+    /// </summary>
+    internal static int RefreshWeavingTrainers(Func<string, ulong?> resolveTemplate) {
+        if (!ClassicWeaving.Active) return 0;
+        var rules = ClassicWeaving.Rules;
+        var stocked = 0;
+        foreach (var weave in rules.Weaves) {
+            if (resolveTemplate(weave.Card) is not { } card) {
+                Logger.Warning("Classic School Weaving: the {0} Weave card {1} is not a client template; not taught.", Logger.Args(weave.School, weave.Card));
+                continue;
+            }
+            foreach (var npc in weave.Trainers) {
+                var spells = SpiralDB.TryGetNpcSpellInventory(npc, out var existing) && existing.Spells is { } list ? list.ToList() : [];
+                if (spells.Any(entry => entry.TemplateID == card)) continue;
+                spells.Add(new NPCSpellEntry { TemplateID = card, RequiredSpellID = 0, Level = rules.Level });
+                SpiralDB.RegisterNpcSpellInventory(new NPCSpellInventory { TemplateID = npc, Spells = spells });
+                stocked++;
+            }
+        }
+        if (stocked > 0) Logger.Information("Classic School Weaving: {0} professors now teach a Weave card at level {1}.", Logger.Args(stocked, rules.Level));
+        return stocked;
     }
 
     /// <summary>

@@ -191,7 +191,8 @@ public static class ClassicSpellTemplates {
     /// <param name="path">The template's Root.wad path, or null when unknown.</param>
     /// <returns>True if the spell may be trained.</returns>
     public static bool IsTrainable(string? path)
-        => s_overrides is not { } overrides || overrides.IsTrainable(path);
+        => s_overrides is not { } overrides || overrides.IsTrainable(path)
+            || ClassicWeaving.IsWeaveCard(path); // CLASSIC OWNER EXTRA: the professors' Weave cards while weaving is on
 
     /// <summary>
     /// True when spell records restrict what trainers teach.
