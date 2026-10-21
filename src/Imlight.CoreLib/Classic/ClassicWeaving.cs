@@ -66,7 +66,7 @@ internal static class ClassicWeaving {
 
     /// <summary>True while the experiment is switched on in the active profile and a table applies to it.</summary>
     internal static bool Active
-        => ClassicRuntime.IsActive && ClassicRuntime.Rules.IsFeatureEnabled(ClassicFeatures.ExperimentsWeaving) && Rules.Id.Length > 0;
+        => ClassicRuntime.IsInitialized && ClassicRuntime.IsActive && ClassicRuntime.Rules.IsFeatureEnabled(ClassicFeatures.ExperimentsWeaving) && Rules.Id.Length > 0;
 
     /// <summary>The school weave whose Weave card has template id <paramref name="templateId"/>, when weaving is active.</summary>
     internal static SchoolWeave? WeaveOfCard(ulong templateId) {
