@@ -40,6 +40,8 @@ internal static class ClassicOctoberTraining {
             && rating >= ArenaRules.MinRatingOf(RequiredRank(spell), config.Ranks);
 
     internal static bool CanTrain(Wizard wizard, ulong trainer, ulong spell) {
+        // CLASSIC OWNER EXTRA: a Weave card is taught only to wizards of its own school (window, service and save path).
+        if (!ClassicWeaving.MayTrain(wizard.MagicSchoolBehavior.MagicSchool.ToString(), spell)) return false;
         if (!Applies(trainer, spell)) return true;
         var config = ClassicArena.Config;
         if (config is null || wizard.MagicSchoolBehavior.Level < RequiredLevel(spell)) return false;

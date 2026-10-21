@@ -153,6 +153,14 @@ internal static class ClassicWeaving {
         return true;
     }
 
+    /// <summary>True when <paramref name="path"/> is an active Weave card (a trainer may then teach it).</summary>
+    internal static bool IsWeaveCard(string? path)
+        => path is not null && Active && Rules.Weaves.Any(weave => string.Equals(weave.Card, path, StringComparison.Ordinal));
+
+    /// <summary>False only for an active Weave card of another school than <paramref name="wizardSchool"/>.</summary>
+    internal static bool MayTrain(string? wizardSchool, ulong templateId)
+        => WeaveOfCard(templateId) is not { } weave || string.Equals(SchoolName(weave.School), wizardSchool, StringComparison.OrdinalIgnoreCase);
+
     /// <summary>The School Weaving deck limit for a Weave card: (copies allowed, must the deck be this school).</summary>
     internal static (int Copies, string School)? DeckLimit(ulong templateId)
         => WeaveOfCard(templateId) is { } weave ? (Rules.DeckCopies, SchoolName(weave.School)) : null;

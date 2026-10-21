@@ -246,6 +246,19 @@ public sealed class SchoolWeavingTests : IDisposable {
     }
 
     [Fact]
+    public void ProfessorsTeachTheWeaveCardOnlyWhileWeavingIsOnAndOnlyToTheirSchool() {
+        TurnOn();
+        Assert.True(ClassicWeaving.IsWeaveCard("Spells/Weave Fire.xml"));
+        Assert.True(ClassicSpellTemplates.IsTrainable("Spells/Weave Fire.xml"));
+        Assert.True(ClassicWeaving.MayTrain("Fire", WeaveCard));
+        Assert.False(ClassicWeaving.MayTrain("Storm", WeaveCard));
+        Assert.True(ClassicWeaving.MayTrain("Storm", Kraken));              // any other card is untouched
+        TurnOn(on: false);
+        Assert.False(ClassicWeaving.IsWeaveCard("Spells/Weave Fire.xml"));
+        Assert.True(ClassicWeaving.MayTrain("Storm", WeaveCard));
+    }
+
+    [Fact]
     public void AWeaveCardGoesOnlyInItsOwnSchoolsDeckAndAtMostTwice() {
         TurnOn();
         SpellTemplate? Lookup(uint id) => _cache.TryGetValue(id, out var t) ? t as SpellTemplate : null;
