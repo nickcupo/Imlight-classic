@@ -589,7 +589,7 @@ public sealed class SchoolMasteryDuelTests : IDisposable {
         Assert.Equal(["Ghoul"], Resolve(duel, Cast(death, krok, "Ghoul")).Select(NameOf).ToArray());
     }
 
-    // ------------------------------------------------------------ Myth: Siege Beast
+    // ------------------------------------------------------------ Myth: Shatterstrike
 
     private static CombatDuelSubCircle Minion(CombatDuelComponent duel, int slot, CombatDuelSubCircle owner) {
         var minion = Occupy(duel, slot, 35680, 600);
@@ -607,22 +607,24 @@ public sealed class SchoolMasteryDuelTests : IDisposable {
     };
 
     [Fact]
-    public void WhenYourMinionHitsAShieldedEnemyYouPierceItsShieldOnceARound() {
+    public void YourMythHitOnAShieldedEnemyPiercesItsNextShieldOnceARound() {
         var duel = NewDuel();
         var krok = Occupy(duel, 0, Krok, 5000);
         var myth = Occupy(duel, 4, 1, 842, MagicSchool.Myth, level: 20);
-        var minion = Minion(duel, 5, myth);
-        krok._hangingEffects.Add(Absorb(1000));   // the minion's hit only dents it
+        foreach (var slot in new[] { 5, 6, 7 }) Occupy(duel, slot, 1, 800, MagicSchool.Fire, level: 20);   // a full group of four
+        krok._hangingEffects.Add(Absorb(1000));   // the Troll only dents it
         duel.Mastery.NewRound(1);
 
-        var list = Resolve(duel, Cast(minion, krok, "Minion Bonk"));
+        var list = Resolve(duel, Cast(myth, krok, "Troll"));
 
-        Assert.Equal(["Minion Bonk", "Pierce"], list.Select(NameOf).ToArray());
+        Assert.Equal(["Troll", "Pierce"], list.Select(NameOf).ToArray());
         Assert.Equal((myth.SlotIndex, krok.SlotIndex), (list[1].m_spellCaster, list[1].m_targetSubcircleList.Single()));
         Assert.DoesNotContain(krok._hangingEffects, e => e.m_effectType == kSpellEffects.kAbsorbDamage);
 
         krok._hangingEffects.Add(Absorb(1000));
-        Assert.Equal(["Minion Bonk"], Resolve(duel, Cast(minion, krok, "Minion Bonk")).Select(NameOf).ToArray());   // once a round
+        Assert.Equal(["Troll"], Resolve(duel, Cast(myth, krok, "Troll")).Select(NameOf).ToArray());   // once a round
+        duel.Mastery.NewRound(2);
+        Assert.Equal(["Troll", "Pierce"], Resolve(duel, Cast(myth, krok, "Troll")).Select(NameOf).ToArray());
     }
 
     [Fact]
@@ -643,11 +645,11 @@ public sealed class SchoolMasteryDuelTests : IDisposable {
     }
 
     [Theory]
-    [InlineData(MagicSchool.Fire, 20, true, true)]    // the owner is not a Myth wizard
-    [InlineData(MagicSchool.Myth, 6, true, true)]     // below Troll Minion's level
-    [InlineData(MagicSchool.Myth, 20, false, true)]   // nothing to pierce
-    [InlineData(MagicSchool.Myth, 20, true, false)]   // the Myth wizard's own hit, not the minion's
-    public void SiegeBeastNeedsAMythWizardsMinionHittingAShield(MagicSchool school, int level, bool shielded, bool byMinion) {
+    [InlineData(MagicSchool.Fire, 20, true, false)]   // not a Myth wizard
+    [InlineData(MagicSchool.Myth, 4, true, false)]    // below Troll's level
+    [InlineData(MagicSchool.Myth, 20, false, false)]  // nothing to pierce
+    [InlineData(MagicSchool.Myth, 20, true, true)]    // a minion's hit: minions are not part of it
+    public void ShatterstrikeNeedsTheMythWizardsOwnHitOnAShield(MagicSchool school, int level, bool shielded, bool byMinion) {
         var duel = NewDuel();
         var krok = Occupy(duel, 0, Krok, 5000);
         var owner = Occupy(duel, 4, 1, 842, school, level);
@@ -655,9 +657,8 @@ public sealed class SchoolMasteryDuelTests : IDisposable {
         if (shielded) krok._hangingEffects.Add(Absorb(1000));
         duel.Mastery.NewRound(1);
 
-        var names = Resolve(duel, Cast(byMinion ? minion : owner, krok, "Minion Bonk")).Select(NameOf).ToArray();
-
-        Assert.Equal(["Minion Bonk"], names);
+        var spell = byMinion ? "Minion Bonk" : "Troll";
+        Assert.Equal([spell], Resolve(duel, Cast(byMinion ? minion : owner, krok, spell)).Select(NameOf).ToArray());
     }
 
     // ------------------------------------------------------------ Life: Overheal

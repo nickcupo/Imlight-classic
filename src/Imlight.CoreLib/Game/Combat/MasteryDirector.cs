@@ -47,10 +47,10 @@
  *     Storm wizard instead ("Wild Bolt - Amulet", the same values, aimed at its
  *     caster); a discharge never puts more than 40% of the Storm wizard's health
  *     back into them. No accuracy or health: a fizzle still wastes the turn.
- *   - Myth, Siege Beast (Round 3, the owner's "shield breaking"): when a Myth
- *     wizard's own minion hits an enemy that holds a shield or absorb, the wizard
- *     casts a free Pierce at it (the client's card: one shield, never a trap).
- *     Once a round per Myth wizard.
+ *   - Myth, Shatterstrike (Round 3, the owner's "shield breaking", independent of
+ *     minions): when a Myth wizard's own Myth attack lands on an enemy that still
+ *     holds a shield or absorb, the wizard casts a free Pierce at it (the client's
+ *     card: one shield, never a trap), so the next hitter lands clean. Once a round.
  *   - Life, Overheal (Round 3, the owner's "some damage for solo"): half of the
  *     healing a Life wizard's own heal puts past full health (capped at a quarter
  *     of their health) becomes a free Life attack card at the weakest enemy, at
@@ -63,8 +63,8 @@
  *     distinct school, Balance included, gives the team a free Bladestorm (+20%).
  *     A cast counts the one school its landed effects name, else its card's school.
  * Only wizards of the school, from the level of the keystone spell their
- * professor teaches (Fire Elf 5, Tower Shield 16, Storm Shark 10, Troll Minion 7,
- * Spirit Armor 16, Ghoul 5, Balanceblade 12).
+ * professor teaches (Fire Elf 5, Tower Shield 16, Storm Shark 10, Troll 5,
+ * Sprite 10, Ghoul 5, Balanceblade 12).
  *
  * USAGE EXAMPLE:
  * duel.Mastery.NewRound(round);                       // CombatDuelComponent, each new round
@@ -126,11 +126,11 @@ internal static class MasteryRules {
     /// <summary>The most a discharge puts back into the Storm wizard, as a share of their health: never a kill from full.</summary>
     internal const float DischargeSelfCap = 0.4f;
 
-    /// <summary>Troll Minion (level 7): Myth's first minion card, and Siege Beast's level.</summary>
-    internal const int SiegeLevel = 7;
+    /// <summary>Troll (level 5): the Myth professor's second attack, and Shatterstrike's level.</summary>
+    internal const int ShatterLevel = 5;
 
     /// <summary>The client's Pierce: removes one shield or absorb from an enemy.</summary>
-    internal const string SiegeSpell = "Pierce";
+    internal const string ShatterSpell = "Pierce";
 
     /// <summary>Sprite (Moolinda Wu, level 10).</summary>
     internal const int OverhealLevel = 10;
@@ -175,7 +175,7 @@ internal sealed class MasteryDirector {
     private readonly HashSet<CombatDuelSubCircle> _retortThisRound = [];
     private readonly Dictionary<CombatDuelSubCircle, int> _prevented = [];
     private readonly HashSet<CombatDuelSubCircle> _overhealThisRound = [];
-    private readonly HashSet<CombatDuelSubCircle> _siegeThisRound = [];
+    private readonly HashSet<CombatDuelSubCircle> _shatterThisRound = [];
     private readonly Dictionary<CombatDuelSubCircle, int> _overheal = [];
     private readonly HashSet<CombatDuelSubCircle> _hungryThisRound = [];
     private readonly Dictionary<CombatDuelSubCircle, HashSet<string>> _schoolsThisFight = [];
@@ -195,7 +195,7 @@ internal sealed class MasteryDirector {
     internal void NewRound(int round) {
         _retortThisRound.Clear();
         _overhealThisRound.Clear();
-        _siegeThisRound.Clear();
+        _shatterThisRound.Clear();
         _hungryThisRound.Clear();
     }
 
@@ -244,7 +244,7 @@ internal sealed class MasteryDirector {
             Add(procs, Kindling(action));
             procs.AddRange(StaticDischarge(action));
             Add(procs, Overheal(action));
-            Add(procs, SiegeBeast(action));
+            Add(procs, Shatterstrike(action));
             Add(procs, HungryDead(action));
             procs.AddRange(Spectrum(action));
         }
@@ -395,22 +395,19 @@ internal sealed class MasteryDirector {
         return best;
     }
 
-    // ------------------------------------------------------------ Myth: Siege Beast
+    // ------------------------------------------------------------ Myth: Shatterstrike
 
-    private QueuedCombatAction? SiegeBeast(QueuedCombatAction action) {
-        var minion = action.SpellCaster;
+    private QueuedCombatAction? Shatterstrike(QueuedCombatAction action) {
+        var caster = action.SpellCaster;
         var target = action.SelectedTarget;
-        if (!minion.IsSummonedMinion || !Deals(action, kSpellEffects.kDamage, kSpellEffects.kDamageOverTime, kSpellEffects.kStealHealth)
-            || target is not { IsAlive: true } || !IsEnemyOf(target, minion) || Shields(target) + Absorbs(target) == 0) {
+        if (!Masters(caster, MagicSchool.Myth, MasteryRules.ShatterLevel) || !caster.IsAlive || !IsSchool(action, MagicSchool.Myth)
+            || !Deals(action, kSpellEffects.kDamage, kSpellEffects.kDamageOverTime, kSpellEffects.kStealHealth)
+            || target is not { IsAlive: true } || !IsEnemyOf(target, caster) || Shields(target) + Absorbs(target) == 0
+            || !_shatterThisRound.Add(caster)) {
             return null;
         }
 
-        var owner = _duel.SubCircles.FirstOrDefault(c => c.IsWizard && minion.IsOwnedMinionOf(c));
-        if (owner is null || !Masters(owner, MagicSchool.Myth, MasteryRules.SiegeLevel) || !_siegeThisRound.Add(owner)) {
-            return null;
-        }
-
-        return Proc(owner, target, MasteryRules.SiegeSpell);
+        return Proc(caster, target, MasteryRules.ShatterSpell);
     }
 
     private static int Absorbs(CombatDuelSubCircle circle)
