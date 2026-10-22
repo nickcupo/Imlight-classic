@@ -258,9 +258,20 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
             return;
         }
 
+        // CLASSIC: a wizard back for a seat held here takes it once their client is in the zone, never a new circle (their
+        // moves arrive before MSG_CLIENTZONED; ios-qa bug 9).
+        if (HoldsSeatFor(playerWizard)) {
+            if (!_pendingRejoins.ContainsKey(playerWizard.CharId)) {
+                QueueRejoin(playerObj, playerActor, playerWizard);
+            }
+
+            return;
+        }
+
         // Check if the player is now in range of the object.
         // If there's a slot available, add the player to the duel.
-        if (IsInRadius(playerObj, _combatSigilObjectInfo.m_radius) && !_entitiesInRange.ContainsKey(playerObj)) {
+        if (IsInRadius(playerObj, _combatSigilObjectInfo.m_radius) && !_entitiesInRange.ContainsKey(playerObj)
+                && !IsSeated(playerObj, playerActor)) { // CLASSIC: already seated under an older object or actor
             // CLASSIC: an ambient wizard walks in only with a permit for this duel (see CombatDuelComponent.Ambient.cs).
             if (!AmbientWizards.MayJoin(playerActor, SigilId)) {
                 return;
@@ -1071,8 +1082,7 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
     private void AddParticipant(CoreObject participantObject, IActorRef participantActor) {
         var isPlayer = participantObject.m_templateID == 1;
 
-        var alreadyInDuel = SubCircles.Any(x => x.ParticipantObject == participantObject);
-        if (alreadyInDuel) {
+        if (IsSeated(participantObject)) { // CLASSIC: by global id, not by object instance (ios-qa bug 9)
             return;
         }
 
@@ -1094,6 +1104,18 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
         Logger.Debug("Duel {0} | Slot {1} | Participant {2} joined",
             Logger.Args(Duel.m_duelID.Full, subCircle.SlotIndex, participantObject.m_debugName));
     }
+
+    /// <summary>
+    /// CLASSIC: whether a circle already holds this participant, a held seat included. A wizard's CoreObject and session
+    /// actor are new after every login or reattach, so comparing instances or actors let a returning wizard take a second
+    /// circle while their own seat was still held (ios-qa bug 9: a nameless slot 5 with the wizard's stats that passed every
+    /// round and kept the duel alive for hours). The object's global id is the same object across sessions.
+    /// </summary>
+    internal bool IsSeated(CoreObject participant, IActorRef actor = null)
+        => participant is not null && SubCircles is not null && SubCircles.Any(circle => circle is { Occupied: true }
+            && (ReferenceEquals(circle.ParticipantObject, participant)
+                || (circle.ParticipantObject.m_globalID.Full != 0 && circle.ParticipantObject.m_globalID.Full == participant.m_globalID.Full)
+                || (actor is not null && !Equals(actor, ActorRefs.Nobody) && Equals(circle.ParticipantActor, actor))));
 
     private void SendCombatPhase(byte phase, IActorRef recipient = null) {
         // Determine which sigil slot the client should point its turn indicator at.
