@@ -1,0 +1,333 @@
+From d7c25f89a8dbb8e5a1dabe0de32ec4587e7d6201 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 22 Oct 2026 15:50:40 +0000
+Subject: [PATCH] Fix BitWriter compact string writes to match BitReader
+
+With compact lengths on, WriteString and WriteWString wrote the
+1+7 / 1+15 bit length prefix but never wrote the string bytes, so
+every non-empty compact string desynced the reader. The empty compact
+UTF-8 string also went through WriteUInt8(0), which byte-aligns
+before the length.
+
+Both now share WriteCompactLength (flag bit, then 7 or 15 bits, no
+flush) and then write the bytes. Alignment follows BitReader exactly:
+ReadString always byte-aligns after the length (ReadBytes, even for
+length 0), while ReadWString returns early on length 0 without
+aligning. WriteWString also accepts null as empty.
+
+BitStringTest round-trips empty, short, 127/128 and 1000-char strings
+in both modes plus UTF-16 text, and pins the prefix bytes. 14 of
+these fail on the old writer.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_019QkioepaCFnEUPKmnUnrJc
+---
+ src/Imcodec.IO/BitWriter.cs  |  66 ++++++------
+ test/IOTest/BitStringTest.cs | 204 +++++++++++++++++++++++++++++++++++
+ 2 files changed, 240 insertions(+), 30 deletions(-)
+ create mode 100644 test/IOTest/BitStringTest.cs
+
+diff --git a/src/Imcodec.IO/BitWriter.cs b/src/Imcodec.IO/BitWriter.cs
+index 0c45fed..de1d10e 100644
+--- a/src/Imcodec.IO/BitWriter.cs
++++ b/src/Imcodec.IO/BitWriter.cs
+@@ -148,29 +148,18 @@ public class BitWriter : BitManipulator {
+     /// </summary>
+     /// <param name="str">The UTF-8 encoded string to write to the stream.</param>
+     public void WriteString(ByteString str) {
+-        if (str.ToString() is null || str.ToString() == string.Empty) {
+-            if (base.CompactLengths) {
+-                WriteUInt8(0);
+-            }
+-            else {
+-                WriteUInt16(0);
+-            }
+-
+-            return;
+-        }
+-
+         if (base.CompactLengths) {
+-            if (str.Length >= 128) {
+-                WriteBit(1);
+-                WriteBits(str.Length, 15);
+-            }
+-            else {
+-                WriteBit(0);
+-                WriteBits(str.Length, 7);
+-            }
++            WriteCompactLength(str.Length);
+         }
+         else {
+-            WriteUInt16((ushort)str.Length);
++            WriteUInt16((ushort) str.Length);
++        }
++
++        // Always byte-align after the length, even for an empty string:
++        // BitReader.ReadString always reads the bytes, which drops any
++        // remaining bits of the current byte.
++        FlushBits();
++        if (str.Length > 0) {
+             WriteBytes(str);
+         }
+     }
+@@ -180,20 +169,37 @@ public class BitWriter : BitManipulator {
+     /// </summary>
+     /// <param name="str">The UTF-16 encoded string to write to the stream.</param>
+     public void WriteWString(string str) {
++        str ??= string.Empty;
++
++        // The length prefix counts UTF-16 code units, not bytes;
++        // BitReader.ReadWString doubles it when reading. It returns early
++        // on an empty string without byte-aligning, so neither do we.
+         if (base.CompactLengths) {
+-            if (str.Length >= 128) {
+-                WriteBit(1);
+-                WriteBits(str.Length, 15);
+-            }
+-            else {
+-                WriteBit(0);
+-                WriteBits(str.Length, 7);
+-            }
++            WriteCompactLength(str.Length);
+         }
+         else {
+             WriteUInt16((ushort) str.Length);
+-            var bytes = Encoding.Unicode.GetBytes(str);
+-            WriteBytes(bytes);
++        }
++
++        if (str.Length > 0) {
++            WriteBytes(Encoding.Unicode.GetBytes(str));
++        }
++    }
++
++    /// <summary>
++    /// Writes a bit-packed string length, as read by <see cref="BitReader.ReadString"/>
++    /// and <see cref="BitReader.ReadWString"/>: a 1-bit "large" flag followed by the
++    /// length in 7 bits (flag clear) or 15 bits (flag set). The bits are not flushed.
++    /// </summary>
++    /// <param name="length">The length to write.</param>
++    private void WriteCompactLength(int length) {
++        if (length > 0x7F) {
++            WriteBit(true);
++            WriteBits(length, 15);
++        }
++        else {
++            WriteBit(false);
++            WriteBits(length, 7);
+         }
+     }
+ 
+diff --git a/test/IOTest/BitStringTest.cs b/test/IOTest/BitStringTest.cs
+new file mode 100644
+index 0000000..bcb4c03
+--- /dev/null
++++ b/test/IOTest/BitStringTest.cs
+@@ -0,0 +1,204 @@
++/*
++BSD 3-Clause License
++
++Copyright (c) 2024, Jooty
++
++Redistribution and use in source and binary forms, with or without
++modification, are permitted provided that the following conditions are met:
++
++1. Redistributions of source code must retain the above copyright notice, this
++   list of conditions and the following disclaimer.
++
++2. Redistributions in binary form must reproduce the above copyright notice,
++   this list of conditions and the following disclaimer in the documentation
++   and/or other materials provided with the distribution.
++
++3. Neither the name of the copyright holder nor the names of its
++   contributors may be used to endorse or promote products derived from
++   this software without specific prior written permission.
++*/
++
++using Imcodec.IO;
++
++namespace Imcodec.Test.IOTest;
++
++public class BitStringTest {
++
++    public static TheoryData<string> Strings => new() {
++        string.Empty,
++        "a",
++        "Wizard City",
++        new string('x', 127),
++        new string('y', 128),
++        new string('z', 1000),
++    };
++
++    private static BitWriter Writer(bool compact) {
++        var writer = new BitWriter();
++        if (compact) {
++            writer.WithCompactLengths();
++        }
++
++        return writer;
++    }
++
++    private static BitReader Reader(byte[] data, bool compact) {
++        var reader = new BitReader(data);
++        if (compact) {
++            reader.WithCompactLengths();
++        }
++
++        return reader;
++    }
++
++    [Theory]
++    [MemberData(nameof(Strings))]
++    public void WriteString_Compact_RoundTrips(string value) {
++        // Arrange. A trailing dword proves the reader ends where the writer did.
++        var writer = Writer(compact: true);
++
++        // Act
++        writer.WriteString(value);
++        writer.WriteUInt32(0xDEADBEEF);
++        var reader = Reader(writer.GetData(), compact: true);
++
++        // Assert
++        Assert.Equal(value, (string) reader.ReadString());
++        Assert.Equal(0xDEADBEEF, reader.ReadUInt32());
++    }
++
++    [Theory]
++    [MemberData(nameof(Strings))]
++    public void WriteString_Verbose_RoundTrips(string value) {
++        // Arrange
++        var writer = Writer(compact: false);
++
++        // Act
++        writer.WriteString(value);
++        writer.WriteUInt32(0xDEADBEEF);
++        var reader = Reader(writer.GetData(), compact: false);
++
++        // Assert
++        Assert.Equal(value, (string) reader.ReadString());
++        Assert.Equal(0xDEADBEEF, reader.ReadUInt32());
++    }
++
++    [Theory]
++    [MemberData(nameof(Strings))]
++    [InlineData("Ünïcødé ☃")]
++    public void WriteWString_Compact_RoundTrips(string value) {
++        // Arrange
++        var writer = Writer(compact: true);
++
++        // Act
++        writer.WriteWString(value);
++        writer.WriteUInt32(0xDEADBEEF);
++        var reader = Reader(writer.GetData(), compact: true);
++
++        // Assert
++        Assert.Equal(value, reader.ReadWString());
++        Assert.Equal(0xDEADBEEF, reader.ReadUInt32());
++    }
++
++    [Theory]
++    [MemberData(nameof(Strings))]
++    [InlineData("Ünïcødé ☃")]
++    public void WriteWString_Verbose_RoundTrips(string value) {
++        // Arrange
++        var writer = Writer(compact: false);
++
++        // Act
++        writer.WriteWString(value);
++        writer.WriteUInt32(0xDEADBEEF);
++        var reader = Reader(writer.GetData(), compact: false);
++
++        // Assert
++        Assert.Equal(value, reader.ReadWString());
++        Assert.Equal(0xDEADBEEF, reader.ReadUInt32());
++    }
++
++    [Fact]
++    public void WriteString_Compact_SmallPrefixIsOneByte() {
++        // Arrange. Flag bit clear, then the length in 7 bits, LSB first.
++        var writer = Writer(compact: true);
++
++        // Act
++        writer.WriteString("abc");
++        var data = writer.GetData();
++
++        // Assert
++        Assert.Equal(new byte[] { 3 << 1, (byte) 'a', (byte) 'b', (byte) 'c' }, data);
++    }
++
++    [Fact]
++    public void WriteString_Compact_LargePrefixIsTwoBytes() {
++        // Arrange. Flag bit set, then the length in 15 bits, LSB first.
++        var writer = Writer(compact: true);
++
++        // Act
++        writer.WriteString(new string('q', 300));
++        var data = writer.GetData();
++
++        // Assert
++        Assert.Equal(302, data.Length);
++        Assert.Equal((300 << 1) | 1, data[0] | (data[1] << 8));
++    }
++
++    [Fact]
++    public void WriteString_Compact_EmptyStillByteAligns() {
++        // Arrange. BitReader.ReadString always byte-aligns after the length,
++        // even for an empty string, so the bit after it starts a new byte.
++        var writer = Writer(compact: true);
++
++        // Act
++        writer.WriteBit(true);
++        writer.WriteString(string.Empty);
++        writer.WriteBit(true);
++        var data = writer.GetData();
++        var reader = Reader(data, compact: true);
++
++        // Assert
++        Assert.Equal(new byte[] { 0x01, 0x00, 0x01 }, data);
++        Assert.True(reader.ReadBit());
++        Assert.Equal(string.Empty, (string) reader.ReadString());
++        Assert.True(reader.ReadBit());
++    }
++
++    [Fact]
++    public void WriteWString_Compact_EmptyDoesNotByteAlign() {
++        // Arrange. BitReader.ReadWString returns on an empty string without
++        // byte-aligning, so the next bit shares the length's last byte.
++        var writer = Writer(compact: true);
++
++        // Act
++        writer.WriteBit(true);
++        writer.WriteWString(string.Empty);
++        writer.WriteBit(true);
++        var data = writer.GetData();
++        var reader = Reader(data, compact: true);
++
++        // Assert
++        Assert.Equal(new byte[] { 0x01, 0x02 }, data);
++        Assert.True(reader.ReadBit());
++        Assert.Equal(string.Empty, reader.ReadWString());
++        Assert.True(reader.ReadBit());
++    }
++
++    [Fact]
++    public void WriteString_Compact_AfterBits_RoundTrips() {
++        // Arrange. Mirrors a bit-packed property followed by a string.
++        var writer = Writer(compact: true);
++
++        // Act
++        writer.WriteBits((byte) 0x5, 3);
++        writer.WriteString("Ravenwood");
++        writer.WriteWString("Unicorn Way");
++        var reader = Reader(writer.GetData(), compact: true);
++
++        // Assert
++        Assert.Equal((byte) 0x5, reader.ReadBits<byte>(3));
++        Assert.Equal("Ravenwood", (string) reader.ReadString());
++        Assert.Equal("Unicorn Way", reader.ReadWString());
++    }
++
++}
+-- 
+2.43.0
+
