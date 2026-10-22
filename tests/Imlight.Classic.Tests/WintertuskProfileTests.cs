@@ -199,7 +199,9 @@ public sealed class WintertuskProfileTests {
         var insaneBolt = book.Records.Single(r => r.Id == "spell.storm.insane_bolt");
         Assert.True(may.AppliesHere(insaneBolt));
         Assert.False(celestia.AppliesHere(insaneBolt));
-        Assert.Equal(["spell.storm.insane_bolt"], book.Records.Where(r => r.Scoped).Select(r => r.Id));
+        // CLASSIC: experiment records (School Mastery's bolts, scoped to the debug profile mastery-demo) are no historical card.
+        string[] historical = ["late-2009", "arc1-2009h1", "october-2010-arc1", "celestia-2010", "wintertusk-2011"];
+        Assert.Equal(["spell.storm.insane_bolt"], book.Records.Where(r => r.Scoped && historical.Any(r.IsInProfile)).Select(r => r.Id));
         // Stun Block is no exception any more (owner delegated 2026-10-16: no 2011 spell changes).
         foreach (var record in book.Records.Where(r => r.Id != "spell.storm.insane_bolt")) {
             Assert.Equal(record.IsInProfile(Celestia), record.IsInProfile(Wintertusk));
