@@ -32,8 +32,12 @@
  * The seven mechanics (design: ~/w101c-private/build/playbot-reports/design-mastery.md), PvE only:
  *   - Fire, Kindling: a Fire burn lands on an enemy that now carries two or more
  *     Fire burns: a free Detonate ("Pet - Detonate") sets the newest off at once.
- *   - Ice, Permafrost: an enemy's spell uses up a shield on an Ice wizard who
- *     loses health and stays standing: a free Ice Armor (absorb 125). Once a round.
+ *   - Ice, Frost Retort (Round 3, the owner's "damage reflection"): when an enemy's
+ *     spell hits an Ice wizard, half of what the wizard's shields and armour
+ *     stopped lashes back at that enemy (at most a quarter of the Ice wizard's
+ *     health), shown as a free Ice attack card landing that number (the classic
+ *     Frost Beetle .. Colossus values, the server naming the value). Once a
+ *     round; never on a tick; a retort is never reflected.
  *   - Storm, Overkill (Round 3, the owner's idea): a Storm wizard's Storm spell
  *     defeats enemies with damage to spare: the damage past their remaining
  *     health is split equally among every other living enemy, shown as a free
@@ -100,10 +104,13 @@ internal static class MasteryRules {
     internal const string KindlingSpell = "Pet - Detonate";
 
     /// <summary>Tower Shield, the Ice professor's shield (Lydia Greyrose, level 16).</summary>
-    internal const int PermafrostLevel = 16;
+    internal const int RetortLevel = 16;
 
-    /// <summary>The client's free Ice Armor: absorb 125 on the caster.</summary>
-    internal const string PermafrostSpell = "PetPower-Combat-IceArmor-01";
+    /// <summary>The share of the stopped damage that lashes back, and the cap as a share of the Ice wizard's health.</summary>
+    internal const float RetortShare = 0.5f, RetortCapShare = 0.25f;
+
+    /// <summary>The classic Ice attack cards whose damage values show the retort (each a list of fixed values).</summary>
+    internal static readonly string[] RetortCards = ["Frost Beetle", "Snow Serpent", "Evil Snowman", "Ice Wyvern", "Colossus"];
 
     /// <summary>Storm Shark (Halston Balestrom, level 10).</summary>
     internal const int OverkillLevel = 10;
@@ -165,7 +172,8 @@ internal sealed class MasteryDirector {
     internal static Func<string, (Spell Spell, SpellTemplate Template)?>? ResolveSpellForTests;
 
     private readonly CombatDuelComponent _duel;
-    private readonly HashSet<CombatDuelSubCircle> _permafrostThisRound = [];
+    private readonly HashSet<CombatDuelSubCircle> _retortThisRound = [];
+    private readonly Dictionary<CombatDuelSubCircle, int> _prevented = [];
     private readonly HashSet<CombatDuelSubCircle> _overgrowthThisRound = [];
     private readonly HashSet<CombatDuelSubCircle> _hungryThisRound = [];
     private readonly Dictionary<CombatDuelSubCircle, HashSet<string>> _schoolsThisFight = [];
@@ -185,7 +193,7 @@ internal sealed class MasteryDirector {
 
     /// <summary>A new round: the once-a-round mechanics may fire again.</summary>
     internal void NewRound(int round) {
-        _permafrostThisRound.Clear();
+        _retortThisRound.Clear();
         _overgrowthThisRound.Clear();
         _hungryThisRound.Clear();
     }
@@ -194,6 +202,7 @@ internal sealed class MasteryDirector {
     internal void BeforeAction(QueuedCombatAction action) {
         _before.Clear();
         _overkill.Clear();
+        _prevented.Clear();
         _landedSchools.Clear();
         foreach (var circle in _duel.SubCircles.Where(c => c is { Occupied: true, AddedToDuel: true, ParticipantGameStats: not null })) {
             _before[circle] = new Snapshot(circle.ParticipantGameStats.m_currentHitpoints, Shields(circle), Blades(circle), Traps(circle));
@@ -203,6 +212,10 @@ internal sealed class MasteryDirector {
     /// <summary>Damage past <paramref name="target"/>'s remaining health in the spell now resolving (CombatEffectApplicator).</summary>
     internal void RecordOverkill(CombatDuelSubCircle target, int overkill)
         => _overkill[target] = _overkill.GetValueOrDefault(target) + Math.Max(overkill, 0);
+
+    /// <summary>Damage <paramref name="target"/>'s shields and armour stopped in the spell now resolving (not a tick).</summary>
+    internal void RecordPrevented(CombatDuelSubCircle target, int prevented)
+        => _prevented[target] = _prevented.GetValueOrDefault(target) + Math.Max(prevented, 0);
 
     /// <summary>The school a landed effect of the spell now resolving names ("All" and none are not schools).</summary>
     internal void RecordEffect(SpellEffect effect) {
@@ -230,7 +243,10 @@ internal sealed class MasteryDirector {
             procs.AddRange(Taming(action));
         }
 
-        procs.AddRange(Permafrost(action));
+        if (action.Cheat?.IsMastery != true) {
+            procs.AddRange(FrostRetort(action));
+        }
+
         return procs;
     }
 
@@ -268,22 +284,52 @@ internal sealed class MasteryDirector {
         => effect.m_effectType == kSpellEffects.kDamageOverTime
             && string.Equals(effect.m_sDamageType, "Fire", StringComparison.OrdinalIgnoreCase);
 
-    // ------------------------------------------------------------ Ice: Permafrost
+    // ------------------------------------------------------------ Ice: Frost Retort
 
-    private IEnumerable<QueuedCombatAction> Permafrost(QueuedCombatAction action) {
-        var caster = action.SpellCaster;
-        foreach (var (wizard, before) in _before) {
-            if (!wizard.IsWizard || !wizard.IsAlive || wizard.OccupiedTeam == caster.ActingTeam || _permafrostThisRound.Contains(wizard)
-                || !Masters(wizard, MagicSchool.Ice, MasteryRules.PermafrostLevel)
-                || wizard.ParticipantGameStats.m_currentHitpoints >= before.Health || Shields(wizard) >= before.Shields) {
+    private IEnumerable<QueuedCombatAction> FrostRetort(QueuedCombatAction action) {
+        var attacker = action.SpellCaster;
+        foreach (var (ice, stopped) in _prevented.ToList()) {
+            if (stopped <= 0 || !ice.IsWizard || !ice.IsAlive || _retortThisRound.Contains(ice)
+                || ice.OccupiedTeam == attacker.ActingTeam || ice.OccupiedTeam == attacker.OccupiedTeam
+                || !attacker.IsAlive || !attacker.Occupied || !Masters(ice, MagicSchool.Ice, MasteryRules.RetortLevel)) {
                 continue;
             }
 
-            if (Proc(wizard, wizard, MasteryRules.PermafrostSpell) is { } armor) {
-                _permafrostThisRound.Add(wizard);
-                yield return armor;
+            var amount = Math.Min((int) Math.Floor(stopped * MasteryRules.RetortShare),
+                (int) Math.Floor(ice.ParticipantGameStats.m_baseHitpoints * MasteryRules.RetortCapShare));
+            if (RetortCardFor(amount, ice) is not { } pick || Proc(ice, attacker, pick.Card) is not { } retort) {
+                continue;
+            }
+
+            retort.ForcedRandomIndex = pick.Index;
+            _retortThisRound.Add(ice);
+            yield return retort;
+        }
+    }
+
+    /// <summary>
+    /// The classic Ice attack card and value that best show <paramref name="amount"/>: the largest listed value at or under it
+    /// once the wizard's own Ice damage bonus (applied again by the cast) is taken out; null under the smallest value.
+    /// </summary>
+    internal static (string Card, int Index, int Value)? RetortCardFor(int amount, CombatDuelSubCircle ice) {
+        var boost = Math.Max(1 + CombatEffectApplicator.GetPercentDamageIncrease(ice, "Ice"), 1f);
+        var budget = amount / boost;
+        (string Card, int Index, int Value)? best = null;
+        foreach (var card in MasteryRules.RetortCards) {
+            if (Resolve(card) is not { } resolved
+                || resolved.Template.m_effects?.OfType<RandomSpellEffect>().FirstOrDefault() is not { m_effectList: { } values }) {
+                continue;
+            }
+
+            for (var i = 0; i < values.Count; i++) {
+                var value = values[i]?.m_effectType == kSpellEffects.kDamage ? values[i].m_effectParam : 0;
+                if (value > 0 && value <= budget && (best is null || value > best.Value.Value)) {
+                    best = (card, i, value);
+                }
             }
         }
+
+        return best;
     }
 
     // ------------------------------------------------------------ Storm: Overkill

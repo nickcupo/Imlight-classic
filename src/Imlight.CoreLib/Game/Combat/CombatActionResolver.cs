@@ -145,7 +145,8 @@ internal static class CombatActionResolver {
             // If that's the case, we need to choose an effect and push the index of the chosen effect
             // to the effect stack.
             chosenEffect = spellEffect switch {
-                RandomSpellEffect randomSpellEffect => ChooseRandomEffect(randomSpellEffect, effectStack, action.SpellCaster._duelActor.Rng),
+                RandomSpellEffect randomSpellEffect => ChooseRandomEffect(randomSpellEffect, effectStack, action.SpellCaster._duelActor.Rng,
+                    action.ForcedRandomIndex), // CLASSIC: a School Mastery proc may name its value
                 VariableSpellEffect variableSpellEffect => ChooseVariableEffect(variableSpellEffect, combatAction.m_xPipCost, effectStack),
                 EffectListSpellEffect effectListSpellEffect => ChooseFromEffectList(effectListSpellEffect, combatAction.m_xPipCost, effectStack),
                 _ => spellEffect,
@@ -288,9 +289,9 @@ internal static class CombatActionResolver {
     private static bool IsClassicHealEffect(kSpellEffects type)
         => type is kSpellEffects.kHeal or kSpellEffects.kHealPercent or kSpellEffects.kHealOverTime;
 
-    private static SpellEffect ChooseRandomEffect(RandomSpellEffect randomSpellEffect, CombatEffectStack effectStack, Random rng) {
+    private static SpellEffect ChooseRandomEffect(RandomSpellEffect randomSpellEffect, CombatEffectStack effectStack, Random rng, int? forced = null) {
         var count = randomSpellEffect.m_effectList.Count;
-        var randomEffectIndex = rng.Next(0, count);
+        var randomEffectIndex = forced is int index ? Math.Clamp(index, 0, count - 1) : rng.Next(0, count);
         var chosenEffect = randomSpellEffect.m_effectList[randomEffectIndex];
 
         effectStack.PushRandomEffectChoice(randomEffectIndex);

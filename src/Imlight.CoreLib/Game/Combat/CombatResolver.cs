@@ -79,6 +79,8 @@ public class QueuedCombatAction {
     internal BossCheatCast Cheat;
     // CLASSIC: a School Mastery proc of an X-pip card names its tier (Storm's overkill Tempest); null: the caster's pips.
     internal int? ForcedXPips;
+    // CLASSIC: a School Mastery proc of a random-damage card names the value it lands (Ice's Frost Retort); null: a roll.
+    internal int? ForcedRandomIndex;
     
 }
 
