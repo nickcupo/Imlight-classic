@@ -33,6 +33,7 @@
  */
 
 using System;
+using System.Linq;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using Akka.Actor;
@@ -148,6 +149,54 @@ public sealed class CombatRejoinTests {
         Seat(duel, 4, player: true, charId: 1);
 
         Assert.False(TakeResume(duel));
+    }
+
+    // ios-qa bug 9 (2026-10-21): a wizard back for a held seat moved inside the circle before their client was zoned; the
+    // join compared object instances, so the rebuilt object took a second circle (a nameless slot 5 that passed forever).
+
+    [Fact]
+    public void ARebuiltWizardObjectIsStillSeatedByItsGlobalId() {
+        var duel = CombatRegressionTests.MakeDuel();
+        var seat = Seat(duel, 4, player: true, charId: 77);
+        seat.ParticipantObject.m_globalID = 0x4A00000000000077UL;
+        seat.HoldSeat(DateTime.UtcNow);
+
+        var rebuilt = new CoreObject { m_templateID = 1, m_globalID = 0x4A00000000000077UL }; // a new login's object
+        Assert.True(duel.IsSeated(rebuilt));
+        Assert.True(duel.IsSeated(rebuilt, ActorRefs.NoSender ?? ActorRefs.Nobody));
+        Assert.False(duel.IsSeated(new CoreObject { m_templateID = 1, m_globalID = 0x4A00000000000078UL }));
+        Assert.False(duel.IsSeated(new CoreObject { m_templateID = 1 })); // no id: only the same instance counts
+        Assert.True(duel.IsSeated(seat.ParticipantObject));
+    }
+
+    [Fact]
+    public void AReturningWizardDoesNotTakeASecondCircle() {
+        var duel = CombatRegressionTests.MakeDuel();
+        Seat(duel, 0, player: false, charId: 0);
+        var seat = Seat(duel, 4, player: true, charId: 77);
+        seat.ParticipantObject.m_globalID = 0x4A00000000000077UL;
+        seat.HoldSeat(DateTime.UtcNow);
+        var occupied = duel.SubCircles.Count(circle => circle.Occupied);
+
+        var rebuilt = new CoreObject { m_templateID = 1, m_globalID = 0x4A00000000000077UL };
+        CombatRegressionTests.Invoke(duel, "AddParticipant", rebuilt, ActorRefs.Nobody);
+
+        Assert.Equal(occupied, duel.SubCircles.Count(circle => circle.Occupied));
+        Assert.Same(seat, Assert.Single(duel.SubCircles, circle => circle.IsWizard));
+    }
+
+    [Fact]
+    public void EverySeatingCheckGoesThroughIsSeated() {
+        var dir = new System.IO.DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null && !System.IO.Directory.Exists(System.IO.Path.Combine(dir.FullName, "src", "Imlight.CoreLib"))) {
+            dir = dir.Parent;
+        }
+
+        var components = System.IO.Path.Combine(dir!.FullName, "src", "Imlight.CoreLib", "Game", "Zone", "Components");
+        var all = string.Join("\n", System.IO.Directory.GetFiles(components, "CombatDuelComponent*.cs").Select(System.IO.File.ReadAllText));
+        Assert.DoesNotContain("x.ParticipantObject == participantObject", all);
+        Assert.DoesNotContain("c.ParticipantActor == actor || ReferenceEquals(c.ParticipantObject, participant)", all);
+        Assert.Contains("if (HoldsSeatFor(playerWizard)) {", all); // OnPlayerMove: a held seat is rejoined, not re-entered
     }
 
     private static bool TakeResume(CombatDuelComponent duel)

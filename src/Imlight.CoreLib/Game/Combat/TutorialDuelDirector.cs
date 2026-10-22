@@ -103,6 +103,7 @@ internal sealed class TutorialDuelDirector {
         // Execute the round's quest-goal grants (rounds 2-6; round 1 is client-driven) so the golems' hands
         // and the player's cards/pips are set before planning begins.
         _roundGranted.Clear();
+        ClearGolemHandsForScriptedRound(roundNum);
         GrantRoundGrants(roundNum);
 
         // Pre-queue the golems' scripted attacks; they never pick moves on their own and without this the
@@ -188,6 +189,34 @@ internal sealed class TutorialDuelDirector {
         caster.SetPips(message.Count);
         _duel.SendCombatPips();
     }
+
+    /// <summary>
+    /// CLASSIC (2026-10-22): a scripted round starts with empty golem hands, as TutorialCombat.lua's "Clear hand mob 0/1"
+    /// intend. The client asks for the next round's golem cards only once its dialog lets it (a fast player has queued
+    /// the next round by then), so its request landed after this round's script had taken a card: the late card stayed,
+    /// sat before the round table's, and the golems replayed the round before (rig playbot-ios 2026-10-22: the second
+    /// Weakness in round 5, so Meteor Strike did 296 instead of 493 and left a golem alive).
+    /// </summary>
+    private void ClearGolemHandsForScriptedRound(int roundNum) {
+        if (!s_roundGoals.ContainsKey(roundNum)) {
+            return; // round 1 is the client's own grant
+        }
+
+        foreach (var golem in _duel.SubCircles.Where(s => s is not null && s.OccupiedTeam == CombatTeam.Monster)) {
+            golem.ClearHand();
+        }
+    }
+
+    /// <summary>The scripted rounds (the round table's keys).</summary>
+    internal static IReadOnlyCollection<int> ScriptedRounds => s_roundGoals.Keys;
+
+    /// <summary>
+    /// CLASSIC (2026-10-22): the tutorial duel cannot be lost; the player keeps at least 1 health. Unverified (no dated
+    /// source; TutorialCombat.lua's own health top-up is commented out). The script's damage assumes the player lives,
+    /// and a defeat sent a new wizard to the Commons with the tutorial quests held.
+    /// </summary>
+    internal static int PlayerHealthAfterDamage(int newHealth, bool tutorialDuel)
+        => tutorialDuel ? Math.Max(newHealth, 1) : newHealth;
 
     private void GrantRoundGrants(int roundNum) {
         if (!s_roundGoals.TryGetValue(roundNum, out var goalNames)) {

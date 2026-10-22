@@ -37,18 +37,21 @@
  *   - Storm, Chain Lightning: a Storm wizard's single-target Storm spell defeats
  *     its target: the same spell leaps, free, to the enemy with the most health.
  *     A leap can leap again, at most twice a round.
- *   - Myth, Evolution: an owned minion that has acted twice grows into the next
- *     monster (Golem -> Troll -> Cyclops -> Minotaur): a free Draw Power
- *     sacrifices it (+2 pips) and the next minion card is cast free. Needs the
- *     owner's level for that card and a free seat.
+ *   - Myth, Taming (Round 3, tied to Monstrology): a Myth spell leaves a creature
+ *     the wizard has studied (Animus for it in their Monstrology ledger) at a
+ *     quarter of its health or less: the client's own Monster Magic Defeat card
+ *     for that creature takes it (free) and its Monster Magic Summon card raises
+ *     it on the wizard's side (free). Once a fight; never a boss; needs no minion
+ *     and a free seat. Extraction and the tome work as before for every school.
  *   - Life, Overgrowth: a Life heal that tops a friend up with 150 or more to
  *     spare grows the spare into a free Spirit Armor (absorb 400). Once a round.
  *   - Death, Puppeteer: a Death drain leaves a creature at half health or below:
  *     a free Beguile takes its next action for the wizard's side. Once a round,
  *     once per creature in a fight.
- *   - Balance, Equilibrium: a Balance attack that uses up both a blade on the
- *     wizard and a trap on the enemy tips the scales: a free Hydra (Fire, Ice and
- *     Storm, 190 each). Once a round.
+ *   - Balance, Equilibrium (Round 3 re-tune): a Balance attack that uses up both
+ *     a blade on the wizard and a trap on the enemy gives the setup back to the
+ *     team: a free Bladestorm (+20% to every friend, the wizard included). Once a
+ *     round. (Round 2 fired a free Hydra; too strong with charm stacking.)
  * Only wizards of the school, from the level of the keystone spell their
  * professor teaches (Fire Elf 5, Tower Shield 16, Storm Shark 10, Troll Minion 7,
  * Spirit Armor 16, Ghoul 5, Balanceblade 12).
@@ -70,6 +73,7 @@ using System.Linq;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Classic;
 using Imlight.Common;
+using Imlight.CoreLib.Game.Monstrology;
 using Imlight.CoreLib.Game.Spells;
 using Imlight.CoreLib.Game.Zone.Components;
 using Imlight.CoreLib.Shared.Behaviors;
@@ -104,26 +108,16 @@ internal static class MasteryRules {
     /// <summary>Leaps a Storm wizard's spells may make in one round.</summary>
     internal const int ChainLeapsPerRound = 2;
 
-    /// <summary>Troll Minion (level 7): the first evolution, Golem to Troll.</summary>
-    internal const int EvolutionLevel = 7;
+    /// <summary>Troll Minion (level 7): Myth's first minion card, and Taming's level.</summary>
+    internal const int TamingLevel = 7;
 
-    /// <summary>A minion evolves after this many actions of its own.</summary>
-    internal const int EvolutionActions = 2;
+    /// <summary>A studied creature at or below this share of its health can be tamed.</summary>
+    internal const float TamingShare = 0.25f;
 
-    /// <summary>The creatures the classic Myth minion cards summon, by tier (Golem 0, Troll 1, Cyclops 2, Minotaur 3).</summary>
-    internal static readonly IReadOnlyDictionary<ulong, int> MinionTier = new Dictionary<ulong, int> {
-        [35972] = 0, [35680] = 1, [36059] = 1, [36060] = 1, [35681] = 2, [36061] = 2, [36062] = 2, [36063] = 2, [35682] = 3,
-    };
+    /// <summary>The client's Monstrology cards for a creature template: Monster Magic Defeat and Monster Magic Summon.</summary>
+    internal static string DefeatCard(ulong creature) => $"Kill{creature}";
 
-    /// <summary>The next tier's card and the level its trainer teaches it at (Troll 7, Cyclops 18, Minotaur 38).</summary>
-    internal static readonly (string Card, int Level)[] NextMinion = [("Minion Myth 001", 7), ("Minion Myth 002", 18), ("Minion Myth 003", 38)];
-
-    /// <summary>The classic Myth minion cards: Golem, Troll, Cyclops, Minotaur.</summary>
-    internal const string GolemMinion = "Minion Myth 000", TrollMinion = "Minion Myth 001",
-        CyclopsMinion = "Minion Myth 002", MinotaurMinion = "Minion Myth 003";
-
-    /// <summary>The client's Draw Power: sacrifices the caster's minion and gives 2 pips.</summary>
-    internal const string EvolutionSacrifice = "PetPower-Combat-DrawPower-01";
+    internal static string SummonCard(ulong creature) => $"Summon{creature}";
 
     /// <summary>Spirit Armor (Life, level 16): Overgrowth's shield, and its level.</summary>
     internal const int OvergrowthLevel = 16;
@@ -146,8 +140,8 @@ internal static class MasteryRules {
     /// <summary>Balanceblade (level 12).</summary>
     internal const int EquilibriumLevel = 12;
 
-    /// <summary>The client's free Hydra: 190 Fire, 190 Ice and 190 Storm at one enemy.</summary>
-    internal const string EquilibriumSpell = "PetPower-Combat-Hydra-01";
+    /// <summary>The client's Bladestorm: +20% to every friend.</summary>
+    internal const string EquilibriumSpell = "Bladestorm";
 
 }
 
@@ -165,7 +159,8 @@ internal sealed class MasteryDirector {
     private readonly HashSet<CombatDuelSubCircle> _puppeteerThisRound = [];
     private readonly HashSet<CombatDuelSubCircle> _equilibriumThisRound = [];
     private readonly Dictionary<CombatDuelSubCircle, int> _leapsThisRound = [];
-    private readonly Dictionary<object, int> _minionActions = new(ReferenceEqualityComparer.Instance);
+    private readonly HashSet<CombatDuelSubCircle> _tamedThisFight = [];
+    private readonly Dictionary<ulong, MonstrologyLedger?> _ledgers = [];
     private readonly HashSet<object> _beguiledByMastery = new(ReferenceEqualityComparer.Instance);
     private readonly Dictionary<CombatDuelSubCircle, Snapshot> _before = [];
 
@@ -208,7 +203,7 @@ internal sealed class MasteryDirector {
             Add(procs, Overgrowth(action));
             Add(procs, Puppeteer(action));
             Add(procs, Equilibrium(action));
-            procs.AddRange(Evolution(action));
+            procs.AddRange(Taming(action));
         }
 
         if (ownCast || action.Cheat?.IsMastery == true) {
@@ -302,29 +297,75 @@ internal sealed class MasteryDirector {
             && !effects.Any(e => e.m_effectTarget is kEffectTarget.kEnemyTeam or kEffectTarget.kEnemyTeamAllAtOnce);
     }
 
-    // ------------------------------------------------------------ Myth: Evolution
+    // ------------------------------------------------------------ Myth: Taming (Monstrology)
 
-    private IEnumerable<QueuedCombatAction> Evolution(QueuedCombatAction action) {
-        var minion = action.SpellCaster;
-        if (!minion.IsSummonedMinion || !minion.IsAlive || minion.ParticipantObject is not { } creature
-            || !MasteryRules.MinionTier.TryGetValue(creature.m_templateID.Full, out var tier)) {
+    /// <summary>Test hook: what Monstrology says about a creature template (its collected id and whether it is a boss).</summary>
+    internal static Func<ulong, (uint Collected, bool Boss)?>? CreatureForTests;
+
+    /// <summary>Test hook: whether a wizard (by circle) has studied a collected creature.</summary>
+    internal static Func<CombatDuelSubCircle, uint, bool>? StudiedForTests;
+
+    private IEnumerable<QueuedCombatAction> Taming(QueuedCombatAction action) {
+        var caster = action.SpellCaster;
+        var target = action.SelectedTarget;
+        if (!Masters(caster, MagicSchool.Myth, MasteryRules.TamingLevel) || !IsSchool(action, MagicSchool.Myth)
+            || !Deals(action, kSpellEffects.kDamage, kSpellEffects.kDamageOverTime, kSpellEffects.kStealHealth)
+            || target is not { IsAlive: true, IsWizard: false, IsSummonedMinion: false, ParticipantObject: { } creature }
+            || !IsEnemyOf(target, caster) || _tamedThisFight.Contains(caster) || !caster.IsAlive
+            || target.ParticipantGameStats.m_currentHitpoints > target.ParticipantGameStats.m_baseHitpoints * MasteryRules.TamingShare
+            || _duel.SubCircles.Any(c => c.IsOwnedMinionOf(caster)) || !_duel.HasFreeSummonSeat(caster)
+            || Creature(creature.m_templateID.Full) is not { Boss: false } facts || !Studied(caster, facts.Collected)) {
             yield break;
         }
 
-        var owner = _duel.SubCircles.FirstOrDefault(c => c.IsWizard && minion.IsOwnedMinionOf(c));
-        var acted = _minionActions[creature] = _minionActions.GetValueOrDefault(creature) + 1;
-        if (owner is null || tier >= MasteryRules.NextMinion.Length || acted < MasteryRules.EvolutionActions
-            || !Masters(owner, MagicSchool.Myth, MasteryRules.NextMinion[tier].Level) || !_duel.HasFreeSummonSeat(owner)) {
+        var tid = creature.m_templateID.Full;
+        if (Proc(caster, target, MasteryRules.DefeatCard(tid)) is not { } defeat
+            || Proc(caster, caster, MasteryRules.SummonCard(tid)) is not { } summon) {
             yield break;
         }
 
-        if (Proc(owner, minion, MasteryRules.EvolutionSacrifice) is not { } sacrifice
-            || Proc(owner, owner, MasteryRules.NextMinion[tier].Card) is not { } summon) {
-            yield break;
-        }
-
-        yield return sacrifice;
+        _tamedThisFight.Add(caster);
+        yield return defeat;
         yield return summon;
+    }
+
+    private static (uint Collected, bool Boss)? Creature(ulong template) {
+        if (CreatureForTests is { } hook) {
+            return hook(template);
+        }
+
+        if (CoreObjectFactory.GetCoreTemplate(template) is not GameObjectTemplate creature
+            || creature.m_behaviors?.OfType<MobMonsterMagicBehaviorTemplate>().FirstOrDefault() is not { } metadata) {
+            return null;   // not a Monstrology creature
+        }
+
+        var boss = metadata.m_isBoss || creature.m_behaviors.OfType<NPCBehaviorTemplate>().FirstOrDefault()?.m_bossMob == true;
+        return (metadata.m_collectedAsTemplateID != 0 ? metadata.m_collectedAsTemplateID : (uint) template, boss);
+    }
+
+    // Studied: the wizard's Monstrology ledger holds Animus for the creature (a successful extraction). Read once a fight.
+    private bool Studied(CombatDuelSubCircle wizard, uint collected) {
+        if (StudiedForTests is { } hook) {
+            return hook(wizard, collected);
+        }
+
+        if (wizard._wizard is not { } owner || !MonstrologyService.Enabled
+            || !MonstrologySessionPolicy.AllowsWizard(owner, MonstrologyService.Enabled)) {
+            return false;
+        }
+
+        if (!_ledgers.TryGetValue(owner.CharId, out var ledger)) {
+            try {
+                ledger = MonstrologyRepository.ForPlayers().Read(owner.CharId);
+            } catch (Exception ex) {
+                Logger.Warning("School Mastery: Monstrology ledger of {0} unreadable ({1}); no Taming.", Logger.Args(owner.CharId.ToString(), ex.Message));
+                ledger = null;
+            }
+
+            _ledgers[owner.CharId] = ledger;
+        }
+
+        return ledger?.Animus.TryGetValue(collected, out var animus) == true && animus > 0;
     }
 
     // ------------------------------------------------------------ Life: Overgrowth
