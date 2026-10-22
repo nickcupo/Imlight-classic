@@ -278,6 +278,41 @@ public sealed class SpellMechanicsTests {
         Assert.Equal(80, roll.m_effectList[0].m_effectParam);
     }
 
+    // CLASSIC: School Mastery's Static Discharge bolts (scoped records): a scoped record may list outcomes the native roll does
+    // not have and change its target; the card overlay ships the rebuilt template. An unscoped record still may not.
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void OnlyAScopedRecordMayAddOutcomesAndChangeTheTargetOfANativeRoll(bool scoped) {
+        var native = new[] { 15, 150, 150, 1150 }.Select(value => new SpellEffect {
+            m_effectType = kSpellEffects.kDamage, m_effectParam = value, m_sDamageType = "Storm", m_effectTarget = kEffectTarget.kEnemySingle,
+        }).ToList();
+        var template = new SpellTemplate {
+            m_accuracy = 70, m_spellRank = new SpellRank { m_spellRank = 2 },
+            m_effects = [new RandomSpellEffect {
+                m_effectType = kSpellEffects.kInvalidSpellEffect, m_effectParam = -1, m_effectTarget = kEffectTarget.kEnemySingle,
+                m_effectList = native,
+            }],
+        };
+        var effect = Effect(SpellEffectKind.Damage, "storm", 25, 1000, targets: SpellTargets.Self) with { Outcomes = [25, 150, 600, 1000] };
+        var record = RecordOf("storm", SpellPips.Of(0), 1.0, effect) is var r ? new ClassicSpellRecord {
+            Id = r.Id, Name = r.Name, School = r.School, Kind = r.Kind, ClientTemplate = r.ClientTemplate, Profiles = r.Profiles,
+            Values = r.Values, SourceFile = r.SourceFile, Scoped = scoped,
+        } : null!;
+        var before = SpellTemplateEditor.ShapeOf(template, "Spells/Pet - Wild Bolt.xml");
+
+        if (!scoped) {
+            Assert.Throws<System.InvalidOperationException>(() => PlanFor(record, before));
+            return;
+        }
+
+        SpellTemplateEditor.ApplyPlan(template, PlanFor(record, before));
+        var roll = Assert.IsType<RandomSpellEffect>(Assert.Single(template.m_effects));
+        Assert.Equal([25, 150, 600, 1000], roll.m_effectList.Select(child => child.m_effectParam).ToArray());
+        Assert.All(roll.m_effectList, child => Assert.Equal(kEffectTarget.kSelf, child.m_effectTarget));
+        Assert.Equal(15, native[0].m_effectParam);   // the native children were copied, not changed
+    }
+
     [Theory]
     [InlineData(0, 10)]
     [InlineData(1, 100)]
