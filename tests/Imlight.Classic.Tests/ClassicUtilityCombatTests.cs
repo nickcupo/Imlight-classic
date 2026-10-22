@@ -403,6 +403,43 @@ public sealed class ClassicUtilityCombatTests : IDisposable {
         m_effectType = kSpellEffects.kModifyIncomingDamageType, m_sDamageType = "Fire",
         m_effectParam = IceIndex, m_effectTarget = kEffectTarget.kEnemySingle, m_spellTemplateID = 1001,
     };
+    // TutorialCombat.lua's numbers (comments by round), with the client's own spell effects (m_spellTemplateID 0):
+    // round 4 golem 1 casts Tutorial Weakness (-25 All) and the player's 300 Life does "300 damage - debuff"; round 5
+    // the player casts Balanceblade (+25 All) on itself; round 6 Meteor Strike (395 Fire) "+ buff" kills both golems
+    // (480 health; golem 0 has 450 damage by then: 120, 105, 225).
+    [Fact]
+    public void TheTutorialDuelDealsTheScriptsDamage() {
+        var player = Circle();
+        Apply(new SpellEffect { m_effectType = kSpellEffects.kModifyOutgoingDamage, m_effectParam = -25, m_sDamageType = "All",
+            m_effectTarget = kEffectTarget.kEnemySingle }, player);                                    // round 4: Tutorial Weakness
+        Assert.Equal(225, Outgoing(player, "Life", 300));                                                // round 4: 300 - debuff
+        Consume(player, "Life");
+
+        Apply(new SpellEffect { m_effectType = kSpellEffects.kModifyOutgoingDamage, m_effectParam = 25, m_sDamageType = "All",
+            m_effectTarget = kEffectTarget.kFriendlySingle }, player);                                  // round 5: Balanceblade
+        var meteor = Outgoing(player, "Fire", 395);                                                      // round 6
+        Assert.Equal(493, meteor);
+        Assert.True(120 + 105 + 225 + meteor >= 480 && meteor >= 480, "Meteor Strike must finish both golems");
+    }
+
+    [Fact]
+    public void TheTutorialDuelCannotBeLost() {
+        Assert.Equal(1, TutorialDuelDirector.PlayerHealthAfterDamage(0, tutorialDuel: true));
+        Assert.Equal(30, TutorialDuelDirector.PlayerHealthAfterDamage(30, tutorialDuel: true));
+        Assert.Equal(0, TutorialDuelDirector.PlayerHealthAfterDamage(0, tutorialDuel: false)); // every other duel as before
+        Assert.Equal([2, 3, 4, 5, 6], TutorialDuelDirector.ScriptedRounds.OrderBy(r => r));      // golem hands cleared then
+    }
+
+    private static int Outgoing(CombatDuelSubCircle caster, string school, int damage) {
+        var charms = CombatCharms.FindAppliedCharms(caster, [new SpellEffect { m_effectType = kSpellEffects.kDamage, m_sDamageType = school }]);
+        return CombatCharms.GetOutgoingDamageFromCharms([.. charms], damage);
+    }
+
+    private static void Consume(CombatDuelSubCircle caster, string school) {
+        var charms = CombatCharms.FindAppliedCharms(caster, [new SpellEffect { m_effectType = kSpellEffects.kDamage, m_sDamageType = school }]);
+        caster._hangingEffects.RemoveAll(x => charms.Contains(x));
+    }
+
     private static void Apply(SpellEffect effect, CombatDuelSubCircle target)
         => CombatEffectApplicator.ApplyEffect(effect, [], target, [target]);
     private static void Damage(CombatDuelSubCircle target, string school, int amount)

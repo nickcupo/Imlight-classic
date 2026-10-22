@@ -80,15 +80,16 @@ internal sealed partial class TutorialService(SessionActor sessionActor) : Messa
 
     [MessageHandler(typeof(GAME_5_PROTOCOL.MSG_ATTACH))]
     private void ReceivePostAttach(GAME_5_PROTOCOL.MSG_ATTACH msg) {
+        if (!IsTutorialZone(msg.ZoneName.ToString())) {
+            return;
+        }
+
+        RestoreSavedStage(); // CLASSIC
         if (!_serializer.Serialize(_tutorialInfo,
                                    PropertyFlags.Prop_Transmit | PropertyFlags.Prop_AuthorityTransmit,
                                    out var tutorialInfoBuffer)) {
             Logger.Error("Failed to serialize tutorial info");
 
-            return;
-        }
-
-        if (!IsTutorialZone(msg.ZoneName.ToString())) {
             return;
         }
         var tutorialMsg = new GAME_5_PROTOCOL.MSG_TUTORIALS() {
@@ -252,12 +253,37 @@ internal sealed partial class TutorialService(SessionActor sessionActor) : Messa
         return;
     }
 
+    /// <summary>
+    /// CLASSIC (2026-10-22): a session starts at stage 0; a wizard who left mid-tutorial gets the stage the client last
+    /// reached (ClientJournal.TutorialStage), and the client's own resume logic takes it from there.
+    /// </summary>
+    private void RestoreSavedStage() {
+        if (_tutorialInfo.m_tutorialStage != 0 || GetActiveWizard() is not { } wizard) {
+            return;
+        }
+
+        // The journal is loaded at login (AttachService); a wizard without one (tests) has nothing saved.
+        if (ResumeStage(wizard.Journal?.TutorialStage) is { } stage) {
+            _tutorialInfo.m_tutorialStage = stage;
+            Logger.Information("Tutorial resumes at saved stage {0} for {1}.", Logger.Args(stage, wizard.CharId));
+        }
+    }
+
+    /// <summary>The stage to resume at: the saved one, unless none or the finished/skipped marker (99).</summary>
+    internal static int? ResumeStage(int? saved) => saved is > 0 and < 99 ? saved : null;
+
     private bool HandleCommandAction(string action, int value) {
         // Stage advances are client-driven; remember the stage so the next MSG_TUTORIALS (sent on zone attach)
         // echoes it back, otherwise the client restarts the tutorial from stage 0 after a zone reload.
         if (action == "Stage") {
             _tutorialInfo.m_tutorialStage = value;
             Logger.Information("Tutorial stage advanced to {0}", Logger.Args(value));
+            // CLASSIC (2026-10-22): kept per character, so a relog mid-tutorial resumes at this stage.
+            // Only for a wizard whose journal was loaded at login (AttachService), never from tests' bare wizards.
+            if (GetActiveWizard() is { Journal: { } stageJournal } stageWizard
+                    && Classic.ClientJournalStore.Save(stageWizard.CharId, journal => journal.TutorialStage = value)) {
+                stageJournal.TutorialStage = value;
+            }
 
             return true;
         }

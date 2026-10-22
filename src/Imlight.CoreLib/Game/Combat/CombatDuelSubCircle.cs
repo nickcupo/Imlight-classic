@@ -635,6 +635,7 @@ public partial class CombatDuelSubCircle {
             if (newHealth < 0) {
                 newHealth = 0;
             }
+            newHealth = TutorialDuelDirector.PlayerHealthAfterDamage(newHealth, _duelActor?.IsTutorialDuel == true); // CLASSIC
 
             // Update the health of the player.
             _wizard.UpdateHealth(newHealth);
