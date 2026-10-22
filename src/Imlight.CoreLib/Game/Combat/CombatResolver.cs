@@ -533,6 +533,12 @@ public class CombatResolver(Duel duel, CombatDuelSubCircle[] actorSubCircles) {
         foreach (var effect in hotEffects) {
             // Todo: are there wards that increase incoming healing?
             // We don't need to calculate stats from gear because the initial application already did that.
+            // CLASSIC: School Mastery banks a tick's healing past full health for the Life wizard who cast it (Overheal).
+            if (MasteryDirector.Active && caster.ParticipantGameStats is { } holder
+                && holder.m_currentHitpoints > 0 && (long) holder.m_currentHitpoints + effect.m_paramPerRound > holder.m_baseHitpoints) {
+                caster._duelActor?.Mastery.RecordHotOverheal(effect,
+                    (int) Math.Min((long) holder.m_currentHitpoints + effect.m_paramPerRound - holder.m_baseHitpoints, int.MaxValue));
+            }
             CombatEffectApplicator.HealParticipantBounded(caster, effect.m_paramPerRound);
             effect.m_numRounds--;
 
