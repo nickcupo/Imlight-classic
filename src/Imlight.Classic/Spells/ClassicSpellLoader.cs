@@ -112,7 +112,9 @@ public static class ClassicSpellLoader {
         "provenance", "later_changes", "modern_values", "license_tag", "notes");
     private static readonly string[] s_recordRequired = [.. s_recordKeys.Where(key => key is not ("profile_values" or "scoped"))];
     internal static readonly FrozenSet<string> s_valuesKeys = FrozenSet.Create(StringComparer.Ordinal,
-        "pips", "accuracy", "level_learned", "training_points", "trainer", "effects");
+        "pips", "accuracy", "level_learned", "training_points", "trainer", "effects", "card_text");
+    // CLASSIC: card_text is optional; it names an existing client string for the card's text (see ReadCardText).
+    private static readonly string[] s_valuesRequired = [.. s_valuesKeys.Where(key => key is not "card_text")];
     internal static readonly FrozenSet<string> s_effectKeys = FrozenSet.Create(StringComparer.Ordinal,
         "type", "school", "min", "max", "outcomes", "backfire", "percent", "rounds", "targets", "notes");
     internal static readonly FrozenSet<string> s_backfireKeys = FrozenSet.Create(StringComparer.Ordinal, "chance", "amount");
@@ -136,6 +138,7 @@ public static class ClassicSpellLoader {
 
     private static readonly Regex s_slug = new(@"^[a-z0-9]+(-[a-z0-9]+)*\z", RegexOptions.CultureInvariant);
     private static readonly Regex s_clientTemplate = new(@"^Spells/.+\.xml\z", RegexOptions.CultureInvariant);
+    private static readonly Regex s_cardText = new(@"^[A-Za-z][A-Za-z0-9-]*_[0-9]+\z", RegexOptions.CultureInvariant);
     private static readonly Regex s_laterDate = new(@"^\d{4}(-\d{2})?\z", RegexOptions.CultureInvariant);
 
     /// <summary>
@@ -307,7 +310,7 @@ public static class ClassicSpellLoader {
             return null;
         }
 
-        diagnostics.CheckKeys(map, keyPath, s_valuesKeys, s_valuesKeys);
+        diagnostics.CheckKeys(map, keyPath, s_valuesKeys, s_valuesRequired);
         var pips = map.Find("pips") is { } pipsEntry ? ReadPips(pipsEntry.Value, YamlTree.Join(keyPath, "pips"), diagnostics) : null;
         var accuracy = map.Find("accuracy") is { } accuracyEntry
             ? diagnostics.ReadFraction(accuracyEntry.Value, YamlTree.Join(keyPath, "accuracy"))
@@ -322,7 +325,9 @@ public static class ClassicSpellLoader {
             return null;
         }
 
-        return new SpellValues(pips.Value, accuracy.Value, levelLearned, trainingPoints, trainer, effects.Value);
+        return new SpellValues(pips.Value, accuracy.Value, levelLearned, trainingPoints, trainer, effects.Value) {
+            CardText = ReadCardText(map, keyPath, diagnostics),
+        };
     }
 
     private static ImmutableDictionary<string, SpellValuesOverride> ReadProfileValues(YMap map, ImmutableArray<string> profiles,
@@ -385,6 +390,7 @@ public static class ClassicSpellLoader {
             SetsTrainer = map.Find("trainer") is not null,
             Trainer = ReadTrainer(map, keyPath, diagnostics),
             Effects = effects,
+            CardText = ReadCardText(map, keyPath, diagnostics),
         };
     }
 
@@ -423,6 +429,22 @@ public static class ClassicSpellLoader {
         }
 
         return trainer;
+    }
+
+    // CLASSIC: a client text key such as Spell_00004760 or CombatMessages_00002484 (table, underscore, number).
+    private static string? ReadCardText(YMap map, string keyPath, YamlDiagnostics diagnostics) {
+        if (map.Find("card_text") is not { } entry) {
+            return null;
+        }
+
+        var path = YamlTree.Join(keyPath, "card_text");
+        var key = diagnostics.ReadString(entry.Value, path);
+        if (key is not null && !s_cardText.IsMatch(key)) {
+            diagnostics.At(entry.Value, path, $"'{key}' is not a client text key such as CombatMessages_00002484");
+            return null;
+        }
+
+        return key;
     }
 
     private static ImmutableArray<SpellEffectValues>? ReadEffects(YNode node, string keyPath, YamlDiagnostics diagnostics) {

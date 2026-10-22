@@ -144,6 +144,55 @@ public sealed class SpellLoaderTests : IDisposable {
     }
 
     [Fact]
+    public void CardTextIsOptionalAndAProfileCanNameIt() {
+        _data.WriteSpell("storm", "wild-bolt", SpellFixture.RecordYaml(school: "storm", slug: "wild-bolt", name: "Wild Bolt",
+            clientTemplate: "Spells/Wild Bolt.xml", values: """
+                values:
+                  pips: 2
+                  accuracy: 0.1
+                  level_learned: null
+                  training_points: null
+                  trainer: null
+                  effects:
+                  - {type: damage, school: storm, min: 1000, max: 1000, targets: single}
+                """, extra: """
+                profile_values:
+                  arc1-2009h1: {card_text: CombatMessages_00002484}
+                """));
+
+        var record = Assert.Single(Load().Records);
+        var late = record.ValuesFor(["late-2009"]);
+        var arc1 = record.ValuesFor(["arc1-2009h1", "late-2009"]);
+
+        Assert.Null(late.CardText);
+        Assert.Equal("CombatMessages_00002484", arc1.CardText);
+        Assert.Equal(late with { CardText = "CombatMessages_00002484" }, arc1);
+    }
+
+    [Fact]
+    public void BaseValuesMayNameCardTextAndAProfileKeepsItUnlessItNamesAnother() {
+        _data.WriteSpell("fire", "fire-cat", SpellFixture.RecordYaml().Replace("  effects:", "  card_text: Spell_00000446\n  effects:")
+            + "\nprofile_values:\n  arc1-2009h1: {pips: 3}\n");
+
+        var record = Assert.Single(Load().Records);
+
+        Assert.Equal("Spell_00000446", record.Values.CardText);
+        Assert.Equal("Spell_00000446", record.ValuesFor(["arc1-2009h1", "late-2009"]).CardText);
+    }
+
+    [Theory]
+    [InlineData("1000 Storm damage")]
+    [InlineData("CombatMessages")]
+    [InlineData("_00002484")]
+    public void CardTextMustBeAClientTextKey(string key) {
+        _data.WriteSpell("fire", "fire-cat", SpellFixture.RecordYaml() + $"\nprofile_values:\n  arc1-2009h1: {{card_text: '{key}'}}\n");
+
+        var error = SingleError("profile_values.arc1-2009h1.card_text");
+
+        Assert.Contains("is not a client text key", error.Message);
+    }
+
+    [Fact]
     public void TheNearestProfileInTheChainWins() {
         var record = SpellFixture.Record(SpellPips.Of(2), 1.0);
         var withOverrides = new ClassicSpellRecord {

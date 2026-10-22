@@ -216,9 +216,19 @@ public sealed class WintertuskProfileTests {
         var overrides = new ClassicSpellOverrides(book, profile);
         var records = book.Records.Where(r => r.Id == "spell.storm.wild_bolt").ToList();
         var record = Assert.Single(records);
-        // No profile may carry a Wild Bolt override at all: the owner's lock lives in the base values.
-        Assert.Empty(record.ProfileValues);
+        // No profile may override Wild Bolt's numbers: the owner's lock lives in the base values. The only override is
+        // October's card text (2026-10-22), which combat never reads.
+        foreach (var entry in record.ProfileValues.Values) {
+            Assert.Null(entry.Pips);
+            Assert.Null(entry.Accuracy);
+            Assert.Null(entry.Effects);
+            Assert.False(entry.SetsLevelLearned || entry.SetsTrainingPoints || entry.SetsTrainer);
+        }
+
         var values = overrides.ValuesOf(record);
+        // CLASSIC: from October 2010 on the card names the client's one-amount Storm damage string, so the flat 1000 reads
+        // "1000", not the reworked card's "1000, 1000 or 1000" (Spell_00004760).
+        Assert.Equal(profile.Lineage.Contains("october-2010-arc1") ? "CombatMessages_00002484" : null, values.CardText);
         Assert.Equal(SpellPips.Of(2), values.Pips);
         Assert.Equal(0.1, values.Accuracy);
         var effect = Assert.Single(values.Effects);

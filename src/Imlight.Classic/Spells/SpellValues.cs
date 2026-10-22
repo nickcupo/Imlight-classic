@@ -175,6 +175,12 @@ public sealed record SpellValues(SpellPips Pips, double Accuracy, int? LevelLear
     /// </summary>
     public int AccuracyPercent => (int) Math.Round(Accuracy * 100, MidpointRounding.AwayFromZero);
 
+    /// <summary>
+    /// CLASSIC: the client text key the card's description names instead of its template's own (for example
+    /// CombatMessages_00002484), or null to keep the template's. Only the card overlay reads it; combat does not.
+    /// </summary>
+    public string? CardText { get; init; }
+
 }
 
 /// <summary>
@@ -197,6 +203,11 @@ public sealed class SpellValuesOverride {
     public ImmutableArray<SpellEffectValues>? Effects { get; init; }
 
     /// <summary>
+    /// CLASSIC: the card's client text key in that profile, or null to keep the inherited one.
+    /// </summary>
+    public string? CardText { get; init; }
+
+    /// <summary>
     /// Applies the fields this entry names over <paramref name="values"/>.
     /// </summary>
     /// <param name="values">The values to override.</param>
@@ -209,6 +220,7 @@ public sealed class SpellValuesOverride {
             TrainingPoints = SetsTrainingPoints ? TrainingPoints : values.TrainingPoints,
             Trainer = SetsTrainer ? Trainer : values.Trainer,
             Effects = Effects ?? values.Effects,
+            CardText = CardText ?? values.CardText,
         };
 
 }
