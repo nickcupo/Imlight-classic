@@ -77,6 +77,8 @@ public class QueuedCombatAction {
     public SpellTemplate SpellTemplate;
     // CLASSIC: a boss cheat cast (BossCheatDirector): no card, no pips, and out of turn when Interrupt is set.
     internal BossCheatCast Cheat;
+    // CLASSIC: a School Mastery proc of an X-pip card names its tier (Storm's overkill Tempest); null: the caster's pips.
+    internal int? ForcedXPips;
     
 }
 

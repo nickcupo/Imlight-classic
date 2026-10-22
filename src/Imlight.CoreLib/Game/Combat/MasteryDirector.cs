@@ -34,9 +34,12 @@
  *     Fire burns: a free Detonate ("Pet - Detonate") sets the newest off at once.
  *   - Ice, Permafrost: an enemy's spell uses up a shield on an Ice wizard who
  *     loses health and stays standing: a free Ice Armor (absorb 125). Once a round.
- *   - Storm, Chain Lightning: a Storm wizard's single-target Storm spell defeats
- *     its target: the same spell leaps, free, to the enemy with the most health.
- *     A leap can leap again, at most twice a round.
+ *   - Storm, Overkill (Round 3, the owner's idea): a Storm wizard's Storm spell
+ *     defeats enemies with damage to spare: the damage past their remaining
+ *     health is split equally among every other living enemy, shown as a free
+ *     Tempest at the tier (80 a tier) nearest each enemy's share. It goes
+ *     through wards, traps and resist like any Storm hit, never spills again,
+ *     and gives no accuracy or health: a fizzle still wastes the turn.
  *   - Myth, Taming (Round 3, tied to Monstrology): a Myth spell leaves a creature
  *     the wizard has studied (Animus for it in their Monstrology ledger) at a
  *     quarter of its health or less: the client's own Monster Magic Defeat card
@@ -45,13 +48,13 @@
  *     and a free seat. Extraction and the tome work as before for every school.
  *   - Life, Overgrowth: a Life heal that tops a friend up with 150 or more to
  *     spare grows the spare into a free Spirit Armor (absorb 400). Once a round.
- *   - Death, Puppeteer: a Death drain leaves a creature at half health or below:
- *     a free Beguile takes its next action for the wizard's side. Once a round,
- *     once per creature in a fight.
- *   - Balance, Equilibrium (Round 3 re-tune): a Balance attack that uses up both
- *     a blade on the wizard and a trap on the enemy gives the setup back to the
- *     team: a free Bladestorm (+20% to every friend, the wizard included). Once a
- *     round. (Round 2 fired a free Hydra; too strong with charm stacking.)
+ *   - Death, Hungry Dead (Round 3): a Death drain that lands while the wizard is
+ *     at half health or less drains again, free (Ghoul, 180). Once a round.
+ *   - Balance, Spectrum (Round 3, the owner's "reward balance for using different
+ *     schools"): every school a Balance wizard casts for the first time in a fight
+ *     (other than Balance) gives a free blade of that school (+35%); the fourth
+ *     distinct school, Balance included, gives the team a free Bladestorm (+20%).
+ *     A cast counts the one school its landed effects name, else its card's school.
  * Only wizards of the school, from the level of the keystone spell their
  * professor teaches (Fire Elf 5, Tower Shield 16, Storm Shark 10, Troll Minion 7,
  * Spirit Armor 16, Ghoul 5, Balanceblade 12).
@@ -103,10 +106,13 @@ internal static class MasteryRules {
     internal const string PermafrostSpell = "PetPower-Combat-IceArmor-01";
 
     /// <summary>Storm Shark (Halston Balestrom, level 10).</summary>
-    internal const int ChainLevel = 10;
+    internal const int OverkillLevel = 10;
 
-    /// <summary>Leaps a Storm wizard's spells may make in one round.</summary>
-    internal const int ChainLeapsPerRound = 2;
+    /// <summary>The client's Tempest: an X-pip Storm card hitting every enemy for 80 a tier.</summary>
+    internal const string OverkillSpell = "Tempest";
+
+    /// <summary>Tempest's damage per tier.</summary>
+    internal const int OverkillTier = 80;
 
     /// <summary>Troll Minion (level 7): Myth's first minion card, and Taming's level.</summary>
     internal const int TamingLevel = 7;
@@ -129,19 +135,24 @@ internal static class MasteryRules {
     internal const string OvergrowthSpell = "Spirit Armor";
 
     /// <summary>Ghoul (Dworgyn, level 5).</summary>
-    internal const int PuppeteerLevel = 5;
+    internal const int HungryDeadLevel = 5;
 
-    /// <summary>A creature at or below this share of its health can be beguiled.</summary>
-    internal const float PuppeteerShare = 0.5f;
+    /// <summary>A drain while the wizard is at or below this share of their health drains again.</summary>
+    internal const float HungryDeadShare = 0.5f;
 
-    /// <summary>The client's free Beguile: one mind control at an enemy.</summary>
-    internal const string PuppeteerSpell = "Pet - Beguile";
+    /// <summary>The client's free Ghoul: a 180 Death drain.</summary>
+    internal const string HungryDeadSpell = "Pet - Ghoul";
 
     /// <summary>Balanceblade (level 12).</summary>
-    internal const int EquilibriumLevel = 12;
+    internal const int SpectrumLevel = 12;
 
-    /// <summary>The client's Bladestorm: +20% to every friend.</summary>
-    internal const string EquilibriumSpell = "Bladestorm";
+    /// <summary>Distinct schools (Balance included) that bring the team's Bladestorm.</summary>
+    internal const int SpectrumSchools = 4;
+
+    /// <summary>The school blades (+35%, one friend) and Bladestorm (+20%, every friend).</summary>
+    internal static string BladeOf(string school) => $"{school}blade";
+
+    internal const string SpectrumTeam = "Bladestorm";
 
 }
 
@@ -156,12 +167,13 @@ internal sealed class MasteryDirector {
     private readonly CombatDuelComponent _duel;
     private readonly HashSet<CombatDuelSubCircle> _permafrostThisRound = [];
     private readonly HashSet<CombatDuelSubCircle> _overgrowthThisRound = [];
-    private readonly HashSet<CombatDuelSubCircle> _puppeteerThisRound = [];
-    private readonly HashSet<CombatDuelSubCircle> _equilibriumThisRound = [];
-    private readonly Dictionary<CombatDuelSubCircle, int> _leapsThisRound = [];
+    private readonly HashSet<CombatDuelSubCircle> _hungryThisRound = [];
+    private readonly Dictionary<CombatDuelSubCircle, HashSet<string>> _schoolsThisFight = [];
+    private readonly HashSet<CombatDuelSubCircle> _spectrumTeamGiven = [];
+    private readonly Dictionary<CombatDuelSubCircle, int> _overkill = [];
+    private readonly HashSet<string> _landedSchools = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<CombatDuelSubCircle> _tamedThisFight = [];
     private readonly Dictionary<ulong, MonstrologyLedger?> _ledgers = [];
-    private readonly HashSet<object> _beguiledByMastery = new(ReferenceEqualityComparer.Instance);
     private readonly Dictionary<CombatDuelSubCircle, Snapshot> _before = [];
 
     private readonly record struct Snapshot(int Health, int Shields, int Blades, int Traps);
@@ -175,21 +187,33 @@ internal sealed class MasteryDirector {
     internal void NewRound(int round) {
         _permafrostThisRound.Clear();
         _overgrowthThisRound.Clear();
-        _puppeteerThisRound.Clear();
-        _equilibriumThisRound.Clear();
-        _leapsThisRound.Clear();
+        _hungryThisRound.Clear();
     }
 
     /// <summary>Before a spell resolves: every combatant's health and shields, to see what the spell did.</summary>
     internal void BeforeAction(QueuedCombatAction action) {
         _before.Clear();
+        _overkill.Clear();
+        _landedSchools.Clear();
         foreach (var circle in _duel.SubCircles.Where(c => c is { Occupied: true, AddedToDuel: true, ParticipantGameStats: not null })) {
             _before[circle] = new Snapshot(circle.ParticipantGameStats.m_currentHitpoints, Shields(circle), Blades(circle), Traps(circle));
         }
     }
 
+    /// <summary>Damage past <paramref name="target"/>'s remaining health in the spell now resolving (CombatEffectApplicator).</summary>
+    internal void RecordOverkill(CombatDuelSubCircle target, int overkill)
+        => _overkill[target] = _overkill.GetValueOrDefault(target) + Math.Max(overkill, 0);
+
+    /// <summary>The school a landed effect of the spell now resolving names ("All" and none are not schools).</summary>
+    internal void RecordEffect(SpellEffect effect) {
+        if (effect?.m_sDamageType is { Length: > 0 } school && !string.Equals(school, "All", StringComparison.OrdinalIgnoreCase)
+            && Enum.TryParse<MagicSchool>(school, ignoreCase: true, out var known) && known != MagicSchool.None) {
+            _landedSchools.Add(known.ToString());
+        }
+    }
+
     /// <summary>
-    /// After a spell resolved: the procs it sets off, in the order they come. Only Chain Lightning may follow a proc.
+    /// After a spell resolved: the procs it sets off, in the order they come. A proc never sets off another proc.
     /// </summary>
     internal List<QueuedCombatAction> AfterAction(QueuedCombatAction action) {
         var procs = new List<QueuedCombatAction>();
@@ -197,17 +221,13 @@ internal sealed class MasteryDirector {
             return procs;
         }
 
-        var ownCast = action.Cheat is null;
-        if (ownCast) {
+        if (action.Cheat is null) {
             Add(procs, Kindling(action));
+            Add(procs, Overkill(action));
             Add(procs, Overgrowth(action));
-            Add(procs, Puppeteer(action));
-            Add(procs, Equilibrium(action));
+            Add(procs, HungryDead(action));
+            procs.AddRange(Spectrum(action));
             procs.AddRange(Taming(action));
-        }
-
-        if (ownCast || action.Cheat?.IsMastery == true) {
-            Add(procs, ChainLightning(action));
         }
 
         procs.AddRange(Permafrost(action));
@@ -266,35 +286,37 @@ internal sealed class MasteryDirector {
         }
     }
 
-    // ------------------------------------------------------------ Storm: Chain Lightning
+    // ------------------------------------------------------------ Storm: Overkill
 
-    private QueuedCombatAction? ChainLightning(QueuedCombatAction action) {
+    private QueuedCombatAction? Overkill(QueuedCombatAction action) {
         var caster = action.SpellCaster;
-        var target = action.SelectedTarget;
-        if (!Masters(caster, MagicSchool.Storm, MasteryRules.ChainLevel) || !caster.IsAlive || !IsSchool(action, MagicSchool.Storm)
-            || !IsSingleTargetAttack(action.SpellTemplate)
-            || target is null || !IsEnemyOf(target, caster) || target.IsAlive || HealthBefore(target) <= 0
-            || _leapsThisRound.GetValueOrDefault(caster) >= MasteryRules.ChainLeapsPerRound) {
+        if (!Masters(caster, MagicSchool.Storm, MasteryRules.OverkillLevel) || !caster.IsAlive || !IsSchool(action, MagicSchool.Storm)) {
             return null;
         }
 
-        var next = _duel.SubCircles
-            .Where(c => c is { Occupied: true, AddedToDuel: true, IsAlive: true } && c != target && IsEnemyOf(c, caster))
-            .OrderByDescending(c => c.ParticipantGameStats.m_currentHitpoints).ThenBy(c => c.SlotIndex)
-            .FirstOrDefault();
-        if (next is null) {
+        var spare = _overkill.Where(kv => !kv.Key.IsAlive && IsEnemyOf(kv.Key, caster)).Sum(kv => kv.Value);
+        var survivors = _duel.SubCircles
+            .Where(c => c is { Occupied: true, AddedToDuel: true, IsAlive: true } && IsEnemyOf(c, caster)).ToList();
+        if (spare <= 0 || survivors.Count == 0) {
             return null;
         }
 
-        _leapsThisRound[caster] = _leapsThisRound.GetValueOrDefault(caster) + 1;
-        return Cast(caster, next, action.Spell, action.SpellTemplate);
+        var tier = OverkillTierFor(spare / (double) survivors.Count, caster);
+        if (tier < 1 || Proc(caster, survivors[0], MasteryRules.OverkillSpell) is not { } tempest) {
+            return null;
+        }
+
+        tempest.ForcedXPips = tier;
+        return tempest;
     }
 
-    // A damaging card whose every enemy effect hits one enemy (an area card never leaps).
-    private static bool IsSingleTargetAttack(SpellTemplate? template) {
-        var effects = Flatten(template?.m_effects).ToList();
-        return effects.Any(e => e.m_effectType is kSpellEffects.kDamage or kSpellEffects.kStealHealth or kSpellEffects.kDamageOverTime)
-            && !effects.Any(e => e.m_effectTarget is kEffectTarget.kEnemyTeam or kEffectTarget.kEnemyTeamAllAtOnce);
+    /// <summary>
+    /// Tempest's tier nearest to <paramref name="share"/> once the wizard's own Storm damage bonus (applied again by the
+    /// cast) is taken out; 0 when the share is under half a tier.
+    /// </summary>
+    internal static int OverkillTierFor(double share, CombatDuelSubCircle caster) {
+        var boost = 1 + CombatEffectApplicator.GetPercentDamageIncrease(caster, "Storm");
+        return (int) Math.Round(share / (MasteryRules.OverkillTier * Math.Max(boost, 1f)), MidpointRounding.AwayFromZero);
     }
 
     // ------------------------------------------------------------ Myth: Taming (Monstrology)
@@ -401,53 +423,68 @@ internal sealed class MasteryDirector {
         return proc;
     }
 
-    // ------------------------------------------------------------ Death: Puppeteer
+    // ------------------------------------------------------------ Death: Hungry Dead
 
-    private QueuedCombatAction? Puppeteer(QueuedCombatAction action) {
+    private QueuedCombatAction? HungryDead(QueuedCombatAction action) {
         var caster = action.SpellCaster;
-        var target = action.SelectedTarget;
-        if (!Masters(caster, MagicSchool.Death, MasteryRules.PuppeteerLevel) || !IsSchool(action, MagicSchool.Death)
-            || !Deals(action, kSpellEffects.kStealHealth) || target is not { IsAlive: true, IsWizard: false }
-            || !IsEnemyOf(target, caster) || target.BeguiledActions > 0 || _puppeteerThisRound.Contains(caster)
-            || target.ParticipantObject is not { } creature || _beguiledByMastery.Contains(creature)
-            || target.ParticipantGameStats.m_currentHitpoints > target.ParticipantGameStats.m_baseHitpoints * MasteryRules.PuppeteerShare) {
+        if (!Masters(caster, MagicSchool.Death, MasteryRules.HungryDeadLevel) || !caster.IsAlive || !IsSchool(action, MagicSchool.Death)
+            || !Deals(action, kSpellEffects.kStealHealth) || _hungryThisRound.Contains(caster)
+            || HealthBefore(caster) > caster.ParticipantGameStats.m_baseHitpoints * MasteryRules.HungryDeadShare) {
             return null;
         }
 
-        var proc = Proc(caster, target, MasteryRules.PuppeteerSpell);
-        if (proc is not null) {
-            _puppeteerThisRound.Add(caster);
-            _beguiledByMastery.Add(creature);
-        }
-
-        return proc;
-    }
-
-    // ------------------------------------------------------------ Balance: Equilibrium
-
-    private QueuedCombatAction? Equilibrium(QueuedCombatAction action) {
-        var caster = action.SpellCaster;
-        var target = action.SelectedTarget;
-        if (!Masters(caster, MagicSchool.Balance, MasteryRules.EquilibriumLevel) || !IsSchool(action, MagicSchool.Balance)
-            || !Deals(action, kSpellEffects.kDamage) || !IsEnemyOf(target, caster) || _equilibriumThisRound.Contains(caster)
-            || !_before.TryGetValue(caster, out var mine) || !_before.TryGetValue(target!, out var theirs)
-            || Blades(caster) >= mine.Blades || Traps(target!) >= theirs.Traps) {
-            return null;
-        }
-
-        var at = target!.IsAlive ? target : _duel.SubCircles
+        var at = action.SelectedTarget is { IsAlive: true } target && IsEnemyOf(target, caster) ? target : _duel.SubCircles
             .Where(c => c is { Occupied: true, AddedToDuel: true, IsAlive: true } && IsEnemyOf(c, caster))
             .OrderByDescending(c => c.ParticipantGameStats.m_currentHitpoints).ThenBy(c => c.SlotIndex).FirstOrDefault();
-        if (at is null) {
+        if (at is null || Proc(caster, at, MasteryRules.HungryDeadSpell) is not { } ghoul) {
             return null;
         }
 
-        var proc = Proc(caster, at, MasteryRules.EquilibriumSpell);
-        if (proc is not null) {
-            _equilibriumThisRound.Add(caster);
+        _hungryThisRound.Add(caster);
+        return ghoul;
+    }
+
+    // ------------------------------------------------------------ Balance: Spectrum
+
+    private IEnumerable<QueuedCombatAction> Spectrum(QueuedCombatAction action) {
+        var caster = action.SpellCaster;
+        if (!Masters(caster, MagicSchool.Balance, MasteryRules.SpectrumLevel) || !caster.IsAlive) {
+            yield break;
         }
 
-        return proc;
+        var school = SchoolOfCast(action);
+        if (school is null) {
+            yield break;
+        }
+
+        if (!_schoolsThisFight.TryGetValue(caster, out var schools)) {
+            _schoolsThisFight[caster] = schools = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        }
+
+        if (!schools.Add(school)) {
+            yield break;   // a school already counted this fight gives nothing more
+        }
+
+        if (!string.Equals(school, nameof(MagicSchool.Balance), StringComparison.OrdinalIgnoreCase)
+            && Proc(caster, caster, MasteryRules.BladeOf(school)) is { } blade) {
+            yield return blade;
+        }
+
+        if (schools.Count >= MasteryRules.SpectrumSchools && _spectrumTeamGiven.Add(caster)
+            && Proc(caster, caster, MasteryRules.SpectrumTeam) is { } team) {
+            yield return team;
+        }
+    }
+
+    /// <summary>The one school a cast counts for: the only school its landed effects name, else its card's school.</summary>
+    internal string? SchoolOfCast(QueuedCombatAction action) {
+        if (_landedSchools.Count == 1) {
+            return _landedSchools.First();
+        }
+
+        var school = (MagicSchool) action.Spell.m_magicSchoolID;
+        return school is MagicSchool.Fire or MagicSchool.Ice or MagicSchool.Storm or MagicSchool.Myth or MagicSchool.Life
+            or MagicSchool.Death or MagicSchool.Balance ? school.ToString() : null;
     }
 
     // A blade on the circle (a positive outgoing-damage charm) and a trap on it (a positive incoming-damage ward).

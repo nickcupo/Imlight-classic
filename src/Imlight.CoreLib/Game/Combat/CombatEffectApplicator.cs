@@ -82,6 +82,11 @@ internal static class CombatEffectApplicator {
                                       uint spellTemplateId = 0) {
         var cinematicTime = 0.0f;
 
+        // CLASSIC: School Mastery notes the school each landed effect names (Balance's Spectrum).
+        if (MasteryDirector.Active) {
+            caster?._duelActor?.Mastery.RecordEffect(effect);
+        }
+
         if (effect.m_effectTarget == kEffectTarget.kGlobal) {
             ApplyGlobalEffect(effect, caster._duelActor.Duel);
 
@@ -681,6 +686,12 @@ internal static class CombatEffectApplicator {
         // Ensure that damage isn't negative.
         reducedDamage = Math.Max(reducedDamage, 0);
 
+        // CLASSIC: School Mastery notes damage past a target's remaining health (Storm's overkill).
+        var healthBefore = target.ParticipantGameStats?.m_currentHitpoints ?? 0;
+        if (MasteryDirector.Active && healthBefore > 0 && reducedDamage > healthBefore) {
+            target._duelActor?.Mastery.RecordOverkill(target, reducedDamage - healthBefore);
+        }
+
         target.DamageParticipant(reducedDamage);
 
         return reducedDamage;
@@ -739,7 +750,7 @@ internal static class CombatEffectApplicator {
         return damageFlatIncrease + caster.ParticipantGameStats.m_dmgBonusFlatAll;
     }
 
-    private static float GetPercentDamageIncrease(CombatDuelSubCircle caster, string damageType) {
+    internal static float GetPercentDamageIncrease(CombatDuelSubCircle caster, string damageType) {
         var damagePercentIncrease = caster.GetStatBySchool(caster.ParticipantGameStats.m_dmgBonusPercent, damageType);
         damagePercentIncrease += caster.ParticipantGameStats.m_dmgBonusPercentAll;
         damagePercentIncrease = Math.Min(damagePercentIncrease, DAMAGE_PERCENT_MAX);
