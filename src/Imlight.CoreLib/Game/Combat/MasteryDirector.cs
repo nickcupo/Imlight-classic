@@ -38,13 +38,15 @@
  *     health), shown as a free Ice attack card landing that number (the classic
  *     Frost Beetle .. Colossus values, the server naming the value). Once a
  *     round; never on a tick; a retort is never reflected.
- *   - Storm, Overload (Round 3, the owner's "chance for chain lightning to hit you
- *     instead"): a Storm wizard's Storm spell defeats enemies with at least 145
- *     damage to spare: the spare lightning breaks loose as a free Insane Bolt
- *     (the client's own card) at the healthiest enemy left: three 145 bolts, each
- *     striking that enemy or, about one time in five, arcing back into the Storm
- *     wizard. The server rolls each bolt once, as for any Insane Bolt. No accuracy
- *     or health is given: a fizzle still wastes the turn.
+ *   - Storm, Static Discharge (Round 3: the owner's overkill split, Wild Bolt look and
+ *     backfire): a Storm wizard's Storm spell defeats enemies with damage to spare:
+ *     the spare is split equally over every other living enemy, one free bolt
+ *     each (the Wild Bolt animation; mastery-demo's card overlay gives the unused
+ *     "Pet - Wild Bolt" template a list of values and the server names the one at
+ *     or under the share). Each bolt has one chance in five to jump back into the
+ *     Storm wizard instead ("Wild Bolt - Amulet", the same values, aimed at its
+ *     caster); a discharge never puts more than 40% of the Storm wizard's health
+ *     back into them. No accuracy or health: a fizzle still wastes the turn.
  *   - Myth, Taming (Round 3, tied to Monstrology): a Myth spell leaves a creature
  *     the wizard has studied (Animus for it in their Monstrology ledger) at a
  *     quarter of its health or less: the client's own Monster Magic Defeat card
@@ -114,13 +116,16 @@ internal static class MasteryRules {
     internal static readonly string[] RetortCards = ["Frost Beetle", "Snow Serpent", "Evil Snowman", "Ice Wyvern", "Colossus"];
 
     /// <summary>Storm Shark (Halston Balestrom, level 10).</summary>
-    internal const int OverloadLevel = 10;
+    internal const int DischargeLevel = 10;
 
-    /// <summary>The client's Insane Bolt (October 2010 values: three rolls of 145, each at the target or the caster).</summary>
-    internal const string OverloadSpell = "Insane Bolt";
+    /// <summary>The bolt at an enemy and the bolt back into the caster (Wild Bolt animation; values from mastery-demo's records).</summary>
+    internal const string DischargeBolt = "Pet - Wild Bolt", DischargeBackfire = "Wild Bolt - Amulet";
 
-    /// <summary>Spare damage needed: one bolt's worth.</summary>
-    internal const int OverloadSpare = 145;
+    /// <summary>One bolt in this many jumps back into the Storm wizard.</summary>
+    internal const int DischargeBackfireOdds = 5;
+
+    /// <summary>The most a discharge puts back into the Storm wizard, as a share of their health: never a kill from full.</summary>
+    internal const float DischargeSelfCap = 0.4f;
 
     /// <summary>Troll Minion (level 7): Myth's first minion card, and Taming's level.</summary>
     internal const int TamingLevel = 7;
@@ -237,7 +242,7 @@ internal sealed class MasteryDirector {
 
         if (action.Cheat is null) {
             Add(procs, Kindling(action));
-            Add(procs, Overload(action));
+            procs.AddRange(StaticDischarge(action));
             Add(procs, Overgrowth(action));
             Add(procs, HungryDead(action));
             procs.AddRange(Spectrum(action));
@@ -333,24 +338,60 @@ internal sealed class MasteryDirector {
         return best;
     }
 
-    // ------------------------------------------------------------ Storm: Overload
+    // ------------------------------------------------------------ Storm: Static Discharge
 
-    private QueuedCombatAction? Overload(QueuedCombatAction action) {
+    private IEnumerable<QueuedCombatAction> StaticDischarge(QueuedCombatAction action) {
         var caster = action.SpellCaster;
-        if (!Masters(caster, MagicSchool.Storm, MasteryRules.OverloadLevel) || !caster.IsAlive || !IsSchool(action, MagicSchool.Storm)) {
-            return null;
+        if (!Masters(caster, MagicSchool.Storm, MasteryRules.DischargeLevel) || !caster.IsAlive || !IsSchool(action, MagicSchool.Storm)) {
+            yield break;
         }
 
         var spare = _overkill.Where(kv => !kv.Key.IsAlive && IsEnemyOf(kv.Key, caster)).Sum(kv => kv.Value);
-        var next = _duel.SubCircles
-            .Where(c => c is { Occupied: true, AddedToDuel: true, IsAlive: true } && IsEnemyOf(c, caster))
-            .OrderByDescending(c => c.ParticipantGameStats.m_currentHitpoints).ThenBy(c => c.SlotIndex).FirstOrDefault();
-        if (spare < MasteryRules.OverloadSpare || next is null) {
+        var survivors = _duel.SubCircles
+            .Where(c => c is { Occupied: true, AddedToDuel: true, IsAlive: true } && IsEnemyOf(c, caster)).ToList();
+        if (spare <= 0 || survivors.Count == 0) {
+            yield break;
+        }
+
+        var share = spare / (double) survivors.Count;
+        var selfRoom = (int) Math.Floor(caster.ParticipantGameStats.m_baseHitpoints * MasteryRules.DischargeSelfCap);
+        foreach (var survivor in survivors) {
+            // Rolled once here, by the server, from the duel's own stream; nothing re-rolls it.
+            var backfire = _duel.Rng.Next(0, MasteryRules.DischargeBackfireOdds) == 0;
+            var card = backfire ? MasteryRules.DischargeBackfire : MasteryRules.DischargeBolt;
+            var budget = backfire ? Math.Min(share, selfRoom) : share;
+            if (BoltFor(card, budget, caster) is not { } pick || Proc(caster, backfire ? caster : survivor, card) is not { } bolt) {
+                continue;
+            }
+
+            if (backfire) {
+                selfRoom -= pick.Shown;
+            }
+
+            bolt.ForcedRandomIndex = pick.Index;
+            yield return bolt;
+        }
+    }
+
+    /// <summary>
+    /// The listed value of <paramref name="card"/> at or under <paramref name="amount"/> once the caster's own Storm bonus (which
+    /// the cast adds back) is taken out; null under the smallest. Shown is the boosted number the bolt will land.
+    /// </summary>
+    internal static (int Index, int Value, int Shown)? BoltFor(string card, double amount, CombatDuelSubCircle caster) {
+        var boost = Math.Max(1 + CombatEffectApplicator.GetPercentDamageIncrease(caster, "Storm"), 1f);
+        if (Resolve(card)?.Template.m_effects?.OfType<RandomSpellEffect>().FirstOrDefault() is not { m_effectList: { } values }) {
             return null;
         }
 
-        // The bolts are rolled once, by the server, when the free Insane Bolt resolves (CombatActionResolver), as for the card.
-        return Proc(caster, next, MasteryRules.OverloadSpell);
+        (int Index, int Value, int Shown)? best = null;
+        for (var i = 0; i < values.Count; i++) {
+            var value = values[i]?.m_effectType == kSpellEffects.kDamage ? values[i].m_effectParam : 0;
+            if (value > 0 && value * boost <= amount + 0.5 && (best is null || value > best.Value.Value)) {
+                best = (i, value, (int) Math.Floor(value * boost));
+            }
+        }
+
+        return best;
     }
 
     // ------------------------------------------------------------ Myth: Taming (Monstrology)
