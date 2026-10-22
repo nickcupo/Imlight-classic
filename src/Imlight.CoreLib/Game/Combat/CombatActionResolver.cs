@@ -89,9 +89,7 @@ internal static class CombatActionResolver {
             && allEffects.Any(effect => effect.m_effectType == kSpellEffects.kReshuffle)) {
             action.SpellCaster.DiscardCard(action.Spell);
         }
-        combatAction.m_xPipCost = action.ForcedXPips is int forced && IsXPipSpell(action.Spell)
-            ? (byte) Math.Clamp(forced, 1, GetMaxXPipTier(action.Spell))   // CLASSIC: a School Mastery proc's tier
-            : GetXPipCost(action.Spell, action.SpellCaster);
+        combatAction.m_xPipCost = GetXPipCost(action.Spell, action.SpellCaster);
 
         // One combined roll per cast: the target's block is part of the crit chance
         // (crit vs crit + K * block), so there is no separate block roll. The landed
