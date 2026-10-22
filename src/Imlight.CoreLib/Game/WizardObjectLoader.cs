@@ -108,17 +108,21 @@ public static class WizardObjectLoader {
     }
 
     /// <summary>
-    /// CLASSIC: the saved hidden quests, in the string the client wrote them in
+    /// CLASSIC: the saved hidden quests, in the bytes the client wrote them in
     /// (Classic/ClientJournal.cs). Nothing changes for a wizard with no journal (ambient wizards, tests).
     /// </summary>
     internal static void SetJournalBehaviors(WizClientObject clientObject, Classic.ClientJournal journal) {
-        if (journal is null) {
+        if (journal?.HiddenQuestsData is not { Length: > 0 } blob
+                || !CoreObjectFactory.FindBehaviorInstance<HiddenQuestsBehavior>(clientObject, out var hidden)) {
             return;
         }
-        if (!string.IsNullOrEmpty(journal.HiddenQuests)
-                && CoreObjectFactory.FindBehaviorInstance<HiddenQuestsBehavior>(clientObject, out var hidden)) {
-            hidden.m_hiddenQuestsData = journal.HiddenQuests;
-        }
+
+        // CLASSIC: the blob goes back byte for byte (a string property would be sent as UTF-8).
+        var idx = clientObject.m_inactiveBehaviors.IndexOf(hidden);
+        clientObject.m_inactiveBehaviors[idx] = new Classic.ClassicHiddenQuestsBehavior {
+            m_behaviorTemplateNameID = hidden.m_behaviorTemplateNameID,
+            RawData = blob,
+        };
     }
 
     public static void SetEquipmentBehavior(WizClientObject clientObject, Wizard character) {

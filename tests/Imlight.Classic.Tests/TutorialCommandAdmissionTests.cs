@@ -243,4 +243,13 @@ public sealed class TutorialCommandAdmissionTests {
         internal bool Admit(GAME_5_PROTOCOL.MSG_SERVERTUTORIALCOMMAND command, out TutorialCommandDecision result)
             => TutorialCommandAdmission.TryPreflightForTests(Wizard, command, Authored, out result, Resolve);
     }
+
+    [Fact]
+    public void AMidTutorialRelogResumesAtTheSavedStage() {
+        // REA 2026-10-22: the stage the client last reached is saved and echoed back after a relog.
+        Assert.Equal(3, Imlight.CoreLib.Game.Services.TutorialService.ResumeStage(3));
+        Assert.Null(Imlight.CoreLib.Game.Services.TutorialService.ResumeStage(null));
+        Assert.Null(Imlight.CoreLib.Game.Services.TutorialService.ResumeStage(0));
+        Assert.Null(Imlight.CoreLib.Game.Services.TutorialService.ResumeStage(99)); // finished or skipped
+    }
 }

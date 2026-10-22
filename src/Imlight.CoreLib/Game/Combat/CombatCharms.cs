@@ -95,8 +95,17 @@ internal static class CombatCharms {
             }
         }
 
-        return [.. appliedCharms.DistinctBy(x => x.m_spellTemplateID)];
+        return [.. appliedCharms.DistinctBy(StackKey)];
     }
+
+    /// <summary>
+    /// CLASSIC (2026-10-22): what makes two hanging effects "the same" for stacking: one copy of each card (its template
+    /// id, stamped by CombatEffectApplicator.ApplyHangingEffect), per effect type and school so a card's own parts (an
+    /// Elemental Blade's Fire, Ice and Storm) never hide each other. Different cards stack; a second copy of the same
+    /// card waits for the next hit. An effect without an id (none was stamped) counts on its own.
+    /// </summary>
+    internal static object StackKey(SpellEffect effect)
+        => effect.m_spellTemplateID == 0 ? effect : (effect.m_spellTemplateID, effect.m_effectType, effect.m_sDamageType);
 
     /// <summary>
     /// CLASSIC: the charms hanging on a participant, newest first, for the effects that remove or steal them.

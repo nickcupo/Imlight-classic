@@ -130,7 +130,7 @@ internal sealed partial class CombatDuelComponent {
 
     /// <summary>Seats a wizard on <paramref name="side"/> (-1: the half they stand in). Returns false when it cannot.</summary>
     private bool PvpSeat(IActorRef actor, CoreObject participant, int side) {
-        if (!_pvpLobby || SubCircles.Any(c => c.Occupied && (c.ParticipantActor == actor || ReferenceEquals(c.ParticipantObject, participant)))) {
+        if (!_pvpLobby || IsSeated(participant, actor)) { // CLASSIC: by global id too (ios-qa bug 9)
             return false;
         }
 
