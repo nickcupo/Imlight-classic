@@ -100,7 +100,7 @@ internal sealed partial class CombatDuelComponent {
             return; // not one of this match's wizards
         }
 
-        if (SubCircles?.Any(c => c is { Occupied: true } && c.ParticipantActor == playerActor) == true) {
+        if (IsSeated(playerObj, playerActor)) { // CLASSIC: by global id too (a new session's actor and object)
             return;
         }
 
