@@ -51,10 +51,14 @@
  *     minions): when a Myth wizard's own Myth attack lands on an enemy that still
  *     holds a shield or absorb, the wizard casts a free Pierce at it (the client's
  *     card: one shield, never a trap), so the next hitter lands clean. Once a round.
- *   - Life, Overheal (Round 3, the owner's "some damage for solo"): half of the
- *     healing a Life wizard's own heal puts past full health (capped at a quarter
- *     of their health) becomes a free Life attack card at the weakest enemy, at
- *     the listed value at or under it (Imp .. Centaur). Once a round.
+ *   - Life, Overheal (Round 3, the owner's "some damage for solo", widened to "all
+ *     overhealing life does to any friendly"): all the healing a Life wizard's own
+ *     Life casts put past full health on any friend (single and area heals, and
+ *     the ticks of their heals over time) is banked; once a round, right after one
+ *     of their own casts, half the bank hits the weakest enemy as a free Life attack
+ *     card (Imp .. Centaur, the listed value at or under it), capped at a quarter of
+ *     their health and never above the Life attack the pips they spent on those
+ *     heals would buy (the card's rank is paid from those pips).
  *   - Death, Hungry Dead (Round 3): a Death drain that lands while the wizard is
  *     at half health or less drains again, free (Ghoul, 180). Once a round.
  *   - Balance, Spectrum (Round 3, the owner's "reward balance for using different
@@ -175,6 +179,11 @@ internal sealed class MasteryDirector {
     private readonly HashSet<CombatDuelSubCircle> _retortThisRound = [];
     private readonly Dictionary<CombatDuelSubCircle, int> _prevented = [];
     private readonly HashSet<CombatDuelSubCircle> _overhealThisRound = [];
+    private readonly Dictionary<CombatDuelSubCircle, int> _overhealBank = [];
+    private readonly Dictionary<CombatDuelSubCircle, int> _healPips = [];
+    private readonly Dictionary<SpellEffect, CombatDuelSubCircle> _hotOwner = new(ReferenceEqualityComparer.Instance);
+    private readonly HashSet<SpellEffect> _hotsBefore = new(ReferenceEqualityComparer.Instance);
+    private int _casterPipsBefore;
     private readonly HashSet<CombatDuelSubCircle> _shatterThisRound = [];
     private readonly Dictionary<CombatDuelSubCircle, int> _overheal = [];
     private readonly HashSet<CombatDuelSubCircle> _hungryThisRound = [];
@@ -205,6 +214,12 @@ internal sealed class MasteryDirector {
         _overkill.Clear();
         _prevented.Clear();
         _overheal.Clear();
+        _hotsBefore.Clear();
+        foreach (var hot in _duel.SubCircles.Where(c => c.Occupied).SelectMany(c => c._hangingEffects ?? [])
+                     .Where(e => e.m_effectType == kSpellEffects.kHealOverTime)) {
+            _hotsBefore.Add(hot);
+        }
+        _casterPipsBefore = PipValue(action?.SpellCaster);
         _landedSchools.Clear();
         foreach (var circle in _duel.SubCircles.Where(c => c is { Occupied: true, AddedToDuel: true, ParticipantGameStats: not null })) {
             _before[circle] = new Snapshot(circle.ParticipantGameStats.m_currentHitpoints, Shields(circle), Blades(circle), Traps(circle));
@@ -222,6 +237,17 @@ internal sealed class MasteryDirector {
     /// <summary>Healing past <paramref name="target"/>'s full health in the spell now resolving (not a tick).</summary>
     internal void RecordOverheal(CombatDuelSubCircle target, int overflow)
         => _overheal[target] = _overheal.GetValueOrDefault(target) + Math.Max(overflow, 0);
+
+    /// <summary>A heal-over-time tick's healing past full health: banked for the Life wizard who cast that heal.</summary>
+    internal void RecordHotOverheal(SpellEffect hot, int overflow) {
+        if (overflow > 0 && _hotOwner.TryGetValue(hot, out var owner)) {
+            _overhealBank[owner] = _overhealBank.GetValueOrDefault(owner) + overflow;
+        }
+    }
+
+    // Pips as a school card spends them: a power pip counts two for the wizard's own school.
+    private static int PipValue(CombatDuelSubCircle? circle)
+        => circle?.CombatParticipant?.m_pipCount is { } pips ? pips.m_genericPips + 2 * pips.m_powerPips : 0;
 
     /// <summary>The school a landed effect of the spell now resolving names ("All" and none are not schools).</summary>
     internal void RecordEffect(SpellEffect effect) {
@@ -417,25 +443,47 @@ internal sealed class MasteryDirector {
 
     private QueuedCombatAction? Overheal(QueuedCombatAction action) {
         var caster = action.SpellCaster;
-        if (!Masters(caster, MagicSchool.Life, MasteryRules.OverhealLevel) || !caster.IsAlive || !IsSchool(action, MagicSchool.Life)
-            || _overhealThisRound.Contains(caster)) {
+        if (!Masters(caster, MagicSchool.Life, MasteryRules.OverhealLevel) || !caster.IsAlive) {
             return null;
         }
 
-        var overflow = _overheal.Where(kv => kv.Key.OccupiedTeam == caster.ActingTeam).Sum(kv => kv.Value);
-        var amount = Math.Min((int) Math.Floor(overflow * MasteryRules.OverhealShare),
+        // Bank this cast: a Life card's overflow on friends (minions included), its pips, and any heal over time it laid.
+        if (IsSchool(action, MagicSchool.Life)) {
+            var overflow = _overheal.Where(kv => kv.Key.OccupiedTeam == caster.ActingTeam).Sum(kv => kv.Value);
+            var newHots = _duel.SubCircles.Where(c => c.Occupied && c.OccupiedTeam == caster.ActingTeam)
+                .SelectMany(c => c._hangingEffects ?? []).Where(e => e.m_effectType == kSpellEffects.kHealOverTime && !_hotsBefore.Contains(e))
+                .ToList();
+            var heals = overflow > 0 || newHots.Count > 0
+                || Flatten(action.SpellTemplate?.m_effects).Any(e => e.m_effectType is kSpellEffects.kHeal or kSpellEffects.kHealOverTime);
+            if (heals) {
+                _overhealBank[caster] = _overhealBank.GetValueOrDefault(caster) + overflow;
+                _healPips[caster] = _healPips.GetValueOrDefault(caster) + Math.Max(_casterPipsBefore - PipValue(caster), 0);
+                foreach (var hot in newHots) _hotOwner[hot] = caster;
+            }
+        }
+
+        // The round's hit, from everything banked since the last one.
+        var banked = _overhealBank.GetValueOrDefault(caster);
+        if (banked <= 0 || _overhealThisRound.Contains(caster)) {
+            return null;
+        }
+
+        var amount = Math.Min((int) Math.Floor(banked * MasteryRules.OverhealShare),
             (int) Math.Floor(caster.ParticipantGameStats.m_baseHitpoints * MasteryRules.OverhealCapShare));
+        var pips = _healPips.GetValueOrDefault(caster);
+        var cards = MasteryRules.OverhealCards.Where(card => Resolve(card) is { } r && (r.Template.m_spellRank?.m_spellRank ?? 0) <= pips);
         var weakest = _duel.SubCircles
             .Where(c => c is { Occupied: true, AddedToDuel: true, IsAlive: true } && IsEnemyOf(c, caster))
             .OrderBy(c => c.ParticipantGameStats.m_currentHitpoints).ThenBy(c => c.SlotIndex).FirstOrDefault();
-        if (amount <= 0 || weakest is null
-            || ListedValueFor(MasteryRules.OverhealCards, amount, caster, "Life") is not { } pick
+        if (amount <= 0 || weakest is null || ListedValueFor(cards, amount, caster, "Life") is not { } pick
             || Proc(caster, weakest, pick.Card) is not { } hit) {
             return null;
         }
 
         hit.ForcedRandomIndex = pick.Index;
         _overhealThisRound.Add(caster);
+        _overhealBank[caster] = 0;
+        _healPips[caster] = Math.Max(pips - (Resolve(pick.Card)?.Template.m_spellRank?.m_spellRank ?? 0), 0);
         return hit;
     }
 

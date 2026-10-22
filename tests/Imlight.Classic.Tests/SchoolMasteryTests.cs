@@ -165,6 +165,10 @@ public sealed class SchoolMasteryDuelTests : IDisposable {
         Add("Spirit Armor", MagicSchool.Life, Effect(kSpellEffects.kAbsorbDamage, 400, kEffectTarget.kFriendlySingle, "All"), rank: 3);
         Add("Pixie", MagicSchool.Life, Effect(kSpellEffects.kHeal, 400, kEffectTarget.kSelf, "Life"), rank: 2);
         Add("Satyr", MagicSchool.Life, Effect(kSpellEffects.kHeal, 860, kEffectTarget.kFriendlySingle, "Life"), rank: 4);
+        Add("Unicorn", MagicSchool.Life, Effect(kSpellEffects.kHeal, 275, kEffectTarget.kFriendlyTeam, "Life"), rank: 3);
+        AddMany("Regenerate", MagicSchool.Life, 5, Effect(kSpellEffects.kHeal, 52, kEffectTarget.kFriendlySingle, "Life"),
+            Effect(kSpellEffects.kHealOverTime, 1101, kEffectTarget.kFriendlySingle, "Life", rounds: 3));
+        Add("Balance Heal", MagicSchool.Balance, Effect(kSpellEffects.kHeal, 400, kEffectTarget.kFriendlySingle, "Life"), rank: 2);
         MasteryDirector.ResolveSpellForTests = name => _spells.TryGetValue(name, out var s) ? s : null;
 
         var lazy = typeof(SpellCinematics).BaseType!.GetField("s_instance", BindingFlags.Static | BindingFlags.NonPublic)!.GetValue(null)!;
@@ -557,6 +561,66 @@ public sealed class SchoolMasteryDuelTests : IDisposable {
         Assert.Equal(["Storm Shark", Bolt, Bolt], list.Select(NameOf).ToArray());
         Assert.False(b.IsAlive);
         Assert.Equal(850, c.ParticipantGameStats.m_currentHitpoints);
+    }
+
+    [Theory]
+    [InlineData(20, 980, 240)]     // a full team of four (three wizards and a minion): 1100 past full, 550, capped at 245: Nature's Wrath 240
+    [InlineData(45, 1663, 300)]    // cap 415, but Unicorn's 3 pips buy no more than Nature's Wrath (rank 3): 300
+    public void AnAreaHealOnAFullTeamCountsEveryFriendButPaysNoMoreThanItsPipsWorthOfLifeAttack(int level, int health, int dealt) {
+        var duel = NewDuel();
+        var krok = Occupy(duel, 0, Krok, 3000);
+        var life = Occupy(duel, 4, 1, health, MagicSchool.Life, level);
+        foreach (var slot in new[] { 5, 6 }) Occupy(duel, slot, 1, 836, MagicSchool.Fire, level);
+        Minion(duel, 7, life);
+        duel.Mastery.NewRound(1);
+
+        var list = Resolve(duel, Cast(life, life, "Unicorn"));
+
+        Assert.Equal(["Unicorn", "Nature's Wrath"], list.Select(NameOf).ToArray());
+        Assert.Equal(3000 - dealt, krok.ParticipantGameStats.m_currentHitpoints);
+    }
+
+    [Fact]
+    public void HealingAFullMinionOfOursCounts() {
+        var duel = NewDuel();
+        var krok = Occupy(duel, 0, Krok, 3000);
+        var life = Occupy(duel, 4, 1, 980, MagicSchool.Life, level: 20);
+        var minion = Minion(duel, 5, life);
+        duel.Mastery.NewRound(1);
+
+        Assert.Equal(["Pixie Life", "Leprechaun"], Resolve(duel, Cast(life, minion, "Pixie Life")).Select(NameOf).ToArray());
+    }
+
+    [Fact]
+    public void HealOverTimeTicksBankForTheLifeWizardAndPayOnTheirNextTurn() {
+        var duel = NewDuel();
+        var krok = Occupy(duel, 0, Krok, 3000);
+        var life = Occupy(duel, 4, 1, 980, MagicSchool.Life, level: 20);
+        var friend = Occupy(duel, 5, 1, 836, MagicSchool.Fire, level: 20);
+        duel.Mastery.NewRound(1);
+
+        // Regenerate on a full friend: 52 past full (26: under the smallest Life card), and a 367-a-round heal over time.
+        Assert.Equal(["Regenerate"], Resolve(duel, Cast(life, friend, "Regenerate")).Select(NameOf).ToArray());
+        // The friend's turn: the tick heals 367 past full, banked for the Life wizard.
+        Resolve(duel, new QueuedCombatAction { SpellCaster = friend });
+
+        duel.Mastery.NewRound(2);
+        var list = Resolve(duel, Cast(life, krok, "Imp"));   // any own cast: the round's hit pays the bank (419 -> 209)
+        Assert.Equal("Leprechaun", NameOf(list[^1]));
+        Assert.Equal(krok.SlotIndex, list[^1].m_targetSubcircleList.Single());
+    }
+
+    [Fact]
+    public void AnotherWizardsHealAndALifeWizardsOtherSchoolHealNeverCount() {
+        var duel = NewDuel();
+        var krok = Occupy(duel, 0, Krok, 3000);
+        var life = Occupy(duel, 4, 1, 980, MagicSchool.Life, level: 20);
+        var fire = Occupy(duel, 5, 1, 836, MagicSchool.Fire, level: 20);
+        duel.Mastery.NewRound(1);
+
+        Assert.Equal(["Pixie Life"], Resolve(duel, Cast(fire, life, "Pixie Life")).Select(NameOf).ToArray());   // a friend's Life heal
+        Assert.Equal(["Balance Heal"], Resolve(duel, Cast(life, fire, "Balance Heal")).Select(NameOf).ToArray()); // not a Life card
+        Assert.Equal(["Imp"], Resolve(duel, Cast(life, krok, "Imp")).Select(NameOf).ToArray());                   // nothing banked
     }
 
     // ------------------------------------------------------------ Death: Hungry Dead
