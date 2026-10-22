@@ -718,6 +718,10 @@ internal static class CombatEffectApplicator {
         }
         int current = target.ParticipantGameStats.m_currentHitpoints;
         int max = target.ParticipantGameStats.m_baseHitpoints;
+        // CLASSIC: School Mastery notes healing past full health in the spell now resolving (Life's Overheal).
+        if (MasteryDirector.Active && current > 0 && max > 0 && (long) current + heal > max) {
+            target._duelActor?.Mastery.RecordOverheal(target, (int) Math.Min((long) current + heal - max, int.MaxValue));
+        }
         long next = Math.Clamp((long) current + heal, 0L, max > 0 ? max : int.MaxValue);
         // CLASSIC: a revived wizard comes back without their previous buffs or pips (PvP Overview, 2009-03-09).
         // Existing HoT resolution skips defeated casters; this boundary also covers team direct heals.

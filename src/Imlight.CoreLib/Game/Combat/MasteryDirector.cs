@@ -47,14 +47,14 @@
  *     Storm wizard instead ("Wild Bolt - Amulet", the same values, aimed at its
  *     caster); a discharge never puts more than 40% of the Storm wizard's health
  *     back into them. No accuracy or health: a fizzle still wastes the turn.
- *   - Myth, Taming (Round 3, tied to Monstrology): a Myth spell leaves a creature
- *     the wizard has studied (Animus for it in their Monstrology ledger) at a
- *     quarter of its health or less: the client's own Monster Magic Defeat card
- *     for that creature takes it (free) and its Monster Magic Summon card raises
- *     it on the wizard's side (free). Once a fight; never a boss; needs no minion
- *     and a free seat. Extraction and the tome work as before for every school.
- *   - Life, Overgrowth: a Life heal that tops a friend up with 150 or more to
- *     spare grows the spare into a free Spirit Armor (absorb 400). Once a round.
+ *   - Myth, Siege Beast (Round 3, the owner's "shield breaking"): when a Myth
+ *     wizard's own minion hits an enemy that holds a shield or absorb, the wizard
+ *     casts a free Pierce at it (the client's card: one shield, never a trap).
+ *     Once a round per Myth wizard.
+ *   - Life, Overheal (Round 3, the owner's "some damage for solo"): half of the
+ *     healing a Life wizard's own heal puts past full health (capped at a quarter
+ *     of their health) becomes a free Life attack card at the weakest enemy, at
+ *     the listed value at or under it (Imp .. Centaur). Once a round.
  *   - Death, Hungry Dead (Round 3): a Death drain that lands while the wizard is
  *     at half health or less drains again, free (Ghoul, 180). Once a round.
  *   - Balance, Spectrum (Round 3, the owner's "reward balance for using different
@@ -83,7 +83,6 @@ using System.Linq;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Classic;
 using Imlight.Common;
-using Imlight.CoreLib.Game.Monstrology;
 using Imlight.CoreLib.Game.Spells;
 using Imlight.CoreLib.Game.Zone.Components;
 using Imlight.CoreLib.Shared.Behaviors;
@@ -127,25 +126,20 @@ internal static class MasteryRules {
     /// <summary>The most a discharge puts back into the Storm wizard, as a share of their health: never a kill from full.</summary>
     internal const float DischargeSelfCap = 0.4f;
 
-    /// <summary>Troll Minion (level 7): Myth's first minion card, and Taming's level.</summary>
-    internal const int TamingLevel = 7;
+    /// <summary>Troll Minion (level 7): Myth's first minion card, and Siege Beast's level.</summary>
+    internal const int SiegeLevel = 7;
 
-    /// <summary>A studied creature at or below this share of its health can be tamed.</summary>
-    internal const float TamingShare = 0.25f;
+    /// <summary>The client's Pierce: removes one shield or absorb from an enemy.</summary>
+    internal const string SiegeSpell = "Pierce";
 
-    /// <summary>The client's Monstrology cards for a creature template: Monster Magic Defeat and Monster Magic Summon.</summary>
-    internal static string DefeatCard(ulong creature) => $"Kill{creature}";
+    /// <summary>Sprite (Moolinda Wu, level 10).</summary>
+    internal const int OverhealLevel = 10;
 
-    internal static string SummonCard(ulong creature) => $"Summon{creature}";
+    /// <summary>The share of the overflow that becomes damage, and the cap as a share of the Life wizard's health.</summary>
+    internal const float OverhealShare = 0.5f, OverhealCapShare = 0.25f;
 
-    /// <summary>Spirit Armor (Life, level 16): Overgrowth's shield, and its level.</summary>
-    internal const int OvergrowthLevel = 16;
-
-    /// <summary>Spare healing (the card's heal past full health) that grows the shield.</summary>
-    internal const int OvergrowthSpare = 150;
-
-    /// <summary>The client's Spirit Armor: absorb 400 on a friend.</summary>
-    internal const string OvergrowthSpell = "Spirit Armor";
+    /// <summary>The classic Life attack cards whose listed values show the hit.</summary>
+    internal static readonly string[] OverhealCards = ["Imp", "Leprechaun", "Nature's Wrath", "Seraph", "Centaur"];
 
     /// <summary>Ghoul (Dworgyn, level 5).</summary>
     internal const int HungryDeadLevel = 5;
@@ -180,14 +174,14 @@ internal sealed class MasteryDirector {
     private readonly CombatDuelComponent _duel;
     private readonly HashSet<CombatDuelSubCircle> _retortThisRound = [];
     private readonly Dictionary<CombatDuelSubCircle, int> _prevented = [];
-    private readonly HashSet<CombatDuelSubCircle> _overgrowthThisRound = [];
+    private readonly HashSet<CombatDuelSubCircle> _overhealThisRound = [];
+    private readonly HashSet<CombatDuelSubCircle> _siegeThisRound = [];
+    private readonly Dictionary<CombatDuelSubCircle, int> _overheal = [];
     private readonly HashSet<CombatDuelSubCircle> _hungryThisRound = [];
     private readonly Dictionary<CombatDuelSubCircle, HashSet<string>> _schoolsThisFight = [];
     private readonly HashSet<CombatDuelSubCircle> _spectrumTeamGiven = [];
     private readonly Dictionary<CombatDuelSubCircle, int> _overkill = [];
     private readonly HashSet<string> _landedSchools = new(StringComparer.OrdinalIgnoreCase);
-    private readonly HashSet<CombatDuelSubCircle> _tamedThisFight = [];
-    private readonly Dictionary<ulong, MonstrologyLedger?> _ledgers = [];
     private readonly Dictionary<CombatDuelSubCircle, Snapshot> _before = [];
 
     private readonly record struct Snapshot(int Health, int Shields, int Blades, int Traps);
@@ -200,7 +194,8 @@ internal sealed class MasteryDirector {
     /// <summary>A new round: the once-a-round mechanics may fire again.</summary>
     internal void NewRound(int round) {
         _retortThisRound.Clear();
-        _overgrowthThisRound.Clear();
+        _overhealThisRound.Clear();
+        _siegeThisRound.Clear();
         _hungryThisRound.Clear();
     }
 
@@ -209,6 +204,7 @@ internal sealed class MasteryDirector {
         _before.Clear();
         _overkill.Clear();
         _prevented.Clear();
+        _overheal.Clear();
         _landedSchools.Clear();
         foreach (var circle in _duel.SubCircles.Where(c => c is { Occupied: true, AddedToDuel: true, ParticipantGameStats: not null })) {
             _before[circle] = new Snapshot(circle.ParticipantGameStats.m_currentHitpoints, Shields(circle), Blades(circle), Traps(circle));
@@ -222,6 +218,10 @@ internal sealed class MasteryDirector {
     /// <summary>Damage <paramref name="target"/>'s shields and armour stopped in the spell now resolving (not a tick).</summary>
     internal void RecordPrevented(CombatDuelSubCircle target, int prevented)
         => _prevented[target] = _prevented.GetValueOrDefault(target) + Math.Max(prevented, 0);
+
+    /// <summary>Healing past <paramref name="target"/>'s full health in the spell now resolving (not a tick).</summary>
+    internal void RecordOverheal(CombatDuelSubCircle target, int overflow)
+        => _overheal[target] = _overheal.GetValueOrDefault(target) + Math.Max(overflow, 0);
 
     /// <summary>The school a landed effect of the spell now resolving names ("All" and none are not schools).</summary>
     internal void RecordEffect(SpellEffect effect) {
@@ -243,10 +243,10 @@ internal sealed class MasteryDirector {
         if (action.Cheat is null) {
             Add(procs, Kindling(action));
             procs.AddRange(StaticDischarge(action));
-            Add(procs, Overgrowth(action));
+            Add(procs, Overheal(action));
+            Add(procs, SiegeBeast(action));
             Add(procs, HungryDead(action));
             procs.AddRange(Spectrum(action));
-            procs.AddRange(Taming(action));
         }
 
         if (action.Cheat?.IsMastery != true) {
@@ -303,7 +303,7 @@ internal sealed class MasteryDirector {
 
             var amount = Math.Min((int) Math.Floor(stopped * MasteryRules.RetortShare),
                 (int) Math.Floor(ice.ParticipantGameStats.m_baseHitpoints * MasteryRules.RetortCapShare));
-            if (RetortCardFor(amount, ice) is not { } pick || Proc(ice, attacker, pick.Card) is not { } retort) {
+            if (ListedValueFor(MasteryRules.RetortCards, amount, ice, "Ice") is not { } pick || Proc(ice, attacker, pick.Card) is not { } retort) {
                 continue;
             }
 
@@ -314,14 +314,15 @@ internal sealed class MasteryDirector {
     }
 
     /// <summary>
-    /// The classic Ice attack card and value that best show <paramref name="amount"/>: the largest listed value at or under it
-    /// once the wizard's own Ice damage bonus (applied again by the cast) is taken out; null under the smallest value.
+    /// The card of <paramref name="cards"/> and its listed value (a RandomSpellEffect of fixed damages) that best show
+    /// <paramref name="amount"/>: the largest at or under it once the caster's own <paramref name="school"/> damage bonus
+    /// (applied again by the cast) is taken out; null under the smallest value.
     /// </summary>
-    internal static (string Card, int Index, int Value)? RetortCardFor(int amount, CombatDuelSubCircle ice) {
-        var boost = Math.Max(1 + CombatEffectApplicator.GetPercentDamageIncrease(ice, "Ice"), 1f);
+    internal static (string Card, int Index, int Value)? ListedValueFor(IEnumerable<string> cards, int amount, CombatDuelSubCircle caster, string school) {
+        var boost = Math.Max(1 + CombatEffectApplicator.GetPercentDamageIncrease(caster, school), 1f);
         var budget = amount / boost;
         (string Card, int Index, int Value)? best = null;
-        foreach (var card in MasteryRules.RetortCards) {
+        foreach (var card in cards) {
             if (Resolve(card) is not { } resolved
                 || resolved.Template.m_effects?.OfType<RandomSpellEffect>().FirstOrDefault() is not { m_effectList: { } values }) {
                 continue;
@@ -394,108 +395,51 @@ internal sealed class MasteryDirector {
         return best;
     }
 
-    // ------------------------------------------------------------ Myth: Taming (Monstrology)
+    // ------------------------------------------------------------ Myth: Siege Beast
 
-    /// <summary>Test hook: what Monstrology says about a creature template (its collected id and whether it is a boss).</summary>
-    internal static Func<ulong, (uint Collected, bool Boss)?>? CreatureForTests;
-
-    /// <summary>Test hook: whether a wizard (by circle) has studied a collected creature.</summary>
-    internal static Func<CombatDuelSubCircle, uint, bool>? StudiedForTests;
-
-    private IEnumerable<QueuedCombatAction> Taming(QueuedCombatAction action) {
-        var caster = action.SpellCaster;
+    private QueuedCombatAction? SiegeBeast(QueuedCombatAction action) {
+        var minion = action.SpellCaster;
         var target = action.SelectedTarget;
-        if (!Masters(caster, MagicSchool.Myth, MasteryRules.TamingLevel) || !IsSchool(action, MagicSchool.Myth)
-            || !Deals(action, kSpellEffects.kDamage, kSpellEffects.kDamageOverTime, kSpellEffects.kStealHealth)
-            || target is not { IsAlive: true, IsWizard: false, IsSummonedMinion: false, ParticipantObject: { } creature }
-            || !IsEnemyOf(target, caster) || _tamedThisFight.Contains(caster) || !caster.IsAlive
-            || target.ParticipantGameStats.m_currentHitpoints > target.ParticipantGameStats.m_baseHitpoints * MasteryRules.TamingShare
-            || _duel.SubCircles.Any(c => c.IsOwnedMinionOf(caster)) || !_duel.HasFreeSummonSeat(caster)
-            || Creature(creature.m_templateID.Full) is not { Boss: false } facts || !Studied(caster, facts.Collected)) {
-            yield break;
+        if (!minion.IsSummonedMinion || !Deals(action, kSpellEffects.kDamage, kSpellEffects.kDamageOverTime, kSpellEffects.kStealHealth)
+            || target is not { IsAlive: true } || !IsEnemyOf(target, minion) || Shields(target) + Absorbs(target) == 0) {
+            return null;
         }
 
-        var tid = creature.m_templateID.Full;
-        if (Proc(caster, target, MasteryRules.DefeatCard(tid)) is not { } defeat
-            || Proc(caster, caster, MasteryRules.SummonCard(tid)) is not { } summon) {
-            yield break;
+        var owner = _duel.SubCircles.FirstOrDefault(c => c.IsWizard && minion.IsOwnedMinionOf(c));
+        if (owner is null || !Masters(owner, MagicSchool.Myth, MasteryRules.SiegeLevel) || !_siegeThisRound.Add(owner)) {
+            return null;
         }
 
-        _tamedThisFight.Add(caster);
-        yield return defeat;
-        yield return summon;
+        return Proc(owner, target, MasteryRules.SiegeSpell);
     }
 
-    private static (uint Collected, bool Boss)? Creature(ulong template) {
-        if (CreatureForTests is { } hook) {
-            return hook(template);
-        }
+    private static int Absorbs(CombatDuelSubCircle circle)
+        => circle._hangingEffects?.Count(effect => effect.m_effectType == kSpellEffects.kAbsorbDamage && effect.m_paramPerRound > 0) ?? 0;
 
-        if (CoreObjectFactory.GetCoreTemplate(template) is not GameObjectTemplate creature
-            || creature.m_behaviors?.OfType<MobMonsterMagicBehaviorTemplate>().FirstOrDefault() is not { } metadata) {
-            return null;   // not a Monstrology creature
-        }
+    // ------------------------------------------------------------ Life: Overheal
 
-        var boss = metadata.m_isBoss || creature.m_behaviors.OfType<NPCBehaviorTemplate>().FirstOrDefault()?.m_bossMob == true;
-        return (metadata.m_collectedAsTemplateID != 0 ? metadata.m_collectedAsTemplateID : (uint) template, boss);
-    }
-
-    // Studied: the wizard's Monstrology ledger holds Animus for the creature (a successful extraction). Read once a fight.
-    private bool Studied(CombatDuelSubCircle wizard, uint collected) {
-        if (StudiedForTests is { } hook) {
-            return hook(wizard, collected);
-        }
-
-        if (wizard._wizard is not { } owner || !MonstrologyService.Enabled
-            || !MonstrologySessionPolicy.AllowsWizard(owner, MonstrologyService.Enabled)) {
-            return false;
-        }
-
-        if (!_ledgers.TryGetValue(owner.CharId, out var ledger)) {
-            try {
-                ledger = MonstrologyRepository.ForPlayers().Read(owner.CharId);
-            } catch (Exception ex) {
-                Logger.Warning("School Mastery: Monstrology ledger of {0} unreadable ({1}); no Taming.", Logger.Args(owner.CharId.ToString(), ex.Message));
-                ledger = null;
-            }
-
-            _ledgers[owner.CharId] = ledger;
-        }
-
-        return ledger?.Animus.TryGetValue(collected, out var animus) == true && animus > 0;
-    }
-
-    // ------------------------------------------------------------ Life: Overgrowth
-
-    private QueuedCombatAction? Overgrowth(QueuedCombatAction action) {
+    private QueuedCombatAction? Overheal(QueuedCombatAction action) {
         var caster = action.SpellCaster;
-        if (!Masters(caster, MagicSchool.Life, MasteryRules.OvergrowthLevel) || !IsSchool(action, MagicSchool.Life)
-            || _overgrowthThisRound.Contains(caster)) {
+        if (!Masters(caster, MagicSchool.Life, MasteryRules.OverhealLevel) || !caster.IsAlive || !IsSchool(action, MagicSchool.Life)
+            || _overhealThisRound.Contains(caster)) {
             return null;
         }
 
-        var heals = Flatten(action.SpellTemplate?.m_effects).Where(e => e.m_effectType == kSpellEffects.kHeal && e.m_effectParam > 0).ToList();
-        if (heals.Count == 0) {
+        var overflow = _overheal.Where(kv => kv.Key.OccupiedTeam == caster.ActingTeam).Sum(kv => kv.Value);
+        var amount = Math.Min((int) Math.Floor(overflow * MasteryRules.OverhealShare),
+            (int) Math.Floor(caster.ParticipantGameStats.m_baseHitpoints * MasteryRules.OverhealCapShare));
+        var weakest = _duel.SubCircles
+            .Where(c => c is { Occupied: true, AddedToDuel: true, IsAlive: true } && IsEnemyOf(c, caster))
+            .OrderBy(c => c.ParticipantGameStats.m_currentHitpoints).ThenBy(c => c.SlotIndex).FirstOrDefault();
+        if (amount <= 0 || weakest is null
+            || ListedValueFor(MasteryRules.OverhealCards, amount, caster, "Life") is not { } pick
+            || Proc(caster, weakest, pick.Card) is not { } hit) {
             return null;
         }
 
-        var friend = heals.Any(e => e.m_effectTarget is kEffectTarget.kSelf) ? caster : action.SelectedTarget;
-        if (friend is not { IsWizard: true, IsAlive: true } || friend.OccupiedTeam != caster.ActingTeam
-            || HealthBefore(friend) <= 0 || friend.ParticipantGameStats.m_currentHitpoints < friend.ParticipantGameStats.m_baseHitpoints) {
-            return null;
-        }
-
-        var spare = HealthBefore(friend) + heals.Max(e => e.m_effectParam) - friend.ParticipantGameStats.m_baseHitpoints;
-        if (spare < MasteryRules.OvergrowthSpare) {
-            return null;
-        }
-
-        var proc = Proc(caster, friend, MasteryRules.OvergrowthSpell);
-        if (proc is not null) {
-            _overgrowthThisRound.Add(caster);
-        }
-
-        return proc;
+        hit.ForcedRandomIndex = pick.Index;
+        _overhealThisRound.Add(caster);
+        return hit;
     }
 
     // ------------------------------------------------------------ Death: Hungry Dead
