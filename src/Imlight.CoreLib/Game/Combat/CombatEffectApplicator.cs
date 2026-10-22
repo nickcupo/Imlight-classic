@@ -70,6 +70,7 @@ internal static class CombatEffectApplicator {
     /// <param name="casterPipCost">The pips the caster pays for the spell after its effects land.</param>
     /// <param name="critBlockedSlots">CLASSIC: target slots that blocked the landed critical (2010 model); they take the
     /// effect without the multiplier. Null for the modern model.</param>
+    /// <param name="spellTemplateId">CLASSIC: the cast spell's template id, stamped on each hanging copy (see ApplyHangingEffect).</param>
     /// <returns>The cinematic time required for the effect to be applied.</returns>
     internal static float ApplyEffect(SpellEffect effect,
                                       SpellEffect[] charms,
@@ -77,7 +78,8 @@ internal static class CombatEffectApplicator {
                                       CombatDuelSubCircle[] targets,
                                       float critMultiplier = 1,
                                       int casterPipCost = 0,
-                                      IReadOnlySet<int> critBlockedSlots = null) {
+                                      IReadOnlySet<int> critBlockedSlots = null,
+                                      uint spellTemplateId = 0) {
         var cinematicTime = 0.0f;
 
         if (effect.m_effectTarget == kEffectTarget.kGlobal) {
@@ -124,7 +126,7 @@ internal static class CombatEffectApplicator {
             case kSpellEffects.kCritBoost:
             case kSpellEffects.kCritBlock:
             case kSpellEffects.kStunBlock:
-                ApplyHangingEffect(effect, targets);
+                ApplyHangingEffect(effect, targets, spellTemplateId);
                 break;
             case kSpellEffects.kMindControl:
                 // Beguile: the target's next action is taken for the caster's side (one action per round of the card).
@@ -483,11 +485,18 @@ internal static class CombatEffectApplicator {
         return cinematicTime;
     }
 
-    private static void ApplyHangingEffect(SpellEffect effect, CombatDuelSubCircle[] targets) {
+    private static void ApplyHangingEffect(SpellEffect effect, CombatDuelSubCircle[] targets, uint spellTemplateId = 0) {
         foreach (var target in targets) {
             // Each target gets its own copy: the effect belongs to the spell template, which every cast of the
             // card in every duel shares. An absorb shield's remaining pool lives on the copy.
             var hanging = CopyOf(effect);
+            // CLASSIC (2026-10-22): the copy carries the card it came from. The client's effects all say 0, so before
+            // this every charm and ward shared one id and DistinctBy(m_spellTemplateID) let only ONE apply per hit;
+            // stacking is one copy of each card (CombatCharms/CombatWards). Retail sent the real id: the client's
+            // MSG_CombatRevealHanging (0x1420d8cd0) reads SpellTemplateID to match a hidden hanging effect.
+            if (hanging.m_spellTemplateID == 0) {
+                hanging.m_spellTemplateID = spellTemplateId;
+            }
 
             // If this is an absorb ward, set the initial value.
             if (hanging.m_effectType == kSpellEffects.kAbsorbDamage) {
