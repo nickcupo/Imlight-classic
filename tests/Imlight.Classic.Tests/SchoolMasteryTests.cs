@@ -119,8 +119,8 @@ public sealed class SchoolMasteryDuelTests : IDisposable {
         Add("Krok Hit", MagicSchool.Fire, Effect(kSpellEffects.kDamage, 300, kEffectTarget.kEnemySingle));
         Add("Big Krok Hit", MagicSchool.Fire, Effect(kSpellEffects.kDamage, 700, kEffectTarget.kEnemySingle));
         Add("Storm Shark", MagicSchool.Storm, Effect(kSpellEffects.kDamage, 400, kEffectTarget.kEnemySingle, "Storm"), rank: 3);
-        AddVariable("Tempest", MagicSchool.Storm, [.. Enumerable.Range(1, 7).Select(tier =>
-            Effect(kSpellEffects.kDamage, 80 * tier, kEffectTarget.kEnemyTeamAllAtOnce, "Storm"))]);
+        // The client's Insane Bolt (r806919, not the Wintertusk record): three rolls, each 145 at the target or the caster.
+        AddMany("Insane Bolt", MagicSchool.Storm, 2, 70, Bolt(4), Bolt(4), Bolt(3));
         Add("Pet - Ghoul", MagicSchool.Death, Effect(kSpellEffects.kStealHealth, 180, kEffectTarget.kEnemySingle, "Death"), rank: 2);
         foreach (var school in new[] { "Fire", "Ice", "Storm" }) {
             Add($"{school}blade", Enum.Parse<MagicSchool>(school), Effect(kSpellEffects.kModifyOutgoingDamage, 35, kEffectTarget.kFriendlySingle, school));
@@ -190,19 +190,17 @@ public sealed class SchoolMasteryDuelTests : IDisposable {
 
     private void AddMany(string name, MagicSchool school, byte rank, params SpellEffect[] effects) => AddMany(name, school, rank, 100, effects);
 
+    private static RandomSpellEffect Bolt(int atTarget) => new() {
+        m_effectType = kSpellEffects.kInvalidSpellEffect, m_effectTarget = kEffectTarget.kEnemySingle, m_sDamageType = "Storm",
+        m_effectList = [.. Enumerable.Repeat(0, atTarget).Select(_ => Effect(kSpellEffects.kDamage, 145, kEffectTarget.kEnemySingle, "Storm")),
+            Effect(kSpellEffects.kDamage, 145, kEffectTarget.kSelf, "Storm")],
+    };
+
     // A ranged classic attack card: one of fixed values, the client's RandomSpellEffect.
     private void AddRandom(string name, MagicSchool school, byte rank, int[] values) => AddMany(name, school, rank, 80, new RandomSpellEffect {
         m_effectType = kSpellEffects.kInvalidSpellEffect, m_effectTarget = kEffectTarget.kInvalidTarget, m_sDamageType = "All",
         m_effectList = [.. values.Select(v => Effect(kSpellEffects.kDamage, v, kEffectTarget.kEnemySingle, school.ToString()))],
     });
-
-    // An X-pip card: one nested effect per pip tier (m_pipNum 1..n), as the client's Tempest.
-    private void AddVariable(string name, MagicSchool school, SpellEffect[] tiers) {
-        for (var i = 0; i < tiers.Length; i++) tiers[i].m_pipNum = (byte) (i + 1);
-        AddMany(name, school, 0, 70, new VariableSpellEffect {
-            m_effectType = kSpellEffects.kInvalidSpellEffect, m_effectTarget = kEffectTarget.kInvalidTarget, m_sDamageType = "All", m_effectList = [.. tiers],
-        });
-    }
 
     private void AddMany(string name, MagicSchool school, byte rank, uint accuracy, params SpellEffect[] effects) {
         var id = Base + _next++;
@@ -417,7 +415,7 @@ public sealed class SchoolMasteryDuelTests : IDisposable {
         ice._hangingEffects.Add(Shield());
         ice._hangingEffects.Add(HangingBurn(300, 2));
         Assert.Equal(1, Resolve(duel, new QueuedCombatAction { SpellCaster = ice }).Count);
-        // Another wizard's School Mastery proc (Storm's Tempest, say) that hits the Ice wizard.
+        // Another wizard's School Mastery proc (Storm's Insane Bolt, say) that hits the Ice wizard.
         ice._hangingEffects.Add(Shield());
         Assert.Equal(["Krok Hit"], Resolve(duel, Hit(krok, ice, mastery: true)).Select(NameOf).ToArray());
         // A friend hitting the Ice wizard on purpose.
@@ -436,61 +434,116 @@ public sealed class SchoolMasteryDuelTests : IDisposable {
         Assert.Equal(["Krok Hit"], Resolve(duel, Hit(krok, ice)).Select(NameOf).ToArray());
     }
 
-    // ------------------------------------------------------------ Storm: Overkill
+    // ------------------------------------------------------------ Storm: Overload (backfire)
 
-    [Theory]
-    [InlineData(300, 0f, 1, 80)]      // 100 spare over two: 50 each, nearest tier 1 (80)
-    [InlineData(100, 0f, 2, 160)]     // 300 spare over two: 150 each, tier 2 (160)
-    [InlineData(100, 0.25f, 2, 200)]  // +25% Storm gear: Shark 500, 400 spare, 200 each = tier 2 (160 x 1.25)
-    public void AStormKillSplitsItsOverkillEquallyOverTheOtherEnemiesAsATempest(int firstHealth, float gear, int tier, int each) {
-        var duel = NewDuel();
-        var a = Occupy(duel, 0, Krok, firstHealth);
-        var b = Occupy(duel, 1, Krok, 1000);
-        var c = Occupy(duel, 2, Krok, 1000);
-        var storm = Occupy(duel, 4, 1, 710, MagicSchool.Storm, level: 20);
-        storm.ParticipantGameStats.m_dmgBonusPercentAll = gear;
-        duel.Mastery.NewRound(1);
+    // The duel's random source, scripted: an accuracy roll (0..100) always hits; each bolt roll (0..n) picks the enemy
+    // entry, or the caster's entry (the last one) when the next scripted answer says so.
+    private sealed class BoltRandom(params bool[] backfires) : Random {
+        private int _bolt;
+        internal int BoltRolls => _bolt;
+        public override int Next(int minValue, int maxValue) {
+            if (maxValue == 100) return 0;
+            var back = _bolt < backfires.Length && backfires[_bolt];
+            _bolt++;
+            return back ? maxValue - 1 : 0;
+        }
+    }
 
-        var list = Resolve(duel, Cast(storm, a, "Storm Shark"));
-
-        Assert.Equal(["Storm Shark", "Tempest"], list.Select(NameOf).ToArray());
-        Assert.True(list[1].m_interrupt);
-        Assert.Equal(tier, list[1].m_xPipCost);
-        Assert.False(a.IsAlive);
-        Assert.Equal([1000 - each, 1000 - each], new[] { b, c }.Select(x => x.ParticipantGameStats.m_currentHitpoints).ToArray());
-        Assert.Equal(4, storm.CombatParticipant.m_pipCount.m_genericPips);   // only the Shark (3 pips) cost pips
+    private static BoltRandom Script(CombatDuelComponent duel, params bool[] backfires) {
+        var random = new BoltRandom(backfires);
+        typeof(CombatDuelComponent).GetField("_rng", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(duel, random);
+        return random;
     }
 
     [Fact]
-    public void TheSpilloverGoesThroughShieldsAndNeverSpillsAgain() {
+    public void AStormKillWithDamageToSpareLetsLooseAnInsaneBoltAtTheHealthiestEnemy() {
         var duel = NewDuel();
         var a = Occupy(duel, 0, Krok, 100);
-        var shielded = Occupy(duel, 1, Krok, 1000);
-        var weak = Occupy(duel, 2, Krok, 50);
+        var b = Occupy(duel, 1, Krok, 1000);
+        var c = Occupy(duel, 2, Krok, 800);
         var storm = Occupy(duel, 4, 1, 710, MagicSchool.Storm, level: 20);
-        shielded._hangingEffects.Add(Shield());
+        var random = Script(duel, false, false, false);
+        duel.Mastery.NewRound(1);
+
+        var list = Resolve(duel, Cast(storm, a, "Storm Shark"));   // 400 into 100: 300 to spare
+
+        Assert.Equal(["Storm Shark", "Insane Bolt"], list.Select(NameOf).ToArray());
+        Assert.Equal((storm.SlotIndex, b.SlotIndex), (list[1].m_spellCaster, list[1].m_targetSubcircleList.First()));
+        Assert.True(list[1].m_interrupt);
+        Assert.Equal(1000 - 435, b.ParticipantGameStats.m_currentHitpoints);   // three bolts of 145
+        Assert.Equal(800, c.ParticipantGameStats.m_currentHitpoints);
+        Assert.Equal(710, storm.ParticipantGameStats.m_currentHitpoints);
+        Assert.Equal(3, random.BoltRolls);   // each bolt rolled once, by the server
+    }
+
+    [Fact]
+    public void ABackfireHitsTheStormWizardThroughTheirOwnShieldAndSetsOffNothingElse() {
+        var duel = NewDuel();
+        var a = Occupy(duel, 0, Krok, 100);
+        var b = Occupy(duel, 1, Krok, 1000);
+        var storm = Occupy(duel, 4, 1, 710, MagicSchool.Storm, level: 20);
+        var ice = Occupy(duel, 5, 1, 1091, MagicSchool.Ice, level: 20);
+        ice._hangingEffects.Add(Shield());
+        var death = Occupy(duel, 6, 1, 915, MagicSchool.Death, level: 20);
+        death.ParticipantGameStats.m_currentHitpoints = 300;
+        storm._hangingEffects.Add(Shield());
+        Script(duel, true, false, true);
         duel.Mastery.NewRound(1);
 
         var list = Resolve(duel, Cast(storm, a, "Storm Shark"));
 
-        // 300 spare over two = tier 2 (160): the shield halves it; the weak one dies with 110 to spare, which stays put.
-        Assert.Equal(["Storm Shark", "Tempest"], list.Select(NameOf).ToArray());
-        Assert.Equal(1000 - 80, shielded.ParticipantGameStats.m_currentHitpoints);
-        Assert.False(weak.IsAlive);
+        // Bolt 1 backfires into the Storm wizard's shield (72), bolt 2 hits the enemy, bolt 3 backfires unshielded (145).
+        Assert.Equal(["Storm Shark", "Insane Bolt"], list.Select(NameOf).ToArray());
+        Assert.Equal(710 - 72 - 145, storm.ParticipantGameStats.m_currentHitpoints);
+        Assert.Equal(1000 - 145, b.ParticipantGameStats.m_currentHitpoints);
+        Assert.Equal((1091, 300), (ice.ParticipantGameStats.m_currentHitpoints, death.ParticipantGameStats.m_currentHitpoints));
+    }
+
+    [Fact]
+    public void AFullHealthStormWizardSurvivesEveryBoltBackfiring() {
+        var duel = NewDuel();
+        var a = Occupy(duel, 0, Krok, 100);
+        Occupy(duel, 1, Krok, 1000);
+        var storm = Occupy(duel, 4, 1, 547, MagicSchool.Storm, level: 10);   // the lowest health that unlocks it
+        Script(duel, true, true, true);
+        duel.Mastery.NewRound(1);
+
+        Resolve(duel, Cast(storm, a, "Storm Shark"));
+
+        Assert.Equal(547 - 435, storm.ParticipantGameStats.m_currentHitpoints);
     }
 
     [Theory]
-    [InlineData(MagicSchool.Storm, 20, 900)]   // no kill, nothing to spill
+    [InlineData(MagicSchool.Storm, 20, 300)]   // 100 to spare: less than one bolt
+    [InlineData(MagicSchool.Storm, 20, 900)]   // no kill
     [InlineData(MagicSchool.Fire, 20, 100)]    // not a Storm wizard
     [InlineData(MagicSchool.Storm, 9, 100)]    // below Storm Shark's level
-    public void OverkillNeedsAStormKillByAStormWizard(MagicSchool school, int level, int firstHealth) {
+    public void OverloadNeedsAStormKillWithABoltToSpare(MagicSchool school, int level, int firstHealth) {
         var duel = NewDuel();
         var a = Occupy(duel, 0, Krok, firstHealth);
         Occupy(duel, 1, Krok, 1000);
         var wizard = Occupy(duel, 4, 1, 710, school, level);
+        Script(duel);
         duel.Mastery.NewRound(1);
 
         Assert.Equal(["Storm Shark"], Resolve(duel, Cast(wizard, a, "Storm Shark")).Select(NameOf).ToArray());
+    }
+
+    [Fact]
+    public void TheBoltsNeverOverloadAgain() {
+        var duel = NewDuel();
+        var a = Occupy(duel, 0, Krok, 100);
+        var b = Occupy(duel, 1, Krok, 200);   // the bolts kill it with 235 to spare
+        var c = Occupy(duel, 2, Krok, 150);
+        var storm = Occupy(duel, 4, 1, 710, MagicSchool.Storm, level: 20);
+        Script(duel, false, false, false);
+        duel.Mastery.NewRound(1);
+
+        var list = Resolve(duel, Cast(storm, a, "Storm Shark"));
+
+        Assert.Equal(["Storm Shark", "Insane Bolt"], list.Select(NameOf).ToArray());
+        Assert.False(b.IsAlive);
+        Assert.Equal(150, c.ParticipantGameStats.m_currentHitpoints);
     }
 
     // ------------------------------------------------------------ Death: Hungry Dead

@@ -38,12 +38,13 @@
  *     health), shown as a free Ice attack card landing that number (the classic
  *     Frost Beetle .. Colossus values, the server naming the value). Once a
  *     round; never on a tick; a retort is never reflected.
- *   - Storm, Overkill (Round 3, the owner's idea): a Storm wizard's Storm spell
- *     defeats enemies with damage to spare: the damage past their remaining
- *     health is split equally among every other living enemy, shown as a free
- *     Tempest at the tier (80 a tier) nearest each enemy's share. It goes
- *     through wards, traps and resist like any Storm hit, never spills again,
- *     and gives no accuracy or health: a fizzle still wastes the turn.
+ *   - Storm, Overload (Round 3, the owner's "chance for chain lightning to hit you
+ *     instead"): a Storm wizard's Storm spell defeats enemies with at least 145
+ *     damage to spare: the spare lightning breaks loose as a free Insane Bolt
+ *     (the client's own card) at the healthiest enemy left: three 145 bolts, each
+ *     striking that enemy or, about one time in five, arcing back into the Storm
+ *     wizard. The server rolls each bolt once, as for any Insane Bolt. No accuracy
+ *     or health is given: a fizzle still wastes the turn.
  *   - Myth, Taming (Round 3, tied to Monstrology): a Myth spell leaves a creature
  *     the wizard has studied (Animus for it in their Monstrology ledger) at a
  *     quarter of its health or less: the client's own Monster Magic Defeat card
@@ -113,13 +114,13 @@ internal static class MasteryRules {
     internal static readonly string[] RetortCards = ["Frost Beetle", "Snow Serpent", "Evil Snowman", "Ice Wyvern", "Colossus"];
 
     /// <summary>Storm Shark (Halston Balestrom, level 10).</summary>
-    internal const int OverkillLevel = 10;
+    internal const int OverloadLevel = 10;
 
-    /// <summary>The client's Tempest: an X-pip Storm card hitting every enemy for 80 a tier.</summary>
-    internal const string OverkillSpell = "Tempest";
+    /// <summary>The client's Insane Bolt (October 2010 values: three rolls of 145, each at the target or the caster).</summary>
+    internal const string OverloadSpell = "Insane Bolt";
 
-    /// <summary>Tempest's damage per tier.</summary>
-    internal const int OverkillTier = 80;
+    /// <summary>Spare damage needed: one bolt's worth.</summary>
+    internal const int OverloadSpare = 145;
 
     /// <summary>Troll Minion (level 7): Myth's first minion card, and Taming's level.</summary>
     internal const int TamingLevel = 7;
@@ -236,7 +237,7 @@ internal sealed class MasteryDirector {
 
         if (action.Cheat is null) {
             Add(procs, Kindling(action));
-            Add(procs, Overkill(action));
+            Add(procs, Overload(action));
             Add(procs, Overgrowth(action));
             Add(procs, HungryDead(action));
             procs.AddRange(Spectrum(action));
@@ -332,37 +333,24 @@ internal sealed class MasteryDirector {
         return best;
     }
 
-    // ------------------------------------------------------------ Storm: Overkill
+    // ------------------------------------------------------------ Storm: Overload
 
-    private QueuedCombatAction? Overkill(QueuedCombatAction action) {
+    private QueuedCombatAction? Overload(QueuedCombatAction action) {
         var caster = action.SpellCaster;
-        if (!Masters(caster, MagicSchool.Storm, MasteryRules.OverkillLevel) || !caster.IsAlive || !IsSchool(action, MagicSchool.Storm)) {
+        if (!Masters(caster, MagicSchool.Storm, MasteryRules.OverloadLevel) || !caster.IsAlive || !IsSchool(action, MagicSchool.Storm)) {
             return null;
         }
 
         var spare = _overkill.Where(kv => !kv.Key.IsAlive && IsEnemyOf(kv.Key, caster)).Sum(kv => kv.Value);
-        var survivors = _duel.SubCircles
-            .Where(c => c is { Occupied: true, AddedToDuel: true, IsAlive: true } && IsEnemyOf(c, caster)).ToList();
-        if (spare <= 0 || survivors.Count == 0) {
+        var next = _duel.SubCircles
+            .Where(c => c is { Occupied: true, AddedToDuel: true, IsAlive: true } && IsEnemyOf(c, caster))
+            .OrderByDescending(c => c.ParticipantGameStats.m_currentHitpoints).ThenBy(c => c.SlotIndex).FirstOrDefault();
+        if (spare < MasteryRules.OverloadSpare || next is null) {
             return null;
         }
 
-        var tier = OverkillTierFor(spare / (double) survivors.Count, caster);
-        if (tier < 1 || Proc(caster, survivors[0], MasteryRules.OverkillSpell) is not { } tempest) {
-            return null;
-        }
-
-        tempest.ForcedXPips = tier;
-        return tempest;
-    }
-
-    /// <summary>
-    /// Tempest's tier nearest to <paramref name="share"/> once the wizard's own Storm damage bonus (applied again by the
-    /// cast) is taken out; 0 when the share is under half a tier.
-    /// </summary>
-    internal static int OverkillTierFor(double share, CombatDuelSubCircle caster) {
-        var boost = 1 + CombatEffectApplicator.GetPercentDamageIncrease(caster, "Storm");
-        return (int) Math.Round(share / (MasteryRules.OverkillTier * Math.Max(boost, 1f)), MidpointRounding.AwayFromZero);
+        // The bolts are rolled once, by the server, when the free Insane Bolt resolves (CombatActionResolver), as for the card.
+        return Proc(caster, next, MasteryRules.OverloadSpell);
     }
 
     // ------------------------------------------------------------ Myth: Taming (Monstrology)
