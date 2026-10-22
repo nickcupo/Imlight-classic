@@ -210,6 +210,7 @@ internal class FriendsService(SessionActor sessionActor) : MessageService(sessio
         }
 
         SendBuddyListEnd(wizard);
+        ResendIncomingRequests(wizard); // CLASSIC: after the list, as the client auto-denies a request from a listed buddy
         InformBuddiesOfStatusChange(true);
         Classic.QuestBuddyNotices.Login(Context.System, charId); // CLASSIC: which quest each online friend is on
     }
@@ -327,9 +328,9 @@ internal class FriendsService(SessionActor sessionActor) : MessageService(sessio
         }
 
         // Add the pending request to the sender. When we get a response from the recipient, we'll know it's valid.
-        if (!wizard.AddPendingFriendRequest(buddyCharID)) {
-            return;
-        }
+        // CLASSIC: a request still on the list (never answered, the recipient logged out) is simply asked again; it used
+        // to block every later request to that wizard. The recipient's side drops a duplicate.
+        wizard.FriendsBehavior.AddPendingFriendRequest(buddyCharID);
 
         // Forward the request to the recipient.
         // (SEE TOP OF FILE FOR FLOW) Step 2
@@ -372,8 +373,12 @@ internal class FriendsService(SessionActor sessionActor) : MessageService(sessio
         }
 
         // Add the pending request to the recipient. When we get a response from the sender, we'll know it's valid.
-        wizard.AddPendingFriendRequest(buddyCharID);
+        wizard.FriendsBehavior.AddPendingFriendRequest(buddyCharID);
         NoteIncomingRequest(wizard.CharId, buddyCharID); // CLASSIC
+        // CLASSIC: kept on the recipient too, so it is shown again at the next login if it is not answered now.
+        if (wizard.FriendsBehavior.AddIncomingFriendRequest(buddyCharID)) {
+            SaveFriends(wizard);
+        }
 
         // Inform the game client. We will now await the player's response.
         var clientMsg = new GAME_5_PROTOCOL.MSG_BUDDYREQUESTADD {
@@ -394,8 +399,8 @@ internal class FriendsService(SessionActor sessionActor) : MessageService(sessio
         // Ensure that this wizard was even pending. If not, log an error and return.
         // Replies identify the saved requester, unlike the initial object-targeted add request.
         var buddyCharID = message.ListOwnerGID;
-        // CLASSIC: only a request this wizard received can be accepted.
-        if (!TakeIncomingRequest(wizard.CharId, buddyCharID) | !wizard.RemovePendingFriendRequest(buddyCharID)) {
+        // CLASSIC: only a request this wizard received can be accepted (this session's record or the saved one).
+        if (!TakeIncoming(wizard, buddyCharID) | !wizard.RemovePendingFriendRequest(buddyCharID)) {
             Logger.Error("{0} tried to add character ID {1} as a friend, but the request was not pending.",
                 Logger.Args(wizard.PlayerNameBehavior.GetWizardName(), buddyCharID));
 
@@ -464,7 +469,7 @@ internal class FriendsService(SessionActor sessionActor) : MessageService(sessio
         // Replies identify the saved requester, unlike the initial object-targeted add request.
         var buddyCharID = message.ListOwnerGID;
         // Ensure that this wizard was even pending. If not, log an error and return. CLASSIC: a request it received.
-        if (!TakeIncomingRequest(wizard.CharId, buddyCharID) | !wizard.RemovePendingFriendRequest(buddyCharID)) {
+        if (!TakeIncoming(wizard, buddyCharID) | !wizard.RemovePendingFriendRequest(buddyCharID)) {
             Logger.Error("{0} tried to deny a friend request from character ID {1}, but the request was not pending.",
                 Logger.Args(wizard.PlayerNameBehavior.GetWizardName(), buddyCharID));
 
@@ -987,6 +992,84 @@ internal class FriendsService(SessionActor sessionActor) : MessageService(sessio
             PreviousName = string.Empty                               // TODO: Implement this
         };
         SendToSocket(buddyMsg);
+    }
+
+    /// <summary>CLASSIC: whether a request the wizard received can still be answered, or should be dropped at login.</summary>
+    internal enum IncomingRequestFate { Show, Drop }
+
+    /// <summary>
+    /// CLASSIC: what a received, unanswered request becomes at the recipient's login: dropped when the sender no longer
+    /// exists, is the recipient, is already a friend, or either has ignored the other; otherwise shown again.
+    /// </summary>
+    internal static IncomingRequestFate FateOfIncoming(Wizard recipient, ulong requester, Wizard sender, bool ignored) {
+        if (sender is null || requester == 0 || requester == recipient.CharId || ignored) {
+            return IncomingRequestFate.Drop;
+        }
+
+        return recipient.FriendsBehavior?.TryGetRelationship(requester, out var relationship) == true
+                && relationship is { IsBrokenUp: false, Blocked: false }
+            ? IncomingRequestFate.Drop
+            : IncomingRequestFate.Show;
+    }
+
+    /// <summary>CLASSIC: takes a received request off both records (this server run's and the saved one).</summary>
+    private static bool TakeIncoming(Wizard wizard, ulong requester) {
+        var live = TakeIncomingRequest(wizard.CharId, requester);
+        var saved = wizard.FriendsBehavior?.RemoveIncomingFriendRequest(requester) == true;
+        if (saved) {
+            SaveFriends(wizard);
+        }
+
+        return live | saved;
+    }
+
+    private static void SaveFriends(Wizard wizard) {
+        try {
+            WizardCollection.UpdateCharacterFriendBehavior(wizard);
+        }
+        catch (Exception ex) {
+            Logger.Warning("Could not save the friend requests of {0}: {1}", Logger.Args(wizard.CharId, ex.Message));
+        }
+    }
+
+    /// <summary>
+    /// CLASSIC (2026-10-22): shows again the requests this wizard received and left unanswered (logged out, or the
+    /// server restarted). The r806919 client takes MSG_BUDDYREQUESTADD at any time once its buddy list is in
+    /// (BuddyListManager::MSG_BuddyRequestAdd 0x141741590 reads ListOwnerGID, Remove, OwnerName, OwnerLevel, OwnerSchool;
+    /// it answers MSG_BUDDYREQUESTDENY by itself for a sender already on the list, so this runs after
+    /// MSG_BUDDYLISTCOMPLETE and never for a friend).
+    /// </summary>
+    private void ResendIncomingRequests(Wizard wizard) {
+        var incoming = wizard.FriendsBehavior?.IncomingFriendRequestsFromCharId?.ToList() ?? [];
+        var dropped = false;
+        foreach (var requester in incoming) {
+            var sender = requester == 0 ? null : WizardCollection.GetCharacter(requester);
+            var ignored = sender is not null && (BuddyRelationshipCollection.HasBlocked(requester, wizard.CharId)
+                || BuddyRelationshipCollection.HasBlocked(wizard.CharId, requester));
+            if (FateOfIncoming(wizard, requester, sender, ignored) == IncomingRequestFate.Drop) {
+                wizard.FriendsBehavior.RemoveIncomingFriendRequest(requester);
+                wizard.FriendsBehavior.RemovePendingFriendRequest(requester);
+                dropped = true;
+                Logger.Debug("{0}: friend request from {1} dropped at login (sender gone, a friend or ignored).",
+                    Logger.Args(wizard.CharId, requester));
+
+                continue;
+            }
+
+            wizard.FriendsBehavior.AddPendingFriendRequest(requester);
+            NoteIncomingRequest(wizard.CharId, requester);
+            SendToSocket(new GAME_5_PROTOCOL.MSG_BUDDYREQUESTADD {
+                ListOwnerGID = requester,
+                EntryGID = wizard.CharId,
+                OwnerName = sender.PlayerNameBehavior.GetWizardName(),
+                OwnerLevel = (byte) (sender.MagicSchoolBehavior?.Level ?? 1),
+                OwnerSchool = sender.MagicSchoolBehavior?.MagicSchool.ToString() ?? "",
+            });
+        }
+
+        if (dropped) {
+            SaveFriends(wizard);
+        }
     }
 
     private void SendBuddyListEnd(Wizard wizard) {

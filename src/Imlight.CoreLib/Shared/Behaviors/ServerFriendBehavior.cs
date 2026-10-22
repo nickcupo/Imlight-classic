@@ -67,6 +67,33 @@ public class ServerFriendBehavior : IClientBehaviorProvider<BehaviorInstance> {
     public readonly List<ulong> PendingFriendRequestsFromCharId = new();
 
     /// <summary>
+    /// CLASSIC (2026-10-22): the requests this wizard received and has not answered, by sender. The pending list above
+    /// holds sent and received requests alike, so after a relog the server could not tell which ones to show again;
+    /// a received request left unanswered at logout could then never be accepted or denied. Absent in older documents
+    /// (read as empty).
+    /// </summary>
+    public List<ulong> IncomingFriendRequestsFromCharId { get; set; } = new();
+
+    /// <summary>CLASSIC: records a received request; false when it was already recorded.</summary>
+    public bool AddIncomingFriendRequest(ulong requester) {
+        IncomingFriendRequestsFromCharId ??= new();
+        if (requester == 0 || IncomingFriendRequestsFromCharId.Contains(requester)) {
+            return false;
+        }
+
+        IncomingFriendRequestsFromCharId.Add(requester);
+        return true;
+    }
+
+    /// <summary>CLASSIC: forgets a received request (answered, or no longer valid); true when it was there.</summary>
+    public bool RemoveIncomingFriendRequest(ulong requester)
+        => IncomingFriendRequestsFromCharId?.RemoveAll(x => x == requester) > 0;
+
+    /// <summary>CLASSIC: whether this wizard received a request from <paramref name="requester"/> it has not answered.</summary>
+    public bool HasIncomingFriendRequest(ulong requester)
+        => IncomingFriendRequestsFromCharId?.Contains(requester) == true;
+
+    /// <summary>
     /// Adds a pending friend request from a character.
     /// </summary>
     /// <param name="characterId">The character ID of the player who sent the friend request.</param>
