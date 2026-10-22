@@ -54,6 +54,9 @@ internal sealed class ClientJournal {
 
     public ulong CharId { get; set; }
     public byte[] HiddenQuestsData { get; set; } // RavenDB keeps a byte array as base64 (not the first version's string field)
+    // CLASSIC (2026-10-22): the tutorial stage the client last advanced to (TutorialService), echoed in MSG_TUTORIALS
+    // after a relog so the client's own resume logic picks up there; null before the first stage.
+    public int? TutorialStage { get; set; }
     public DateTime UpdatedUtc { get; set; }
 
 }
