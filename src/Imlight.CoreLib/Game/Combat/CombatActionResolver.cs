@@ -145,8 +145,9 @@ internal static class CombatActionResolver {
             // If that's the case, we need to choose an effect and push the index of the chosen effect
             // to the effect stack.
             chosenEffect = spellEffect switch {
-                RandomSpellEffect randomSpellEffect => ChooseRandomEffect(randomSpellEffect, effectStack, action.SpellCaster._duelActor.Rng,
-                    action.ForcedRandomIndex), // CLASSIC: a School Mastery proc may name its value
+                RandomSpellEffect randomSpellEffect => action.ForcedRandomIndex is int namedChoice
+                    ? ChooseForcedRandomEffect(randomSpellEffect, effectStack, namedChoice) // CLASSIC: a School Mastery proc names its value
+                    : ChooseRandomEffect(randomSpellEffect, effectStack, action.SpellCaster._duelActor.Rng),
                 VariableSpellEffect variableSpellEffect => ChooseVariableEffect(variableSpellEffect, combatAction.m_xPipCost, effectStack),
                 EffectListSpellEffect effectListSpellEffect => ChooseFromEffectList(effectListSpellEffect, combatAction.m_xPipCost, effectStack),
                 _ => spellEffect,
@@ -289,9 +290,16 @@ internal static class CombatActionResolver {
     private static bool IsClassicHealEffect(kSpellEffects type)
         => type is kSpellEffects.kHeal or kSpellEffects.kHealPercent or kSpellEffects.kHealOverTime;
 
-    private static SpellEffect ChooseRandomEffect(RandomSpellEffect randomSpellEffect, CombatEffectStack effectStack, Random rng, int? forced = null) {
+    // CLASSIC: a School Mastery proc's named choice, sent to the client like a roll.
+    private static SpellEffect ChooseForcedRandomEffect(RandomSpellEffect randomSpellEffect, CombatEffectStack effectStack, int index) {
+        var chosen = Math.Clamp(index, 0, randomSpellEffect.m_effectList.Count - 1);
+        effectStack.PushRandomEffectChoice(chosen);
+        return randomSpellEffect.m_effectList[chosen];
+    }
+
+    private static SpellEffect ChooseRandomEffect(RandomSpellEffect randomSpellEffect, CombatEffectStack effectStack, Random rng) {
         var count = randomSpellEffect.m_effectList.Count;
-        var randomEffectIndex = forced is int index ? Math.Clamp(index, 0, count - 1) : rng.Next(0, count);
+        var randomEffectIndex = rng.Next(0, count);
         var chosenEffect = randomSpellEffect.m_effectList[randomEffectIndex];
 
         effectStack.PushRandomEffectChoice(randomEffectIndex);
