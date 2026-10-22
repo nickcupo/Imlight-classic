@@ -66,7 +66,7 @@ internal static class CombatWards {
                                                        SpellEffect spellEffect,
                                                        kHangingDisposition disposition = kHangingDisposition.kBoth) {
         if (ClassicRuntime.IsActive && disposition != kHangingDisposition.kBoth) {
-            return [.. FindRemovableWards(target, disposition).DistinctBy(x => x.m_spellTemplateID)];
+            return [.. FindRemovableWards(target, disposition).DistinctBy(CombatCharms.StackKey)];
         }
         // Keep damage application order independent of utility-spell disposition selection.
 
@@ -79,7 +79,7 @@ internal static class CombatWards {
             _ => [.. beneficialWards, .. harmfulWards]
         };
 
-        return [.. wards.DistinctBy(x => x.m_spellTemplateID)];
+        return [.. wards.DistinctBy(CombatCharms.StackKey)];
     }
 
     /// <summary>

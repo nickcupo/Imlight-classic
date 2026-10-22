@@ -210,7 +210,8 @@ internal static class CombatActionResolver {
                                                                 targets,
                                                                 critsThisEffect ? critMultiplier : 1f, // CLASSIC: was critMultiplier
                                                                 casterPipCost,
-                                                                classicCritModel is not null ? classicBlockedSlots : null);
+                                                                classicCritModel is not null ? classicBlockedSlots : null,
+                                                                action.Spell?.m_templateID ?? 0); // CLASSIC: charm/ward stacking
         }
 
         if (critEligibleTargetSlots.Count > 0) {

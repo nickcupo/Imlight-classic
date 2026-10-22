@@ -430,6 +430,87 @@ public sealed class ClassicUtilityCombatTests : IDisposable {
         Assert.Equal([2, 3, 4, 5, 6], TutorialDuelDirector.ScriptedRounds.OrderBy(r => r));      // golem hands cleared then
     }
 
+    // CLASSIC (2026-10-22): charm and ward stacking. Every hanging copy carries the card it came from (the client's own
+    // effects all say m_spellTemplateID 0, which made every charm and ward look like one card: only one ever applied).
+    // Values are the classic-data cards: Balanceblade +25 All, Fireblade +35 Fire, Weakness -25 All, Fire Trap +25 Fire,
+    // Feint +70 All on the enemy, Hex +30 All, Elemental Shield -50 Fire/Ice/Storm (one card, three parts).
+    private const uint Balanceblade = 501, Fireblade = 502, Weakness = 503, FireTrap = 504, Feint = 505, Hex = 506,
+        ElementalShield = 507;
+
+    [Fact]
+    public void ABladeAndAWeaknessBothApply() {
+        var player = Circle();
+        Hang(Charm(25, "All"), player, Balanceblade);
+        Hang(Charm(-25, "All"), player, Weakness);
+        Assert.Equal(370, Outgoing(player, "Fire", 395)); // 395 x 0.75 = 296, x 1.25 = 370 (before: the Weakness alone, 296)
+        Consume(player, "Fire");
+        Assert.Empty(player._hangingEffects);              // both were used by the one hit
+    }
+
+    [Fact]
+    public void DifferentBladesStack() {
+        var player = Circle();
+        Hang(Charm(35, "Fire"), player, Fireblade);
+        Hang(Charm(25, "All"), player, Balanceblade);
+        Assert.Equal(168, Outgoing(player, "Fire", 100)); // 100 x 1.25 x 1.35 = 168
+        Assert.Equal(125, Outgoing(player, "Life", 100)); // a Life spell only gets the Balanceblade
+    }
+
+    [Fact]
+    public void TwoCopiesOfTheSameBladeDoNotStack() {
+        var player = Circle();
+        Hang(Charm(35, "Fire"), player, Fireblade);
+        Hang(Charm(35, "Fire"), player, Fireblade);
+        Assert.Equal(135, Outgoing(player, "Fire", 100)); // one copy per hit, not 182
+        Consume(player, "Fire");
+        Assert.Single(player._hangingEffects);             // the second copy waits for the next Fire hit
+        Assert.Equal(135, Outgoing(player, "Fire", 100));
+        Consume(player, "Fire");
+        Assert.Equal(100, Outgoing(player, "Fire", 100));
+    }
+
+    [Fact]
+    public void DifferentTrapsStackAndTheSameTrapTwiceDoesNot() {
+        var enemy = Circle();
+        Hang(Ward(25, "Fire", 0), enemy, FireTrap);
+        Hang(Ward(25, "Fire", 0), enemy, FireTrap);
+        Hang(Ward(70, "All", 0), enemy, Feint);
+        Hang(Ward(30, "All", 0), enemy, Hex);
+        Damage(enemy, "Fire", 100);                        // newest first: 100 x 1.3 x 1.7 x 1.25 = 276 (one Fire Trap)
+        Assert.Equal(1000 - 276, enemy.ParticipantGameStats.m_currentHitpoints);
+        var left = Assert.Single(enemy._hangingEffects);   // the second Fire Trap is still up
+        Assert.Equal(FireTrap, left.m_spellTemplateID);
+    }
+
+    [Fact]
+    public void OneCardsPartsNeverHideEachOther() {
+        var player = Circle();
+        foreach (var school in new[] { "Fire", "Ice", "Storm" }) {
+            Hang(Ward(-50, school, 0), player, ElementalShield);
+        }
+        Damage(player, "Ice", 100);                        // the Ice part, though the Storm part hangs newer
+        Assert.Equal(1000 - 50, player.ParticipantGameStats.m_currentHitpoints);
+    }
+
+    [Fact]
+    public void AHangingCopyCarriesItsCardAndAnUnstampedEffectCountsOnItsOwn() {
+        var player = Circle();
+        Hang(Charm(25, "All"), player, Balanceblade);
+        Assert.Equal(Balanceblade, Assert.Single(player._hangingEffects).m_spellTemplateID);
+        var unstamped = Circle();
+        Apply(Charm(25, "All"), unstamped);
+        Apply(Charm(-25, "All"), unstamped);
+        Assert.Equal(370, Outgoing(unstamped, "Fire", 395));
+    }
+
+    private static SpellEffect Charm(int percent, string school) => new() {
+        m_effectType = kSpellEffects.kModifyOutgoingDamage, m_effectParam = percent, m_sDamageType = school,
+        m_effectTarget = kEffectTarget.kFriendlySingle,
+    };
+
+    private static void Hang(SpellEffect effect, CombatDuelSubCircle target, uint card)
+        => CombatEffectApplicator.ApplyEffect(effect, [], target, [target], spellTemplateId: card);
+
     private static int Outgoing(CombatDuelSubCircle caster, string school, int damage) {
         var charms = CombatCharms.FindAppliedCharms(caster, [new SpellEffect { m_effectType = kSpellEffects.kDamage, m_sDamageType = school }]);
         return CombatCharms.GetOutgoingDamageFromCharms([.. charms], damage);
