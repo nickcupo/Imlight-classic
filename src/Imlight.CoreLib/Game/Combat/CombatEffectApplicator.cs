@@ -343,7 +343,12 @@ internal static class CombatEffectApplicator {
             var wards = CombatWards.FindAppliedWards(target, effect);
             wards = CombatWards.GetWardsBySchool([.. wards], effect.m_sDamageType, out var finalSchool);
             cinematicTime += wards.Count * HANGING_EFFECT_CONSUME_TIME;
+            var damageBeforeWards = damage;
             damage = CombatWards.GetIncomingDamageFromWards(wards, damage);
+            // CLASSIC: School Mastery notes what the target's shields stopped (Ice's Frost Retort); a tick never counts.
+            if (MasteryDirector.Active && damage < damageBeforeWards) {
+                target._duelActor?.Mastery.RecordPrevented(target, damageBeforeWards - damage);
+            }
             damage = WithIncomingAura(target, damage, finalSchool); // CLASSIC: Star aura (Fortification)
 
             var dealt = DoDamageToTarget(target, damage, finalSchool);

@@ -113,7 +113,6 @@ public sealed class SchoolMasteryDuelTests : IDisposable {
 
         // The client templates the procs cast (their r806919 shapes) and the fight's cards.
         Add("Pet - Detonate", MagicSchool.Fire, Effect(kSpellEffects.kDetonateOverTime, 1, kEffectTarget.kEnemySingle, "All"), accuracy: 75);
-        Add("PetPower-Combat-IceArmor-01", MagicSchool.Ice, Effect(kSpellEffects.kAbsorbDamage, 125, kEffectTarget.kSelf, "All"), rank: 1);
         Add("Link", MagicSchool.Fire, Burn(180), rank: 2);
         Add("Fire Elf", MagicSchool.Fire, Burn(210), rank: 2);
         Add("Thunder Snake", MagicSchool.Storm, Effect(kSpellEffects.kDamageOverTime, 180, kEffectTarget.kEnemySingle, "Storm", rounds: 3), rank: 1);
@@ -127,7 +126,12 @@ public sealed class SchoolMasteryDuelTests : IDisposable {
             Add($"{school}blade", Enum.Parse<MagicSchool>(school), Effect(kSpellEffects.kModifyOutgoingDamage, 35, kEffectTarget.kFriendlySingle, school));
         }
         Add("Fire Cat", MagicSchool.Fire, Effect(kSpellEffects.kDamage, 100, kEffectTarget.kEnemySingle, "Fire"), rank: 1);
-        Add("Frost Beetle", MagicSchool.Ice, Effect(kSpellEffects.kDamage, 85, kEffectTarget.kEnemySingle, "Ice"), rank: 1);
+        AddRandom("Frost Beetle", MagicSchool.Ice, 1, [65, 75, 85, 95, 105]);
+        AddRandom("Snow Serpent", MagicSchool.Ice, 2, [155, 165, 175, 185, 195]);
+        AddRandom("Evil Snowman", MagicSchool.Ice, 3, [240, 255, 270, 285, 300]);
+        AddRandom("Ice Wyvern", MagicSchool.Ice, 4, [335, 350, 365, 380, 395]);
+        AddRandom("Colossus", MagicSchool.Ice, 6, [460, 480, 500, 520, 540]);
+        Add("Huge Krok Hit", MagicSchool.Fire, Effect(kSpellEffects.kDamage, 1600, kEffectTarget.kEnemySingle));
         Add("Prism Hit", MagicSchool.Balance, Effect(kSpellEffects.kDamage, 365, kEffectTarget.kEnemySingle, "Ice"), rank: 4);
         AddMany("Hydra", MagicSchool.Balance, rank: 6, Effect(kSpellEffects.kDamage, 230, kEffectTarget.kEnemySingle, "Fire"),
             Effect(kSpellEffects.kDamage, 230, kEffectTarget.kEnemySingle, "Ice"), Effect(kSpellEffects.kDamage, 230, kEffectTarget.kEnemySingle, "Storm"));
@@ -185,6 +189,12 @@ public sealed class SchoolMasteryDuelTests : IDisposable {
         => AddMany(name, school, rank, accuracy, effect);
 
     private void AddMany(string name, MagicSchool school, byte rank, params SpellEffect[] effects) => AddMany(name, school, rank, 100, effects);
+
+    // A ranged classic attack card: one of fixed values, the client's RandomSpellEffect.
+    private void AddRandom(string name, MagicSchool school, byte rank, int[] values) => AddMany(name, school, rank, 80, new RandomSpellEffect {
+        m_effectType = kSpellEffects.kInvalidSpellEffect, m_effectTarget = kEffectTarget.kInvalidTarget, m_sDamageType = "All",
+        m_effectList = [.. values.Select(v => Effect(kSpellEffects.kDamage, v, kEffectTarget.kEnemySingle, school.ToString()))],
+    });
 
     // An X-pip card: one nested effect per pip tier (m_pipNum 1..n), as the client's Tempest.
     private void AddVariable(string name, MagicSchool school, SpellEffect[] tiers) {
@@ -349,72 +359,81 @@ public sealed class SchoolMasteryDuelTests : IDisposable {
         Assert.Equal(1200 - 140, krok.ParticipantGameStats.m_currentHitpoints);
     }
 
-    // ------------------------------------------------------------ Ice: Permafrost
+    // ------------------------------------------------------------ Ice: Frost Retort
 
-    private QueuedCombatAction Hit(CombatDuelSubCircle creature, CombatDuelSubCircle target, string spell = "Krok Hit") => new() {
+    private QueuedCombatAction Hit(CombatDuelSubCircle creature, CombatDuelSubCircle target, string spell = "Krok Hit", bool mastery = false) => new() {
         // A creature's free cast, so the test needs no creature deck.
         SpellCaster = creature, SelectedTarget = target, Spell = _spells[spell].Item1, SpellTemplate = _spells[spell].Item2,
-        Cheat = new BossCheatCast(BossCheatKind.ExtraCast, Interrupt: false, Message: null),
+        Cheat = new BossCheatCast(mastery ? BossCheatKind.Mastery : BossCheatKind.ExtraCast, Interrupt: mastery, Message: null),
     };
 
-    [Fact]
-    public void AShieldThatSoftensAHitFormsAFreeIceArmorOnceARound() {
-        var duel = NewDuel();
-        var krok = Occupy(duel, 0, Krok, 1200);
-        var ice = Occupy(duel, 4, 1, 1091, MagicSchool.Ice, level: 20);
-        ice._hangingEffects.Add(Shield());
-        duel.Mastery.NewRound(1);
-
-        var list = Resolve(duel, Hit(krok, ice));
-        Assert.Equal(["Krok Hit", "PetPower-Combat-IceArmor-01"], list.Select(NameOf).ToArray());
-        Assert.Equal(ice.SlotIndex, list[1].m_spellCaster);
-        Assert.True(list[1].m_interrupt);
-        Assert.Equal(1091 - 150, ice.ParticipantGameStats.m_currentHitpoints);   // 300 halved by Tower Shield
-        Assert.Equal(125, Assert.Single(ice._hangingEffects, e => e.m_effectType == kSpellEffects.kAbsorbDamage).m_paramPerRound);
-
-        // Later the same round, another shielded hit: the armor and the shield take it, and no second armor forms.
-        ice._hangingEffects.Add(Shield());
-        list = Resolve(duel, Hit(krok, ice));
-        Assert.Equal(["Krok Hit"], list.Select(NameOf).ToArray());
-        Assert.Equal(1091 - 150 - 87, ice.ParticipantGameStats.m_currentHitpoints);   // 300 - 125 absorbed, then halved
-        Assert.DoesNotContain(ice._hangingEffects, e => e.m_effectType is kSpellEffects.kAbsorbDamage or kSpellEffects.kModifyIncomingDamage);
-
-        // A new round: the next shielded hit forms another.
-        ice._hangingEffects.Add(Shield());
-        duel.Mastery.NewRound(2);
-        list = Resolve(duel, Hit(krok, ice));
-        Assert.Equal(["Krok Hit", "PetPower-Combat-IceArmor-01"], list.Select(NameOf).ToArray());
-    }
-
     [Theory]
-    [InlineData(MagicSchool.Ice, 15, true)]    // below Tower Shield's level
-    [InlineData(MagicSchool.Life, 20, true)]   // not an Ice wizard
-    [InlineData(MagicSchool.Ice, 20, false)]   // no shield to soften the hit
-    public void PermafrostNeedsAnIceWizardAndAShield(MagicSchool school, int level, bool shielded) {
+    [InlineData("Krok Hit", "Frost Beetle", 75)]      // 300 halved: 150 stopped, 75 back
+    [InlineData("Big Krok Hit", "Snow Serpent", 175)] // 700 halved: 350 stopped, 175 back
+    [InlineData("Huge Krok Hit", "Evil Snowman", 270)] // 1600 halved: 800 stopped, 400 capped at a quarter of 1091 (272): 270 shown
+    public void HalfOfWhatTheShieldStoppedLashesBackAsAnIceCard(string hit, string card, int back) {
         var duel = NewDuel();
-        var krok = Occupy(duel, 0, Krok, 1200);
-        var wizard = Occupy(duel, 4, 1, 1091, school, level);
-        if (shielded) wizard._hangingEffects.Add(Shield());
+        var krok = Occupy(duel, 0, Krok, 5000);
+        var ice = Occupy(duel, 4, 1, 1091, MagicSchool.Ice, level: 20);
+        ice.ParticipantGameStats.m_currentHitpoints = 1091;
+        ice._hangingEffects.Add(Shield());
         duel.Mastery.NewRound(1);
 
-        var list = Resolve(duel, Hit(krok, wizard));
+        var list = Resolve(duel, Hit(krok, ice, hit));
 
-        Assert.Equal(["Krok Hit"], list.Select(NameOf).ToArray());
+        Assert.Equal([hit, card], list.Select(NameOf).ToArray());
+        Assert.Equal((ice.SlotIndex, krok.SlotIndex), (list[1].m_spellCaster, list[1].m_targetSubcircleList.Single()));
+        Assert.True(list[1].m_interrupt);
+        Assert.Equal(5000 - back, krok.ParticipantGameStats.m_currentHitpoints);
     }
 
     [Fact]
-    public void ATeammatesSpellNeverFormsPermafrost() {
+    public void TheRetortComesOnceARoundAndNeverWithoutAShield() {
         var duel = NewDuel();
-        Occupy(duel, 0, Krok, 1200);
+        var krok = Occupy(duel, 0, Krok, 5000);
         var ice = Occupy(duel, 4, 1, 1091, MagicSchool.Ice, level: 20);
-        var fire = Occupy(duel, 5, 1, 836, MagicSchool.Fire, level: 20);
+        duel.Mastery.NewRound(1);
+
+        Assert.Equal(["Krok Hit"], Resolve(duel, Hit(krok, ice)).Select(NameOf).ToArray());   // no shield, nothing stopped
+        ice.ParticipantGameStats.m_currentHitpoints = 1091;
+        ice._hangingEffects.Add(Shield());
+        Assert.Equal(["Krok Hit", "Frost Beetle"], Resolve(duel, Hit(krok, ice)).Select(NameOf).ToArray());
+        ice._hangingEffects.Add(Shield());
+        Assert.Equal(["Krok Hit"], Resolve(duel, Hit(krok, ice)).Select(NameOf).ToArray());   // once a round
+        duel.Mastery.NewRound(2);
+        ice._hangingEffects.Add(Shield());
+        Assert.Equal(["Krok Hit", "Frost Beetle"], Resolve(duel, Hit(krok, ice)).Select(NameOf).ToArray());
+    }
+
+    [Fact]
+    public void ATickAProcAndAFriendNeverSetOffTheRetort() {
+        var duel = NewDuel();
+        var krok = Occupy(duel, 0, Krok, 5000);
+        var ice = Occupy(duel, 4, 1, 1091, MagicSchool.Ice, level: 20);
+        var friend = Occupy(duel, 5, 1, 836, MagicSchool.Fire, level: 20);
+        duel.Mastery.NewRound(1);
+
+        // A burn ticking on the shielded Ice wizard at the start of their own turn.
+        ice._hangingEffects.Add(Shield());
+        ice._hangingEffects.Add(HangingBurn(300, 2));
+        Assert.Equal(1, Resolve(duel, new QueuedCombatAction { SpellCaster = ice }).Count);
+        // Another wizard's School Mastery proc (Storm's Tempest, say) that hits the Ice wizard.
+        ice._hangingEffects.Add(Shield());
+        Assert.Equal(["Krok Hit"], Resolve(duel, Hit(krok, ice, mastery: true)).Select(NameOf).ToArray());
+        // A friend hitting the Ice wizard on purpose.
+        ice._hangingEffects.Add(Shield());
+        Assert.Equal(["Krok Hit"], Resolve(duel, Cast(friend, ice, "Krok Hit")).Select(NameOf).ToArray());
+    }
+
+    [Fact]
+    public void FrostRetortNeedsTowerShieldsLevel() {
+        var duel = NewDuel();
+        var krok = Occupy(duel, 0, Krok, 5000);
+        var ice = Occupy(duel, 4, 1, 1000, MagicSchool.Ice, level: 15);
         ice._hangingEffects.Add(Shield());
         duel.Mastery.NewRound(1);
-        duel.Mastery.BeforeAction(Cast(fire, ice, "Krok Hit"));
-        ice._hangingEffects.Clear();
-        ice.ParticipantGameStats.m_currentHitpoints -= 100;
 
-        Assert.Empty(duel.Mastery.AfterAction(Cast(fire, ice, "Krok Hit")));
+        Assert.Equal(["Krok Hit"], Resolve(duel, Hit(krok, ice)).Select(NameOf).ToArray());
     }
 
     // ------------------------------------------------------------ Storm: Overkill
