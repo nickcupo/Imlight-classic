@@ -111,6 +111,19 @@ internal sealed class PlayerOptionIndex {
     internal static int Ordinal(IReadOnlyDictionary<int, IServiceComponent> map, int index)
         => map.TryGetValue(index, out var owner) ? map.Count(entry => entry.Key < index && ReferenceEquals(entry.Value, owner)) : 0;
 
+    // CLASSIC: the named NPC protocol must agree with the option this wizard was sent. The generic
+    // MSG_INTERACTOPTION path calls the same handler with "Interact" and carries only an index.
+    internal bool TryResolve(IActorRef player, int index, string serviceName, out IServiceComponent component) {
+        if (TryResolve(player, index, out var found)
+                && (serviceName == "Interact" || string.Equals(found.ServiceName, serviceName, StringComparison.Ordinal))) {
+            component = found;
+            return true;
+        }
+
+        component = null;
+        return false;
+    }
+
     internal bool TryResolve(IActorRef player, int index, out IServiceComponent component) {
         if (_maps.TryGetValue(player, out var map) && map.TryGetValue(index, out var found)) {
             component = found;
@@ -275,7 +288,7 @@ internal sealed class InteractServiceMementoComponent(ZoneEntity entity)
         // the same service name (e.g. InteractQuestSelectComponent shadowing WoodenChestComponent).
         // CLASSIC: in the list this wizard was sent, not the one the NPC built for whoever asked last.
         var ordinal = 0; // CLASSIC: which of the component's own options (IOrdinalServiceComponent)
-        if (_playerOptionIndex.TryResolve(playerActor, (int) serviceIndex, out var serviceComponent)) {
+        if (_playerOptionIndex.TryResolve(playerActor, (int) serviceIndex, serviceName, out var serviceComponent)) {
             ordinal = _playerOptionIndex.OrdinalOf(playerActor, (int) serviceIndex);
         } else if (TryResolveFromCurrentOptions(playerActor, playerCharacter, ref serviceIndex, serviceName, out serviceComponent)) {
             ordinal = PlayerOptionIndex.Ordinal(_optionIndexToComponent, (int) serviceIndex);
@@ -514,15 +527,7 @@ internal sealed class InteractServiceMementoComponent(ZoneEntity entity)
         var gameObjTemplate = Entity.Template as GameObjectTemplate;
 
         // Get all service options and track which component owns each flat index.
-        _optionIndexToComponent.Clear();
-        var allOptions = new List<ServiceOptionBase>();
-        foreach (var component in _serviceComponents) {
-            var componentOptions = component.GetServiceOptions(playerCharacter).ToList();
-            foreach (var option in componentOptions) {
-                _optionIndexToComponent[allOptions.Count] = component;
-                allOptions.Add(option);
-            }
-        }
+        var allOptions = BuildServiceOptions(_serviceComponents, playerCharacter, _optionIndexToComponent);
 
         // Get UI overrides based on priority.
         var sortedComponents = SortComponentsByPriority(_serviceComponents);
@@ -547,6 +552,24 @@ internal sealed class InteractServiceMementoComponent(ZoneEntity entity)
             m_serviceOptions = allOptions,
             m_personaMadlibs = _madlibBlock
         };
+    }
+
+    // CLASSIC: r806919 sends the selected option's m_serviceIndex in MSG_INTERACTNPC, rather than its
+    // visual row number. Every option must publish the same index used by the per-wizard owner map.
+    // Without this, Equipment on multi-service NPCs such as Zeke and Eloise sends the default index 0.
+    internal static List<ServiceOptionBase> BuildServiceOptions(IEnumerable<IServiceComponent> components,
+        Wizard wizard, IDictionary<int, IServiceComponent> owners) {
+        owners.Clear();
+        var options = new List<ServiceOptionBase>();
+        foreach (var component in components) {
+            foreach (var option in component.GetServiceOptions(wizard)) {
+                option.m_serviceIndex = (uint) options.Count;
+                owners[options.Count] = component;
+                options.Add(option);
+            }
+        }
+
+        return options;
     }
 
     private void SetMadLibBlock() {
