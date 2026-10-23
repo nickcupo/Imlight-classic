@@ -32,11 +32,18 @@
  */
 
 using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Linq;
+using System.Text.Json;
 using Imlight.Classic.Admin;
+using Imlight.Classic.Ambient;
 using Imlight.CoreLib.Classic.Admin;
+using Imlight.CoreLib.Classic.Ambient;
 using Imlight.Common;
 using Imlight.CoreLib.WizardData;
+using Imlight.CoreLib.WizardData.Models.Misc;
+using Imlight.CoreLib.WizardData.Models.Player;
 using Xunit;
 
 namespace Imlight.Classic.Tests;
@@ -67,6 +74,55 @@ public sealed class ServerAdminTests {
         // Server values go through textContent; the page has no innerHTML at all.
         Assert.DoesNotContain("innerHTML", AdminDashboardPage.Html);
         Assert.Contains("'X-W101C':'1'", AdminDashboardPage.Html);
+    }
+
+    [Fact]
+    public void OnlineListUsesAmbientRegistryRatherThanAnAccountNameOrIdPattern() {
+        // A human can have an ambient-looking id or account name. An ambient wizard can have an ordinary id.
+        const ulong humanId = 0xA3B1E00000000991;
+        const ulong simulatedId = 782345;
+        var record = AmbientWizardRecord.From(AmbientIdentity.Generate(991, "WizardCity/WC_Hub",
+            new NameTableSizes(100, 100, 50, 50), (1, 12)), simulatedId);
+        var ambient = new AmbientWizard(record, new Wizard { CharId = simulatedId });
+        AmbientWizards.Register(ambient);
+        try {
+            var lookups = new List<ulong>();
+            var online = ServerAdmin.OnlineWizards([
+                new OnlinePlayer { CharacterId = simulatedId, AccountId = simulatedId, CurrentZone = "WizardCity/WC_Hub" },
+                new OnlinePlayer { CharacterId = humanId, AccountId = 7, CurrentZone = "WizardCity/WC_Unicorn", CurrentZoneDisplayName = "Unicorn Way" },
+                new OnlinePlayer { CharacterId = 0, AccountId = 8 }, // character selection is not a wizard in the world
+            ], new HashSet<ulong> { simulatedId, humanId }, (id, _) => {
+                lookups.Add(id);
+                return ("ambient-bot", "Zelda");
+            });
+
+            Assert.Equal(2, online.Count);
+            Assert.Equal(new[] { humanId }, lookups);
+            Assert.Equal(humanId, online[0].CharacterId);
+            Assert.False(online[0].IsSimulated);
+            Assert.Equal("ambient-bot", online[0].Account);
+            Assert.Equal("Unicorn Way", online[0].ZoneName);
+            Assert.True(online[0].InDuel);
+            Assert.True(online[1].IsSimulated);
+            Assert.Equal("—", online[1].Account);
+            Assert.True(online[1].InDuel);
+            using var json = JsonDocument.Parse(JsonSerializer.Serialize(online,
+                new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase }));
+            Assert.False(json.RootElement[0].GetProperty("isSimulated").GetBoolean());
+            Assert.True(json.RootElement[1].GetProperty("isSimulated").GetBoolean());
+        }
+        finally { AmbientWizards.Unregister(ambient); }
+    }
+
+    [Fact]
+    public void OnlineListKeepsHumanNamesAndSortingAndAllowsAnEmptyWorld() {
+        Assert.Empty(ServerAdmin.OnlineWizards([], new HashSet<ulong>(), (_, _) => throw new Exception("no names to resolve")));
+        var online = ServerAdmin.OnlineWizards([
+            new OnlinePlayer { CharacterId = 810001, AccountId = 1 },
+            new OnlinePlayer { CharacterId = 810002, AccountId = 2 },
+        ], new HashSet<ulong>(), (_, account) => ("account " + account, account == 1 ? "Zelda" : "amber"));
+        Assert.Equal(new[] { "amber", "Zelda" }, online.Select(w => w.Wizard));
+        Assert.All(online, wizard => { Assert.False(wizard.IsSimulated); Assert.False(wizard.InDuel); });
     }
 
     // A backup's plan stays (the dashboard shows it), but it is carried out once: the 1 s tick used to run it again

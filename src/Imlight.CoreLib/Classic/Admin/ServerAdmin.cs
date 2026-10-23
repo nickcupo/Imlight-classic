@@ -56,7 +56,9 @@ using Akka.Actor;
 using Imcodec.MessageLayer.Generated;
 using Imlight.Classic.Admin;
 using Imlight.Common;
+using Imlight.CoreLib.Classic.Ambient;
 using Imlight.CoreLib.WizardData.Collections;
+using Imlight.CoreLib.WizardData.Models.Misc;
 
 namespace Imlight.CoreLib.Classic.Admin;
 
@@ -87,7 +89,8 @@ internal static class ServerShutdownDrain {
 }
 
 /// <summary>An online wizard, as the dashboard lists them.</summary>
-public sealed record OnlineWizard(string Account, string Wizard, ulong CharacterId, string Zone, string ZoneName, bool InDuel);
+public sealed record OnlineWizard(string Account, string Wizard, ulong CharacterId, string Zone, string ZoneName, bool InDuel,
+    bool IsSimulated = false);
 
 /// <summary>A backup archive.</summary>
 public sealed record BackupFile(string Name, long Bytes, DateTime WrittenUtc);
@@ -226,14 +229,25 @@ public static class ServerAdmin {
     /// <summary>Who is online and where.</summary>
     public static IReadOnlyList<OnlineWizard> OnlineWizards() {
         var inDuel = ActiveDuels.Snapshot().SelectMany(duel => duel.CharacterIds).ToHashSet();
+        return OnlineWizards(OnlinePlayerCollection.GetOnlinePlayers(), inDuel,
+            (characterId, accountId) => s_names.GetOrAdd(characterId, id => LookUpNames(id, accountId)));
+    }
+
+    // CLASSIC: use the live ambient registry, never a name or id pattern, to distinguish simulated wizards.
+    // Their names live in memory; looking up a fake account in RavenDB only produces misleading numeric labels.
+    internal static IReadOnlyList<OnlineWizard> OnlineWizards(IEnumerable<OnlinePlayer> players, ISet<ulong> inDuel,
+        Func<ulong, ulong, (string Account, string Wizard)> resolveNames) {
         var list = new List<OnlineWizard>();
-        foreach (var player in OnlinePlayerCollection.GetOnlinePlayers().Where(player => player.CharacterId != 0)) {
-            var (account, wizard) = s_names.GetOrAdd(player.CharacterId, id => LookUpNames(id, player.AccountId));
+        foreach (var player in players.Where(player => player.CharacterId != 0)) {
+            var simulated = AmbientWizards.TryGet(player.CharacterId, out var ambient);
+            var (account, wizard) = simulated
+                ? ("—", ambient.Wizard.PlayerNameBehavior?.GetWizardName() ?? $"wizard {player.CharacterId}")
+                : resolveNames(player.CharacterId, player.AccountId);
             list.Add(new OnlineWizard(account, wizard, player.CharacterId, player.CurrentZone ?? "",
-                player.CurrentZoneDisplayName ?? "", inDuel.Contains(player.CharacterId)));
+                player.CurrentZoneDisplayName ?? "", inDuel.Contains(player.CharacterId), simulated));
         }
 
-        return [.. list.OrderBy(entry => entry.Wizard, StringComparer.OrdinalIgnoreCase)];
+        return [.. list.OrderBy(entry => entry.IsSimulated).ThenBy(entry => entry.Wizard, StringComparer.OrdinalIgnoreCase)];
     }
 
     /// <summary>The backup archives, newest first.</summary>

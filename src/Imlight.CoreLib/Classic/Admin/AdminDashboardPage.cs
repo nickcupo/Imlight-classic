@@ -70,6 +70,9 @@ button.danger { background:var(--bad); }
 .ERROR,.Error,.Fatal { color:var(--bad); }
 .Warning { color:var(--warn); }
 .pill { display:inline-block; padding:1px 7px; border-radius:10px; border:1px solid var(--line); font-size:12px; }
+.pill.real { color:var(--ok); border-color:var(--ok); }
+.pill.simulated { color:var(--accent); border-color:var(--accent); }
+#onlineFilter { width:auto; }
 .log { max-height:340px; overflow:auto; font:12px/1.4 ui-monospace,Menlo,monospace; }
 .log div { padding:2px 0; border-bottom:1px dashed var(--line); }
 #login { max-width:340px; margin:12vh auto; background:var(--card); border:1px solid var(--line); border-radius:10px; padding:18px; }
@@ -97,7 +100,9 @@ button.danger { background:var(--bad); }
     <h2>Server</h2>
     <div class="stats">
       <div class="stat"><b id="uptime">-</b><span>uptime</span></div>
-      <div class="stat"><b id="onlineCount">-</b><span>online</span></div>
+      <div class="stat"><b id="onlineCount">-</b><span>online wizards</span></div>
+      <div class="stat"><b id="realCount">-</b><span>real players</span></div>
+      <div class="stat"><b id="simulatedCount">-</b><span>simulated players</span></div>
       <div class="stat"><b id="duelCount">-</b><span>fights</span></div>
       <div class="stat"><b id="errCount">-</b><span>errors / warnings</span></div>
     </div>
@@ -132,7 +137,9 @@ button.danger { background:var(--bad); }
   </section>
   <section class="wide">
     <h2>Online</h2>
-    <table><thead><tr><th>Wizard</th><th>Account</th><th>Zone</th><th>In a fight</th></tr></thead><tbody id="online"></tbody></table>
+    <div class="row"><label for="onlineFilter">Show</label><select id="onlineFilter"><option value="all">All players</option><option value="real">Real players</option><option value="simulated">Simulated players</option></select></div>
+    <p class="muted">Real players are connected people. Simulated players are server-controlled wizards.</p>
+    <table><thead><tr><th>Wizard</th><th>Type</th><th>Account</th><th>Zone</th><th>In a fight</th></tr></thead><tbody id="online"></tbody></table>
   </section>
   <section class="wide">
     <h2>Fights in progress</h2>
@@ -175,8 +182,18 @@ function fmtBytes(b) { return b > 1048576 ? (b/1048576).toFixed(1)+' MB' : (b/10
 function rows(tbody, items, cells, empty) {
   const tb = $(tbody); tb.replaceChildren();
   if (!items || !items.length) { const tr = el('tr'); const td = el('td', empty, 'muted'); td.colSpan = 9; tr.append(td); tb.append(tr); return; }
-  for (const it of items) { const tr = el('tr'); for (const c of cells(it)) tr.append(el('td', c)); tb.append(tr); }
+  for (const it of items) { const tr = el('tr'); for (const c of cells(it)) { const td = el('td'); if (c instanceof Node) td.append(c); else if (c !== undefined && c !== null) td.textContent = String(c); tr.append(td); } tb.append(tr); }
 }
+// CLASSIC: keep the chosen filter across the five-second state refreshes; all totals describe the full list.
+let onlineWizards = [];
+function renderOnline() {
+  const filter = $('onlineFilter').value;
+  const visible = onlineWizards.filter(w => filter === 'all' || (filter === 'simulated' ? w.isSimulated : !w.isSimulated));
+  const empty = filter === 'real' ? 'No real players are online.' : filter === 'simulated' ? 'No simulated players are online.' : 'Nobody is online.';
+  rows('online', visible, w => [w.wizard, el('span', w.isSimulated ? 'Simulated' : 'Real player', 'pill ' + (w.isSimulated ? 'simulated' : 'real')), w.account,
+    w.zoneName ? w.zoneName + ' (' + w.zone + ')' : w.zone, w.inDuel ? 'yes' : ''], empty);
+}
+$('onlineFilter').addEventListener('change', renderOnline);
 let editing = null;
 let friendStateLoaded = false;
 async function refreshFriendState() {
@@ -252,11 +269,14 @@ async function refresh() {
   $('who').textContent = s.user;
   $('uptime').textContent = fmtUptime(s.uptimeSeconds);
   $('onlineCount').textContent = s.online.length;
+  $('simulatedCount').textContent = s.online.filter(w => w.isSimulated).length;
+  $('realCount').textContent = s.online.filter(w => !w.isSimulated).length;
   $('duelCount').textContent = s.duels.length;
   $('errCount').textContent = s.errors + ' / ' + s.warnings;
   $('profile').textContent = 'Profile ' + s.profile + ', started ' + fmtTime(s.startedUtc);
   $('restartState').textContent = s.restart ? (s.restart.kind + ' by ' + s.restart.requestedBy + ': ' + s.restart.state + '; due ' + fmtTime(s.restart.deadlineUtc) + ', latest ' + fmtTime(s.restart.hardCapUtc) + (s.restart.reason ? ' (' + s.restart.reason + ')' : '')) : 'No restart scheduled.';
-  rows('online', s.online, w => [w.wizard, w.account, w.zoneName ? w.zoneName + ' (' + w.zone + ')' : w.zone, w.inDuel ? 'yes' : ''], 'Nobody is online.');
+  onlineWizards = s.online;
+  renderOnline();
   rows('duels', s.duels, d => [d.zone, d.pvp ? 'PvP' : 'PvE', d.wizards, d.creatures, d.heldSeats, fmtTime(d.startedUtc)], 'No fights.');
   $('backupDir').textContent = s.backupDirectory;
   rows('backups', s.backups, b => [b.name, fmtBytes(b.bytes), fmtTime(b.writtenUtc)], 'No backups found.');
