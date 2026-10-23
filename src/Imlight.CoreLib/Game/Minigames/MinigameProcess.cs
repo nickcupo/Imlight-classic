@@ -50,6 +50,9 @@ using Imcodec.ObjectProperty;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
 using Imlight.CoreLib.Game.Processes;
+using Imlight.CoreLib.Game.Minigames;
+using Imlight.Classic.Security;
+using SavedScore = Imlight.CoreLib.WizardData.Models.Misc.ScoreTracking;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;
 using Imlight.CoreLib.WizardData.Collections;
@@ -68,6 +71,10 @@ internal sealed class MinigameProcess : Process {
     // once per run, not before MinigameRun.MinimumDuration, not twice within the per-wizard cooldown, and the score is
     // capped (Imlight.Classic.Security.MinigameRun).
     private readonly Imlight.Classic.Security.MinigameRun _run = new();
+    private readonly SoblocksSession _soblocks = new();
+    private readonly TimeProvider _clock;
+    private readonly Func<string, SavedScore[]> _getLeaderboard;
+    private readonly Action<SavedScore> _recordScore;
     private static readonly Dictionary<ulong, DateTimeOffset> s_lastPaid = [];
 
     // todo: change this below. The rewards should come from the actual drop tables.
@@ -95,9 +102,23 @@ internal sealed class MinigameProcess : Process {
     private readonly byte[] _allowedProtocolIds = [25, 40, 41, 42, 43, 44, 45, 46, 47, 54];
 
     // ctor
-    public MinigameProcess(string processName, uint processId, byte minigameIndex) : base(processName, processId) {
+    public MinigameProcess(string processName, uint processId, byte minigameIndex)
+        : this(processName, processId, minigameIndex, Imlight.CoreLib.Game.Minigames.MinigameConfig.GetMinigameInfo(minigameIndex)) { }
+
+    // CLASSIC: supplied authored config permits a real actor dispatch test without private WAD loading.
+    public MinigameProcess(string processName, uint processId, byte minigameIndex, MinigameInfo minigameInfo)
+        : this(processName, processId, minigameIndex, minigameInfo, TimeProvider.System,
+            ScoreTrackingCollection.GetLeaderboard, ScoreTrackingCollection.AddScoreTracking) { }
+
+    // CLASSIC: time and score persistence are per-instance dependencies; reward admission/payment is still common.
+    public MinigameProcess(string processName, uint processId, byte minigameIndex, MinigameInfo minigameInfo,
+            TimeProvider clock, Func<string, SavedScore[]> getLeaderboard, Action<SavedScore> recordScore)
+        : base(processName, processId) {
+        _clock = clock;
+        _getLeaderboard = getLeaderboard;
+        _recordScore = recordScore;
         this._minigameIndex = minigameIndex;
-        this._minigameInfo = Imlight.CoreLib.Game.Minigames.MinigameConfig.GetMinigameInfo(minigameIndex);
+        this._minigameInfo = minigameInfo;
 
         if (this._minigameInfo == null) {
             throw new Exception($"Minigame at index {minigameIndex} not found.");
@@ -107,6 +128,10 @@ internal sealed class MinigameProcess : Process {
     [MessageHandler(typeof(IMessage))]
     internal void ReceiveElse(IMessage message) {
         HadActivity = true;
+
+        // CLASSIC: Soblocks' generated order 1 is AdvanceOff and 3 is Attack, never connect/rewards.
+        if (TryDispatchSoblocks(ProcessName, _soblocks, _run, message, _clock.GetUtcNow(),
+                reply => Sender.Tell(reply, Self), HandleRewards)) return;
 
         if (!_allowedProtocolIds.Contains(message.ServiceId)) {
             return;
@@ -124,9 +149,22 @@ internal sealed class MinigameProcess : Process {
         }
     }
 
+    // CLASSIC: the production actor and wire-level tests share this typed route. Other game jobs consume/drop
+    // service 25, and a Soblocks job never falls through to another game's generic connect/reward convention.
+    internal static bool TryDispatchSoblocks(string game, SoblocksSession session, MinigameRun run,
+            IMessage message, DateTimeOffset now, Action<IMessage> send, Action<int> rewards) {
+        if (!string.Equals(game, "Soblocks", StringComparison.Ordinal)) return message.ServiceId == 25;
+        if (message.ServiceId != 25) return true;
+        session.Receive(message, now, send, () => {
+            run.Start(now);
+            send(new WIZARD_12_PROTOCOL.MSG_ENTERMINIGAME());
+        }, rewards);
+        return true;
+    }
+
     private void HandleConnect() {
         IsMinigameActive = true;
-        _run.Start(DateTimeOffset.UtcNow); // CLASSIC
+        _run.Start(_clock.GetUtcNow()); // CLASSIC
 
         var msg = new WIZARD_12_PROTOCOL.MSG_ENTERMINIGAME();
         Sender.Tell(msg, Self);
@@ -158,7 +196,7 @@ internal sealed class MinigameProcess : Process {
 
         // CLASSIC: the score is the client's word; cap it, and pay one result per run (see _run).
         score = Imlight.Classic.Security.MinigameRun.ClampScore(score, _minigameInfo.m_scoreThresholds);
-        var decision = _run.Decide(DateTimeOffset.UtcNow, wizard.CharId, s_lastPaid);
+        var decision = _run.Decide(_clock.GetUtcNow(), wizard.CharId, s_lastPaid);
         if (decision != Imlight.Classic.Security.MinigameRewardDecision.Reward) {
             Logger.Warning("{0} {1}: result of wizard {2} (score {3}) not paid: {4}.",
                 Logger.Args(nameof(MinigameProcess), ProcessName, wizard.CharId, score, decision.ToString()));
@@ -204,7 +242,7 @@ internal sealed class MinigameProcess : Process {
             GamerNameOverride = wizard.PlayerNameBehavior.NameOverride,
             GamerGender = genderString
         };
-        if (recordScore) ScoreTrackingCollection.AddScoreTracking(scoreTrack); // CLASSIC: an unpaid result is not ranked
+        if (recordScore) _recordScore(scoreTrack); // CLASSIC: an unpaid result is not ranked
 
         // Check if the user's score has beaten any of the top scores.
         for (var i = 0; recordScore && i < leaderboard.m_scores.Count; i++) {
@@ -293,7 +331,7 @@ internal sealed class MinigameProcess : Process {
             m_scores = []
         };
 
-        var leaderboard = ScoreTrackingCollection.GetLeaderboard(ProcessName);
+        var leaderboard = _getLeaderboard(ProcessName);
         foreach (var entry in leaderboard) {
             scoreTrackingList.m_scores.Add(entry.GetClientBehaviorInstance());
         }
