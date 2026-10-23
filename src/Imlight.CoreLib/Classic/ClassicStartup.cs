@@ -122,7 +122,12 @@ public static class ClassicStartup {
                 ClassicFeatures.PetsLeveling, ClassicFeatures.PetsHatching, ClassicFeatures.PetsTalents, ClassicFeatures.PetsEnergy,
             };
             IReadOnlySet<string> none = new HashSet<string>();
-            rules.OwnerExtraFeatures = () => ClassicSettings.PetPavilion ? petPavilion : none;
+            // CLASSIC OWNER EXTRA: [Classic] SchoolWeaving adds the experiments.weaving switch (design-weaving).
+            var weaving = new HashSet<string>(StringComparer.Ordinal) { ClassicFeatures.ExperimentsWeaving };
+            var both = new HashSet<string>(petPavilion.Concat(weaving), StringComparer.Ordinal);
+            rules.OwnerExtraFeatures = () => (ClassicSettings.PetPavilion, ClassicSettings.SchoolWeaving) switch {
+                (true, true) => both, (true, false) => petPavilion, (false, true) => weaving, _ => none,
+            };
 
             ClassicRuntime.Initialize(rules, new LoggerAuditSink(), auditVerbose);
             s_classicDataRoot = classicDataRoot;

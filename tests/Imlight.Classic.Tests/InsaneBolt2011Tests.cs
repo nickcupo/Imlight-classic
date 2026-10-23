@@ -67,7 +67,9 @@ public sealed class InsaneBolt2011Tests : IDisposable {
     [Fact]
     public void NoOtherRecordIsScopedByFlagAndDarkPactHasNoRecord() {
         var book = Book();
-        Assert.Equal([Id], book.Records.Where(r => r.Scoped).Select(r => r.Id));
+        // CLASSIC: experiment records (School Mastery's bolts, scoped to the debug profile mastery-demo) are no historical card.
+        string[] historical = ["late-2009", "arc1-2009h1", "october-2010-arc1", "celestia-2010", "wintertusk-2011"];
+        Assert.Equal([Id], book.Records.Where(r => r.Scoped && historical.Any(r.IsInProfile)).Select(r => r.Id));
         Assert.DoesNotContain(book.Records, r => r.Name is "Dark Pact" or "Dark Tribute");
         Assert.DoesNotContain(book.Records, r => r.ClientTemplate == "Spells/Dark Pact.xml");
         // Wild Bolt is a different card and keeps its record exactly (not scoped, no backfire).

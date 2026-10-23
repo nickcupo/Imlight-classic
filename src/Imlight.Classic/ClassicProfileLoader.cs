@@ -64,7 +64,7 @@ public static class ClassicProfileLoader {
     internal static readonly FrozenSet<string> s_worldUnlockKeys = FrozenSet.Create(StringComparer.Ordinal, "any_of", "source", "notes");
     private static readonly FrozenSet<string> s_ruleKeys = FrozenSet.Create(StringComparer.Ordinal,
         "accuracy_table", "xp_table", "player_health", "mob_rewards", "badges", "quest_cards", "treasure_prices", "mob_stats", "crown_shop", "later_objects", "creature_decks", "power_pips_from_rank", "dragonspyre_difficulty", "tutorial",
-        "teleport_stones", "potions", "second_chance", "boss_cheats", "instance_resets", "puzzle_helpers", "level_stats", "critical", "astral", "gardening");
+        "teleport_stones", "potions", "second_chance", "boss_cheats", "instance_resets", "puzzle_helpers", "level_stats", "critical", "astral", "gardening", "weaving");
 
     /// <summary>
     /// Loads the profile <paramref name="id"/> from <paramref name="profilesDir"/>, following its extends chain.
@@ -372,13 +372,14 @@ public static class ClassicProfileLoader {
 
         foreach (var entry in features.Entries) {
             var path = YamlTree.Join("features", entry.Key);
-            if (entry.Key == ClassicFeatures.PetsGroup) {
+            // CLASSIC: pets and experiments are groups of switches.
+            if (ClassicFeatures.IsGroup(entry.Key)) {
                 if (diagnostics.ReadMap(entry.Value, path) is not { } pets) {
                     continue;
                 }
 
                 foreach (var pet in pets.Entries) {
-                    var feature = $"{ClassicFeatures.PetsGroup}.{pet.Key}";
+                    var feature = $"{entry.Key}.{pet.Key}";
                     var petPath = YamlTree.Join(path, pet.Key);
                     if (!ClassicFeatures.IsKnown(feature)) {
                         diagnostics.AtKey(pets, pet, petPath, $"unknown feature '{feature}'");
@@ -500,6 +501,7 @@ public static class ClassicProfileLoader {
                 InstanceResets = ScalarOf(rules, "instance_resets"), // CLASSIC
                 PuzzleHelpers = ScalarOf(rules, "puzzle_helpers"), // CLASSIC
                 Astral = ScalarOf(rules, "astral"), // CLASSIC: Astral trainers, dated polymorph, Moon rework (celestia-2010)
+                Weaving = ScalarOf(rules, "weaving"), // CLASSIC OWNER EXTRA: School Weaving (experiments.weaving)
                 Gardening = ScalarOf(rules, "gardening"), // CLASSIC: gardening tables (wintertusk-2011)
                 PowerPipsFromRank = ScalarOf(rules, "power_pips_from_rank"),
                 DragonspyreDifficulty = ScalarOf(rules, "dragonspyre_difficulty"),

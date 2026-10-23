@@ -204,6 +204,14 @@ internal sealed class InteractTrainerComponent(ZoneEntity entity) : ZoneEntityCo
                 continue;
             }
 
+            // CLASSIC OWNER EXTRA: another school's Weave card is shown greyed out (School Weaving).
+            if (!ClassicWeaving.MayTrain(schoolName, SpellInventory[i].TemplateID)) {
+                newBase.m_bCanTrain = false;
+                newBase.m_failedRequirement = null;
+                newServiceOptions.Add(newBase);
+                continue;
+            }
+
             // CLASSIC: the owner's temporary October Private-rank requirement applies only to Diego's Cloak.
             if (ClassicOctoberTraining.Applies(TrainerTemplateId, SpellInventory[i].TemplateID)
                 && !ClassicOctoberTraining.CanTrain(wizard, TrainerTemplateId, SpellInventory[i].TemplateID)) {

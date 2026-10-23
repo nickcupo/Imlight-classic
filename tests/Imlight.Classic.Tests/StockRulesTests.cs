@@ -88,8 +88,9 @@ public sealed class StockRulesTests {
     public void EveryFeatureIsEnabled(string which) {
         var rules = Resolve(which);
 
+        // CLASSIC: an experiment is not a feature of the game; it stays off unless a profile turns it on.
         foreach (var feature in ClassicFeatures.All) {
-            Assert.True(rules.IsFeatureEnabled(feature), feature);
+            Assert.Equal(!ClassicFeatures.IsExperiment(feature), rules.IsFeatureEnabled(feature));
         }
     }
 

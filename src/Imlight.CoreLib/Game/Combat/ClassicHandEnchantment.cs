@@ -24,8 +24,20 @@ internal static class ClassicHandEnchantment {
             || target.m_treasureCard || target.m_itemCard || target.m_battleCard
             || CoreObjectFactory.GetCoreTemplate(source.m_templateID) is not SpellTemplate enchantment
             || CoreObjectFactory.GetCoreTemplate(target.m_templateID) is not SpellTemplate original
-            || enchantment.m_spellRank?.m_spellRank != 0 || enchantment.m_effects is not { Count: > 0 }
-            || (pvp ? original.m_noPvPEnchant : original.m_noPvEEnchant)
+            || enchantment.m_spellRank?.m_spellRank != 0 || enchantment.m_effects is not { Count: > 0 }) {
+            return false;
+        }
+        // CLASSIC OWNER EXTRA: a Weave card (School Weaving) is decided by its own table, never by the client's Mutate list.
+        if (ClassicWeaving.WeaveOfCard(source.m_templateID) is not null) {
+            if (!ClassicWeaving.TryPrepare(source, target, original, pvp, out var woven, out var wovenCast, out var why)) {
+                if (why is not null) Imlight.Common.Logger.Debug("Weaving refused: {0}.", Imlight.Common.Logger.Args(why));
+                return false;
+            }
+            enchanted = woven;
+            castTemplate = wovenCast;
+            return true;
+        }
+        if ((pvp ? original.m_noPvPEnchant : original.m_noPvEEnchant)
             || (pvp && !AllowsPvpEnchantment(source))) { // CLASSIC: only dated October Cloak is enabled in PvP.
             return false;
         }

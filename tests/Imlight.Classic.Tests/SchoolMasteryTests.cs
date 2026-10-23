@@ -1,0 +1,944 @@
+/*
+ * Imlight
+ * Copyright (C) 2025 Revive101
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program. If not, see <http://www.gnu.org/licenses/>.
+ *
+ * CLASSIC: School Mastery (experiments.mastery, an experiment): the switch stays off in every historical profile, and
+ * all seven school mechanics and their Weaving combinations run through the real duel resolver.
+ *
+ * Created by: Nick with Claude Code (claude-opus-5-5)
+ * Version: KALI 1.0
+ * Last Updated: 10/21/2026
+ */
+
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Reflection;
+using System.Runtime.CompilerServices;
+using Akka.Actor;
+using Imcodec.ObjectProperty.TypeCache;
+using Imlight.Classic.Rules;
+using Imlight.Common;
+using Imlight.CoreLib.Classic;
+using Imlight.CoreLib.Game.Combat;
+using Imlight.CoreLib.Game.Spells;
+using Imlight.CoreLib.Game.Zone.Components;
+using Imlight.CoreLib.Shared.Behaviors;
+using Imlight.CoreLib.Shared.Resources;
+using Xunit;
+using CombatResolver = Imlight.CoreLib.Game.Combat.CombatResolver;
+
+namespace Imlight.Classic.Tests;
+
+[Collection(nameof(ClassicRuntimeCollection))]
+public sealed class SchoolMasterySwitchTests {
+
+    [Theory]
+    [InlineData("late-2009")]
+    [InlineData("arc1-2009h1")]
+    [InlineData("october-2010-arc1")]
+    [InlineData("celestia-2010")]
+    [InlineData("wintertusk-2011")]
+    [InlineData("dev-unrestricted")]
+    public void EveryHistoricalProfileKeepsTheExperimentOff(string profile) {
+        var rules = ClassicDataFixture.RealRules(profile);
+        Assert.False(rules.MasteryEnabled);
+        Assert.False(rules.Profile.Features.IsEnabled(ClassicFeatures.ExperimentsMastery));
+    }
+
+    [Fact]
+    public void TheDemoProfileTurnsItOnAndKeepsTheLiveProfilesRules() {
+        var demo = ClassicDataFixture.RealRules("mastery-demo");
+        var live = ClassicDataFixture.RealRules("october-2010-arc1");
+        Assert.True(demo.MasteryEnabled);
+        Assert.Equal(ProfileStatus.Debug, demo.Profile.Status);
+        Assert.Equal(live.Profile.Cutoff, demo.Profile.Cutoff);
+        Assert.Equal(live.Profile.Features.Disabled.ToArray(), demo.Profile.Features.Disabled.ToArray());
+        Assert.False(demo.Profile.Features.IsEnabled(ClassicFeatures.CriticalAndBlock));
+    }
+
+    [Fact]
+    public void AnExperimentIsOffUnlessSetWhileAHistoricalSwitchIsOnUnlessSet() {
+        Assert.False(FeatureSwitches.None.IsEnabled(ClassicFeatures.ExperimentsMastery));
+        Assert.True(FeatureSwitches.None.IsEnabled(ClassicFeatures.Housing));
+        Assert.True(new FeatureSwitches(new Dictionary<string, bool> { [ClassicFeatures.ExperimentsMastery] = true })
+            .IsEnabled(ClassicFeatures.ExperimentsMastery));
+        Assert.True(ClassicFeatures.IsExperiment(ClassicFeatures.ExperimentsMastery));
+        Assert.False(ClassicFeatures.IsExperiment(ClassicFeatures.PetsEnergy));
+    }
+
+    [Fact]
+    public void StockRulesKeepItOff() => Assert.False(ClassicRules.Stock.MasteryEnabled);
+
+}
+
+[Collection(nameof(ClassicRuntimeCollection))]
+public sealed class SchoolMasteryDuelTests : IDisposable {
+
+    private static readonly (int Index, string Name)[] TestSchools = [(9201, "Fire"), (9202, "Ice"), (9203, "Storm"), (9204, "Myth"), (9205, "Life"), (9206, "Death"), (9207, "Balance")];
+    private const uint Base = uint.MaxValue - 900;
+    private const ulong Krok = 35433;
+    private readonly Dictionary<int, MagicSchoolTemplate> _schools;
+    private readonly Dictionary<string, (Spell, SpellTemplate)> _spells = [];
+    private uint _next;
+
+    public SchoolMasteryDuelTests() {
+        UseProfile("mastery-demo");
+        var config = Path.GetTempFileName();
+        try {
+            File.WriteAllText(config, $"[Logging]\nLogLevel=FATAL\nLogPath={Path.Combine(Path.GetTempPath(), "imlight-mastery-tests.log")}\n");
+            ConfigurationManager.Initialize(config);
+        } finally {
+            File.Delete(config);
+        }
+
+        _schools = (Dictionary<int, MagicSchoolTemplate>) typeof(MagicSchools)
+            .GetField("s_magicSchools", BindingFlags.Static | BindingFlags.NonPublic)!.GetValue(null)!;
+        foreach (var (index, name) in TestSchools) {
+            _schools[index] = new MagicSchoolTemplate { m_schoolName = name, m_schoolIndex = index - 9199 };
+        }
+
+        // The client templates the procs cast (their r806919 shapes) and the fight's cards.
+        Add("Pet - Detonate", MagicSchool.Fire, Effect(kSpellEffects.kDetonateOverTime, 1, kEffectTarget.kEnemySingle, "All"), accuracy: 75);
+        Add("Link", MagicSchool.Fire, Burn(180), rank: 2);
+        Add("Fire Elf", MagicSchool.Fire, Burn(210), rank: 2);
+        Add("Thunder Snake", MagicSchool.Storm, Effect(kSpellEffects.kDamageOverTime, 180, kEffectTarget.kEnemySingle, "Storm", rounds: 3), rank: 1);
+        Add("Krok Hit", MagicSchool.Fire, Effect(kSpellEffects.kDamage, 300, kEffectTarget.kEnemySingle));
+        Add("Big Krok Hit", MagicSchool.Fire, Effect(kSpellEffects.kDamage, 700, kEffectTarget.kEnemySingle));
+        Add("Storm Shark", MagicSchool.Storm, Effect(kSpellEffects.kDamage, 400, kEffectTarget.kEnemySingle, "Storm"), rank: 3);
+        // The bolts as mastery-demo's records shape them: the Wild Bolt animation with fifteen listed values.
+        AddRandom(MasteryRules.DischargeBolt, MagicSchool.Storm, 0, [25, 50, 75, 100, 125, 150, 200, 250, 300, 350, 400, 500, 600, 800, 1000]);
+        AddRandom(MasteryRules.DischargeBackfire, MagicSchool.Storm, 0, [25, 50, 75, 100, 125, 150, 200, 250, 300, 350, 400, 500, 600, 800, 1000], kEffectTarget.kSelf);
+        Add("Storm Bomb", MagicSchool.Storm, Effect(kSpellEffects.kDamage, 2000, kEffectTarget.kEnemySingle, "Storm"), rank: 3);
+        Add("Pet - Ghoul", MagicSchool.Death, Effect(kSpellEffects.kStealHealth, 180, kEffectTarget.kEnemySingle, "Death"), rank: 2);
+        foreach (var school in new[] { "Fire", "Ice", "Storm" }) {
+            Add($"{school}blade", Enum.Parse<MagicSchool>(school), Effect(kSpellEffects.kModifyOutgoingDamage, 35, kEffectTarget.kFriendlySingle, school));
+        }
+        Add("Fire Cat", MagicSchool.Fire, Effect(kSpellEffects.kDamage, 100, kEffectTarget.kEnemySingle, "Fire"), rank: 1);
+        AddRandom("Frost Beetle", MagicSchool.Ice, 1, [65, 75, 85, 95, 105]);
+        AddRandom("Snow Serpent", MagicSchool.Ice, 2, [155, 165, 175, 185, 195]);
+        AddRandom("Evil Snowman", MagicSchool.Ice, 3, [240, 255, 270, 285, 300]);
+        AddRandom("Ice Wyvern", MagicSchool.Ice, 4, [335, 350, 365, 380, 395]);
+        AddRandom("Colossus", MagicSchool.Ice, 6, [460, 480, 500, 520, 540]);
+        Add("Huge Krok Hit", MagicSchool.Fire, Effect(kSpellEffects.kDamage, 1600, kEffectTarget.kEnemySingle));
+        Add("Prism Hit", MagicSchool.Balance, Effect(kSpellEffects.kDamage, 365, kEffectTarget.kEnemySingle, "Ice"), rank: 4);
+        AddMany("Hydra", MagicSchool.Balance, rank: 6, Effect(kSpellEffects.kDamage, 230, kEffectTarget.kEnemySingle, "Fire"),
+            Effect(kSpellEffects.kDamage, 230, kEffectTarget.kEnemySingle, "Ice"), Effect(kSpellEffects.kDamage, 230, kEffectTarget.kEnemySingle, "Storm"));
+        Add("Troll", MagicSchool.Myth, Effect(kSpellEffects.kDamage, 190, kEffectTarget.kEnemySingle, "Myth"), rank: 2);
+        // The minion cards summon nothing here (param 0): the spawn needs the client's creature templates and a live zone.
+        Add("Minion Myth 000", MagicSchool.Myth, Effect(kSpellEffects.kSummonCreature, 0, kEffectTarget.kSelf, "Myth"));
+        Add("Minion Myth 001", MagicSchool.Myth, Effect(kSpellEffects.kSummonCreature, 0, kEffectTarget.kSelf, "Myth"));
+        Add("Minion Myth 002", MagicSchool.Myth, Effect(kSpellEffects.kSummonCreature, 0, kEffectTarget.kSelf, "Myth"));
+        Add("Minion Myth 003", MagicSchool.Myth, Effect(kSpellEffects.kSummonCreature, 0, kEffectTarget.kSelf, "Myth"), rank: 3);
+        Add("Pixie Life", MagicSchool.Life, Effect(kSpellEffects.kHeal, 420, kEffectTarget.kFriendlySingle, "Life"), rank: 2);
+        Add("Ghoul", MagicSchool.Death, Effect(kSpellEffects.kStealHealth, 160, kEffectTarget.kEnemySingle, "Death"), rank: 2);
+        Add("Hex", MagicSchool.Balance, Effect(kSpellEffects.kModifyIncomingDamage, 30, kEffectTarget.kEnemySingle, "All"));
+        Add("Balanceblade", MagicSchool.Balance, Effect(kSpellEffects.kModifyOutgoingDamage, 25, kEffectTarget.kFriendlySingle, "All"));
+        Add("Scorpion", MagicSchool.Balance, Effect(kSpellEffects.kDamage, 180, kEffectTarget.kEnemySingle, "Balance"), rank: 2);
+        Add("Bladestorm", MagicSchool.Balance, Effect(kSpellEffects.kModifyOutgoingDamage, 20, kEffectTarget.kFriendlyTeam, "All"), rank: 1);
+        // The tome's cards for the test creature (r806919 shapes: Monster Magic Defeat and Summon, Myth, rank 2).
+        Add($"Kill{Krok}", MagicSchool.Myth, Effect(kSpellEffects.kKillCreature, (int) Krok, kEffectTarget.kEnemySingle, "Moon"), rank: 2);
+        Add($"Summon{Krok}", MagicSchool.Myth, Effect(kSpellEffects.kSummonCreature, 0, kEffectTarget.kSelf, "Myth"), rank: 2);
+        Add("Minion Bonk", MagicSchool.Myth, Effect(kSpellEffects.kDamage, 100, kEffectTarget.kEnemySingle, "Myth"));
+        Add("Pierce", MagicSchool.Myth, new SpellEffect {
+            m_effectType = kSpellEffects.kRemoveWard, m_effectParam = 1, m_sDamageType = "All", m_effectTarget = kEffectTarget.kEnemySingle,
+            m_disposition = kHangingDisposition.kBeneficial,
+        });
+        AddRandom("Imp", MagicSchool.Life, 1, [65, 75, 85, 95, 105]);
+        AddRandom("Leprechaun", MagicSchool.Life, 2, [155, 165, 175, 185, 195]);
+        AddRandom("Nature's Wrath", MagicSchool.Life, 3, [240, 255, 270, 285, 300]);
+        AddRandom("Seraph", MagicSchool.Life, 4, [335, 350, 365, 380, 395]);
+        AddRandom("Centaur", MagicSchool.Life, 6, [515, 535, 555, 575, 595]);
+        Add("Spirit Armor", MagicSchool.Life, Effect(kSpellEffects.kAbsorbDamage, 400, kEffectTarget.kFriendlySingle, "All"), rank: 3);
+        Add("Pixie", MagicSchool.Life, Effect(kSpellEffects.kHeal, 400, kEffectTarget.kSelf, "Life"), rank: 2);
+        Add("Satyr", MagicSchool.Life, Effect(kSpellEffects.kHeal, 860, kEffectTarget.kFriendlySingle, "Life"), rank: 4);
+        Add("Unicorn", MagicSchool.Life, Effect(kSpellEffects.kHeal, 275, kEffectTarget.kFriendlyTeam, "Life"), rank: 3);
+        AddMany("Regenerate", MagicSchool.Life, 5, Effect(kSpellEffects.kHeal, 52, kEffectTarget.kFriendlySingle, "Life"),
+            Effect(kSpellEffects.kHealOverTime, 1101, kEffectTarget.kFriendlySingle, "Life", rounds: 3));
+        Add("Balance Heal", MagicSchool.Balance, Effect(kSpellEffects.kHeal, 400, kEffectTarget.kFriendlySingle, "Life"), rank: 2);
+        MasteryDirector.ResolveSpellForTests = name => _spells.TryGetValue(name, out var s) ? s : null;
+
+        var lazy = typeof(SpellCinematics).BaseType!.GetField("s_instance", BindingFlags.Static | BindingFlags.NonPublic)!.GetValue(null)!;
+        if (!(bool) lazy.GetType().GetProperty("IsValueCreated")!.GetValue(lazy)!) {
+            lazy.GetType().GetField("_value", BindingFlags.Instance | BindingFlags.NonPublic)!
+                .SetValue(lazy, RuntimeHelpers.GetUninitializedObject(typeof(SpellCinematics)));
+            lazy.GetType().GetField("_state", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(lazy, null);
+        }
+    }
+
+    private static void UseProfile(string profile) {
+        ClassicRuntime.ResetForTests();
+        ClassicRuntime.Initialize(ClassicDataFixture.RealRules(profile));
+    }
+
+    public void Dispose() {
+        MasteryDirector.ResolveSpellForTests = null;
+        foreach (var (index, _) in TestSchools) _schools.Remove(index);
+        foreach (var (_, (spell, _)) in _spells) Cache.Remove(spell.m_templateID);
+        ClassicRuntime.ResetForTests();
+    }
+
+    private static IDictionary<ulong, CoreTemplate> Cache => (IDictionary<ulong, CoreTemplate>) typeof(CoreObjectFactory)
+        .GetField("s_templateCache", BindingFlags.Static | BindingFlags.NonPublic)!.GetValue(null)!;
+
+    private static SpellEffect Effect(kSpellEffects type, int param, kEffectTarget target, string school = "Fire", int rounds = 0) => new() {
+        m_effectType = type, m_effectParam = param, m_sDamageType = school, m_effectTarget = target, m_numRounds = rounds, m_healModifier = 1f,
+    };
+
+    private static SpellEffect Burn(int total) => Effect(kSpellEffects.kDamageOverTime, total, kEffectTarget.kEnemySingle, "Fire", rounds: 3);
+
+    private void Add(string name, MagicSchool school, SpellEffect effect, byte rank = 0, uint accuracy = 100)
+        => AddMany(name, school, rank, accuracy, effect);
+
+    private void AddMany(string name, MagicSchool school, byte rank, params SpellEffect[] effects) => AddMany(name, school, rank, 100, effects);
+
+    // A ranged classic attack card: one of fixed values, the client's RandomSpellEffect.
+    private void AddRandom(string name, MagicSchool school, byte rank, int[] values, kEffectTarget target = kEffectTarget.kEnemySingle)
+        => AddMany(name, school, rank, 80, new RandomSpellEffect {
+            m_effectType = kSpellEffects.kInvalidSpellEffect, m_effectTarget = kEffectTarget.kInvalidTarget, m_sDamageType = "All",
+            m_effectList = [.. values.Select(v => Effect(kSpellEffects.kDamage, v, target, school.ToString()))],
+        });
+
+    private void AddMany(string name, MagicSchool school, byte rank, uint accuracy, params SpellEffect[] effects) {
+        var id = Base + _next++;
+        foreach (var effect in effects) effect.m_spellTemplateID = id;   // as a loaded template's effects carry it (ward matching groups by it)
+        var template = new SpellTemplate {
+            m_name = name, m_spellBase = name, m_accuracy = (byte) accuracy, m_sMagicSchoolName = school.ToString(),
+            m_spellRank = new SpellRank { m_spellRank = rank }, m_effects = [.. effects],
+        };
+        Cache[id] = template;
+        _spells[name] = (new Spell {
+            m_templateID = id, m_accuracy = (byte) accuracy, m_magicSchoolID = (uint) school,
+            m_pipCost = new SpellRank { m_spellRank = rank },
+        }, template);
+    }
+
+    private static CombatDuelSubCircle Occupy(CombatDuelComponent duel, int slot, ulong template, int health, MagicSchool school = MagicSchool.None, int level = 0) {
+        var circle = duel.SubCircles[slot];
+        CombatRegressionTests.SetProperty(circle, "ParticipantObject", new CoreObject { m_templateID = template });
+        CombatRegressionTests.SetProperty(circle, "ParticipantActor", ActorRefs.Nobody);
+        var stats = (ServerWizGameStats) RuntimeHelpers.GetUninitializedObject(typeof(ServerWizGameStats));
+        stats.m_baseHitpoints = health;
+        stats.m_currentHitpoints = health;
+        stats.m_schoolID = (uint) school;
+        stats.Level = level;
+        CombatRegressionTests.SetProperty(circle, "ParticipantGameStats", stats);
+        var combatStats = (WizGameStats) RuntimeHelpers.GetUninitializedObject(typeof(WizGameStats));
+        CombatRegressionTests.SetProperty(circle, "CombatParticipant", new CombatParticipant {
+            m_hangingEffects = [], m_pGameStats = combatStats, m_pipCount = new PipCount { m_genericPips = 7 },
+        });
+        circle._combatDeck = new CombatDeck([], [], 7);
+        circle.AddedToDuel = true;
+        return circle;
+    }
+
+    private static CombatDuelComponent NewDuel() {
+        var duel = CombatRegressionTests.MakeDuel();
+        CombatRegressionTests.SetProperty(duel, "Duel", new Duel { m_duelModifier = new DuelModifier { m_battlefieldEffects = [] } });
+        return duel;
+    }
+
+    private QueuedCombatAction Cast(CombatDuelSubCircle caster, CombatDuelSubCircle target, string spell)
+        => new() { SpellCaster = caster, SelectedTarget = target, Spell = _spells[spell].Item1, SpellTemplate = _spells[spell].Item2 };
+
+    private static List<CombatAction> Resolve(CombatDuelComponent duel, params QueuedCombatAction[] actions) {
+        var resolver = new CombatResolver(duel.Duel, duel.SubCircles);
+        resolver.Reset();
+        var queue = (List<QueuedCombatAction>) typeof(CombatResolver)
+            .GetField("_queuedCombatActions", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(resolver)!;
+        queue.AddRange(actions);
+        var list = new CombatActionListObj { m_actionList = [] };
+        typeof(CombatResolver).GetMethod("ProcessQueuedActions", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(resolver, [list]);
+        return list.m_actionList;
+    }
+
+    private static SpellEffect HangingBurn(int perRound, int rounds, string school = "Fire") => new() {
+        m_effectType = kSpellEffects.kDamageOverTime, m_paramPerRound = perRound, m_numRounds = rounds, m_sDamageType = school,
+    };
+
+    private static SpellEffect Shield(int percent = -50) => new() {
+        m_effectType = kSpellEffects.kModifyIncomingDamage, m_effectParam = percent, m_sDamageType = "All", m_spellTemplateID = 777,
+    };
+
+    private string NameOf(CombatAction action) => _spells.First(s => s.Value.Item1.m_templateID == action.m_spell?.m_templateID).Key;
+
+    // ------------------------------------------------------------ Fire: Kindling
+
+    [Fact]
+    public void ASecondBurnOnABurningEnemyIsSetOffAtOnceByAFreeDetonate() {
+        var duel = NewDuel();
+        var krok = Occupy(duel, 0, Krok, 1200);
+        var fire = Occupy(duel, 4, 1, 836, MagicSchool.Fire, level: 20);
+        krok._hangingEffects.Add(HangingBurn(70, 2));            // Fire Elf's burn, two ticks left
+
+        var list = Resolve(duel, Cast(fire, krok, "Link"));
+
+        Assert.Equal(["Link", "Pet - Detonate"], list.Select(NameOf).ToArray());
+        var proc = list[1];
+        Assert.True(proc.m_interrupt);
+        Assert.Equal((char) 1, proc.m_spellHits);
+        Assert.Equal(fire.SlotIndex, proc.m_spellCaster);
+        // Link (60 a round for 3) went off at once: 180. Fire Elf's burn is left to tick.
+        Assert.Equal(1200 - 180, krok.ParticipantGameStats.m_currentHitpoints);
+        var left = Assert.Single(krok._hangingEffects, e => e.m_effectType == kSpellEffects.kDamageOverTime);
+        Assert.Equal((70, 2), (left.m_paramPerRound, left.m_numRounds));
+        // The proc cost nothing: Link's 2 pips only.
+        Assert.Equal(5, fire.CombatParticipant.m_pipCount.m_genericPips);
+    }
+
+    [Fact]
+    public void TheDetonationGoesThroughTheEnemysShieldLikeATick() {
+        var duel = NewDuel();
+        var krok = Occupy(duel, 0, Krok, 1200);
+        var fire = Occupy(duel, 4, 1, 836, MagicSchool.Fire, level: 20);
+        krok._hangingEffects.Add(HangingBurn(70, 2));
+        krok._hangingEffects.Add(Shield());
+
+        Resolve(duel, Cast(fire, krok, "Link"));
+
+        Assert.Equal(1200 - 90, krok.ParticipantGameStats.m_currentHitpoints);
+        Assert.DoesNotContain(krok._hangingEffects, e => e.m_effectType == kSpellEffects.kModifyIncomingDamage);
+    }
+
+    [Theory]
+    [InlineData(MagicSchool.Fire, 4, "Link", true)]       // below Fire Elf's level
+    [InlineData(MagicSchool.Storm, 20, "Link", true)]     // not a Fire wizard
+    [InlineData(MagicSchool.Fire, 20, "Link", false)]     // the first burn: nothing to kindle
+    [InlineData(MagicSchool.Fire, 20, "Thunder Snake", true)] // not a Fire burn
+    public void KindlingNeedsAFireWizardAFireBurnAndABurningEnemy(MagicSchool school, int level, string spell, bool alreadyBurning) {
+        var duel = NewDuel();
+        var krok = Occupy(duel, 0, Krok, 1200);
+        var wizard = Occupy(duel, 4, 1, 836, school, level);
+        if (alreadyBurning) krok._hangingEffects.Add(HangingBurn(70, 2));
+
+        var list = Resolve(duel, Cast(wizard, krok, spell));
+
+        Assert.Equal([spell], list.Select(NameOf).ToArray());
+    }
+
+    [Fact]
+    public void WithTheSwitchOffNothingProcsAndDetonateStaysInert() {
+        UseProfile("october-2010-arc1");
+        var duel = NewDuel();
+        var krok = Occupy(duel, 0, Krok, 1200);
+        var fire = Occupy(duel, 4, 1, 836, MagicSchool.Fire, level: 20);
+        krok._hangingEffects.Add(HangingBurn(70, 2));
+
+        var list = Resolve(duel, Cast(fire, krok, "Link"));
+        Assert.Equal(["Link"], list.Select(NameOf).ToArray());
+
+        // A Detonate card (if any profile dealt one) does nothing outside the experiment, as before.
+        var before = krok.ParticipantGameStats.m_currentHitpoints;
+        Resolve(duel, Cast(fire, krok, "Pet - Detonate"));
+        Assert.Equal(before, krok.ParticipantGameStats.m_currentHitpoints);
+        Assert.Equal(2, krok._hangingEffects.Count(e => e.m_effectType == kSpellEffects.kDamageOverTime));
+    }
+
+    [Fact]
+    public void AProcNeverUsesUpADispel() {
+        var duel = NewDuel();
+        var krok = Occupy(duel, 0, Krok, 1200);
+        var fire = Occupy(duel, 4, 1, 836, MagicSchool.Fire, level: 20);
+        krok._hangingEffects.Add(HangingBurn(70, 2));
+        var proc = new QueuedCombatAction {
+            SpellCaster = fire, SelectedTarget = krok, Spell = _spells["Pet - Detonate"].Item1, SpellTemplate = _spells["Pet - Detonate"].Item2,
+            Cheat = new BossCheatCast(BossCheatKind.Mastery, Interrupt: true, Message: null),
+        };
+        var dispel = new SpellEffect { m_effectType = kSpellEffects.kDispel, m_sDamageType = "Fire" };
+        fire._hangingEffects.Add(dispel);
+
+        var list = Resolve(duel, proc);
+
+        Assert.Equal((char) 1, Assert.Single(list).m_spellHits);
+        Assert.Contains(dispel, fire._hangingEffects);
+        Assert.Equal(1200 - 140, krok.ParticipantGameStats.m_currentHitpoints);
+    }
+
+    // ------------------------------------------------------------ Ice: Frost Retort
+
+    private QueuedCombatAction Hit(CombatDuelSubCircle creature, CombatDuelSubCircle target, string spell = "Krok Hit", bool mastery = false) => new() {
+        // A creature's free cast, so the test needs no creature deck.
+        SpellCaster = creature, SelectedTarget = target, Spell = _spells[spell].Item1, SpellTemplate = _spells[spell].Item2,
+        Cheat = new BossCheatCast(mastery ? BossCheatKind.Mastery : BossCheatKind.ExtraCast, Interrupt: mastery, Message: null),
+    };
+
+    [Theory]
+    [InlineData("Krok Hit", "Frost Beetle", 75)]      // 300 halved: 150 stopped, 75 back
+    [InlineData("Big Krok Hit", "Snow Serpent", 175)] // 700 halved: 350 stopped, 175 back
+    [InlineData("Huge Krok Hit", "Evil Snowman", 270)] // 1600 halved: 800 stopped, 400 capped at a quarter of 1091 (272): 270 shown
+    public void HalfOfWhatTheShieldStoppedLashesBackAsAnIceCard(string hit, string card, int back) {
+        var duel = NewDuel();
+        var krok = Occupy(duel, 0, Krok, 5000);
+        var ice = Occupy(duel, 4, 1, 1091, MagicSchool.Ice, level: 20);
+        ice.ParticipantGameStats.m_currentHitpoints = 1091;
+        ice._hangingEffects.Add(Shield());
+        duel.Mastery.NewRound(1);
+
+        var list = Resolve(duel, Hit(krok, ice, hit));
+
+        Assert.Equal([hit, card], list.Select(NameOf).ToArray());
+        Assert.Equal((ice.SlotIndex, krok.SlotIndex), (list[1].m_spellCaster, list[1].m_targetSubcircleList.Single()));
+        Assert.True(list[1].m_interrupt);
+        Assert.Equal(5000 - back, krok.ParticipantGameStats.m_currentHitpoints);
+    }
+
+    [Fact]
+    public void TheRetortComesOnceARoundAndNeverWithoutAShield() {
+        var duel = NewDuel();
+        var krok = Occupy(duel, 0, Krok, 5000);
+        var ice = Occupy(duel, 4, 1, 1091, MagicSchool.Ice, level: 20);
+        duel.Mastery.NewRound(1);
+
+        Assert.Equal(["Krok Hit"], Resolve(duel, Hit(krok, ice)).Select(NameOf).ToArray());   // no shield, nothing stopped
+        ice.ParticipantGameStats.m_currentHitpoints = 1091;
+        ice._hangingEffects.Add(Shield());
+        Assert.Equal(["Krok Hit", "Frost Beetle"], Resolve(duel, Hit(krok, ice)).Select(NameOf).ToArray());
+        ice._hangingEffects.Add(Shield());
+        Assert.Equal(["Krok Hit"], Resolve(duel, Hit(krok, ice)).Select(NameOf).ToArray());   // once a round
+        duel.Mastery.NewRound(2);
+        ice._hangingEffects.Add(Shield());
+        Assert.Equal(["Krok Hit", "Frost Beetle"], Resolve(duel, Hit(krok, ice)).Select(NameOf).ToArray());
+    }
+
+    [Fact]
+    public void ATickAProcAndAFriendNeverSetOffTheRetort() {
+        var duel = NewDuel();
+        var krok = Occupy(duel, 0, Krok, 5000);
+        var ice = Occupy(duel, 4, 1, 1091, MagicSchool.Ice, level: 20);
+        var friend = Occupy(duel, 5, 1, 836, MagicSchool.Fire, level: 20);
+        duel.Mastery.NewRound(1);
+
+        // A burn ticking on the shielded Ice wizard at the start of their own turn.
+        ice._hangingEffects.Add(Shield());
+        ice._hangingEffects.Add(HangingBurn(300, 2));
+        Assert.Equal(1, Resolve(duel, new QueuedCombatAction { SpellCaster = ice }).Count);
+        // Another wizard's School Mastery proc (a Storm wizard's discharge bolt, say) that hits the Ice wizard.
+        ice._hangingEffects.Add(Shield());
+        Assert.Equal(["Krok Hit"], Resolve(duel, Hit(krok, ice, mastery: true)).Select(NameOf).ToArray());
+        // A friend hitting the Ice wizard on purpose.
+        ice._hangingEffects.Add(Shield());
+        Assert.Equal(["Krok Hit"], Resolve(duel, Cast(friend, ice, "Krok Hit")).Select(NameOf).ToArray());
+    }
+
+    [Fact]
+    public void FrostRetortNeedsTowerShieldsLevel() {
+        var duel = NewDuel();
+        var krok = Occupy(duel, 0, Krok, 5000);
+        var ice = Occupy(duel, 4, 1, 1000, MagicSchool.Ice, level: 15);
+        ice._hangingEffects.Add(Shield());
+        duel.Mastery.NewRound(1);
+
+        Assert.Equal(["Krok Hit"], Resolve(duel, Hit(krok, ice)).Select(NameOf).ToArray());
+    }
+
+    // ------------------------------------------------------------ Storm: Static Discharge (Wild Bolt, backfire)
+
+    // The duel's random source, scripted: an accuracy roll (0..100) always hits; each bolt's backfire roll (0..5) jumps back
+    // (0) when the next scripted answer says so.
+    private sealed class BoltRandom(params bool[] backfires) : Random {
+        private int _bolt;
+        internal int BoltRolls => _bolt;
+        public override int Next(int minValue, int maxValue) {
+            if (maxValue != MasteryRules.DischargeBackfireOdds) return 0;
+            var back = _bolt < backfires.Length && backfires[_bolt];
+            _bolt++;
+            return back ? 0 : 1;
+        }
+    }
+
+    private static BoltRandom Script(CombatDuelComponent duel, params bool[] backfires) {
+        var random = new BoltRandom(backfires);
+        typeof(CombatDuelComponent).GetField("_rng", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(duel, random);
+        return random;
+    }
+
+    private const string Bolt = MasteryRules.DischargeBolt, Back = MasteryRules.DischargeBackfire;
+
+    [Theory]
+    [InlineData(0f, 150)]       // 300 spare over two: 150 each
+    [InlineData(0.25f, 187)]    // +25% Storm gear: 400 spare, 200 each; the 150 bolt lands 187 (200 / 1.25 = 160, at or under: 150)
+    public void AStormKillSplitsItsSpareDamageOverTheOtherEnemiesOneBoltEach(float gear, int each) {
+        var duel = NewDuel();
+        var a = Occupy(duel, 0, Krok, 100);
+        var b = Occupy(duel, 1, Krok, 1000);
+        var c = Occupy(duel, 2, Krok, 1000);
+        var storm = Occupy(duel, 4, 1, 710, MagicSchool.Storm, level: 20);
+        storm.ParticipantGameStats.m_dmgBonusPercentAll = gear;
+        var random = Script(duel, false, false);
+        duel.Mastery.NewRound(1);
+
+        var list = Resolve(duel, Cast(storm, a, "Storm Shark"));
+
+        Assert.Equal(["Storm Shark", Bolt, Bolt], list.Select(NameOf).ToArray());
+        Assert.Equal([b.SlotIndex, c.SlotIndex], list.Skip(1).Select(x => x.m_targetSubcircleList.Single()).ToArray());
+        Assert.All(list.Skip(1), x => Assert.True(x.m_interrupt));
+        Assert.Equal([1000 - each, 1000 - each], new[] { b, c }.Select(x => x.ParticipantGameStats.m_currentHitpoints).ToArray());
+        Assert.Equal(710, storm.ParticipantGameStats.m_currentHitpoints);
+        Assert.Equal(2, random.BoltRolls);   // one backfire roll per bolt, by the server
+    }
+
+    [Fact]
+    public void ABoltThatJumpsBackHitsTheStormWizardThroughTheirShieldAndSetsOffNothingElse() {
+        var duel = NewDuel();
+        var a = Occupy(duel, 0, Krok, 100);
+        var b = Occupy(duel, 1, Krok, 1000);
+        var c = Occupy(duel, 2, Krok, 1000);
+        var storm = Occupy(duel, 4, 1, 710, MagicSchool.Storm, level: 20);
+        var ice = Occupy(duel, 5, 1, 1091, MagicSchool.Ice, level: 20);
+        ice._hangingEffects.Add(Shield());
+        var death = Occupy(duel, 6, 1, 915, MagicSchool.Death, level: 20);
+        death.ParticipantGameStats.m_currentHitpoints = 300;
+        storm._hangingEffects.Add(Shield());
+        Script(duel, true, false);
+        duel.Mastery.NewRound(1);
+
+        var list = Resolve(duel, Cast(storm, a, "Storm Shark"));
+
+        Assert.Equal(["Storm Shark", Back, Bolt], list.Select(NameOf).ToArray());
+        Assert.Equal(storm.SlotIndex, list[1].m_targetSubcircleList.Single());
+        Assert.Equal(710 - 75, storm.ParticipantGameStats.m_currentHitpoints);   // its 150 halved by the Storm wizard's own shield
+        Assert.Equal((1000, 850), (b.ParticipantGameStats.m_currentHitpoints, c.ParticipantGameStats.m_currentHitpoints));
+        Assert.Equal((1091, 300), (ice.ParticipantGameStats.m_currentHitpoints, death.ParticipantGameStats.m_currentHitpoints));
+    }
+
+    [Fact]
+    public void ADischargeNeverPutsMoreThan40PercentBackIntoTheStormWizard() {
+        var duel = NewDuel();
+        var a = Occupy(duel, 0, Krok, 100);
+        Occupy(duel, 1, Krok, 3000);
+        Occupy(duel, 2, Krok, 3000);
+        var storm = Occupy(duel, 4, 1, 547, MagicSchool.Storm, level: 10);   // the lowest health that unlocks it: room 218
+        Script(duel, true, true);
+        duel.Mastery.NewRound(1);
+
+        var list = Resolve(duel, Cast(storm, a, "Storm Bomb"));   // 2000 into 100: 950 each
+
+        Assert.Equal(["Storm Bomb", Back], list.Select(NameOf).ToArray());   // 200 back, then only 18 of room: no second bolt
+        Assert.Equal(547 - 200, storm.ParticipantGameStats.m_currentHitpoints);
+    }
+
+    [Theory]
+    [InlineData(MagicSchool.Storm, 20, 390)]   // 10 to spare: under the smallest bolt
+    [InlineData(MagicSchool.Storm, 20, 900)]   // no kill
+    [InlineData(MagicSchool.Fire, 20, 100)]    // not a Storm wizard
+    [InlineData(MagicSchool.Storm, 9, 100)]    // below Storm Shark's level
+    public void StaticDischargeNeedsAStormKillWithDamageToSpare(MagicSchool school, int level, int firstHealth) {
+        var duel = NewDuel();
+        var a = Occupy(duel, 0, Krok, firstHealth);
+        Occupy(duel, 1, Krok, 1000);
+        var wizard = Occupy(duel, 4, 1, 710, school, level);
+        Script(duel);
+        duel.Mastery.NewRound(1);
+
+        Assert.Equal(["Storm Shark"], Resolve(duel, Cast(wizard, a, "Storm Shark")).Select(NameOf).ToArray());
+    }
+
+    [Fact]
+    public void TheBoltsNeverDischargeAgain() {
+        var duel = NewDuel();
+        var a = Occupy(duel, 0, Krok, 100);
+        var b = Occupy(duel, 1, Krok, 100);   // its 150 bolt kills it with 50 to spare
+        var c = Occupy(duel, 2, Krok, 1000);
+        var storm = Occupy(duel, 4, 1, 710, MagicSchool.Storm, level: 20);
+        Script(duel, false, false);
+        duel.Mastery.NewRound(1);
+
+        var list = Resolve(duel, Cast(storm, a, "Storm Shark"));
+
+        Assert.Equal(["Storm Shark", Bolt, Bolt], list.Select(NameOf).ToArray());
+        Assert.False(b.IsAlive);
+        Assert.Equal(850, c.ParticipantGameStats.m_currentHitpoints);
+    }
+
+    [Theory]
+    [InlineData(20, 980, 240)]     // a full team of four (three wizards and a minion): 1100 past full, 550, capped at 245: Nature's Wrath 240
+    [InlineData(45, 1663, 300)]    // cap 415, but Unicorn's 3 pips buy no more than Nature's Wrath (rank 3): 300
+    public void AnAreaHealOnAFullTeamCountsEveryFriendButPaysNoMoreThanItsPipsWorthOfLifeAttack(int level, int health, int dealt) {
+        var duel = NewDuel();
+        var krok = Occupy(duel, 0, Krok, 3000);
+        var life = Occupy(duel, 4, 1, health, MagicSchool.Life, level);
+        foreach (var slot in new[] { 5, 6 }) Occupy(duel, slot, 1, 836, MagicSchool.Fire, level);
+        Minion(duel, 7, life);
+        duel.Mastery.NewRound(1);
+
+        var list = Resolve(duel, Cast(life, life, "Unicorn"));
+
+        Assert.Equal(["Unicorn", "Nature's Wrath"], list.Select(NameOf).ToArray());
+        Assert.Equal(3000 - dealt, krok.ParticipantGameStats.m_currentHitpoints);
+    }
+
+    [Fact]
+    public void HealingAFullMinionOfOursCounts() {
+        var duel = NewDuel();
+        var krok = Occupy(duel, 0, Krok, 3000);
+        var life = Occupy(duel, 4, 1, 980, MagicSchool.Life, level: 20);
+        var minion = Minion(duel, 5, life);
+        duel.Mastery.NewRound(1);
+
+        Assert.Equal(["Pixie Life", "Leprechaun"], Resolve(duel, Cast(life, minion, "Pixie Life")).Select(NameOf).ToArray());
+    }
+
+    [Fact]
+    public void HealOverTimeTicksBankForTheLifeWizardAndPayOnTheirNextTurn() {
+        var duel = NewDuel();
+        var krok = Occupy(duel, 0, Krok, 3000);
+        var life = Occupy(duel, 4, 1, 980, MagicSchool.Life, level: 20);
+        var friend = Occupy(duel, 5, 1, 836, MagicSchool.Fire, level: 20);
+        duel.Mastery.NewRound(1);
+
+        // Regenerate on a full friend: 52 past full (26: under the smallest Life card), and a 367-a-round heal over time.
+        Assert.Equal(["Regenerate"], Resolve(duel, Cast(life, friend, "Regenerate")).Select(NameOf).ToArray());
+        // The friend's turn: the tick heals 367 past full, banked for the Life wizard.
+        Resolve(duel, new QueuedCombatAction { SpellCaster = friend });
+
+        duel.Mastery.NewRound(2);
+        var list = Resolve(duel, Cast(life, krok, "Imp"));   // any own cast: the round's hit pays the bank (419 -> 209)
+        Assert.Equal("Leprechaun", NameOf(list[^1]));
+        Assert.Equal(krok.SlotIndex, list[^1].m_targetSubcircleList.Single());
+    }
+
+    [Fact]
+    public void AnotherWizardsHealAndALifeWizardsOtherSchoolHealNeverCount() {
+        var duel = NewDuel();
+        var krok = Occupy(duel, 0, Krok, 3000);
+        var life = Occupy(duel, 4, 1, 980, MagicSchool.Life, level: 20);
+        var fire = Occupy(duel, 5, 1, 836, MagicSchool.Fire, level: 20);
+        duel.Mastery.NewRound(1);
+
+        Assert.Equal(["Pixie Life"], Resolve(duel, Cast(fire, life, "Pixie Life")).Select(NameOf).ToArray());   // a friend's Life heal
+        Assert.Equal(["Balance Heal"], Resolve(duel, Cast(life, fire, "Balance Heal")).Select(NameOf).ToArray()); // not a Life card
+        Assert.Equal(["Imp"], Resolve(duel, Cast(life, krok, "Imp")).Select(NameOf).ToArray());                   // nothing banked
+    }
+
+    // ------------------------------------------------------------ Death: Hungry Dead
+
+    [Fact]
+    public void ADrainBelowHalfHealthDrainsAgainOnceARound() {
+        var duel = NewDuel();
+        var krok = Occupy(duel, 0, Krok, 1200);
+        var death = Occupy(duel, 4, 1, 915, MagicSchool.Death, level: 20);
+        death.ParticipantGameStats.m_currentHitpoints = 400;
+        duel.Mastery.NewRound(1);
+
+        var list = Resolve(duel, Cast(death, krok, "Ghoul"));
+
+        Assert.Equal(["Ghoul", "Pet - Ghoul"], list.Select(NameOf).ToArray());
+        Assert.Equal(1200 - 160 - 180, krok.ParticipantGameStats.m_currentHitpoints);
+        Assert.Equal(400 + 160 + 180, death.ParticipantGameStats.m_currentHitpoints);
+        death.ParticipantGameStats.m_currentHitpoints = 300;
+        Assert.Equal(["Ghoul"], Resolve(duel, Cast(death, krok, "Ghoul")).Select(NameOf).ToArray());   // once a round
+    }
+
+    [Fact]
+    public void AHealthyDeathWizardDoesNotDrainAgain() {
+        var duel = NewDuel();
+        var krok = Occupy(duel, 0, Krok, 1200);
+        var death = Occupy(duel, 4, 1, 915, MagicSchool.Death, level: 20);
+        death.ParticipantGameStats.m_currentHitpoints = 600;
+        duel.Mastery.NewRound(1);
+
+        Assert.Equal(["Ghoul"], Resolve(duel, Cast(death, krok, "Ghoul")).Select(NameOf).ToArray());
+    }
+
+    // ------------------------------------------------------------ Myth: Shatterstrike
+
+    private static CombatDuelSubCircle Minion(CombatDuelComponent duel, int slot, CombatDuelSubCircle owner) {
+        var minion = Occupy(duel, slot, 35680, 600);
+        CombatRegressionTests.SetProperty(minion, "IsSummonedMinion", true);
+        minion.CaptureMinionOwner(owner.SlotIndex);
+        return minion;
+    }
+
+    private static SpellEffect Absorb(int amount) => new() {
+        m_effectType = kSpellEffects.kAbsorbDamage, m_effectParam = amount, m_paramPerRound = amount, m_sDamageType = "All", m_spellTemplateID = 778,
+    };
+
+    private static SpellEffect Trap() => new() {
+        m_effectType = kSpellEffects.kModifyIncomingDamage, m_effectParam = 30, m_sDamageType = "All", m_spellTemplateID = 779,
+    };
+
+    [Fact]
+    public void YourMythHitOnAShieldedEnemyPiercesItsNextShieldOnceARound() {
+        var duel = NewDuel();
+        var krok = Occupy(duel, 0, Krok, 5000);
+        var myth = Occupy(duel, 4, 1, 842, MagicSchool.Myth, level: 20);
+        foreach (var slot in new[] { 5, 6, 7 }) Occupy(duel, slot, 1, 800, MagicSchool.Fire, level: 20);   // a full group of four
+        krok._hangingEffects.Add(Absorb(1000));   // the Troll only dents it
+        duel.Mastery.NewRound(1);
+
+        var list = Resolve(duel, Cast(myth, krok, "Troll"));
+
+        Assert.Equal(["Troll", "Pierce"], list.Select(NameOf).ToArray());
+        Assert.Equal((myth.SlotIndex, krok.SlotIndex), (list[1].m_spellCaster, list[1].m_targetSubcircleList.Single()));
+        Assert.DoesNotContain(krok._hangingEffects, e => e.m_effectType == kSpellEffects.kAbsorbDamage);
+
+        krok._hangingEffects.Add(Absorb(1000));
+        Assert.Equal(["Troll"], Resolve(duel, Cast(myth, krok, "Troll")).Select(NameOf).ToArray());   // once a round
+        duel.Mastery.NewRound(2);
+        Assert.Equal(["Troll", "Pierce"], Resolve(duel, Cast(myth, krok, "Troll")).Select(NameOf).ToArray());
+    }
+
+    [Fact]
+    public void PierceTakesAShieldButNeverYourTeamsTrap() {
+        var duel = NewDuel();
+        var krok = Occupy(duel, 0, Krok, 5000);
+        var myth = Occupy(duel, 4, 1, 842, MagicSchool.Myth, level: 20);
+        krok._hangingEffects.Add(Trap());
+        krok._hangingEffects.Add(Absorb(1000));
+
+        Resolve(duel, new QueuedCombatAction {
+            SpellCaster = myth, SelectedTarget = krok, Spell = _spells["Pierce"].Item1, SpellTemplate = _spells["Pierce"].Item2,
+            Cheat = new BossCheatCast(BossCheatKind.Mastery, Interrupt: true, Message: null),
+        });
+
+        Assert.DoesNotContain(krok._hangingEffects, e => e.m_effectType == kSpellEffects.kAbsorbDamage);
+        Assert.Contains(krok._hangingEffects, e => e.m_effectType == kSpellEffects.kModifyIncomingDamage && e.m_effectParam > 0);
+    }
+
+    [Theory]
+    [InlineData(MagicSchool.Fire, 20, true, false)]   // not a Myth wizard
+    [InlineData(MagicSchool.Myth, 4, true, false)]    // below Troll's level
+    [InlineData(MagicSchool.Myth, 20, false, false)]  // nothing to pierce
+    [InlineData(MagicSchool.Myth, 20, true, true)]    // a minion's hit: minions are not part of it
+    public void ShatterstrikeNeedsTheMythWizardsOwnHitOnAShield(MagicSchool school, int level, bool shielded, bool byMinion) {
+        var duel = NewDuel();
+        var krok = Occupy(duel, 0, Krok, 5000);
+        var owner = Occupy(duel, 4, 1, 842, school, level);
+        var minion = Minion(duel, 5, owner);
+        if (shielded) krok._hangingEffects.Add(Absorb(1000));
+        duel.Mastery.NewRound(1);
+
+        var spell = byMinion ? "Minion Bonk" : "Troll";
+        Assert.Equal([spell], Resolve(duel, Cast(byMinion ? minion : owner, krok, spell)).Select(NameOf).ToArray());
+    }
+
+    // ------------------------------------------------------------ Life: Overheal
+
+    [Fact]
+    public void HalfOfAHealsOverflowHitsTheWeakestEnemyAsALifeCardOnceARound() {
+        var duel = NewDuel();
+        var weak = Occupy(duel, 0, Krok, 500);
+        Occupy(duel, 1, Krok, 1000);
+        var life = Occupy(duel, 4, 1, 980, MagicSchool.Life, level: 20);
+        life.ParticipantGameStats.m_currentHitpoints = 900;   // Pixie 400: 320 past full, 160 back
+        duel.Mastery.NewRound(1);
+
+        var list = Resolve(duel, Cast(life, life, "Pixie"));
+
+        Assert.Equal(["Pixie", "Leprechaun"], list.Select(NameOf).ToArray());
+        Assert.Equal((life.SlotIndex, weak.SlotIndex), (list[1].m_spellCaster, list[1].m_targetSubcircleList.Single()));
+        Assert.Equal(500 - 155, weak.ParticipantGameStats.m_currentHitpoints);
+        Assert.Equal(980, life.ParticipantGameStats.m_currentHitpoints);
+
+        Assert.Equal(["Pixie"], Resolve(duel, Cast(life, life, "Pixie")).Select(NameOf).ToArray());   // once a round
+    }
+
+    [Theory]
+    [InlineData("Satyr", "Nature's Wrath", 240)]   // a full friend: 860 past full, 430, capped at a quarter of 980 (245)
+    [InlineData("Pixie Life", "Leprechaun", 195)]  // Fairy on a full friend: 420, 210 back
+    public void AHealOnAFullFriendCountsButIsCapped(string heal, string card, int dealt) {
+        var duel = NewDuel();
+        var krok = Occupy(duel, 0, Krok, 2000);
+        var life = Occupy(duel, 4, 1, 980, MagicSchool.Life, level: 20);
+        var friend = Occupy(duel, 5, 1, 836, MagicSchool.Fire, level: 20);
+        duel.Mastery.NewRound(1);
+
+        Assert.Equal([heal, card], Resolve(duel, Cast(life, friend, heal)).Select(NameOf).ToArray());
+        Assert.Equal(2000 - dealt, krok.ParticipantGameStats.m_currentHitpoints);
+    }
+
+    [Theory]
+    [InlineData(MagicSchool.Life, 20, 500)]   // nothing past full
+    [InlineData(MagicSchool.Life, 9, 900)]    // below Sprite's level
+    [InlineData(MagicSchool.Death, 20, 900)]  // not a Life wizard
+    public void OverhealNeedsALifeWizardHealingPastFull(MagicSchool school, int level, int health) {
+        var duel = NewDuel();
+        Occupy(duel, 0, Krok, 2000);
+        var wizard = Occupy(duel, 4, 1, 980, school, level);
+        wizard.ParticipantGameStats.m_currentHitpoints = health;
+        duel.Mastery.NewRound(1);
+
+        Assert.Equal(["Pixie"], Resolve(duel, Cast(wizard, wizard, "Pixie")).Select(NameOf).ToArray());
+    }
+
+    // ------------------------------------------------------------ Balance: Spectrum
+
+    [Fact]
+    public void EachNewSchoolGivesItsBladeAndTheFourthSchoolGivesTheTeamBladestorm() {
+        var duel = NewDuel();
+        var krok = Occupy(duel, 0, Krok, 5000);
+        var balance = Occupy(duel, 4, 1, 992, MagicSchool.Balance, level: 20);
+        var friend = Occupy(duel, 5, 1, 836, MagicSchool.Fire, level: 20);
+        duel.Mastery.NewRound(1);
+
+        string[] Play(CombatDuelSubCircle target, string spell) => [.. Resolve(duel, Cast(balance, target, spell)).Select(NameOf)];
+
+        Assert.Equal(["Hex"], Play(krok, "Hex"));                                 // Balance: counted, no blade
+        Assert.Equal(["Fire Cat", "Fireblade"], Play(krok, "Fire Cat"));          // a new school: its blade
+        Assert.Equal(["Fire Cat"], Play(krok, "Fire Cat"));                       // the same school again: nothing
+        Assert.Equal(["Hydra"], Play(krok, "Hydra"));                             // three schools at once count as Balance
+        Assert.Equal(["Prism Hit", "Iceblade"], Play(krok, "Prism Hit"));         // a Balance card that landed Ice counts Ice
+        Assert.Equal(["Thunder Snake", "Stormblade", "Bladestorm"], Play(krok, "Thunder Snake"));   // the fourth school
+        Assert.Equal(["Frost Beetle"], Play(krok, "Frost Beetle"));               // Ice again, and Bladestorm only once
+        Assert.Contains(friend._hangingEffects, e => e.m_effectType == kSpellEffects.kModifyOutgoingDamage && e.m_effectParam == 20);
+    }
+
+    [Fact]
+    public void SpectrumNeedsBalancebladesLevel() {
+        var duel = NewDuel();
+        var krok = Occupy(duel, 0, Krok, 5000);
+        var balance = Occupy(duel, 4, 1, 992, MagicSchool.Balance, level: 11);
+        duel.Mastery.NewRound(1);
+
+        Assert.Equal(["Fire Cat"], Resolve(duel, Cast(balance, krok, "Fire Cat")).Select(NameOf).ToArray());
+    }
+
+    // ------------------------------------------------------------ PvP
+
+    // ------------------------------------------------------------ Combined Weaving + Mastery
+
+    // Build the same transformed effects used by both live combat and the client card overlay, then resolve them
+    // through the real duel. This catches integration failures the isolated rider and Mastery tests cannot see.
+    private string AddWoven(MagicSchool school) {
+        var table = WeavingRulesLoader.Load(Path.Combine(ClassicDataFixture.Root, "rules", "weaving-classic.yaml"));
+        var original = new SpellTemplate {
+            m_sMagicSchoolName = school == MagicSchool.Storm ? "Fire" : "Storm", m_sTypeName = "Damage", m_accuracy = 100,
+            m_spellRank = new SpellRank { m_spellRank = 4 },
+            m_effects = [Effect(kSpellEffects.kDamage, 1000, kEffectTarget.kEnemySingle, "Storm")],
+        };
+        Assert.True(WeavingSpellBuilder.TryBuildCast(original, table.RiderFor(school.ToString().ToLowerInvariant())!, out var built, out var refusal), refusal);
+        var name = $"Woven {school}";
+        AddMany(name, school, 4, [.. built.m_effects]);
+        return name;
+    }
+
+    [Fact]
+    public void WovenFireKindlesItsNewBurnWithoutConsumingTheOldBurn() {
+        var duel = NewDuel();
+        var enemy = Occupy(duel, 0, Krok, 3000);
+        var fire = Occupy(duel, 4, 1, 2000, MagicSchool.Fire, 25);
+        enemy._hangingEffects.Add(HangingBurn(70, 2));
+        var woven = AddWoven(MagicSchool.Fire);
+
+        Assert.Equal([woven, "Pet - Detonate"], Resolve(duel, Cast(fire, enemy, woven)).Select(NameOf).ToArray());
+        Assert.Equal(1800, enemy.ParticipantGameStats.m_currentHitpoints); // 600 hit + 600 new burn
+        var old = Assert.Single(enemy._hangingEffects, e => e.m_effectType == kSpellEffects.kDamageOverTime);
+        Assert.Equal((70, 2), (old.m_paramPerRound, old.m_numRounds));
+        Assert.Equal(3, fire.CombatParticipant.m_pipCount.m_genericPips); // no extra pips for Mastery
+    }
+
+    [Fact]
+    public void WovenIceAbsorbFeedsFrostRetortWhenTheEnemyHits() {
+        var duel = NewDuel();
+        var enemy = Occupy(duel, 0, Krok, 5000);
+        var ice = Occupy(duel, 4, 1, 2000, MagicSchool.Ice, 25);
+        var woven = AddWoven(MagicSchool.Ice);
+        duel.Mastery.NewRound(1);
+        Assert.Equal([woven], Resolve(duel, Cast(ice, enemy, woven)).Select(NameOf).ToArray());
+        Assert.Equal(250, Assert.Single(ice._hangingEffects, e => e.m_effectType == kSpellEffects.kAbsorbDamage).m_paramPerRound);
+
+        Assert.Equal(["Krok Hit", "Frost Beetle"], Resolve(duel, Cast(enemy, ice, "Krok Hit")).Select(NameOf).ToArray());
+        Assert.Equal(1950, ice.ParticipantGameStats.m_currentHitpoints); // 250 absorbed, 50 reaches health
+        Assert.Equal(5000 - 900 - 105, enemy.ParticipantGameStats.m_currentHitpoints); // 125 budget, largest listed value 105
+    }
+
+    [Fact]
+    public void WovenStormKillDischargesOnlyItsActualOverkill() {
+        var duel = NewDuel();
+        var victim = Occupy(duel, 0, Krok, 900);
+        var survivor = Occupy(duel, 1, Krok, 2000);
+        var storm = Occupy(duel, 4, 1, 2000, MagicSchool.Storm, 25);
+        Script(duel, false);
+        var woven = AddWoven(MagicSchool.Storm);
+
+        Assert.Equal([woven, Bolt], Resolve(duel, Cast(storm, victim, woven)).Select(NameOf).ToArray());
+        Assert.Equal(0, victim.ParticipantGameStats.m_currentHitpoints);
+        Assert.Equal(1600, survivor.ParticipantGameStats.m_currentHitpoints); // 1300 - 900, not the original card's 1000
+    }
+
+    [Fact]
+    public void WovenMythsTwoHitsThenPierceWorkInAFullParty() {
+        var duel = NewDuel();
+        var enemy = Occupy(duel, 0, Krok, 5000);
+        var myth = Occupy(duel, 4, 1, 2000, MagicSchool.Myth, 25);
+        foreach (var slot in new[] { 5, 6, 7 }) Occupy(duel, slot, 1, 2000, MagicSchool.Fire, 25);
+        enemy._hangingEffects.Add(Absorb(2000));
+        var woven = AddWoven(MagicSchool.Myth);
+
+        Assert.Equal([woven, "Pierce"], Resolve(duel, Cast(myth, enemy, woven)).Select(NameOf).ToArray());
+        Assert.DoesNotContain(enemy._hangingEffects, e => e.m_effectType == kSpellEffects.kAbsorbDamage);
+        Assert.Equal(5000, enemy.ParticipantGameStats.m_currentHitpoints); // both hits went into the absorb
+    }
+
+    [Fact]
+    public void WovenLifeHealingTicksCanFundOverhealOnTheNextCast() {
+        var duel = NewDuel();
+        var enemy = Occupy(duel, 0, Krok, 5000);
+        var life = Occupy(duel, 4, 1, 2000, MagicSchool.Life, 25);
+        Script(duel);
+        var woven = AddWoven(MagicSchool.Life);
+        duel.Mastery.NewRound(1);
+        Assert.Equal([woven], Resolve(duel, Cast(life, enemy, woven)).Select(NameOf).ToArray());
+        Assert.Single(life._hangingEffects, e => e.m_effectType == kSpellEffects.kHealOverTime);
+        duel.Mastery.NewRound(2);
+
+        var nextCast = Cast(life, enemy, "Imp");
+        nextCast.ForcedRandomIndex = 0; // fix the ordinary Imp roll; the Mastery attack selects its own listed value
+        Assert.Equal(["Imp", "Imp"], Resolve(duel, nextCast).Select(NameOf).ToArray());
+        Assert.Equal(5000 - 800 - 65 - 65, enemy.ParticipantGameStats.m_currentHitpoints);
+    }
+
+    [Fact]
+    public void WovenDeathDrainTriggersHungryDeadFromTheWizardsStartingHealth() {
+        var duel = NewDuel();
+        var enemy = Occupy(duel, 0, Krok, 5000);
+        var death = Occupy(duel, 4, 1, 2000, MagicSchool.Death, 25);
+        death.ParticipantGameStats.m_currentHitpoints = 900;
+        var woven = AddWoven(MagicSchool.Death);
+        duel.Mastery.NewRound(1);
+
+        Assert.Equal([woven, "Pet - Ghoul"], Resolve(duel, Cast(death, enemy, woven)).Select(NameOf).ToArray());
+        Assert.Equal(5000 - 750 - 180, enemy.ParticipantGameStats.m_currentHitpoints);
+        Assert.True(death.ParticipantGameStats.m_currentHitpoints > 1000); // initial drain crossed half; follow-up still fires
+    }
+
+    [Fact]
+    public void WovenBalanceCountsAsBalanceNotItsOriginalSchoolForSpectrum() {
+        var duel = NewDuel();
+        var enemy = Occupy(duel, 0, Krok, 5000);
+        var balance = Occupy(duel, 4, 1, 2000, MagicSchool.Balance, 25);
+        var woven = AddWoven(MagicSchool.Balance);
+        duel.Mastery.NewRound(1);
+        Assert.Equal(["Fire Cat", "Fireblade"], Resolve(duel, Cast(balance, enemy, "Fire Cat")).Select(NameOf).ToArray());
+        Assert.Equal([woven], Resolve(duel, Cast(balance, enemy, woven)).Select(NameOf).ToArray());
+        Assert.Equal(["Thunder Snake", "Stormblade"], Resolve(duel, Cast(balance, enemy, "Thunder Snake")).Select(NameOf).ToArray());
+        Assert.Equal(["Frost Beetle", "Iceblade", "Bladestorm"], Resolve(duel, Cast(balance, enemy, "Frost Beetle")).Select(NameOf).ToArray());
+    }
+
+    [Fact]
+    public void NothingProcsInAPvpDuel() {
+        var duel = NewDuel();
+        duel.Duel.m_bPVP = true;
+        var a = Occupy(duel, 0, Krok, 300);
+        Occupy(duel, 1, Krok, 900);
+        var storm = Occupy(duel, 4, 1, 710, MagicSchool.Storm, level: 20);
+        duel.Mastery.NewRound(1);
+
+        Assert.Equal(["Storm Shark"], Resolve(duel, Cast(storm, a, "Storm Shark")).Select(NameOf).ToArray());
+    }
+
+}

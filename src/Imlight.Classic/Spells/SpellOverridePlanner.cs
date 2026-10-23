@@ -291,7 +291,9 @@ public static class SpellOverridePlanner {
             values = record.Values;
         }
 
-        var (prepared, randomChildren) = PrepareDiscreteOutcomes(values, shape);
+        // CLASSIC: a scoped record (a later card or an experiment, shipped with its own card overlay) may list outcomes and a
+        // target the native roll does not have; every other record only selects native outcomes, as the stock client replays.
+        var (prepared, randomChildren) = PrepareDiscreteOutcomes(values, shape, record.Scoped);
         var plan = PlanValues(record, match, values, prepared, inheritedFixedPips) with { RandomChildren = randomChildren };
         var issues = SpellMechanicsAudit.Compare(values, SpellPlanSimulator.Apply(shape, plan), record.School);
         plan = plan with { RemainingIssues = issues };
@@ -427,7 +429,7 @@ public static class SpellOverridePlanner {
         => issue.Kind is not (MechanicsIssueKind.Pips or MechanicsIssueKind.SchoolPips or MechanicsIssueKind.Accuracy);
 
     private static (SpellTemplateShape Shape, ImmutableDictionary<int, ImmutableArray<int>> Children) PrepareDiscreteOutcomes(
-        SpellValues values, SpellTemplateShape shape) {
+        SpellValues values, SpellTemplateShape shape, bool scoped = false) {
         var selections = ImmutableDictionary.CreateBuilder<int, ImmutableArray<int>>();
         if (!values.Effects.Any(effect => !effect.Outcomes.IsEmpty)) {
             return (shape, selections.ToImmutable());
@@ -451,7 +453,7 @@ public static class SpellOverridePlanner {
             }
 
             var slot = slots[candidates[0].Slot];
-            if (slot.Kind != TemplateEffectKind.Damage || !SchoolFits(effect, slot) || CategoryOf(effect) != CategoryOf(slot.Target)) {
+            if (slot.Kind != TemplateEffectKind.Damage || !SchoolFits(effect, slot) || (!scoped && CategoryOf(effect) != CategoryOf(slot.Target))) {
                 throw new InvalidOperationException($"{shape.Path}: explicit outcomes must preserve the native damage school and target");
             }
             var top = slot.Addresses[0].Index;
@@ -459,6 +461,9 @@ public static class SpellOverridePlanner {
             foreach (var outcome in effect.Outcomes) {
                 var source = Enumerable.Range(0, slot.Effects.Length).FirstOrDefault(
                     child => slot.Effects[child].Param == outcome && !selected.Contains(child), -1);
+                if (source < 0 && scoped) {
+                    source = 0;   // CLASSIC: a copy of the first native choice; the value plan sets its amount to the outcome
+                }
                 if (source < 0) {
                     throw new InvalidOperationException($"{shape.Path}: native random effect has no damage outcome {outcome}");
                 }

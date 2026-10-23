@@ -223,6 +223,48 @@ public sealed class ClassicEnchantmentPacketTests : IDisposable {
         Assert.DoesNotContain(restored, s => s.m_templateID == Mutation);
     }
 
+    // CLASSIC OWNER EXTRA: School Weaving over the real move-5 packet. A Fire wizard's Weave card turns a Storm card in hand
+    // into the Fire face, keeping the Storm card's pips; the cast is the Storm card's damage as Fire at 60% plus a 60% burn.
+    [Fact]
+    public async Task AWeaveCardOverTheWireShowsTheFaceAndCastsTheOriginalAsTheWeaversSchool() {
+        var resolve = Imlight.CoreLib.Classic.ClassicWeaving.ResolveTemplate;
+        try {
+            ClassicRuntime.ResetForTests();
+            var rules = ClassicDataFixture.RealRules("late-2009");
+            rules.OwnerExtraFeatures = () => new HashSet<string> { ClassicFeatures.ExperimentsWeaving };
+            ClassicRuntime.Initialize(rules);
+            var table = Imlight.Classic.Rules.WeavingRulesLoader.Load(Path.Combine(ClassicDataFixture.Root, "rules", "weaving-classic.yaml"));
+            var fire = table.Weaves.Single(weave => weave.School == "fire") with {
+                Card = "Spells/W.xml", Inputs = [new Imlight.Classic.Rules.WeaveInput("Spells/T.xml", "Spells/F.xml")] };
+            Imlight.CoreLib.Classic.ClassicProgression.SetWeavingForTests(table with { Weaves = [fire, .. table.Weaves.Where(weave => weave.School != "fire")] });
+            Imlight.CoreLib.Classic.ClassicWeaving.ResolveTemplate = path => path switch {
+                "Spells/W.xml" => Source, "Spells/T.xml" => Target, "Spells/F.xml" => Mutation, _ => null };
+            SourceTemplate.m_effects[0].m_effectType = kSpellEffects.kModifyCardMutation;
+            SourceTemplate.m_effects[0].m_effectTarget = kEffectTarget.kSpecificSpells;
+            TargetTemplate.m_sMagicSchoolName = "Storm";
+            TargetTemplate.m_effects[0].m_sDamageType = "Storm";
+            Send();
+            var card = Assert.Single((await ReadHand()).m_spellList);
+            Assert.Equal(Mutation, card.m_templateID);                   // the client draws the Fire face
+            Assert.Equal(Target, card.m_premutationSpellID);
+            Assert.Equal(Source, card.m_enchantment);
+            Assert.Equal(2, (int) card.m_pipCost.m_spellRank);           // the Storm card's cost, not the face's 3
+            var enemy = Occupy(0, false);
+            CombatRegressionTests.Invoke(_duel, "HandleAttackMove", _caster, 0, 0u);
+            var action = _duel.CombatResolver.GetQueuedAction(_caster);
+            Assert.Equal("Fire", action.SpellTemplate.m_sMagicSchoolName);
+            Assert.Contains(action.SpellTemplate.m_effects, e => e.m_effectType == kSpellEffects.kDamageOverTime && e.m_effectParam == 120 && e.m_numRounds == 3);
+            var result = new CombatAction { m_spell = action.Spell, m_targetSubcircleList = [] };
+            float time = 0;
+            Assert.True(CombatActionResolver.ProcessedQueuedCombatAction(action, ref result, ref time));
+            Assert.Equal(880, enemy.ParticipantGameStats.m_currentHitpoints); // 60% of 200 now; the burn ticks later
+            Assert.Equal(200, TargetTemplate.m_effects[0].m_effectParam);      // the shared template is untouched
+        } finally {
+            Imlight.CoreLib.Classic.ClassicWeaving.ResolveTemplate = resolve;
+            Imlight.CoreLib.Classic.ClassicProgression.SetWeavingForTests(Imlight.Classic.Rules.WeavingRules.Empty);
+        }
+    }
+
     [Fact]
     public async Task TreasureEnchantIsConsumedOnceAndNotRestoredWithTheBaseCard() {
         SourceTemplate.m_Treasure = true;
