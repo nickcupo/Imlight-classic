@@ -16,7 +16,7 @@
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
  *
  * CLASSIC: School Mastery (experiments.mastery, an experiment): the switch stays off in every historical profile, and
- * the Fire (Kindling) and Ice (Permafrost) procs in a duel, through the real resolver.
+ * all seven school mechanics and their Weaving combinations run through the real duel resolver.
  *
  * Created by: Nick with Claude Code (claude-opus-5-5)
  * Version: KALI 1.0
@@ -33,6 +33,7 @@ using Akka.Actor;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Classic.Rules;
 using Imlight.Common;
+using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.Game.Combat;
 using Imlight.CoreLib.Game.Spells;
 using Imlight.CoreLib.Game.Zone.Components;
@@ -807,6 +808,126 @@ public sealed class SchoolMasteryDuelTests : IDisposable {
     }
 
     // ------------------------------------------------------------ PvP
+
+    // ------------------------------------------------------------ Combined Weaving + Mastery
+
+    // Build the same transformed effects used by both live combat and the client card overlay, then resolve them
+    // through the real duel. This catches integration failures the isolated rider and Mastery tests cannot see.
+    private string AddWoven(MagicSchool school) {
+        var table = WeavingRulesLoader.Load(Path.Combine(ClassicDataFixture.Root, "rules", "weaving-classic.yaml"));
+        var original = new SpellTemplate {
+            m_sMagicSchoolName = school == MagicSchool.Storm ? "Fire" : "Storm", m_sTypeName = "Damage", m_accuracy = 100,
+            m_spellRank = new SpellRank { m_spellRank = 4 },
+            m_effects = [Effect(kSpellEffects.kDamage, 1000, kEffectTarget.kEnemySingle, "Storm")],
+        };
+        Assert.True(WeavingSpellBuilder.TryBuildCast(original, table.RiderFor(school.ToString().ToLowerInvariant())!, out var built, out var refusal), refusal);
+        var name = $"Woven {school}";
+        AddMany(name, school, 4, [.. built.m_effects]);
+        return name;
+    }
+
+    [Fact]
+    public void WovenFireKindlesItsNewBurnWithoutConsumingTheOldBurn() {
+        var duel = NewDuel();
+        var enemy = Occupy(duel, 0, Krok, 3000);
+        var fire = Occupy(duel, 4, 1, 2000, MagicSchool.Fire, 25);
+        enemy._hangingEffects.Add(HangingBurn(70, 2));
+        var woven = AddWoven(MagicSchool.Fire);
+
+        Assert.Equal([woven, "Pet - Detonate"], Resolve(duel, Cast(fire, enemy, woven)).Select(NameOf).ToArray());
+        Assert.Equal(1800, enemy.ParticipantGameStats.m_currentHitpoints); // 600 hit + 600 new burn
+        var old = Assert.Single(enemy._hangingEffects, e => e.m_effectType == kSpellEffects.kDamageOverTime);
+        Assert.Equal((70, 2), (old.m_paramPerRound, old.m_numRounds));
+        Assert.Equal(3, fire.CombatParticipant.m_pipCount.m_genericPips); // no extra pips for Mastery
+    }
+
+    [Fact]
+    public void WovenIceAbsorbFeedsFrostRetortWhenTheEnemyHits() {
+        var duel = NewDuel();
+        var enemy = Occupy(duel, 0, Krok, 5000);
+        var ice = Occupy(duel, 4, 1, 2000, MagicSchool.Ice, 25);
+        var woven = AddWoven(MagicSchool.Ice);
+        duel.Mastery.NewRound(1);
+        Assert.Equal([woven], Resolve(duel, Cast(ice, enemy, woven)).Select(NameOf).ToArray());
+        Assert.Equal(250, Assert.Single(ice._hangingEffects, e => e.m_effectType == kSpellEffects.kAbsorbDamage).m_paramPerRound);
+
+        Assert.Equal(["Krok Hit", "Frost Beetle"], Resolve(duel, Cast(enemy, ice, "Krok Hit")).Select(NameOf).ToArray());
+        Assert.Equal(1950, ice.ParticipantGameStats.m_currentHitpoints); // 250 absorbed, 50 reaches health
+        Assert.Equal(5000 - 900 - 105, enemy.ParticipantGameStats.m_currentHitpoints); // 125 budget, largest listed value 105
+    }
+
+    [Fact]
+    public void WovenStormKillDischargesOnlyItsActualOverkill() {
+        var duel = NewDuel();
+        var victim = Occupy(duel, 0, Krok, 900);
+        var survivor = Occupy(duel, 1, Krok, 2000);
+        var storm = Occupy(duel, 4, 1, 2000, MagicSchool.Storm, 25);
+        Script(duel, false);
+        var woven = AddWoven(MagicSchool.Storm);
+
+        Assert.Equal([woven, Bolt], Resolve(duel, Cast(storm, victim, woven)).Select(NameOf).ToArray());
+        Assert.Equal(0, victim.ParticipantGameStats.m_currentHitpoints);
+        Assert.Equal(1600, survivor.ParticipantGameStats.m_currentHitpoints); // 1300 - 900, not the original card's 1000
+    }
+
+    [Fact]
+    public void WovenMythsTwoHitsThenPierceWorkInAFullParty() {
+        var duel = NewDuel();
+        var enemy = Occupy(duel, 0, Krok, 5000);
+        var myth = Occupy(duel, 4, 1, 2000, MagicSchool.Myth, 25);
+        foreach (var slot in new[] { 5, 6, 7 }) Occupy(duel, slot, 1, 2000, MagicSchool.Fire, 25);
+        enemy._hangingEffects.Add(Absorb(2000));
+        var woven = AddWoven(MagicSchool.Myth);
+
+        Assert.Equal([woven, "Pierce"], Resolve(duel, Cast(myth, enemy, woven)).Select(NameOf).ToArray());
+        Assert.DoesNotContain(enemy._hangingEffects, e => e.m_effectType == kSpellEffects.kAbsorbDamage);
+        Assert.Equal(5000, enemy.ParticipantGameStats.m_currentHitpoints); // both hits went into the absorb
+    }
+
+    [Fact]
+    public void WovenLifeHealingTicksCanFundOverhealOnTheNextCast() {
+        var duel = NewDuel();
+        var enemy = Occupy(duel, 0, Krok, 5000);
+        var life = Occupy(duel, 4, 1, 2000, MagicSchool.Life, 25);
+        Script(duel);
+        var woven = AddWoven(MagicSchool.Life);
+        duel.Mastery.NewRound(1);
+        Assert.Equal([woven], Resolve(duel, Cast(life, enemy, woven)).Select(NameOf).ToArray());
+        Assert.Single(life._hangingEffects, e => e.m_effectType == kSpellEffects.kHealOverTime);
+        duel.Mastery.NewRound(2);
+
+        var nextCast = Cast(life, enemy, "Imp");
+        nextCast.ForcedRandomIndex = 0; // fix the ordinary Imp roll; the Mastery attack selects its own listed value
+        Assert.Equal(["Imp", "Imp"], Resolve(duel, nextCast).Select(NameOf).ToArray());
+        Assert.Equal(5000 - 800 - 65 - 65, enemy.ParticipantGameStats.m_currentHitpoints);
+    }
+
+    [Fact]
+    public void WovenDeathDrainTriggersHungryDeadFromTheWizardsStartingHealth() {
+        var duel = NewDuel();
+        var enemy = Occupy(duel, 0, Krok, 5000);
+        var death = Occupy(duel, 4, 1, 2000, MagicSchool.Death, 25);
+        death.ParticipantGameStats.m_currentHitpoints = 900;
+        var woven = AddWoven(MagicSchool.Death);
+        duel.Mastery.NewRound(1);
+
+        Assert.Equal([woven, "Pet - Ghoul"], Resolve(duel, Cast(death, enemy, woven)).Select(NameOf).ToArray());
+        Assert.Equal(5000 - 750 - 180, enemy.ParticipantGameStats.m_currentHitpoints);
+        Assert.True(death.ParticipantGameStats.m_currentHitpoints > 1000); // initial drain crossed half; follow-up still fires
+    }
+
+    [Fact]
+    public void WovenBalanceCountsAsBalanceNotItsOriginalSchoolForSpectrum() {
+        var duel = NewDuel();
+        var enemy = Occupy(duel, 0, Krok, 5000);
+        var balance = Occupy(duel, 4, 1, 2000, MagicSchool.Balance, 25);
+        var woven = AddWoven(MagicSchool.Balance);
+        duel.Mastery.NewRound(1);
+        Assert.Equal(["Fire Cat", "Fireblade"], Resolve(duel, Cast(balance, enemy, "Fire Cat")).Select(NameOf).ToArray());
+        Assert.Equal([woven], Resolve(duel, Cast(balance, enemy, woven)).Select(NameOf).ToArray());
+        Assert.Equal(["Thunder Snake", "Stormblade"], Resolve(duel, Cast(balance, enemy, "Thunder Snake")).Select(NameOf).ToArray());
+        Assert.Equal(["Frost Beetle", "Iceblade", "Bladestorm"], Resolve(duel, Cast(balance, enemy, "Frost Beetle")).Select(NameOf).ToArray());
+    }
 
     [Fact]
     public void NothingProcsInAPvpDuel() {
