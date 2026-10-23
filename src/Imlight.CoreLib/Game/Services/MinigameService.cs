@@ -122,9 +122,9 @@ internal class MinigameService(SessionActor sessionActor) : MessageService(sessi
 
     [MessageHandler(typeof(GAME_5_PROTOCOL.MSG_MESSAGE_PROCESS))]
     private void ReceiveMessageProcess(GAME_5_PROTOCOL.MSG_MESSAGE_PROCESS message) {
-        // CLASSIC: a process message with no minigame running is dropped; it used to throw and
-        // close the session (security audit 2026-10-04).
-        if (_minigameJob is null) {
+        // CLASSIC: a process message with no matching current job is dropped. A late tunnel from an
+        // old minigame must not start, finish or reward its replacement.
+        if (_minigameJob is null || message.JobID != _minigameProcessId) {
             Logger.Debug("Dropped a process message for job {0} with no matching minigame.", Logger.Args(message.JobID));
 
             return;
