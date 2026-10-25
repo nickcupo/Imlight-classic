@@ -278,4 +278,17 @@ internal sealed class CLASSIC_FEATURES_PROTOCOL : IServerProtocol {
         /// <summary>True when the wizard's client said it entered the zone (MSG_CLIENTZONED).</summary>
         public bool Zoned;
     }
+
+    /// <summary>
+    /// CLASSIC: a house zone's House_Teleport_01 (TeleportProximityBehavior) says a wizard stepped into its radius
+    /// (HouseDoorComponent). ZoneService decides from the validated lot whether to open the door. Never on the wire.
+    /// </summary>
+    public sealed class MSG_HOUSEDOOR : IServerMessage {
+        public byte MessageOrder { get; } = 20;
+        public byte ServiceID { get; } = 110;
+        /// <summary>The door object's global id, which the client's TeleportProximityBehavior answers with.</summary>
+        public ulong DoorId;
+        /// <summary>The zone the door stands in.</summary>
+        public string Zone;
+    }
 }

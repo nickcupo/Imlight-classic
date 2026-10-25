@@ -84,7 +84,10 @@ internal sealed class RenderComponent(ZoneEntity entity) : ZoneEntityComponent(e
 
     public static bool ShouldAttachToEntity(CoreTemplate template)
         => template is GameObjectTemplate gameObjectTemplate
-        && gameObjectTemplate.m_behaviors.Any(x => x is RenderBehaviorTemplate)
+        && gameObjectTemplate.m_behaviors.Any(x => x is RenderBehaviorTemplate
+            // CLASSIC: an invisible TeleportProximityBehavior object (a house's House_Teleport_01, 160429) must exist
+            // on the client too: its behavior answers the server's MSG_REQUESTHOUSINGZONE (HouseDoorComponent).
+            || x is TeleportProximityBehaviorTemplate)
         || template is CombatSigilTemplate; // bug fix: combat sigil templtaes don't have any behaviors
 
     public override void OnStart() {
