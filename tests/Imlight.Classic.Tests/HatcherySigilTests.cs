@@ -88,4 +88,13 @@ public sealed class HatcherySigilTests {
         Assert.Equal(4242ul, partner!.m_characterId.Full);
         Assert.Equal([2ul, 3ul], partner.m_pets.Select(p => p.m_globalID.Full).Order());    // Adult (3) or older only
     }
+
+    // The partner-left notice (MSG_PETGAMEEND) goes only to sigil pairs; the client-JOIN path keeps its messages.
+    [Fact]
+    public void OnlyARunKeyedLobbyIsASigilPair() {
+        Assert.True(PetGameService.IsSigilPair(HatcheryRuns.LobbyKey(77)));
+        Assert.False(PetGameService.IsSigilPair("WizardCity/Interiors/WC_Hatchery"));
+        Assert.False(PetGameService.IsSigilPair(HatcheryRuns.MorphZone));
+        Assert.False(PetGameService.IsSigilPair(null!));
+    }
 }
