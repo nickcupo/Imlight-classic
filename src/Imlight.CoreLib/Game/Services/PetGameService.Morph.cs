@@ -233,6 +233,10 @@ internal sealed partial class PetGameService {
         if (_morph is { } m && ReferenceEquals(m.Lobby, message.Lobby)) SendMorphText("Hatch:Hatch");
     }
 
+    /// <summary>CLASSIC: true for a Hatchery sigil pair's lobby (keyed by its run, HatcheryRuns.LobbyKey).</summary>
+    internal static bool IsSigilPair(string key)
+        => key is not null && key.StartsWith(HatcheryRuns.MorphZone + "#", StringComparison.Ordinal);
+
     private void SendMorphText(string text)
         => SendToSocket(new PET_9_PROTOCOL.MSG_PETGAMEDATA { Game = MorphGame, Data = text });
 
@@ -394,6 +398,10 @@ internal sealed partial class PetGameService {
             Logger.Information("Pet hatching: the partner left.");
             SendToSocket(new PET_9_PROTOCOL.MSG_PETMORPHSET { PetID = 0 });
             SendToSocket(new PET_9_PROTOCOL.MSG_PETMORPHREADY { Confirmed = 0 });
+            // CLASSIC: r806919 shows "Your partner has left" and resets its window (which stays open; Exit sends
+            // MSG_PETGAMEENDING and goes back to the Hatchery) only on MSG_PETGAMEEND for its game (0x140ac3560);
+            // it ignores the partner's despawn and MORPHSET 0. Sigil pairs only: the client-JOIN path is unchanged.
+            if (IsSigilPair(m.Key)) SendToSocket(new PET_9_PROTOCOL.MSG_PETGAMEEND { Game = MorphGame, Data = "" });
 
             return;
         }
