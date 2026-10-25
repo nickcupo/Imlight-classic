@@ -85,6 +85,13 @@ internal sealed partial class PetGameService {
         public bool Ready;
         public bool Done;
 
+        /// <summary>CLASSIC: this side's PetGameMorphPartner (its wizard and hatchable pets), sent to the OTHER side in
+        /// its MSG_PETGAMESTART (r806919 sigil pairs only); null otherwise.</summary>
+        public Imcodec.IO.ByteString? PartnerData;
+
+        /// <summary>CLASSIC: "Hatch" once this side pressed the window's Hatch button (r806919 "Hatch:Hatch").</summary>
+        public string Mode;
+
         /// <summary>CLASSIC (2026-10-04): the ambient wizard playing this side (no service of its own), or null.</summary>
         public AmbientWizard Ambient;
 
@@ -103,6 +110,10 @@ internal sealed partial class PetGameService {
     private sealed record PartnerChanged(MorphLobby Lobby, MorphSide Side, ulong PetId, bool Ready, bool Left);
 
     private sealed record MorphEggTimer(ulong EggId);
+
+    // CLASSIC: the other side of a sigil pair arrived (send its PetGameMorphPartner in START) or both chose Hatch.
+    private sealed record MorphPartnerArrived(MorphLobby Lobby, int Side);
+    private sealed record MorphBothHatch(MorphLobby Lobby);
 
     // CLASSIC (2026-10-04): the ambient partner's steps, run by the waiting player's service.
     private sealed record AmbientMorphJoin;
@@ -139,6 +150,17 @@ internal sealed partial class PetGameService {
             }
         }
 
+        // CLASSIC: an r806919 sigil pair (lobbyKey set) gets the native sequence: INIT with Track = lends available
+        // today (0: no Lend in 2010's hatching), then START carrying the partner's PetGameMorphPartner once both are in.
+        Imcodec.IO.ByteString? partnerData = null;
+        if (lobbyKey is not null) {
+            if (!TryPrepareMorphPartner(wizard, out var prepared)) {
+                Logger.Warning("Pet hatching: {0}'s pets could not be prepared for the partner window.", Logger.Args(wizard.CharId));
+            }
+            else partnerData = prepared;
+        }
+
+        MorphSide partnerOnArrival = null;
         (MorphLobby Lobby, int Side, string Key) admitted;
         while (true) {
             var lobby = s_lobbies.GetOrAdd(key, _ => new MorphLobby());
@@ -156,8 +178,9 @@ internal sealed partial class PetGameService {
                     return;
                 }
 
-                lobby.Sides[free] = new MorphSide { Service = Self, CharId = wizard.CharId };
+                lobby.Sides[free] = new MorphSide { Service = Self, CharId = wizard.CharId, PartnerData = partnerData };
                 admitted = (lobby, free, key);
+                partnerOnArrival = lobby.Sides[1 - free];
                 if (lobby.Sides.All(s => s is not null)) {
                     // A full lobby moves on; the next pair starts a new one.
                     s_lobbies.TryRemove(new KeyValuePair<string, MorphLobby>(key, lobby));
@@ -183,10 +206,64 @@ internal sealed partial class PetGameService {
                 AmbientPets.Wait(Random.Shared, AmbientPets.JoinMinSeconds, AmbientPets.JoinMaxSeconds));
         }
 
+        if (lobbyKey is not null) {
+            SendToSocket(new PET_9_PROTOCOL.MSG_PETGAMEINIT { Game = MorphGame, Data = "", MinLevel = PetHatchRules.MinLevel, Track = 0 });
+            if (partnerOnArrival?.PartnerData is { } theirs) {
+                SendToSocket(new PET_9_PROTOCOL.MSG_PETGAMESTART { Game = MorphGame, Data = theirs });
+                partnerOnArrival.Service?.Tell(new MorphPartnerArrived(_morph.Value.Lobby, _morph.Value.Side));
+            }
+            return;
+        }
+
         SendToSocket(new PET_9_PROTOCOL.MSG_PETGAMEJOINRSP { Game = MorphGame, Success = 1 });
         SendToSocket(new PET_9_PROTOCOL.MSG_PETGAMEINIT { Game = MorphGame, Data = "", MinLevel = PetHatchRules.MinLevel, Track = (byte) _morph.Value.Side });
         SendToSocket(new PET_9_PROTOCOL.MSG_PETGAMESTART { Game = MorphGame, Data = "" });
     }
+
+    [MessageHandler(typeof(MorphPartnerArrived))]
+    private void ReceiveMorphPartnerArrived(MorphPartnerArrived message) {
+        if (_morph is not { } m || !ReferenceEquals(m.Lobby, message.Lobby)) return;
+        Imcodec.IO.ByteString? data;
+        lock (m.Lobby.Gate) data = m.Lobby.Sides[message.Side]?.PartnerData;
+        if (data is { } theirs) SendToSocket(new PET_9_PROTOCOL.MSG_PETGAMESTART { Game = MorphGame, Data = theirs });
+    }
+
+    [MessageHandler(typeof(MorphBothHatch))]
+    private void ReceiveMorphBothHatch(MorphBothHatch message) {
+        if (_morph is { } m && ReferenceEquals(m.Lobby, message.Lobby)) SendMorphText("Hatch:Hatch");
+    }
+
+    private void SendMorphText(string text)
+        => SendToSocket(new PET_9_PROTOCOL.MSG_PETGAMEDATA { Game = MorphGame, Data = text });
+
+    /// <summary>
+    /// CLASSIC: r806919's PetGameMorph::HandlePetGameStart (0x140abd9a0) loads START's Data as a PetGameMorphPartner
+    /// (m_characterId, m_pets) with property mask 0x18 (Transmit | AuthorityTransmit), raw and non-versionable like the
+    /// kiosk's PetGameInfo (PetGameInitializationCodec); m_characterId != 0 is the two-player window and m_pets is the
+    /// right-hand list PETMORPHSET picks from. The pets: this wizard's hatched pets of at least the hatching level.
+    /// </summary>
+    internal static bool TryPrepareMorphPartner(ulong charId, IEnumerable<WizClientObjectItem> pets, out Imcodec.IO.ByteString data) {
+        data = default;
+        try {
+            var partner = new PetGameMorphPartner {
+                m_characterId = charId,
+                m_pets = [.. pets.Where(p => PetProgress.Behavior(p) is { } b && b.m_level >= PetHatchRules.MinLevel).Cast<CoreObject>()],
+            };
+            var serializer = new ObjectSerializer(Versionable: false, Behaviors: SerializerFlags.None);
+            if (!serializer.Serialize(partner, PropertyFlags.Prop_Transmit | PropertyFlags.Prop_AuthorityTransmit, out var prepared)
+                || prepared.Length == 0) return false;
+            data = prepared;
+            return true;
+        }
+        catch (Exception) {
+            return false;
+        }
+    }
+
+    private static bool TryPrepareMorphPartner(Wizard wizard, out Imcodec.IO.ByteString data)
+        => TryPrepareMorphPartner(wizard.CharId,
+            (wizard.EquipmentBehavior?.EquippedItems ?? []).Concat(wizard.InventoryBehavior?.Items ?? [])
+                .OfType<WizClientObjectItem>().DistinctBy(i => i.m_globalID.Full), out data);
 
     private void LeaveMorph() {
         if (_morph is not { } m) {
@@ -249,6 +326,29 @@ internal sealed partial class PetGameService {
                     AmbientSawPick(m, partner);
                 }
 
+                break;
+            }
+
+            case "Hatch": {
+                // CLASSIC: r806919's HatchButton ("Hatch:Hatch"): the wait panel until the partner chose too, then both
+                // get the main panel ("Hatch:Hatch"). Lend is off (INIT Track 0), so only Hatch is a choice.
+                bool both;
+                lock (m.Lobby.Gate) {
+                    me = m.Lobby.Sides[m.Side];
+                    partner = m.Lobby.Sides[1 - m.Side];
+                    if (me is not null) me.Mode = "Hatch";
+                    both = partner?.Mode == "Hatch";
+                }
+                if (both) {
+                    SendMorphText("Hatch:Hatch");
+                    partner.Service?.Tell(new MorphBothHatch(m.Lobby));
+                }
+                else SendMorphText("Hatch:Wait");
+                break;
+            }
+
+            case "Lend": {
+                Logger.Information("Pet hatching: {0} pressed Lend, which is off (no lends in 2010).", Logger.Args(wizard?.CharId));
                 break;
             }
 

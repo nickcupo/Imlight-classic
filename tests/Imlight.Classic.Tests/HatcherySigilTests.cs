@@ -6,9 +6,13 @@
 
 using System;
 using Akka.Actor;
+using System.Linq;
+using Imcodec.CoreObject;
 using Imcodec.Math;
+using Imcodec.ObjectProperty;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.CoreLib.Classic;
+using Imlight.CoreLib.Game.Services;
 using Imlight.CoreLib.Game.Zone.Components;
 using Xunit;
 
@@ -69,5 +73,19 @@ public sealed class HatcherySigilTests {
         Assert.True(HatcherySigilComponent.Within(new Vector3(-883.5f, -498.7f, 0f), pad));
         Assert.True(HatcherySigilComponent.Within(new Vector3(-883.5f + 140, -498.7f, 0f), pad));
         Assert.False(HatcherySigilComponent.Within(new Vector3(-883.5f + 160, -498.7f, 0f), pad));
+    }
+
+    // r806919's PetGameMorph::HandlePetGameStart (0x140abd9a0) loads START's Data as a PetGameMorphPartner with property
+    // mask 0x18; m_characterId != 0 is the two-player window, m_pets the partner's list (PETMORPHSET picks from it).
+    [Fact]
+    public void TheStartCarriesThePartnersWizardAndItsHatchablePets() {
+        static WizClientObjectItem Pet(ulong id, int level) => new() {
+            m_globalID = id, m_templateID = 1, m_inactiveBehaviors = [new ClientPetItemBehavior { m_level = (byte) level }] };
+        Assert.True(PetGameService.TryPrepareMorphPartner(4242, [Pet(1, 1), Pet(2, 3), Pet(3, 5)], out var data));
+        var reader = new ObjectSerializer(Versionable: false, Behaviors: SerializerFlags.None);
+        Assert.True(reader.Deserialize<PetGameMorphPartner>((byte[]) data,
+            PropertyFlags.Prop_Transmit | PropertyFlags.Prop_AuthorityTransmit, out var partner));
+        Assert.Equal(4242ul, partner!.m_characterId.Full);
+        Assert.Equal([2ul, 3ul], partner.m_pets.Select(p => p.m_globalID.Full).Order());    // Adult (3) or older only
     }
 }
