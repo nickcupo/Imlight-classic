@@ -1,5 +1,6 @@
 using System;
 using Imcodec.MessageLayer.Generated;
+using Imlight.Common;
 using Imlight.CoreLib.Classic.Housing;
 using Imlight.CoreLib.Shared.Networking;
 using Imlight.CoreLib.Shared.Packets;
@@ -68,15 +69,27 @@ internal partial class ZoneService {
     [MessageHandler(typeof(CLASSIC_FEATURES_PROTOCOL.MSG_HOUSEDOOR))]
     private void ReceiveHouseDoor(CLASSIC_FEATURES_PROTOCOL.MSG_HOUSEDOOR message) {
         var wizard = GetActiveWizard();
-        if (wizard is null || wizard.IsInDuel || SessionActor.TransferringOut || _isTransferQueued
-            || !HouseCatalog.Same(wizard.Zone, message.Zone) || _currentHousingDeedId == 0
-            || !HouseCollection.TryGetOwned(_currentInstanceOwner, _currentHousingDeedId, out var record)
-            || !HouseCatalog.TryGet(record.TemplateId, out var house)
-            || DoorDestination(house, message.Zone) is not { } door) return;
+        var refused = wizard is null ? "no wizard"
+            : wizard.IsInDuel || SessionActor.TransferringOut || _isTransferQueued ? "busy (duel or transfer)"
+            : !HouseCatalog.Same(wizard.Zone, message.Zone) ? $"in {wizard.Zone}, not {message.Zone}"
+            : _currentHousingDeedId == 0 ? "no lot on this session" : null;
+        HouseRecord record = null;
+        HouseDefinition house = null;
+        if (refused is null && !HouseCollection.TryGetOwned(_currentInstanceOwner, _currentHousingDeedId, out record))
+            refused = $"lot {_currentInstanceOwner}/{_currentHousingDeedId} not owned";
+        if (refused is null && !HouseCatalog.TryGet(record.TemplateId, out house)) refused = $"house {record.TemplateId} not approved";
+        var door = refused is null ? DoorDestination(house, message.Zone) : null;
+        if (refused is null && door is null) refused = $"{message.Zone} is neither side of house {record.TemplateId}";
+        if (refused is not null) {
+            Logger.Debug("House door {0} for {1}: not opened ({2}).", Logger.Args(message.DoorId, wizard?.CharId, refused));
+            return;
+        }
+        Logger.Debug("House door {0} for {1}: asking the client to load {2} (template {3}).",
+            Logger.Args(message.DoorId, wizard.CharId, door.Value.Zone, door.Value.TemplateId));
         _pendingDoorId = message.DoorId; _pendingDoorZone = message.Zone;
         _pendingDoorUntil = DateTime.UtcNow.AddMinutes(2);
         SendToSocket(new WIZARDHOUSING_50_PROTOCOL.MSG_REQUESTHOUSINGZONE {
-            GlobalID = message.DoorId, Status = 0, TemplateGID = door.TemplateId,
+            GlobalID = message.DoorId, Status = 0, TemplateGID = door.Value.TemplateId,
         });
     }
 
@@ -88,6 +101,7 @@ internal partial class ZoneService {
         if (wizard is null || _pendingDoorId == 0 || message.GlobalID != _pendingDoorId || DateTime.UtcNow > _pendingDoorUntil
             || !HouseCatalog.Same(wizard.Zone, _pendingDoorZone)) return;
         var zone = _pendingDoorZone; _pendingDoorId = 0; _pendingDoorZone = "";
+        Logger.Debug("House door {0} for {1}: the client answered status {2}.", Logger.Args(message.GlobalID, wizard.CharId, message.Status));
         if (message.Status != 0) { InformGameClient("Your house could not be loaded. Please try again."); return; }
         if (wizard.IsInDuel || SessionActor.TransferringOut || _isTransferQueued || _currentHousingDeedId == 0
             || !HouseCollection.TryGetOwned(_currentInstanceOwner, _currentHousingDeedId, out var record)

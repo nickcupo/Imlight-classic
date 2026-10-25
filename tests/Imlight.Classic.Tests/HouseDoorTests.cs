@@ -18,6 +18,7 @@ using Xunit;
 
 namespace Imlight.Classic.Tests;
 
+[Collection(nameof(ClassicRuntimeCollection))]
 public sealed class HouseDoorTests {
 
     // The Wooded Cottage's exterior door (r806919 Housing/WizardCity/WC_Tier1_Exterior gamedata).
@@ -73,5 +74,29 @@ public sealed class HouseDoorTests {
         Assert.Equal(("Housing/WizardCity/WC_Tier1_Interior", 160432u),
             ZoneService.DoorDestination(cottage, "Housing/WizardCity/WC_Tier1_Exterior"));
         Assert.Equal("House_Teleport_01", ZoneService.DOOR_LOCATION);
+    }
+
+    // The rig failure (2026-10-25): the component asked HouseCatalog.IsApprovedRoom with Zone.ZoneName, the zone data's
+    // DISPLAY name ("WizardZone_00001251" for the Wooded Cottage's lot, as the zone's own log lines show), so a door was
+    // never active. It must use the zone path.
+    [Fact]
+    public void TheDoorOpensByZonePathInTheOctober2010ProfileOnly() {
+        try {
+            ClassicRuntime.ResetForTests();
+            ClassicRuntime.Initialize(ClassicDataFixture.RealRules("october-2010-arc1"));
+            var previous = HouseCatalog.TestDefinitions.Value;
+            try {
+                HouseCatalog.TestDefinitions.Value = HouseCatalog.Load(
+                    Path.Combine(ClassicDataFixture.Root, "housing", "houses-october-2010.yaml"), "october-2010-arc1");
+                Assert.True(HouseDoorComponent.OpensIn("Housing/WizardCity/WC_Tier1_Exterior"));
+                Assert.True(HouseDoorComponent.OpensIn("Housing/WizardCity/WC_Tier1_Interior"));
+                Assert.False(HouseDoorComponent.OpensIn("WizardZone_00001251"));   // the display name the bug used
+                Assert.False(HouseDoorComponent.OpensIn("WizardCity/WC_Hub"));
+                Assert.False(HouseDoorComponent.OpensIn(null));
+            }
+            finally { HouseCatalog.TestDefinitions.Value = previous; }
+        }
+        finally { ClassicRuntime.ResetForTests(); }
+        Assert.False(HouseDoorComponent.OpensIn("Housing/WizardCity/WC_Tier1_Exterior"));     // no classic rules: off
     }
 }

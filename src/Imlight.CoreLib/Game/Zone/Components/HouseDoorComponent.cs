@@ -6,6 +6,7 @@ using Imcodec.CoreObject;
 using Imcodec.Math;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Classic;
+using Imlight.Common;
 using Imlight.CoreLib.Classic.Housing;
 using Imlight.CoreLib.Game.Zone.Core;
 using Imlight.CoreLib.Shared.Packets;
@@ -34,9 +35,20 @@ internal sealed class HouseDoorComponent(ZoneEntity entity) : ZoneEntityComponen
 
     public override void OnStart() {
         _door = (Entity.Template as GameObjectTemplate)?.m_behaviors.OfType<TeleportProximityBehaviorTemplate>().FirstOrDefault();
-        _active = _door is not null && _door.m_radius > 0 && ClassicRuntime.IsInitialized && ClassicRuntime.IsActive
-            && Zone?.ZoneName is { } zone && HouseCatalog.IsApprovedRoom(zone);
+        // Zone.ZonePath, not Zone.ZoneName: ZoneName is the zone data's display name ("WizardZone_00001251" for the
+        // Wooded Cottage's lot), so the approved-room check on it never matched (playbot-ios rig, 2026-10-25).
+        var zone = Zone?.ZonePath;
+        _active = _door is not null && _door.m_radius > 0 && OpensIn(zone);
+        Logger.Debug("House door {0} in {1}: {2} (radius {3}).", Logger.Args(Entity.ActiveGameObject?.m_globalID.Full, zone,
+            _active ? "active" : _door is null || _door.m_radius <= 0 ? "off (no proximity radius)"
+                : !ClassicRuntime.IsInitialized || !ClassicRuntime.IsActive ? "off (classic rules inactive)" : "off (not an approved house room)",
+            _door?.m_radius));
     }
+
+    /// <summary>True when a house door in <paramref name="zonePath"/> (a zone PATH) opens: an approved house room of an
+    /// active classic profile.</summary>
+    internal static bool OpensIn(string? zonePath)
+        => zonePath is not null && ClassicRuntime.IsInitialized && ClassicRuntime.IsActive && HouseCatalog.IsApprovedRoom(zonePath);
 
     // A wizard who arrives (or logs in) inside the radius does not walk through the door: only stepping in does.
     public override void OnPlayerJoin(CoreObject playerObj, IActorRef playerActor, Wizard playerWizard) {
@@ -49,9 +61,11 @@ internal sealed class HouseDoorComponent(ZoneEntity entity) : ZoneEntityComponen
         if (!_active) return;
         if (_inRange.Update(playerObj.m_globalID.Full, playerActor, InRange(playerObj.m_location)) != RangeChange.Entered) return;
 
+        Logger.Debug("House door {0} in {1}: {2} stepped in; asking the session.", Logger.Args(
+            Entity.ActiveGameObject.m_globalID.Full, Zone.ZonePath, playerWizard?.CharId));
         playerActor.Tell(new CLASSIC_FEATURES_PROTOCOL.MSG_HOUSEDOOR {
             DoorId = Entity.ActiveGameObject.m_globalID.Full,
-            Zone = Zone.ZoneName,
+            Zone = Zone.ZonePath,
         });
     }
 
