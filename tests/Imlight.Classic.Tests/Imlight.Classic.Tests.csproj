@@ -154,6 +154,7 @@
     <ServerIntegrationTest Include="HouseTests.cs" />
     <ServerIntegrationTest Include="HouseTransportTests.cs" />
     <ServerIntegrationTest Include="ArenaInstanceAttachTests.cs" />
+    <ServerIntegrationTest Include="HouseDoorTests.cs" />
     <ServerIntegrationTest Include="ArenaReturnPointTests.cs" />
   </ItemGroup>
   <!-- security-auth -->
