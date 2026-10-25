@@ -257,11 +257,11 @@ public class GameWorld : ReceiveProtocolDispatcher, IWithTimers {
     private void HandleInstancedZoneTransfer(ZONE_102_PROTOCOL.MSG_ZONETRANSFER message) {
         // A PRIVATE transfer (sigil dungeon / solo entry) must NEVER be satisfied by a shared public copy;
         // that would drop the player into a public instance of a dungeon they asked to enter privately.
-        if (!message.IsPrivate && message.HousingDeedId == 0 && _publicZones.TryGetValue(message.DestinationZone, out var zone)) {
-            zone.Forward(message);
-
-            return;
-        }
+        // CLASSIC: an owner's copy of the zone also comes before a public one for a non-private transfer
+        // (ReceiveInstanceContainerQueryResult). The attach after a server transfer carries only the owner of the
+        // instance that answered (GroupInstances.OwnerForAttach), not IsPrivate; with a public copy of the same zone
+        // loaded (someone logged in there), every fighter of an arena match landed in it, the match's circle never
+        // saw them and the match ended as a no contest (playbot-ios 2026-10-25, Ranked 1v1 in MB_Arena).
 
         // Capture sender before async work; Akka Sender is context-bound.
         var originalSender = Sender;
@@ -287,6 +287,13 @@ public class GameWorld : ReceiveProtocolDispatcher, IWithTimers {
     private void ReceiveInstanceContainerQueryResult(ZONE_102_PROTOCOL.MSG_INSTANCECONTAINER_QUERY_RESULT result) {
         var message = result.OriginalTransfer;
 
+        if (_publicZones.TryGetValue(message.DestinationZone, out var publicZone)
+                && UsePublicCopy(message.IsPrivate, message.HousingDeedId, ownerHasZone: result.Response?.HasZone == true)) {
+            publicZone.Tell(message, result.OriginalSender); // CLASSIC: no copy of the owner's; the public one, as before.
+
+            return;
+        }
+
         if (result.Response == null || !result.Response.HasZone) {
             // A loader may already be in progress; a second player can enter the same instance zone while it
             // is still loading. Only spin up one loader (and register its owner once); the extra transfer just
@@ -305,6 +312,14 @@ public class GameWorld : ReceiveProtocolDispatcher, IWithTimers {
         // Instance container has the zone; forward the transfer to it.
         _instanceContainers[new(message.OwnerCharId, message.HousingDeedId)].Tell(message, result.OriginalSender);
     }
+
+    /// <summary>
+    /// CLASSIC: whether a transfer for an owner with an instance container goes to the loaded public copy of the zone:
+    /// never for a private transfer or a house, and not when the owner's container already holds the zone (an arena
+    /// match's or a sigil run's copy, entered privately).
+    /// </summary>
+    internal static bool UsePublicCopy(bool isPrivate, ulong housingDeedId, bool ownerHasZone)
+        => !isPrivate && housingDeedId == 0 && !ownerHasZone;
 
     public void HandleOtherZoneTransfer(ZONE_102_PROTOCOL.MSG_ZONETRANSFER message) {
         // Get the zone if it's already loaded; or, create a new one if it's not.
