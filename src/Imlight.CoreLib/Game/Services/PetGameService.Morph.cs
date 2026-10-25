@@ -63,6 +63,8 @@ using Imlight.Common;
 using Imlight.CoreLib.Classic.Ambient;
 using Imlight.CoreLib.Game.Pet;
 using Imlight.CoreLib.Shared.Networking;
+using Imlight.CoreLib.Classic;
+using Imlight.CoreLib.Game.Zone.Components;
 using Imlight.CoreLib.Shared.Packets;
 using Imlight.CoreLib.WizardData.Collections;
 using Imlight.CoreLib.WizardData.Models.Player;
@@ -112,14 +114,17 @@ internal sealed partial class PetGameService {
 
     private (MorphLobby Lobby, int Side, string Key)? _morph;
 
-    private void JoinMorph(Wizard wizard) {
+    /// <param name="lobbyKey">CLASSIC: the pair's own lobby (a Hatchery sigil's run, HatcheryRuns.LobbyKey); null pairs
+    /// by zone (a client's MSG_PETGAMEJOIN).</param>
+    /// <param name="preferredSide">CLASSIC: the side the Hatchery sigil gave this wizard, or -1.</param>
+    private void JoinMorph(Wizard wizard, string lobbyKey = null, int preferredSide = -1) {
         if (!Imlight.Classic.ClassicRuntime.Rules.IsFeatureEnabled(Imlight.Classic.ClassicFeatures.PetsHatching) || wizard is null) {
             SendToSocket(new PET_9_PROTOCOL.MSG_PETGAMEJOINRSP { Game = MorphGame, Success = 0 });
 
             return;
         }
 
-        var key = wizard.Zone ?? "";
+        var key = lobbyKey ?? wizard.Zone ?? "";
         // CLASSIC: a repeated JOIN for this still-valid lobby replays admission without losing the offer/readiness.
         if (_morph is { } current && string.Equals(current.Key, key, StringComparison.Ordinal)) {
             lock (current.Lobby.Gate) {
@@ -142,7 +147,8 @@ internal sealed partial class PetGameService {
                     continue;
                 }
 
-                var free = Array.FindIndex(lobby.Sides, s => s is null);
+                var free = preferredSide is 0 or 1 && lobby.Sides[preferredSide] is null ? preferredSide
+                    : Array.FindIndex(lobby.Sides, s => s is null);
                 if (free < 0) {
                     InformGameClient("Both hatching spots are taken.");
                     SendToSocket(new PET_9_PROTOCOL.MSG_PETGAMEJOINRSP { Game = MorphGame, Success = 0 });
@@ -171,7 +177,7 @@ internal sealed partial class PetGameService {
         RetireTraining();
         _morph = admitted;
         Logger.Information("Pet hatching: {0} joins side {1} in {2}.", Logger.Args(wizard.CharId, _morph.Value.Side, key));
-        if (AmbientHatching.Enabled) {
+        if (AmbientHatching.Enabled && lobbyKey is null) { // CLASSIC: a sigil pair's copy has no ambient wizards
             // CLASSIC (2026-10-04): alone on the spots, an ambient wizard of the zone may come over after a moment.
             Timers.StartSingleTimer("ambientMorphJoin", new AmbientMorphJoin(),
                 AmbientPets.Wait(Random.Shared, AmbientPets.JoinMinSeconds, AmbientPets.JoinMaxSeconds));
@@ -596,6 +602,41 @@ internal sealed partial class PetGameService {
         Stash?.ClearStash(); // CLASSIC: close bypasses publication staging and discards work that could reopen it.
         RetireTraining();
         LeaveMorph();
+    }
+
+    // ------------------------------------------------------------------ CLASSIC: the Hatchery's sigils
+
+    // Two wizards stood on one Hatchery sigil (HatcherySigilComponent): to the pair's own copy of the morph zone.
+    [MessageHandler(typeof(CLASSIC_FEATURES_PROTOCOL.MSG_HATCHERYTRIP))]
+    private void ReceiveHatcheryTrip(CLASSIC_FEATURES_PROTOCOL.MSG_HATCHERYTRIP message) {
+        var wizard = GetActiveWizard();
+        if (_closing || wizard is null || !HatcherySigilComponent.Enabled || wizard.IsInDuel
+            || !string.Equals(wizard.Zone, HatcheryRuns.HatcheryZone, StringComparison.OrdinalIgnoreCase)
+            || HatcheryRuns.SideOf(message.RunId, wizard.CharId, DateTime.UtcNow) is null) return;
+        Logger.Information("Pet hatching: {0} goes to hatching run {1}.", Logger.Args(wizard.CharId, message.RunId));
+        LeaveMorph();
+        RetireTraining();
+        Teleport(HatcheryRuns.MorphZone, doTeleportEffects: false, makePrivate: true, ownerCharId: message.RunId,
+            destinationLocation: "Start");
+    }
+
+    // Arriving in the morph zone: the pair's game starts (r806919 opens the PetGameMorph window from MSG_PETGAMEINIT);
+    // anyone there without a sigil run (a relog, a stale transfer) goes back to the Hatchery.
+    private void TryArriveMorph() {
+        if (_closing) return;
+        var wizard = GetActiveWizard();
+        if (wizard is null || !string.Equals(wizard.Zone, HatcheryRuns.MorphZone, StringComparison.OrdinalIgnoreCase)) return;
+        var run = SessionActor.HousingAttach is { } attach && attach.CharacterId == wizard.CharId ? attach.OwnerId : 0;
+        var side = HatcheryRuns.SideOf(run, wizard.CharId, DateTime.UtcNow);
+        if (side is null || !HatcherySigilComponent.Enabled) {
+            Logger.Information("Pet hatching: {0} is in {1} without a hatching run; back to the Hatchery.",
+                Logger.Args(wizard.CharId, wizard.Zone));
+            LeaveMorph();
+            Teleport(HatcheryRuns.HatcheryZone, doTeleportEffects: false, destinationLocation: HatcheryRuns.HatcheryLocation);
+            return;
+        }
+        if (_morph is { } current && current.Key == HatcheryRuns.LobbyKey(run)) return; // a repeated attach completion
+        JoinMorph(wizard, HatcheryRuns.LobbyKey(run), side.Value);
     }
 
     [MessageHandler(typeof(MorphEggTimer))]

@@ -61,6 +61,8 @@ using Imlight.Common;
 using Imlight.CoreLib.Game.Pet;
 using Imlight.CoreLib.Shared.Items;
 using Imlight.CoreLib.Shared.Networking;
+using Imlight.CoreLib.Classic;
+using Imlight.CoreLib.Game.Zone.Components;
 using Imlight.CoreLib.Shared.Packets;
 using Imlight.CoreLib.Shared.Resources;
 using Imlight.CoreLib.WizardData.Collections;
@@ -370,6 +372,10 @@ internal sealed partial class PetGameService(SessionActor sessionActor) : Messag
         // CLASSIC: GlobalID semantics are not proven here; bind only the native Game identity.
         if (_morph is not null && string.Equals(game, MorphGame, StringComparison.Ordinal)) {
             LeaveMorph();
+            // CLASSIC: closing the hatching window in the pair's copy of the morph zone goes back to the Hatchery.
+            if (string.Equals(GetActiveWizard()?.Zone, HatcheryRuns.MorphZone, StringComparison.OrdinalIgnoreCase)) {
+                Teleport(HatcheryRuns.HatcheryZone, doTeleportEffects: false, destinationLocation: HatcheryRuns.HatcheryLocation);
+            }
             return;
         }
         if (_session is null || !string.Equals(game, _session.Game, StringComparison.Ordinal)) return;
