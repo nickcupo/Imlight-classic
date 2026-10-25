@@ -631,17 +631,14 @@ public class Zone : ReceiveProtocolDispatcher, IWithTimers {
             actualLocation = parsedLoc;
         }
         else {
-            var searchedLoc = ZoneData.m_locationList.FirstOrDefault(x => x.m_locName == location);
+            var wanted = location.ToString();
+            var searchedLoc = FindLocation(ZoneData.m_locationList, wanted);
             if (searchedLoc is null) {
-                var start = ZoneData.m_locationList.FirstOrDefault(x => x.m_locName == "Start");
-                if (start is not null) {
-                    actualLocation = (Vector4) start.m_location;
-                    actualLocation.W = start.m_direction;
-
-                    return actualLocation;
-                }
-
                 return s_locationFailedGiveaway;
+            }
+            if (searchedLoc.m_locName != wanted && searchedLoc.m_locName != "Start") {
+                Logger.Warning("Zone {0} has neither location \"{1}\" nor \"Start\"; using its first location \"{2}\".",
+                    Logger.Args(ZonePath, wanted, searchedLoc.m_locName));
             }
 
             actualLocation = (Vector4) searchedLoc.m_location;
@@ -649,6 +646,18 @@ public class Zone : ReceiveProtocolDispatcher, IWithTimers {
         }
 
         return actualLocation;
+    }
+
+    /// <summary>
+    /// The location named <paramref name="name"/>, else "Start", else (CLASSIC) the zone's first location; null only for a
+    /// zone without locations. Some 2014 packages the server loads have no "Start": the Krokotopia Arena
+    /// (WizardCity/KT_Duel_Arena, tools/classic-zones.list) lists only Home and Spectator points, so a GM teleport or any
+    /// transfer by zone name put the wizard at float.MaxValue (playbot-ios 2026-10-25). Its first location is a Home on
+    /// the arena floor.
+    /// </summary>
+    internal static LocationTemplate FindLocation(IEnumerable<LocationTemplate> locations, string name) {
+        var list = locations?.Where(l => l is not null).ToList() ?? [];
+        return list.FirstOrDefault(l => l.m_locName == name) ?? list.FirstOrDefault(l => l.m_locName == "Start") ?? list.FirstOrDefault();
     }
 
     private void ProcessZoneTransfer(ZONE_102_PROTOCOL.MSG_ZONETRANSFER message, IActorRef sender) {
