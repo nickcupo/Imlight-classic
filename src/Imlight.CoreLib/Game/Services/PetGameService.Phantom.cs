@@ -186,7 +186,10 @@ internal sealed partial class PetGameService {
     private const string PhantomArrival = "petGameArrival";
 
     [MessageHandler(typeof(SERVICE_101_PROTOCOL.MSG_ATTACHCOMPLETE))]
-    private void ReceivePhantomAttachComplete(SERVICE_101_PROTOCOL.MSG_ATTACHCOMPLETE message) => TryArrive(final: false);
+    private void ReceivePhantomAttachComplete(SERVICE_101_PROTOCOL.MSG_ATTACHCOMPLETE message) {
+        TryArrive(final: false);
+        TryArriveMorph(); // CLASSIC: a Hatchery sigil pair's morph game
+    }
 
     // CLASSIC: the parent trusted the completed attach only after its world object was recorded.
     [MessageHandler(typeof(PetGameSceneTrusted))]

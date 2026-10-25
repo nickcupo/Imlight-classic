@@ -291,4 +291,14 @@ internal sealed class CLASSIC_FEATURES_PROTOCOL : IServerProtocol {
         /// <summary>The zone the door stands in.</summary>
         public string Zone;
     }
+
+    /// <summary>
+    /// CLASSIC: two wizards stood on one Pet Hatchery sigil (HatcherySigilComponent): go to the pair's own copy of the
+    /// morph game's zone, run <see cref="RunId"/> (HatcheryRuns). Never on the wire.
+    /// </summary>
+    public sealed class MSG_HATCHERYTRIP : IServerMessage {
+        public byte MessageOrder { get; } = 21;
+        public byte ServiceID { get; } = 110;
+        public ulong RunId;
+    }
 }
