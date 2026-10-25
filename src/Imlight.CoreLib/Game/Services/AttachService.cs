@@ -124,10 +124,10 @@ internal class AttachService(SessionActor sessionActor) : MessageService(session
         SessionActor.PublishHousingAttach(new HousingAttachContext(_wizard.CharId, zoneDetails.InstanceOwnerId,
             message.ZoneName, zoneDetails.DynamicZoneId, message.ZoneID, zoneDetails.HousingDeedId));
 
-        // CLASSIC: logging back in to an arena whose match is over (or a copy of one nobody fights in): back to the arena
-        // hall once the attach is done.
+        // CLASSIC: logging back in to an arena whose match is over (or a copy of one nobody fights in or watches): back to
+        // the arena hall once the attach is done. Spectators of a running match stay (ArenaMatchmaker.OnArenaTrip).
         if (Classic.Arena.ClassicArena.IsArenaZone(message.ZoneName)
-                && Classic.Arena.ArenaMatchmaker.Instance?.RunFor(_wizard.CharId) is null
+                && Classic.Arena.ArenaMatchmaker.Instance?.OnArenaTrip(_wizard.CharId) != true
                 && Classic.Arena.ClassicArena.Config is { } arena) {
             TellOtherServices(new CLASSIC_FEATURES_PROTOCOL.MSG_ARENARETURN {
                 Zone = arena.HallZone, Location = arena.HallLocation, DelaySeconds = 5,

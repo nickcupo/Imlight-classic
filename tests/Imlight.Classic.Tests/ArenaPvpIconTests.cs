@@ -201,6 +201,48 @@ public sealed class ArenaPvpIconTests {
         AssertIdle(w.Arena.AttachedStatus(Viewer, w.Online[Viewer]), Viewer);
     }
 
+    // AttachService returns anyone who attaches in an arena without an arena trip to the hall after 5 seconds; a
+    // spectator has no seat in the run, so this must count watching too (playbot-ios 2026-10-25: every onlooker was
+    // sent back 5 s after landing).
+    [Fact]
+    public void ASpectatorIsOnTheArenaTripUntilTheMatchEnds() {
+        var w = new World();
+        w.Arena.QuickJoin(A, ArenaKind.Practice, w.Size(ArenaKind.Practice, 1));
+        var match = w.Arena.MatchOf(A);
+        w.Arena.Join(B, match, w.Arena.TeamIdsOf(match)[1]);
+        w.Arena.Confirm(A, true);
+        w.Arena.Confirm(B, true);
+        var run = w.Trips[0].Run;
+        w.Arena.Started(run);
+        Assert.True(w.Arena.OnArenaTrip(A));                               // a fighter
+        Assert.False(w.Arena.OnArenaTrip(Viewer));                         // nobody's onlooker yet
+        Assert.False(w.Arena.OnArenaTrip(C));
+
+        w.Arena.Watch(Viewer, match);
+        Assert.Equal((Viewer, run), w.Trips.Last());                        // sent to the fighters' own instance
+        Assert.True(w.Arena.OnArenaTrip(Viewer));                          // arriving there: not sent back to the hall
+        Assert.False(w.Arena.OnArenaTrip(C));
+
+        w.Arena.Finish(run, winningSide: 0, fled: []);                     // the match ends: everyone goes home
+        Assert.False(w.Arena.OnArenaTrip(Viewer));
+        Assert.False(w.Arena.OnArenaTrip(A));
+    }
+
+    [Fact]
+    public void ASpectatorWhoLeavesIsNoLongerOnTheTrip() {
+        var w = new World();
+        w.Arena.QuickJoin(A, ArenaKind.Practice, w.Size(ArenaKind.Practice, 1));
+        var match = w.Arena.MatchOf(A);
+        w.Arena.Join(B, match, w.Arena.TeamIdsOf(match)[1]);
+        w.Arena.Confirm(A, true);
+        w.Arena.Confirm(B, true);
+        w.Arena.Started(w.Trips[0].Run);
+        w.Arena.Watch(Viewer, match);
+        w.Arena.Leave(Viewer);
+        Assert.False(w.Arena.OnArenaTrip(Viewer));
+        Assert.True(w.Arena.OnArenaTrip(B));
+    }
+
     [Fact]
     public void NothingIsSentWhileTheArenaStops() {
         var w = new World();

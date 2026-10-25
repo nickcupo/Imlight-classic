@@ -297,6 +297,19 @@ internal sealed class ArenaMatchmaker {
     /// <summary>The arena trip a wizard is on now (gone to their match's arena), or null.</summary>
     public ArenaRun? RunFor(ulong charId) => _runs.Values.FirstOrDefault(r => r.Side0.Contains(charId) || r.Side1.Contains(charId));
 
+    /// <summary>
+    /// CLASSIC: true while the wizard fights in a match's arena (RunFor) or watches one whose arena trip is still on.
+    /// AttachService sends anyone else who attaches in an arena back to the hall; a spectator has no seat in the run, so
+    /// without this every onlooker was returned 5 seconds after arriving (playbot-ios 2026-10-25, 3 of 3).
+    /// </summary>
+    public bool OnArenaTrip(ulong charId) {
+        if (RunFor(charId) is not null) return true;
+        lock (_gate) {
+            return _spectators.TryGetValue(charId, out var watched) && _matches.TryGetValue(watched, out var match)
+                && match.RunId != 0 && _runs.ContainsKey(match.RunId);
+        }
+    }
+
     /// <summary>True when <paramref name="runId"/> keys a match's arena instance.</summary>
     public bool IsRun(ulong runId) => runId != 0 && _runs.ContainsKey(runId);
 
