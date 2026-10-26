@@ -66,6 +66,8 @@ internal sealed class WispManaComponent : ZoneEntityComponent, IComponentFactory
     }
 
     public override void OnPlayerMove(CoreObject playerObj, IActorRef playerActor, Wizard playerWizard) {
+        // CLASSIC: never inside a duel (WispPickup.Allowed).
+        if (!WispPickup.Allowed(playerWizard)) return;
         if (IsInRadius(playerObj, INTERACTION_RADIUS)) {
             // Values with gear and effects.
             var baseMana = playerWizard.GameStats.m_baseMana;
