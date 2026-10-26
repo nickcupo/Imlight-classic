@@ -151,6 +151,7 @@ internal sealed class InteractServiceMementoComponent(ZoneEntity entity)
     // CLASSIC: per wizard, the quests and goals already sent in their chaining class at this NPC (DialogChain); cleared
     // when the wizard leaves this NPC's range or the zone.
     private readonly Dictionary<IActorRef, HashSet<string>> _chained = [];
+    private readonly Dictionary<IActorRef, List<(ulong Id, string Name)>> _questSnapshot = []; // CLASSIC: DialogChain.QuestDiff
     private readonly PlayersInRange _playersInInteractionRange = new(); // CLASSIC: a new session actor replaces a stale one.
     private readonly PlayersInRange _playersInRenderRange = new(); // CLASSIC
     private List<IServiceComponent> _serviceComponents = [];
@@ -215,6 +216,7 @@ internal sealed class InteractServiceMementoComponent(ZoneEntity entity)
         _playerOptionIndex.Remove(playerActor); // CLASSIC
         _lastInteraction.Remove(playerActor); // CLASSIC
         _chained.Remove(playerActor); // CLASSIC
+        _questSnapshot.Remove(playerActor); // CLASSIC
         _playersInInteractionRange.Remove(playerActor);
         _playersInRenderRange.Remove(playerActor);
 
@@ -515,17 +517,21 @@ internal sealed class InteractServiceMementoComponent(ZoneEntity entity)
 
         // If we have no service options, do not send anything.
         if (_serviceMemento.m_serviceOptions.Count <= 0) {
+            _questSnapshot[playerActor] = [.. (wizard.QuestBehavior?.CurrentQuestInstances ?? []).Select(q => (q.ID, q.QuestName))]; // CLASSIC
             return;
         }
 
         // CLASSIC: answering r806919's re-ask after a dialog (Reinteract 2), offers and quest turn-ins go in the classes
         // the client chains on (DialogChain). The memento is rebuilt for every send, so this changes only this answer.
+        var quests = wizard.QuestBehavior?.CurrentQuestInstances ?? [];
+        var snapshot = quests.Select(q => (q.ID, q.QuestName)).ToList();
         if (reinteract == 2) {
-            var quests = wizard.QuestBehavior?.CurrentQuestInstances ?? [];
+            var happened = DialogChain.QuestDiff.Between(_questSnapshot.GetValueOrDefault(playerActor), snapshot);
             if (!_chained.TryGetValue(playerActor, out var chained)) _chained[playerActor] = chained = [];
             _serviceMemento.m_serviceOptions = DialogChain.Forms(_serviceMemento.m_serviceOptions,
-                id => quests.FirstOrDefault(q => q.ID == id), QuestByTitle, chained);
+                id => quests.FirstOrDefault(q => q.ID == id), QuestByTitle, happened, chained);
         }
+        _questSnapshot[playerActor] = snapshot; // CLASSIC: what the next re-ask compares with
 
         // Serialize the service memento and send it to the player.
         var serializer = new ObjectSerializer(

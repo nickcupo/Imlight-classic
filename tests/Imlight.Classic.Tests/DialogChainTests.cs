@@ -53,38 +53,70 @@ public sealed class DialogChainTests {
 
     private static QuestTemplate? ByTitle(string title) => s_quests.Value.Values.FirstOrDefault(q => q.m_questTitle == title);
 
-    [Fact]
-    public void KhabasTalkBackTurnsInAndHisNextQuestIsOfferedAtOnce() {
-        var bling = Bling(waypointDone: true);
-        var chained = DialogChain.Forms(KhabasOptions(bling), id => id == bling.ID ? bling : null, ByTitle);
+    private static readonly (ulong, string)[] Nothing = [];
 
-        var turnIn = Assert.IsType<AvailableCompleteEntry>(chained[0]);
+    [Fact]
+    public void AfterAcceptingBlingTheTalkBackChainsAndAfterHandingItInTheNextQuestDoes() {
+        var bling = Bling(waypointDone: true);
+        (ulong, string)[] withBling = [(bling.ID, bling.QuestName)];
+
+        // The re-ask right after accepting KT-SPH2-C02-007: its talk goal at Khaba chains (the turn-in), the offer of 008
+        // does not (007 is not complete yet).
+        var accepted = DialogChain.QuestDiff.Between(Nothing, withBling);
+        var afterAccept = DialogChain.Forms(KhabasOptions(bling), id => id == bling.ID ? bling : null, ByTitle, accepted);
+        var turnIn = Assert.IsType<AvailableCompleteEntry>(afterAccept[0]);
         Assert.Equal((DialogChain.PersonaGoalService, 0u, bling.ID), (turnIn.m_serviceName, turnIn.m_serviceIndex, turnIn.m_questID.Full));
-        var next = Assert.IsType<AvailableQuestEntry>(chained[1]);
+        Assert.Equal(typeof(PrepEntry), afterAccept[1].GetType());
+        Assert.IsType<EquipmentShopOption>(afterAccept[2]);                   // other services are untouched
+
+        // The re-ask right after handing 007 in: 008 (which requires 007 Complete) chains.
+        var handedIn = DialogChain.QuestDiff.Between(withBling, Nothing);
+        var offers = KhabasOptions(bling).Skip(1).ToList();                  // 007's talk goal is gone
+        var afterHandIn = DialogChain.Forms(offers, _ => null, ByTitle, handedIn);
+        var next = Assert.IsType<AvailableQuestEntry>(afterHandIn[0]);
         Assert.Equal((DialogChain.OfferService, 1u, "KT-SPH2-C02-008"), (next.m_serviceName, next.m_serviceIndex, next.m_questName));
         Assert.Equal(Quest("KT-SPH2-C02-008").m_mainline, next.m_isMainline);
-        Assert.IsType<EquipmentShopOption>(chained[2]);                       // other services are untouched
 
         // They reach the client in their own classes (MSG_SENDNPCOPTIONS' memento, property mask 4).
         var serializer = new ObjectSerializer(Versionable: false, Behaviors: SerializerFlags.None);
-        Assert.True(serializer.Serialize(new ServiceMementoBase { m_serviceOptions = chained }, 4, out var bytes));
+        Assert.True(serializer.Serialize(new ServiceMementoBase { m_serviceOptions = [afterAccept[0], afterHandIn[0]] }, 4, out var bytes));
         Assert.True(serializer.Deserialize<ServiceMementoBase>(bytes, 4, out var received));
         Assert.IsType<AvailableCompleteEntry>(received!.m_serviceOptions[0]);
         Assert.Equal("KT-SPH2-C02-008", Assert.IsType<AvailableQuestEntry>(received.m_serviceOptions[1]).m_questName);
+    }
+
+    // qa-s124 at Dr. Gordon Flemming: after a goal-only talk (no quest accepted or completed) nothing chains, or r806919's
+    // DoInteract opens the services menu at every multi-quest NPC.
+    [Fact]
+    public void AfterAGoalOnlyTalkNothingChains() {
+        var bling = Bling(waypointDone: true);
+        (ulong, string)[] withBling = [(bling.ID, bling.QuestName)];
+        var chained = DialogChain.Forms(KhabasOptions(bling), id => id == bling.ID ? bling : null, ByTitle,
+            DialogChain.QuestDiff.Between(withBling, withBling));
+        Assert.Equal(typeof(GoalEntry), chained[0].GetType());
+        Assert.Equal(typeof(PrepEntry), chained[1].GetType());
+        Assert.Equal(typeof(GoalEntry), DialogChain.Forms(KhabasOptions(bling), id => bling, ByTitle,
+            DialogChain.QuestDiff.Between(null, withBling))[0].GetType()); // no earlier snapshot: nothing known happened
+    }
+
+    [Fact]
+    public void AnOfferChainsOnlyAfterTheQuestItFollows() {
+        Assert.True(DialogChain.Follows(Quest("KT-SPH2-C02-008"), "KT-SPH2-C02-007"));
+        Assert.False(DialogChain.Follows(Quest("KT-SPH2-C02-008"), "KT-SPH2-C02-006"));
+        Assert.False(DialogChain.Follows(Quest("KT-SPH2-C02-007"), "KT-SPH2-C02-007"));
     }
 
     [Fact]
     public void ATalkGoalThatDoesNotFinishTheQuestStaysAGoalEntry() {
         var bling = Bling(waypointDone: false);                               // the waypoint is still to do
         Assert.False(DialogChain.TurnsIn(bling, bling.GoalProgress.Single(g => g.GoalType == GOAL_TYPE.GOAL_TYPE_PERSONA).ID));
-        var chained = DialogChain.Forms(KhabasOptions(bling), id => id == bling.ID ? bling : null, ByTitle);
-        Assert.Equal(typeof(GoalEntry), chained[0].GetType());
     }
 
     [Fact]
     public void AnUnknownQuestOrTitleIsLeftAsItWas() {
         var bling = Bling(waypointDone: true);
-        var chained = DialogChain.Forms(KhabasOptions(bling), _ => null, _ => null);
+        var chained = DialogChain.Forms(KhabasOptions(bling), _ => null, _ => null,
+            DialogChain.QuestDiff.Between([(bling.ID, bling.QuestName)], []));
         Assert.Equal(typeof(GoalEntry), chained[0].GetType());
         Assert.Equal(typeof(PrepEntry), chained[1].GetType());
     }
@@ -97,7 +129,8 @@ public sealed class DialogChainTests {
         var bling = Bling(waypointDone: true);
         var talk = bling.GoalProgress.Single(g => g.GoalType == GOAL_TYPE.GOAL_TYPE_PERSONA);
         var plain = KhabasOptions(bling);                                    // the list as built (not chained)
-        var chained = DialogChain.Forms(plain, id => id == bling.ID ? bling : null, ByTitle);
+        var chained = DialogChain.Forms(plain, id => id == bling.ID ? bling : null, ByTitle,
+            DialogChain.QuestDiff.Between(Nothing, [(bling.ID, bling.QuestName)]));
         foreach (var list in new[] { plain, chained }) {
             Assert.Equal(0, DialogChain.FindChosen(list, DialogChain.PersonaGoalService, bling.ID, talk.ID, null));
             Assert.Equal(1, DialogChain.FindChosen(list, DialogChain.OfferService, 0, 0, Quest("KT-SPH2-C02-008").m_questTitle));
@@ -113,16 +146,16 @@ public sealed class DialogChainTests {
     [Fact]
     public void AQuestOrGoalChainsOncePerVisitSoExitDoesNotReopenIt() {
         var bling = Bling(waypointDone: true);
+        var accepted = DialogChain.QuestDiff.Between(Nothing, [(bling.ID, bling.QuestName)]);
         var chained = new HashSet<string>();
-        var first = DialogChain.Forms(KhabasOptions(bling), id => id == bling.ID ? bling : null, ByTitle, chained);
+        var first = DialogChain.Forms(KhabasOptions(bling), id => id == bling.ID ? bling : null, ByTitle, accepted, chained);
         Assert.IsType<AvailableCompleteEntry>(first[0]);
-        Assert.IsType<AvailableQuestEntry>(first[1]);
 
-        var afterExit = DialogChain.Forms(KhabasOptions(bling), id => id == bling.ID ? bling : null, ByTitle, chained);
+        // Even if the same change were seen again (Exit re-asks), it is not chained twice in one visit.
+        var afterExit = DialogChain.Forms(KhabasOptions(bling), id => id == bling.ID ? bling : null, ByTitle, accepted, chained);
         Assert.Equal(typeof(GoalEntry), afterExit[0].GetType());
-        Assert.Equal(typeof(PrepEntry), afterExit[1].GetType());
 
         chained.Clear();                                                      // left range: a new visit chains again
-        Assert.IsType<AvailableQuestEntry>(DialogChain.Forms(KhabasOptions(bling), id => id == bling.ID ? bling : null, ByTitle, chained)[1]);
+        Assert.IsType<AvailableCompleteEntry>(DialogChain.Forms(KhabasOptions(bling), id => id == bling.ID ? bling : null, ByTitle, accepted, chained)[0]);
     }
 }

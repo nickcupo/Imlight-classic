@@ -26,20 +26,50 @@ internal static class DialogChain {
     /// <summary>The options with offers and quest-completing talk-backs in their chaining classes.</summary>
     /// <param name="questById">The wizard's quest instance by id, or null.</param>
     /// <param name="questByTitle">The quest template whose title key is this, or null.</param>
-    /// <param name="chained">CLASSIC: the chain keys this wizard was already sent at this NPC (ChainKey); those stay in
-    /// their plain class, and every newly chained key is added. r806919's Exit before the last page of a dialog
-    /// re-asks with Reinteract 2 too, so a quest chained again would reopen after every Exit (ios-parity); the plain
-    /// option opens only on X. Null: no memory.</param>
+    /// <param name="happened">CLASSIC: what changed in the wizard's quests since this NPC last sent them options
+    /// (QuestDiff). Only that chains (ios-parity, qa-s124 at Dr. Gordon Flemming): the offer that FOLLOWS a quest just
+    /// completed (its requirements name that quest Complete), and the talk goals of a quest just accepted. After a
+    /// goal-only talk nothing chains: every offer chained at a multi-quest NPC made r806919's DoInteract open the
+    /// services menu after each talk.</param>
+    /// <param name="chained">CLASSIC: the chain keys this wizard was already sent at this NPC (QuestKey / GoalKey); those
+    /// stay in their plain class. r806919's Exit before a dialog's last page re-asks with Reinteract 2 too, so a quest
+    /// chained again would reopen after every Exit; the plain option opens only on X. Null: no memory.</param>
     internal static List<ServiceOptionBase> Forms(IEnumerable<ServiceOptionBase> options, Func<ulong, QuestInstance?> questById,
-                                                  Func<string, QuestTemplate?> questByTitle, ISet<string>? chained = null)
+                                                  Func<string, QuestTemplate?> questByTitle, QuestDiff happened,
+                                                  ISet<string>? chained = null)
         => [.. options.Select(option => option switch {
             GoalEntry goal when goal is not AvailableCompleteEntry && goal.m_serviceName == PersonaGoalService
-                && questById(goal.m_questID.Full) is { } quest && TurnsIn(quest, goal.m_goalID.Full)
+                && happened.Accepted.Contains(goal.m_questID.Full) && questById(goal.m_questID.Full) is not null
                 && First(chained, GoalKey(goal.m_questID.Full, goal.m_goalID.Full)) => Complete(goal),
             PrepEntry prep when prep.m_serviceName == OfferService && questByTitle(prep.m_displayKey) is { } template
+                && happened.Completed.Any(done => Follows(template, done))
                 && First(chained, QuestKey(template.m_questName)) => Offer(prep, template),
             _ => option,
         })];
+
+    /// <summary>CLASSIC: the quests that left the wizard's list (completed) and joined it (accepted) between two
+    /// snapshots of (id, name).</summary>
+    internal sealed record QuestDiff(IReadOnlySet<string> Completed, IReadOnlySet<ulong> Accepted) {
+        internal static readonly QuestDiff None = new(new HashSet<string>(), new HashSet<ulong>());
+
+        internal static QuestDiff Between(IReadOnlyCollection<(ulong Id, string Name)>? before,
+                                          IReadOnlyCollection<(ulong Id, string Name)> now) {
+            if (before is null) return None;
+            var nowNames = now.Select(q => q.Name).ToHashSet(StringComparer.Ordinal);
+            var beforeIds = before.Select(q => q.Id).ToHashSet();
+            return new(before.Where(q => !nowNames.Contains(q.Name)).Select(q => q.Name).ToHashSet(StringComparer.Ordinal),
+                now.Where(q => !beforeIds.Contains(q.Id)).Select(q => q.Id).ToHashSet());
+        }
+    }
+
+    /// <summary>True when <paramref name="quest"/>'s requirements ask for <paramref name="completed"/> to be complete.</summary>
+    internal static bool Follows(QuestTemplate quest, string completed) => Names(quest.m_requirements, completed);
+
+    private static bool Names(Requirement? requirement, string completed) => requirement switch {
+        ReqHasEntry has => !has.m_applyNOT && has.m_questName == completed && has.m_entryName == "Complete",
+        RequirementList list => !list.m_applyNOT && (list.m_requirements ?? []).Any(r => Names(r, completed)),
+        _ => false,
+    };
 
     internal static string GoalKey(ulong questId, ulong goalId) => $"goal:{questId}:{goalId}";
     internal static string QuestKey(string questName) => $"quest:{questName}";
