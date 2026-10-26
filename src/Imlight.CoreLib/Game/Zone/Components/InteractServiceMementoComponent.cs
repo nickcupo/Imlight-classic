@@ -493,6 +493,14 @@ internal sealed class InteractServiceMementoComponent(ZoneEntity entity)
             return;
         }
 
+        // CLASSIC: answering r806919's re-ask after a dialog (Reinteract 2), offers and quest turn-ins go in the classes
+        // the client chains on (DialogChain). The memento is rebuilt for every send, so this changes only this answer.
+        if (reinteract == 2) {
+            var quests = wizard.QuestBehavior?.CurrentQuestInstances ?? [];
+            _serviceMemento.m_serviceOptions = DialogChain.Forms(_serviceMemento.m_serviceOptions,
+                id => quests.FirstOrDefault(q => q.ID == id), QuestByTitle);
+        }
+
         // Serialize the service memento and send it to the player.
         var serializer = new ObjectSerializer(
             Versionable: false,
@@ -571,6 +579,11 @@ internal sealed class InteractServiceMementoComponent(ZoneEntity entity)
     // CLASSIC: r806919 sends the selected option's m_serviceIndex in MSG_INTERACTNPC, rather than its
     // visual row number. Every option must publish the same index used by the per-wizard owner map.
     // Without this, Equipment on multi-service NPCs such as Zeke and Eloise sends the default index 0.
+    // CLASSIC: the quest whose title key an offer shows (an NPC's offers are listed by title key).
+    private static QuestTemplate QuestByTitle(string titleKey)
+        => string.IsNullOrEmpty(titleKey) ? null
+            : QuestTemplateCollection.GetAllQuests().FirstOrDefault(q => q is not null && q.m_questTitle == titleKey);
+
     internal static List<ServiceOptionBase> BuildServiceOptions(IEnumerable<IServiceComponent> components,
         Wizard wizard, IDictionary<int, IServiceComponent> owners) {
         owners.Clear();
