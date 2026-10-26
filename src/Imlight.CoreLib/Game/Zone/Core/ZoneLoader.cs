@@ -123,6 +123,7 @@ internal sealed class ZoneLoader : ReceiveProtocolDispatcher {
             // build plans from TriggerData; filtering in either supervisor would race the other one's plan cache.
             if (!error) triggerData = ClassicPuzzleHelpers.FilterTriggers(message.ZonePath, triggerData);
             if (!error) triggerData = ClassicStateTriggers.HoldBack(message.ZonePath, triggerData); // CLASSIC: the Throne Room fire door.
+            if (!error) triggerData = ClassicKillGates.Apply(message.ZonePath, triggerData); // CLASSIC: rules.kill_gates.
 
             Logger.Debug("Zone {ZonePath} files read in {ReadMs} ms ({Source}), deserialized in {DeserializeMs} ms.",
                 Logger.Args(message.ZonePath, readMs, fromCache ? "cache" : "archive", timer.ElapsedMilliseconds));

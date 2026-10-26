@@ -72,6 +72,7 @@ public static class ClassicProgression {
     private static volatile SecondChanceRules? s_secondChance; // CLASSIC
     private static volatile BossCheats s_bossCheats = BossCheats.Empty; // CLASSIC
     private static volatile PuzzleHelpers s_puzzleHelpers = PuzzleHelpers.Empty; // CLASSIC
+    private static volatile KillGates s_killGates = Imlight.Classic.Rules.KillGates.Empty; // CLASSIC
     private static volatile AstralRules s_astral = AstralRules.Empty; // CLASSIC: Celestia Astral schools
     private static volatile WeavingRules s_weaving = WeavingRules.Empty; // CLASSIC OWNER EXTRA: School Weaving
 
@@ -155,6 +156,9 @@ public static class ClassicProgression {
     /// </summary>
     public static BossCheats BossCheats => s_bossCheats;
 
+    /// <summary>CLASSIC: door kill gates that name a creature their room never spawns (rules.kill_gates); Empty without one.</summary>
+    public static KillGates KillGates => s_killGates;
+
     /// <summary>CLASSIC: October-only puzzle answers and goal-arrow policy; other profiles always receive Empty.</summary>
     public static PuzzleHelpers PuzzleHelpers => s_puzzleHelpers;
 
@@ -187,6 +191,10 @@ public static class ClassicProgression {
     public static void Initialize(ClassicProfile profile, string classicDataRoot) {
         // CLASSIC: unlike optional legacy tables, a configured puzzle policy must exist and validate at startup.
         s_puzzleHelpers = PuzzleHelpersLoader.LoadForProfile(profile, classicDataRoot);
+        // CLASSIC: door kill gates naming an absent creature (two Dragonspyre gauntlet rooms); a named file must validate.
+        s_killGates = profile.Rules.KillGates is { } killGates && File.Exists(Path.Combine(classicDataRoot, killGates))
+            ? KillGatesLoader.Load(Path.Combine(classicDataRoot, killGates))
+            : Imlight.Classic.Rules.KillGates.Empty;
         // CLASSIC: the Astral schools (celestia-2010); a configured file must exist and validate.
         s_astral = AstralRulesLoader.LoadForProfile(profile, classicDataRoot);
         // CLASSIC OWNER EXTRA: School Weaving; a configured file must exist and validate even while the experiment is off.

@@ -64,7 +64,7 @@ public static class ClassicProfileLoader {
     internal static readonly FrozenSet<string> s_worldUnlockKeys = FrozenSet.Create(StringComparer.Ordinal, "any_of", "source", "notes");
     private static readonly FrozenSet<string> s_ruleKeys = FrozenSet.Create(StringComparer.Ordinal,
         "accuracy_table", "xp_table", "player_health", "mob_rewards", "badges", "quest_cards", "treasure_prices", "mob_stats", "crown_shop", "later_objects", "creature_decks", "power_pips_from_rank", "dragonspyre_difficulty", "tutorial",
-        "teleport_stones", "potions", "second_chance", "boss_cheats", "instance_resets", "puzzle_helpers", "level_stats", "critical", "astral", "gardening", "weaving");
+        "teleport_stones", "potions", "second_chance", "boss_cheats", "instance_resets", "kill_gates", "puzzle_helpers", "level_stats", "critical", "astral", "gardening", "weaving");
 
     /// <summary>
     /// Loads the profile <paramref name="id"/> from <paramref name="profilesDir"/>, following its extends chain.
@@ -424,7 +424,7 @@ public static class ClassicProfileLoader {
                         _ = diagnostics.ReadString(files.Items[i], YamlTree.Index(path, i));
                     }
                     break;
-                case "second_chance" or "boss_cheats" or "instance_resets" or "puzzle_helpers": // CLASSIC: null switches off an inherited file (arc1-2009h1, before Oct 2009)
+                case "second_chance" or "boss_cheats" or "instance_resets" or "kill_gates" or "puzzle_helpers": // CLASSIC: null switches off an inherited file (arc1-2009h1, before Oct 2009)
                     if (entry.Value is not YNull) {
                         _ = diagnostics.ReadString(entry.Value, path);
                     }
@@ -499,6 +499,7 @@ public static class ClassicProfileLoader {
                 BossCheats = BossCheatFilesOf(rules).FirstOrDefault(), // CLASSIC
                 BossCheatFiles = BossCheatFilesOf(rules), // CLASSIC: one file or a list
                 InstanceResets = ScalarOf(rules, "instance_resets"), // CLASSIC
+                KillGates = ScalarOf(rules, "kill_gates"), // CLASSIC: door kill gates naming an absent creature
                 PuzzleHelpers = ScalarOf(rules, "puzzle_helpers"), // CLASSIC
                 Astral = ScalarOf(rules, "astral"), // CLASSIC: Astral trainers, dated polymorph, Moon rework (celestia-2010)
                 Weaving = ScalarOf(rules, "weaving"), // CLASSIC OWNER EXTRA: School Weaving (experiments.weaving)
