@@ -231,6 +231,7 @@ public sealed class ClassicZoneTypeRegistry : TypeRegistry {
         [ClassicResAddTriggerObject.TypeHash] = typeof(ClassicResAddTriggerObject),
         [ClassicResStateChange.TypeHash] = typeof(ClassicResStateChange),
         [Imlight.Classic.Quests.TriggerObjectIds.ReqTriggerStateHash] = typeof(ClassicReqTriggerState),
+        [Imlight.Classic.Quests.TriggerObjectIds.StateTriggerHash] = typeof(ClassicStateTrigger), // CLASSIC: KT_Chamber_T4's SoulKeeper wall and 17 more.
     };
 
     public override void RegisterType(uint hash, Type t)
