@@ -43,6 +43,7 @@ using Akka.Actor;
 using Imcodec.MessageLayer.Generated;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Common;
+using Imlight.CoreLib.Classic;
 using Imlight.CoreLib.Game.WizBang;
 using Imlight.CoreLib.Game.Zone.Core;
 using Imlight.CoreLib.Shared.Networking;
@@ -282,7 +283,7 @@ internal sealed class InteractPersonaGoalComponent(ZoneEntity entity)
         WizBang = newState.HasActiveGoal ? WizBangs.CompleteQuestGoal : WizBangs.None;
 
         // Only trigger seamless transition if this persona goal completion will complete the quest
-        if (WillPersonaGoalCompletionCompleteQuest(playerCharacter, state)) {
+        if (ServerChainsAfterHandIn(ClassicQuestEngine.IsActive) && WillPersonaGoalCompletionCompleteQuest(playerCharacter, state)) {
             // Schedule the seamless transition after quest completion processing.
             var startTransitionMsg = new ZONE_102_PROTOCOL.MSG_STARTSEAMLESSTRANSITION {
                 PlayerActor = playerActor,
@@ -295,6 +296,15 @@ internal sealed class InteractPersonaGoalComponent(ZoneEntity entity)
                 TimeSpan.FromMilliseconds(QUEST_COMPLETION_TRANSITION_DELAY_MS));
         }
     }
+
+    /// <summary>
+    /// CLASSIC: whether the server itself opens the NPC's first offer after a hand-in (the seamless transition: a timer
+    /// that routes QuestOfferService index 0 with Reinteract 2). Not with the classic engine: r806919 chains on its own
+    /// (DialogChain): after the dialog it re-asks with Reinteract 2 and opens the services menu, or sends
+    /// MSG_INTERACTAVAILABLEQUEST for a single chain entry. The timer put an unasked offer on top of that menu (qa-s146,
+    /// Sergeant Muldoon's three offers after Olde News).
+    /// </summary>
+    internal static bool ServerChainsAfterHandIn(bool classicEngine) => !classicEngine;
 
     private static bool WillPersonaGoalCompletionCompleteQuest(Wizard playerCharacter, PlayerPersonaGoalState state) {
         // Get the quest instance for this goal
