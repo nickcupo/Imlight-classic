@@ -153,6 +153,7 @@
     <ServerIntegrationTest Include="OctoberShopRuntimeTests.cs" />
     <ServerIntegrationTest Include="HouseTests.cs" />
     <ServerIntegrationTest Include="HouseTransportTests.cs" />
+    <ServerIntegrationTest Include="NpcOptionsRefreshTests.cs" />
     <ServerIntegrationTest Include="HatcherySigilTests.cs" />
     <ServerIntegrationTest Include="ZoneLocationFallbackTests.cs" />
     <ServerIntegrationTest Include="ArenaInstanceAttachTests.cs" />
