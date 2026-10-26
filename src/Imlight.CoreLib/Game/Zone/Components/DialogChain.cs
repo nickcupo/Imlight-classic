@@ -26,15 +26,26 @@ internal static class DialogChain {
     /// <summary>The options with offers and quest-completing talk-backs in their chaining classes.</summary>
     /// <param name="questById">The wizard's quest instance by id, or null.</param>
     /// <param name="questByTitle">The quest template whose title key is this, or null.</param>
+    /// <param name="chained">CLASSIC: the chain keys this wizard was already sent at this NPC (ChainKey); those stay in
+    /// their plain class, and every newly chained key is added. r806919's Exit before the last page of a dialog
+    /// re-asks with Reinteract 2 too, so a quest chained again would reopen after every Exit (ios-parity); the plain
+    /// option opens only on X. Null: no memory.</param>
     internal static List<ServiceOptionBase> Forms(IEnumerable<ServiceOptionBase> options, Func<ulong, QuestInstance?> questById,
-                                                  Func<string, QuestTemplate?> questByTitle)
+                                                  Func<string, QuestTemplate?> questByTitle, ISet<string>? chained = null)
         => [.. options.Select(option => option switch {
             GoalEntry goal when goal is not AvailableCompleteEntry && goal.m_serviceName == PersonaGoalService
-                && questById(goal.m_questID.Full) is { } quest && TurnsIn(quest, goal.m_goalID.Full) => Complete(goal),
+                && questById(goal.m_questID.Full) is { } quest && TurnsIn(quest, goal.m_goalID.Full)
+                && First(chained, GoalKey(goal.m_questID.Full, goal.m_goalID.Full)) => Complete(goal),
             PrepEntry prep when prep.m_serviceName == OfferService && questByTitle(prep.m_displayKey) is { } template
-                => Offer(prep, template),
+                && First(chained, QuestKey(template.m_questName)) => Offer(prep, template),
             _ => option,
         })];
+
+    internal static string GoalKey(ulong questId, ulong goalId) => $"goal:{questId}:{goalId}";
+    internal static string QuestKey(string questName) => $"quest:{questName}";
+
+    // True (and remembered) the first time this key is chained; always true without memory.
+    private static bool First(ISet<string>? chained, string key) => chained is null || chained.Add(key);
 
     /// <summary>
     /// CLASSIC: the position of the option a chained message chose in <paramref name="options"/> (the wizard's current

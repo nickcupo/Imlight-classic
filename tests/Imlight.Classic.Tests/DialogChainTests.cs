@@ -107,4 +107,22 @@ public sealed class DialogChainTests {
         Assert.Equal(-1, DialogChain.FindChosen(plain, DialogChain.OfferService, 0, 0, Quest("KT-SPH2-C02-007").m_questTitle));
         Assert.Equal(-1, DialogChain.FindChosen(plain, DialogChain.OfferService, bling.ID, talk.ID, null));
     }
+
+    // r806919's Exit before a dialog's last page also re-asks with Reinteract 2; a quest chained again would reopen
+    // 500 ms after every Exit. Each quest or goal is chained once per visit; X (the plain option) still opens it.
+    [Fact]
+    public void AQuestOrGoalChainsOncePerVisitSoExitDoesNotReopenIt() {
+        var bling = Bling(waypointDone: true);
+        var chained = new HashSet<string>();
+        var first = DialogChain.Forms(KhabasOptions(bling), id => id == bling.ID ? bling : null, ByTitle, chained);
+        Assert.IsType<AvailableCompleteEntry>(first[0]);
+        Assert.IsType<AvailableQuestEntry>(first[1]);
+
+        var afterExit = DialogChain.Forms(KhabasOptions(bling), id => id == bling.ID ? bling : null, ByTitle, chained);
+        Assert.Equal(typeof(GoalEntry), afterExit[0].GetType());
+        Assert.Equal(typeof(PrepEntry), afterExit[1].GetType());
+
+        chained.Clear();                                                      // left range: a new visit chains again
+        Assert.IsType<AvailableQuestEntry>(DialogChain.Forms(KhabasOptions(bling), id => id == bling.ID ? bling : null, ByTitle, chained)[1]);
+    }
 }
