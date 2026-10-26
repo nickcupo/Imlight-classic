@@ -245,6 +245,12 @@ public sealed class ProfileRules {
     /// </summary>
     public string? InstanceResets { get; init; }
 
+    /// <summary>
+    /// Path under classic-data of the door kill-gate fixes (a door's Monster_Killed requirement that names a creature
+    /// its room never spawns, and the creature to wait for instead), if any. CLASSIC.
+    /// </summary>
+    public string? KillGates { get; init; }
+
     /// <summary>CLASSIC: dated dungeon answers and quest-goal helper overrides, restricted to October 2010.</summary>
     public string? PuzzleHelpers { get; init; }
 
