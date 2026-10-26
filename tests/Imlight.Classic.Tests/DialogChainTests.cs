@@ -88,4 +88,23 @@ public sealed class DialogChainTests {
         Assert.Equal(typeof(GoalEntry), chained[0].GetType());
         Assert.Equal(typeof(PrepEntry), chained[1].GetType());
     }
+
+    // r806919's AvailableCompleteEntry sends MSG_INTERACTCOMPLETEGOAL {NPC, quest, goal} and AvailableQuestEntry sends
+    // MSG_INTERACTAVAILABLEQUEST {NPC, quest name} instead of MSG_INTERACTNPC; the server finds the option they chose in
+    // the wizard's current list and routes it like that option's click.
+    [Fact]
+    public void TheChainedMessagesFindTheirOptionInTheCurrentList() {
+        var bling = Bling(waypointDone: true);
+        var talk = bling.GoalProgress.Single(g => g.GoalType == GOAL_TYPE.GOAL_TYPE_PERSONA);
+        var plain = KhabasOptions(bling);                                    // the list as built (not chained)
+        var chained = DialogChain.Forms(plain, id => id == bling.ID ? bling : null, ByTitle);
+        foreach (var list in new[] { plain, chained }) {
+            Assert.Equal(0, DialogChain.FindChosen(list, DialogChain.PersonaGoalService, bling.ID, talk.ID, null));
+            Assert.Equal(1, DialogChain.FindChosen(list, DialogChain.OfferService, 0, 0, Quest("KT-SPH2-C02-008").m_questTitle));
+        }
+        // Not at this NPC now: another goal, another quest, or the wrong service.
+        Assert.Equal(-1, DialogChain.FindChosen(plain, DialogChain.PersonaGoalService, bling.ID, talk.ID + 99, null));
+        Assert.Equal(-1, DialogChain.FindChosen(plain, DialogChain.OfferService, 0, 0, Quest("KT-SPH2-C02-007").m_questTitle));
+        Assert.Equal(-1, DialogChain.FindChosen(plain, DialogChain.OfferService, bling.ID, talk.ID, null));
+    }
 }

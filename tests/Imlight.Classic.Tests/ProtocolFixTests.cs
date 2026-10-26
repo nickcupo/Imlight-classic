@@ -62,7 +62,11 @@ public sealed class ProtocolFixTests {
         Assert.True(Handles(typeof(QuestService), typeof(QUEST_MESSAGES_52_PROTOCOL.MSG_COMPLETEPERSONA)));
         Assert.True(Handles(typeof(QuestService), typeof(WIZARD_12_PROTOCOL.MSG_COMPLETEDIALOG)));
         Assert.True(Handles(typeof(QuestService), typeof(WIZARD_12_PROTOCOL.MSG_INTERACTUNDERWAYQUEST)));
-        Assert.True(Handles(typeof(QuestService), typeof(WIZARD_12_PROTOCOL.MSG_INTERACTCOMPLETEGOAL)));
+        // CLASSIC: r806919's chained options (AvailableCompleteEntry / AvailableQuestEntry) send these; InteractService
+        // routes them to the NPC like the option's click (DialogChain).
+        Assert.True(Handles(typeof(InteractService), typeof(WIZARD_12_PROTOCOL.MSG_INTERACTCOMPLETEGOAL)));
+        Assert.False(Handles(typeof(QuestService), typeof(WIZARD_12_PROTOCOL.MSG_INTERACTCOMPLETEGOAL)));
+        Assert.True(Handles(typeof(InteractService), typeof(WIZARD_12_PROTOCOL.MSG_INTERACTAVAILABLEQUEST)));
     }
 
     [Fact]

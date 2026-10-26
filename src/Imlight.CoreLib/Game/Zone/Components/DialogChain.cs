@@ -36,6 +36,25 @@ internal static class DialogChain {
             _ => option,
         })];
 
+    /// <summary>
+    /// CLASSIC: the position of the option a chained message chose in <paramref name="options"/> (the wizard's current
+    /// list), or -1: for MSG_INTERACTCOMPLETEGOAL the persona goal option of that quest and goal; for
+    /// MSG_INTERACTAVAILABLEQUEST the offer whose title key is <paramref name="questTitle"/> (offers are listed by title).
+    /// </summary>
+    internal static int FindChosen(IReadOnlyList<ServiceOptionBase> options, string serviceName, ulong questId, ulong goalId,
+                                   string? questTitle) {
+        for (var i = 0; i < options.Count; i++) {
+            var option = options[i];
+            if (option.m_serviceName != serviceName) continue;
+            if (serviceName == PersonaGoalService && option is GoalEntry goal && questId != 0
+                && goal.m_questID.Full == questId && goal.m_goalID.Full == goalId) return i;
+            if (serviceName == OfferService && questTitle is { Length: > 0 }
+                && (option is PrepEntry prep && prep.m_displayKey == questTitle
+                    || option is AvailableQuestEntry offer && offer.m_questTitle == questTitle)) return i;
+        }
+        return -1;
+    }
+
     /// <summary>True when finishing goal <paramref name="goalId"/> finishes the quest: every other goal is done.</summary>
     internal static bool TurnsIn(QuestInstance quest, ulong goalId)
         => quest.GoalProgress.Any(g => g.ID == goalId)

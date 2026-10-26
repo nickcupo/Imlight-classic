@@ -75,6 +75,39 @@ internal class InteractService(SessionActor sessionActor) : MessageService(sessi
         HandleInteraction(message, msg => msg.GlobalID, msg => msg.ServiceName, msg => msg.ServiceIndex);
     }
 
+    // CLASSIC: r806919's AvailableCompleteEntry (0x1415962d0) sends this instead of MSG_INTERACTNPC: the talk-back of that
+    // quest goal at that NPC (DialogChain). Routed like the option's click.
+    [MessageHandler(typeof(WIZARD_12_PROTOCOL.MSG_INTERACTCOMPLETEGOAL))]
+    private void ReceiveInteractCompleteGoal(WIZARD_12_PROTOCOL.MSG_INTERACTCOMPLETEGOAL message)
+        => RouteChainedOption(message.MobileID, DialogChain.PersonaGoalService, message.QuestID, message.GoalID, null);
+
+    // CLASSIC: r806919's AvailableQuestEntry (0x141596820) sends this instead of MSG_INTERACTNPC: that quest's offer at
+    // that NPC (DialogChain). Routed like the option's click.
+    [MessageHandler(typeof(WIZARD_12_PROTOCOL.MSG_INTERACTAVAILABLEQUEST))]
+    private void ReceiveInteractAvailableQuest(WIZARD_12_PROTOCOL.MSG_INTERACTAVAILABLEQUEST message)
+        => RouteChainedOption(message.MobileID, DialogChain.OfferService, 0, 0, message.QuestName.ToString());
+
+    private void RouteChainedOption(ulong npcId, string serviceName, ulong questId, ulong goalId, string questName) {
+        var wizard = GetActiveWizard();
+        var npc = npcId == 0 ? null : GetZoneObject(npcId);
+        if (wizard is null || npc?.GetComponentOfType<InteractServiceMementoComponent>() is not { } memento) {
+            Logger.Debug("{0} chose a chained option of {1}; no such NPC with services here.", Logger.Args(wizard?.CharId, npcId));
+            return;
+        }
+
+        memento.ActorRef.Tell(new ZONE_102_PROTOCOL.MSG_ZONEINTERACTION {
+            GlobalID = npcId,
+            ServiceName = serviceName,
+            ServiceIndex = uint.MaxValue,
+            PlayerActor = SessionActor.ActorRef,
+            PlayerCharacter = wizard,
+            PlayerObject = GetActiveGameObject(),
+            ChainQuestId = questId,
+            ChainGoalId = goalId,
+            ChainQuestName = questName,
+        });
+    }
+
     /// <summary>CLASSIC: an MSG_INTERACTNPC that asks an NPC for its current options (empty service, Reinteract set).</summary>
     internal static bool IsOptionsRequest(string serviceName, int reinteract, ulong npcId)
         => string.IsNullOrEmpty(serviceName) && reinteract != 0 && npcId != 0;

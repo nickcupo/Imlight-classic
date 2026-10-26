@@ -281,6 +281,26 @@ internal sealed class InteractServiceMementoComponent(ZoneEntity entity)
         // InteractService after r806919 dropped its cached list): answer with the list, Reinteract echoed. No
         // LEAVESERVICERANGE (the client already dropped its cache; a LEAVE now would cancel the new interaction) and no
         // routing (which would send the list a second time).
+        // CLASSIC: a chained option (DialogChain): find it in this wizard's current list; that list becomes the one the
+        // click is routed by. Not there (the quest or goal is not at this NPC now): the current list is sent instead.
+        if (message.ChainQuestId != 0 || !string.IsNullOrEmpty(message.ChainQuestName)) {
+            var owners = new Dictionary<int, IServiceComponent>();
+            var current = BuildServiceOptions(_serviceComponents, playerCharacter, owners);
+            var found = DialogChain.FindChosen(current, serviceName, message.ChainQuestId, message.ChainGoalId,
+                message.ChainQuestName is { Length: > 0 } name ? QuestTemplateCollection.GetQuestByName(name)?.m_questTitle : null);
+            if (found < 0) {
+                Logger.Debug("Chained option of NPC {0} ({1} {2}/{3}) is not in the wizard's options; re-sent the options.",
+                    Logger.Args(Entity.ActiveGameObject.m_debugName, serviceName, message.ChainQuestName ?? message.ChainQuestId.ToString(),
+                        message.ChainGoalId));
+                SendActorServiceOptions(playerActor, 0);
+
+                return;
+            }
+
+            _playerOptionIndex.Set(playerActor, owners);
+            serviceIndex = (uint) found;
+        }
+
         if (IsOptionsRequest(serviceName, reinteract)) {
             SendActorServiceOptions(playerActor, reinteract);
 
