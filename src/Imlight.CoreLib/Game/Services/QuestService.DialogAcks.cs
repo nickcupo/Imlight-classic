@@ -80,9 +80,7 @@ internal partial class QuestService {
         => Logger.Debug("Player '{0}' asked for the dialog of underway quest {1}; INTERACTNPC drives dialogs, nothing to do.",
             Logger.Args(GetActiveWizard()?.CharId, message?.QuestID));
 
-    [MessageHandler(typeof(WIZARD_12_PROTOCOL.MSG_INTERACTCOMPLETEGOAL))]
-    private void ReceiveClientInteractCompleteGoal(WIZARD_12_PROTOCOL.MSG_INTERACTCOMPLETEGOAL message)
-        => Logger.Debug("Player '{0}' asked for the dialog to complete goal {1} of quest {2}; the goal completes on INTERACTNPC, nothing to do.",
-            Logger.Args(GetActiveWizard()?.CharId, message?.GoalID, message?.QuestID));
+    // CLASSIC: MSG_INTERACTCOMPLETEGOAL (r806919's AvailableCompleteEntry) is handled by InteractService, which routes it
+    // to the NPC like the option's click (DialogChain).
 
 }

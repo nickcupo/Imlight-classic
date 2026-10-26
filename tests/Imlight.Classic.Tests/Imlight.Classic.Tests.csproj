@@ -154,6 +154,7 @@
     <ServerIntegrationTest Include="HouseTests.cs" />
     <ServerIntegrationTest Include="HouseTransportTests.cs" />
     <ServerIntegrationTest Include="WispInDuelTests.cs" />
+    <ServerIntegrationTest Include="DialogChainTests.cs" />
     <ServerIntegrationTest Include="NpcOptionsRefreshTests.cs" />
     <ServerIntegrationTest Include="HatcherySigilTests.cs" />
     <ServerIntegrationTest Include="ZoneLocationFallbackTests.cs" />

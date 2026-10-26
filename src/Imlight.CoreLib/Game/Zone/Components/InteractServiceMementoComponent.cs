@@ -148,6 +148,10 @@ internal sealed class InteractServiceMementoComponent(ZoneEntity entity)
     private const float DEFAULT_RENDER_DISTANCE = 5000.0f; // Default wizbang render distance.
 
     private readonly float _interactionRadius = 300.0f;
+    // CLASSIC: per wizard, the quests and goals already sent in their chaining class at this NPC (DialogChain); cleared
+    // when the wizard leaves this NPC's range or the zone.
+    private readonly Dictionary<IActorRef, HashSet<string>> _chained = [];
+    private readonly Dictionary<IActorRef, List<(ulong Id, string Name)>> _questSnapshot = []; // CLASSIC: DialogChain.QuestDiff
     private readonly PlayersInRange _playersInInteractionRange = new(); // CLASSIC: a new session actor replaces a stale one.
     private readonly PlayersInRange _playersInRenderRange = new(); // CLASSIC
     private List<IServiceComponent> _serviceComponents = [];
@@ -211,6 +215,8 @@ internal sealed class InteractServiceMementoComponent(ZoneEntity entity)
         _sentTeleportOptions.Remove(playerActor); // CLASSIC
         _playerOptionIndex.Remove(playerActor); // CLASSIC
         _lastInteraction.Remove(playerActor); // CLASSIC
+        _chained.Remove(playerActor); // CLASSIC
+        _questSnapshot.Remove(playerActor); // CLASSIC
         _playersInInteractionRange.Remove(playerActor);
         _playersInRenderRange.Remove(playerActor);
 
@@ -234,6 +240,7 @@ internal sealed class InteractServiceMementoComponent(ZoneEntity entity)
                 SendActorServiceOptions(playerActor);
                 break;
             case RangeChange.Left:
+                _chained.Remove(playerActor); // CLASSIC: a new visit chains afresh
                 _sentTeleportOptions.Remove(playerActor); // CLASSIC
                 _playerOptionIndex.Remove(playerActor); // CLASSIC: its options are gone with it
                 SendLeaveServiceRange(playerActor);
@@ -281,6 +288,26 @@ internal sealed class InteractServiceMementoComponent(ZoneEntity entity)
         // InteractService after r806919 dropped its cached list): answer with the list, Reinteract echoed. No
         // LEAVESERVICERANGE (the client already dropped its cache; a LEAVE now would cancel the new interaction) and no
         // routing (which would send the list a second time).
+        // CLASSIC: a chained option (DialogChain): find it in this wizard's current list; that list becomes the one the
+        // click is routed by. Not there (the quest or goal is not at this NPC now): the current list is sent instead.
+        if (message.ChainQuestId != 0 || !string.IsNullOrEmpty(message.ChainQuestName)) {
+            var owners = new Dictionary<int, IServiceComponent>();
+            var current = BuildServiceOptions(_serviceComponents, playerCharacter, owners);
+            var found = DialogChain.FindChosen(current, serviceName, message.ChainQuestId, message.ChainGoalId,
+                message.ChainQuestName is { Length: > 0 } name ? QuestTemplateCollection.GetQuestByName(name)?.m_questTitle : null);
+            if (found < 0) {
+                Logger.Debug("Chained option of NPC {0} ({1} {2}/{3}) is not in the wizard's options; re-sent the options.",
+                    Logger.Args(Entity.ActiveGameObject.m_debugName, serviceName, message.ChainQuestName ?? message.ChainQuestId.ToString(),
+                        message.ChainGoalId));
+                SendActorServiceOptions(playerActor, 0);
+
+                return;
+            }
+
+            _playerOptionIndex.Set(playerActor, owners);
+            serviceIndex = (uint) found;
+        }
+
         if (IsOptionsRequest(serviceName, reinteract)) {
             SendActorServiceOptions(playerActor, reinteract);
 
@@ -490,8 +517,21 @@ internal sealed class InteractServiceMementoComponent(ZoneEntity entity)
 
         // If we have no service options, do not send anything.
         if (_serviceMemento.m_serviceOptions.Count <= 0) {
+            _questSnapshot[playerActor] = [.. (wizard.QuestBehavior?.CurrentQuestInstances ?? []).Select(q => (q.ID, q.QuestName))]; // CLASSIC
             return;
         }
+
+        // CLASSIC: answering r806919's re-ask after a dialog (Reinteract 2), offers and quest turn-ins go in the classes
+        // the client chains on (DialogChain). The memento is rebuilt for every send, so this changes only this answer.
+        var quests = wizard.QuestBehavior?.CurrentQuestInstances ?? [];
+        var snapshot = quests.Select(q => (q.ID, q.QuestName)).ToList();
+        if (reinteract == 2) {
+            var happened = DialogChain.QuestDiff.Between(_questSnapshot.GetValueOrDefault(playerActor), snapshot);
+            if (!_chained.TryGetValue(playerActor, out var chained)) _chained[playerActor] = chained = [];
+            _serviceMemento.m_serviceOptions = DialogChain.Forms(_serviceMemento.m_serviceOptions,
+                id => quests.FirstOrDefault(q => q.ID == id), QuestByTitle, happened, chained);
+        }
+        _questSnapshot[playerActor] = snapshot; // CLASSIC: what the next re-ask compares with
 
         // Serialize the service memento and send it to the player.
         var serializer = new ObjectSerializer(
@@ -571,6 +611,11 @@ internal sealed class InteractServiceMementoComponent(ZoneEntity entity)
     // CLASSIC: r806919 sends the selected option's m_serviceIndex in MSG_INTERACTNPC, rather than its
     // visual row number. Every option must publish the same index used by the per-wizard owner map.
     // Without this, Equipment on multi-service NPCs such as Zeke and Eloise sends the default index 0.
+    // CLASSIC: the quest whose title key an offer shows (an NPC's offers are listed by title key).
+    private static QuestTemplate QuestByTitle(string titleKey)
+        => string.IsNullOrEmpty(titleKey) ? null
+            : QuestTemplateCollection.GetAllQuests().FirstOrDefault(q => q is not null && q.m_questTitle == titleKey);
+
     internal static List<ServiceOptionBase> BuildServiceOptions(IEnumerable<IServiceComponent> components,
         Wizard wizard, IDictionary<int, IServiceComponent> owners) {
         owners.Clear();

@@ -755,6 +755,11 @@ public class ZONE_102_PROTOCOL : IServerProtocol {
         public Wizard PlayerCharacter;
         public CoreObject PlayerObject;
         public int Reinteract = 0; 
+        // CLASSIC: a chained dialog option (r806919's AvailableCompleteEntry / AvailableQuestEntry send their own
+        // messages, not MSG_INTERACTNPC): the option is found in the wizard's current list by these instead of an index.
+        public ulong ChainQuestId;
+        public ulong ChainGoalId;
+        public string ChainQuestName;
 
     }
 
