@@ -118,4 +118,26 @@ public static class TriggerObjectIds {
     /// <summary>CoreObjectInfo.m_loadingType.</summary>
     public const uint LoadingTypeHash = 0xD1F3E716;
 
+    /// <summary>"class StateTrigger": a Trigger that acts on its own trigger object when it fires.</summary>
+    public const uint StateTriggerHash = 201234632;
+
+    /// <summary>StateTrigger.m_requiredState (std::string): the state its object must be in for it to fire.</summary>
+    public const uint RequiredStateHash = 2654559709;
+
+    /// <summary>StateTrigger.m_questEvent (std::string).</summary>
+    public const uint QuestEventHash = 1788127695;
+
+    /// <summary>StateTrigger.m_requiredQuest (std::string); empty in all r806919 and 2014 data.</summary>
+    public const uint RequiredQuestHash = 2652228142;
+
+    /// <summary>StateTrigger, unnamed std::string: the state its object goes through ("Walking", "Idle_Open").</summary>
+    public const uint TransitionStateHash = 3431571632;
+
+    /// <summary>StateTrigger, unnamed std::string: the state its object ends in ("Idle", "Idle_Open").</summary>
+    public const uint EndStateHash = 3350245995;
+
+    /// <summary>StateTrigger, unnamed one-byte flag: 1 on every StateTrigger whose object is a collision wall or the Katz
+    /// Lab barrel, the ones whose firing can do nothing else; read as "remove the object".</summary>
+    public const uint RemoveObjectHash = 333662217;
+
 }

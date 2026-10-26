@@ -147,6 +147,86 @@ public sealed class ZoneTriggerRuntimeTests {
         Assert.Contains("DynaTrigger_KT_Door_Frost instance (2)", ZoneTriggerPlans.Facts(Named(triggers, "Prison2DoorOpener")).ChangedObjects);
     }
 
+    [Theory]
+    [InlineData("class StateTrigger", TriggerObjectIds.StateTriggerHash)]
+    public void StateTriggerIsKingsIslesName(string type, uint hash)
+        => Assert.Equal(hash, Imlight.Classic.Cinematics.KingsIsleHash.Type(type));
+
+    [Theory]
+    [InlineData("m_requiredState", TriggerObjectIds.RequiredStateHash)]
+    [InlineData("m_questEvent", TriggerObjectIds.QuestEventHash)]
+    [InlineData("m_requiredQuest", TriggerObjectIds.RequiredQuestHash)]
+    public void StateTriggerPropertyNamesHashToTheData(string name, uint hash)
+        => Assert.Equal(hash, Imlight.Classic.Cinematics.KingsIsleHash.Property(name, "std::string"));
+
+    [Fact]
+    public void LuckyCharmedSoulKeeperTriggerIsReadAndTakesItsWallDown() {
+        // KT-HUB-C03-004: entering the Activator Volume plays the SoulKeeper's dialog and takes down the collision wall
+        // that Trigger (2) also holds; the trigger used to be skipped and the wall stayed.
+        var triggers = ServedTriggers("Krokotopia-KT_Pyramid-Interiors-KT_Chamber_T4");
+        const string wall = "DynaTrigger_KT_DoorCollision instance";
+
+        var soulKeeper = Assert.IsType<ClassicStateTrigger>(Named(triggers, "Trigger (4)"));
+        Assert.True(soulKeeper.RemovesObject);
+        Assert.Equal(wall, soulKeeper.ObjectTag);
+        Assert.Equal(["Enter_Activator Volume"], soulKeeper.m_fireEvents.Select(e => (string) e));
+        var results = soulKeeper.m_results.m_results;
+        Assert.Equal(wall, Assert.IsType<ClassicResRemoveTriggerObject>(results[0]).ObjectName);
+        Assert.Contains(results, r => r is ResActorDialog);
+        Assert.Equal([wall], ZoneTriggerPlans.Facts(soulKeeper).RemovedObjects);
+        Assert.Equal(wall, (string) Assert.IsType<ClassicTriggerObjectInfo>(Named(triggers, "Trigger (2)").m_triggerObjInfo).m_zoneTag);
+    }
+
+    [Fact]
+    public void TheThroneRoomFireDoorIsHeldBackWithItsGate() {
+        var data = new WizZoneTriggers { m_triggers = [.. ExtractTriggers("Krokotopia-KT_Pyramid-KT_ThroneRoom")] };
+
+        var door = Assert.IsType<ClassicStateTrigger>(Named(data.m_triggers, "Trigger Door1"));
+        Assert.Equal(("Idle_Closed", "Idle_Open", "Idle_Open"), (door.RequiredState, door.TransitionState, door.EndState));
+        Assert.False(door.RemovesObject);
+        Assert.True(door.ChangesObjectState);
+        var gate = Assert.Single(door.m_requirements.m_requirements.OfType<ClassicReqState>());
+        Assert.Equal(("DynaTrigger_KT_Gate1_FireDoor1", "Idle_Closed"), (gate.m_triggerObjName, gate.m_triggerObjState));
+        Assert.Contains(door.m_requirements.m_requirements, r => r is RequirementList); // its own Monster_Killed check
+        Assert.Equal(Operator.ROP_AND, door.m_requirements.m_operator);
+        Assert.True(ZoneTriggerPlans.CanPass(door.m_requirements));
+
+        var wall = Assert.IsType<ClassicStateTrigger>(Named(data.m_triggers, "Trigger DoorCol1"));
+        Assert.False(wall.ChangesObjectState);
+        Assert.Equal("DynaTrigger_KT_DoorCollision1",
+            Assert.IsType<ClassicResRemoveTriggerObject>(Assert.Single(wall.m_results.m_results)).ObjectName);
+
+        var loaded = ClassicStateTriggers.HoldBack("Krokotopia/KT_Pyramid/KT_ThroneRoom", data);
+        Assert.DoesNotContain(loaded.m_triggers, t => (string) t.m_triggerName == "Trigger Door1");
+        Assert.Contains(loaded.m_triggers, t => (string) t.m_triggerName == "Trigger DoorCol1");
+        Assert.Equal(data.m_triggers.Count - 1, loaded.m_triggers.Count);
+        Assert.Same(loaded, ClassicStateTriggers.HoldBack("Krokotopia/KT_Pyramid/KT_ThroneRoom", loaded)); // nothing left to hold
+    }
+
+    [Fact]
+    public void FindTheBeetlesBeetleKeepsItsStateAndGoalGate() {
+        var bug = Assert.IsType<ClassicStateTrigger>(Named(ServedTriggers("Krokotopia-KT_Krokosphinx-KT_EntranceHall"), "Bug7Trigger"));
+
+        Assert.Equal(("Idle", "Walking", "Idle"), (bug.RequiredState, bug.TransitionState, bug.EndState));
+        Assert.False(bug.RemovesObject);
+        Assert.Empty(bug.m_results.m_results); // ends where it started: nothing to change
+        var gate = Assert.Single(bug.m_requirements.m_requirements.OfType<ClassicReqState>());
+        Assert.Equal(("Bug7", "Idle"), (gate.m_triggerObjName, gate.m_triggerObjState));
+        Assert.Contains(bug.m_requirements.m_requirements, r => r is RequirementList); // HasGoal(Explore-001-1, Goal 7)
+    }
+
+    [Fact]
+    public void BigBenCounterweightWallsAreStateTriggersThatRemoveThemselves() {
+        var triggers = ExtractTriggers("Marleybone-MB_BigBen-MB_CounterweightEast");
+        var walls = triggers.OfType<ClassicStateTrigger>().ToList();
+
+        Assert.Equal(["Trigger 11 (1)", "Trigger 12 (1)", "Trigger 13", "Trigger 14"], walls.Select(t => (string) t.m_triggerName).Order());
+        Assert.All(walls, wall => {
+            Assert.True(wall.RemovesObject);
+            Assert.Equal(wall.ObjectTag, Assert.IsType<ClassicResRemoveTriggerObject>(Assert.Single(wall.m_results.m_results)).ObjectName);
+        });
+    }
+
     // A hand-made street: a gate trigger enabled by a quest event, with its own object, and a check trigger.
     private static ZoneTriggerPlan Street() {
         Trigger Make(string name, string[] act, string[] fire, string[] deact, List<Result> results, ClassicTriggerObjectInfo info = null)

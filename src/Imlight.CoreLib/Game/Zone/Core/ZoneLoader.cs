@@ -122,6 +122,7 @@ internal sealed class ZoneLoader : ReceiveProtocolDispatcher {
             // CLASSIC: filter before broadcasting the shared load result. Both object and trigger supervisors
             // build plans from TriggerData; filtering in either supervisor would race the other one's plan cache.
             if (!error) triggerData = ClassicPuzzleHelpers.FilterTriggers(message.ZonePath, triggerData);
+            if (!error) triggerData = ClassicStateTriggers.HoldBack(message.ZonePath, triggerData); // CLASSIC: the Throne Room fire door.
 
             Logger.Debug("Zone {ZonePath} files read in {ReadMs} ms ({Source}), deserialized in {DeserializeMs} ms.",
                 Logger.Args(message.ZonePath, readMs, fromCache ? "cache" : "archive", timer.ElapsedMilliseconds));

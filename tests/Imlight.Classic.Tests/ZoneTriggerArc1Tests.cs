@@ -136,11 +136,10 @@ public sealed class ZoneTriggerArc1Tests {
         var path = File.Exists(served) ? served : Path.Combine(s_r806919, wadName + ".wad");
         using var stream = File.OpenRead(path);
         var wad = ArchiveParser.Parse(stream);
-        if (wad is null || Read<WizZoneTriggers>(wad, "triggers.xml") is not { } triggers) {
+        var zonePath = wadName.Replace('-', '/');
+        if (wad is null || ClassicStateTriggers.HoldBack(zonePath, Read<WizZoneTriggers>(wad, "triggers.xml")!) is not { } triggers) {
             return null;
         }
-
-        var zonePath = wadName.Replace('-', '/');
 
         return ZoneTriggerPlans.Build(zonePath, [.. triggers.m_triggers.Where(t => t is not null)!],
             Read<WizZoneVolumes>(wad, "volumes.xml"), Read<WizZoneData>(wad, "gamedata.bin"), s_questEvents.Value);
@@ -226,6 +225,42 @@ public sealed class ZoneTriggerArc1Tests {
         foreach (var wall in new[] { "DynaTrigger_KT_DoorCollision instance", "DynaTrigger_KT_DoorCollision instance (Room5)" }) {
             Assert.True(gauntlet.Liveness.Objects[wall].Releasable, wall); // Monster_Killed disables the wall's trigger
         }
+    }
+
+    [Fact]
+    public void StateTriggersReleaseTheirWalls() {
+        // Lucky Charmed (KT-HUB-C03-004): the SoulKeeper's StateTrigger now takes down the wall it shares with Trigger (2).
+        var chamber = Zone("Krokotopia/KT_Pyramid/Interiors/KT_Chamber_T4");
+        const string wall = "DynaTrigger_KT_DoorCollision instance";
+        var walls = chamber.Liveness.Objects[wall];
+        Assert.Equal(new[] { Index(chamber, "Trigger (2)"), Index(chamber, "Trigger (4)") }.Order(), walls.Owners.Order());
+        Assert.True(walls.Releasable);
+        Assert.Contains(wall, chamber.TriggerObjectsToSpawn().Select(info => (string) info.m_zoneTag));
+        var presence = new TriggerObjectPresence<string>(chamber.Liveness.Objects);
+        presence.Remove(wall, "instance");
+        Assert.False(presence.IsPresent(wall, "instance", _ => true)); // both copies go, though both triggers stay armed
+
+        // The Throne Room fire door is held back, so the wall that waits for it is left out (passable, as before).
+        var throne = Zone("Krokotopia/KT_Pyramid/KT_ThroneRoom");
+        Assert.True(throne.Liveness.Objects["DynaTrigger_KT_DoorCollision1"].Stuck);
+        Assert.False(throne.Liveness.Objects.ContainsKey("DynaTrigger_KT_Gate1_FireDoor1"));
+        Assert.DoesNotContain("DynaTrigger_KT_DoorCollision1", throne.TriggerObjectsToSpawn().Select(info => (string) info.m_zoneTag));
+
+        // Big Ben's counterweight walls come down with the gates the levers open; the server posts none of the levers'
+        // state events, so the gates are left out already and the walls are left out with them (passable, as before).
+        foreach (var side in new[] { "East", "West" }) {
+            var counterweight = Zone($"Marleybone/MB_BigBen/MB_Counterweight{side}");
+            var spawned = counterweight.TriggerObjectsToSpawn().Select(info => (string) info.m_zoneTag).ToHashSet();
+            var counterweightWalls = counterweight.Triggers.OfType<ClassicStateTrigger>().Select(t => t.ObjectTag).ToList();
+            Assert.Equal(4, counterweightWalls.Count);
+            Assert.All(counterweightWalls, tag => {
+                Assert.True(counterweight.Liveness.Objects[tag].Stuck, $"{side} {tag}");
+                Assert.DoesNotContain(tag, spawned);
+            });
+        }
+
+        // Every StateTrigger of the served zones is read; only the Throne Room fire door is held back.
+        Assert.True(s_plans.Value.Sum(p => p.Triggers.OfType<ClassicStateTrigger>().Count()) >= 17);
     }
 
     [Fact]

@@ -23,7 +23,7 @@
  * CLASSIC: reads the zone-trigger classes that name trigger objects and
  * trigger states, which the generated registries read empty: a trigger's
  * own object (TriggerObjectInfo), ResRemoveTriggerObject,
- * ResAddTriggerObject, ResStateChange and ReqTriggerState.
+ * ResAddTriggerObject, ResStateChange, ReqTriggerState and StateTrigger.
  *
  * USAGE EXAMPLE:
  * Registered in ClassicZoneTypeRegistry; ZoneTriggerPlans reads them.
@@ -45,14 +45,17 @@
  *
  * Created by: Nick with Claude Code (claude-opus-5-5)
  * Version: KALI 1.0
- * Last Updated: 10/05/2026
+ * Last Updated: 10/26/2026
  */
 
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using Imcodec.IO;
 using Imcodec.ObjectProperty;
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Classic.Quests;
+using Imlight.Common;
 using Imlight.CoreLib.Classic.Cinematics;
 
 namespace Imlight.CoreLib.Classic;
@@ -247,6 +250,123 @@ public sealed record ClassicReqTriggerState : Requirement {
                     break;
             }
         });
+    }
+
+}
+
+/// <summary>
+/// CLASSIC: StateTrigger ("class StateTrigger" hashes to 201234632), a Trigger that acts on its own trigger object when
+/// it fires, which the generated registries read as nothing at all, so the trigger was skipped. 18 triggers of the served
+/// zones: the KT_Chamber_T4 collision wall and SoulKeeper dialog of "Lucky Charmed", the Big Ben counterweight walls, the
+/// Throne Room fire door and its wall, the Find the Beetles beetles, the Katz Lab barrel. It reads as a plain Trigger
+/// (its Trigger properties are Trigger's) whose own object effects become ordinary requirements and results:
+/// <list type="bullet">
+/// <item>m_requiredState: it fires only while its object is in that state (ReqState; an untracked object passes);</item>
+/// <item>the remove flag: the object goes away (ResRemoveTriggerObject) before the trigger's own results, the walls Big
+/// Ben's levers and the KT_Chamber_T4 SoulKeeper take down;</item>
+/// <item>m_questEvent: posted after its results (ResPostEvent; "BarrelGet", which nothing served listens to).</item>
+/// </list>
+/// One that would put its object into a new state (<see cref="ChangesObjectState"/>) is held back
+/// (<see cref="ClassicStateTriggers.HoldBack"/>). Inferred from the data, not from KingsIsle code: the remove flag is 1
+/// exactly on the StateTriggers whose firing can do nothing else (no results, a collision-wall object), and the state
+/// strings are the objects' animations.
+/// </summary>
+public sealed record ClassicStateTrigger : Trigger {
+
+    public string RequiredState { get; set; } = "";
+    public string TransitionState { get; set; } = "";
+    public string EndState { get; set; } = "";
+    public string QuestEvent { get; set; } = "";
+    public string RequiredQuest { get; set; } = "";
+    public bool RemovesObject { get; set; }
+
+    /// <summary>True when firing would leave its object in another state than the required one: the Throne Room fire
+    /// door, "Idle_Closed" to "Idle_Open". (The beetles walk and end "Idle" where they started.)</summary>
+    public bool ChangesObjectState => !string.IsNullOrEmpty(EndState) && EndState != RequiredState;
+
+    public override uint GetHash() => TriggerObjectIds.StateTriggerHash;
+
+    public override bool Encode(BitWriter writer, ObjectSerializer serializer) => false;
+
+    public override bool Decode(BitReader reader, ObjectSerializer serializer) {
+        if (!serializer.Versionable) {
+            return false;
+        }
+
+        var start = reader.BitPos();
+        if (!base.Decode(reader, serializer)) {
+            return false;
+        }
+
+        var end = reader.BitPos();
+        reader.SeekBit((int) start);
+        VersionableProperties.Read(reader, hash => {
+            switch (hash) {
+                case TriggerObjectIds.RequiredStateHash: RequiredState = (string) reader.ReadString() ?? ""; break;
+                case TriggerObjectIds.TransitionStateHash: TransitionState = (string) reader.ReadString() ?? ""; break;
+                case TriggerObjectIds.EndStateHash: EndState = (string) reader.ReadString() ?? ""; break;
+                case TriggerObjectIds.QuestEventHash: QuestEvent = (string) reader.ReadString() ?? ""; break;
+                case TriggerObjectIds.RequiredQuestHash: RequiredQuest = (string) reader.ReadString() ?? ""; break;
+                case TriggerObjectIds.RemoveObjectHash: RemovesObject = reader.ReadUInt8() != 0; break;
+            }
+        });
+        reader.SeekBit((int) end);
+        ApplyObjectEffects();
+
+        return true;
+    }
+
+    /// <summary>The zone tag of its own object, or null.</summary>
+    public string ObjectTag => (m_triggerObjInfo as ClassicTriggerObjectInfo)?.m_zoneTag is { } tag && !string.IsNullOrEmpty((string) tag)
+        ? (string) tag : null;
+
+    // Turns the object effects into requirements and results, once, after decoding.
+    private void ApplyObjectEffects() {
+        var tag = ObjectTag;
+        if (!string.IsNullOrEmpty(RequiredState) && tag is not null) {
+            Requirement inState = new ClassicReqState { m_triggerObjName = tag, m_triggerObjState = RequiredState };
+            m_requirements = m_requirements?.m_requirements is { Count: > 0 }
+                ? new RequirementList { m_operator = Operator.ROP_AND, m_requirements = [m_requirements, inState] }
+                : new RequirementList { m_operator = Operator.ROP_AND, m_requirements = [inState] };
+        }
+
+        var results = new List<Result>();
+        if (RemovesObject && tag is not null) {
+            results.Add(new ClassicResRemoveTriggerObject { ObjectName = tag });
+        }
+
+        results.AddRange((m_results?.m_results ?? []).Where(r => r is not null));
+        if (!string.IsNullOrEmpty(QuestEvent)) {
+            results.Add(new ResPostEvent { m_eventName = QuestEvent });
+        }
+
+        m_results = new ResultList { m_results = results };
+    }
+
+}
+
+/// <summary>
+/// CLASSIC: the StateTriggers a zone load leaves out.
+/// </summary>
+internal static class ClassicStateTriggers {
+
+    /// <summary>
+    /// A copy of the zone's triggers without the StateTriggers that change their object's state (KT_ThroneRoom's
+    /// "Trigger Door1", which only Krokenkahmen's defeat opens; his spawn starts inactive and a kill is not replayed in a
+    /// later instance, so a wizard on a later quest could find the door shut for good). They stay skipped as before, so
+    /// their door and the wall whose trigger waits for the door's event are left out (ZoneTriggerLiveness: Stuck).
+    /// </summary>
+    internal static WizZoneTriggers HoldBack(string zonePath, WizZoneTriggers data) {
+        if (data?.m_triggers is not { } triggers || !triggers.Any(t => t is ClassicStateTrigger { ChangesObjectState: true })) {
+            return data;
+        }
+
+        foreach (var held in triggers.OfType<ClassicStateTrigger>().Where(t => t.ChangesObjectState)) {
+            Logger.Debug("Zone {Zone}: StateTrigger {Trigger} ({From} to {To}) is left out.",
+                Logger.Args(zonePath, (string) held.m_triggerName, held.RequiredState, held.EndState));
+        }
+
+        return data with { m_triggers = [.. triggers.Where(t => t is not ClassicStateTrigger { ChangesObjectState: true })] };
     }
 
 }
