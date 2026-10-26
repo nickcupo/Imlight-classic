@@ -30,4 +30,28 @@ public sealed class NpcOptionsRefreshTests {
         Assert.False(InteractServiceMementoComponent.IsOptionsRequest("", 0));
         Assert.False(InteractServiceMementoComponent.IsOptionsRequest("WizShoppingService", 2));
     }
+
+    // qa-s146: Olde News handed in to Sergeant Muldoon, who then has three mainline offers. r806919 re-asks (Reinteract
+    // 2) and opens the services menu; it sends no MSG_INTERACTAVAILABLEQUEST with more than one chain entry. The server's
+    // own hand-in timer then routed QuestOfferService index 0 with Reinteract 2 and opened "A Giant Problem" on top.
+    [Theory]
+    [InlineData("QuestOfferService", 2)]       // the hand-in timer's interaction
+    [InlineData("QuestPersonaGoalService", 2)]
+    [InlineData("QuestOfferService", 1)]
+    [InlineData("", 2)]                        // the client's own re-ask
+    public void AClassicReaskOnlyGetsTheOptionsBack(string service, int reinteract)
+        => Assert.True(InteractServiceMementoComponent.OnlyAnswersOptions(service, reinteract, classicEngine: true));
+
+    [Fact]
+    public void AClickStillActsAndTheStockEngineKeepsItsReinteract() {
+        Assert.False(InteractServiceMementoComponent.OnlyAnswersOptions("QuestOfferService", 0, classicEngine: true));  // a click
+        Assert.False(InteractServiceMementoComponent.OnlyAnswersOptions("QuestOfferService", 2, classicEngine: false)); // stock
+        Assert.True(InteractServiceMementoComponent.OnlyAnswersOptions("", 2, classicEngine: false));
+    }
+
+    [Fact]
+    public void OnlyTheStockEngineOpensTheNextOfferAfterAHandIn() {
+        Assert.False(InteractPersonaGoalComponent.ServerChainsAfterHandIn(classicEngine: true)); // r806919 chains itself
+        Assert.True(InteractPersonaGoalComponent.ServerChainsAfterHandIn(classicEngine: false));
+    }
 }

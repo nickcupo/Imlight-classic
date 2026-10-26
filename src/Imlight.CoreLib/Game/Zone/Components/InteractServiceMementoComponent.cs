@@ -308,7 +308,7 @@ internal sealed class InteractServiceMementoComponent(ZoneEntity entity)
             serviceIndex = (uint) found;
         }
 
-        if (IsOptionsRequest(serviceName, reinteract)) {
+        if (OnlyAnswersOptions(serviceName, reinteract, ClassicQuestEngine.IsActive)) {
             SendActorServiceOptions(playerActor, reinteract);
 
             return;
@@ -560,6 +560,15 @@ internal sealed class InteractServiceMementoComponent(ZoneEntity entity)
     /// <summary>CLASSIC: an interaction that only asks for the NPC's current options.</summary>
     internal static bool IsOptionsRequest(string serviceName, int reinteract)
         => string.IsNullOrEmpty(serviceName) && reinteract != 0;
+
+    /// <summary>
+    /// CLASSIC: an interaction answered with the NPC's options and nothing else. With the classic engine every re-ask
+    /// (Reinteract 1 or 2) is one, whatever service and index it carries: r806919 picks an offer or a turn-in itself
+    /// (MSG_INTERACTAVAILABLEQUEST / MSG_INTERACTCOMPLETEGOAL, chained interactions with Reinteract 0); acting on index 0
+    /// opened the NPC's first offer unasked (qa-s146).
+    /// </summary>
+    internal static bool OnlyAnswersOptions(string serviceName, int reinteract, bool classicEngine)
+        => IsOptionsRequest(serviceName, reinteract) || classicEngine && reinteract != 0;
 
     private void SendLeaveServiceRange(IActorRef playerActor) {
         var msg = new GAME_5_PROTOCOL.MSG_LEAVESERVICERANGE {
