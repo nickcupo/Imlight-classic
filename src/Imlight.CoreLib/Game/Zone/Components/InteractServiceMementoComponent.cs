@@ -277,6 +277,16 @@ internal sealed class InteractServiceMementoComponent(ZoneEntity entity)
             }
         }
 
+        // CLASSIC: the client asking for this NPC's current options (an empty service name with Reinteract, sent by
+        // InteractService after r806919 dropped its cached list): answer with the list, Reinteract echoed. No
+        // LEAVESERVICERANGE (the client already dropped its cache; a LEAVE now would cancel the new interaction) and no
+        // routing (which would send the list a second time).
+        if (IsOptionsRequest(serviceName, reinteract)) {
+            SendActorServiceOptions(playerActor, reinteract);
+
+            return;
+        }
+
         // If this is a reinteract scenario, send service range messages first.
         if (reinteract == 2) {
             SendLeaveServiceRange(playerActor);
@@ -506,6 +516,10 @@ internal sealed class InteractServiceMementoComponent(ZoneEntity entity)
 
         playerActor.Tell(npcOptionsMsg);
     }
+
+    /// <summary>CLASSIC: an interaction that only asks for the NPC's current options.</summary>
+    internal static bool IsOptionsRequest(string serviceName, int reinteract)
+        => string.IsNullOrEmpty(serviceName) && reinteract != 0;
 
     private void SendLeaveServiceRange(IActorRef playerActor) {
         var msg = new GAME_5_PROTOCOL.MSG_LEAVESERVICERANGE {

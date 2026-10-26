@@ -61,10 +61,41 @@ internal class InteractService(SessionActor sessionActor) : MessageService(sessi
         // A player is closing their shop
         if (message.ServiceName == "") {
             CloseShop(wizard.GameObjectID);
+            // CLASSIC: r806919 also sends an empty service name to ask an NPC for its CURRENT options: 500 ms after an
+            // NPC dialog closes (FUN_14172ca20/ca40: it drops its cached options and sends Reinteract 2), on
+            // CancelInteraction (Reinteract 1) and after the server's MSG_REINTERACT. It expects MSG_SENDNPCOPTIONS with
+            // Reinteract echoed; with 2 and a quest offer or turn-in in the list it opens that dialog (a talk-back
+            // goal's chain). Dropping it left the NPC with no or stale options until the wizard walked away and back.
+            if (IsOptionsRequest(message.ServiceName, message.Reinteract, message.GlobalID)) {
+                RequestNpcOptions(message.GlobalID, message.Reinteract);
+            }
             return;
         }
 
         HandleInteraction(message, msg => msg.GlobalID, msg => msg.ServiceName, msg => msg.ServiceIndex);
+    }
+
+    /// <summary>CLASSIC: an MSG_INTERACTNPC that asks an NPC for its current options (empty service, Reinteract set).</summary>
+    internal static bool IsOptionsRequest(string serviceName, int reinteract, ulong npcId)
+        => string.IsNullOrEmpty(serviceName) && reinteract != 0 && npcId != 0;
+
+    private void RequestNpcOptions(ulong npcId, int reinteract) {
+        var wizard = GetActiveWizard();
+        var npc = GetZoneObject(npcId);
+        if (wizard is null || npc?.GetComponentOfType<InteractServiceMementoComponent>() is not { } memento) {
+            Logger.Debug("{0} asked NPC {1} for its options; no such NPC with services here.", Logger.Args(wizard?.CharId, npcId));
+            return;
+        }
+
+        memento.ActorRef.Tell(new ZONE_102_PROTOCOL.MSG_ZONEINTERACTION {
+            GlobalID = npcId,
+            ServiceName = "",
+            ServiceIndex = 0,
+            PlayerActor = SessionActor.ActorRef,
+            PlayerCharacter = wizard,
+            PlayerObject = GetActiveGameObject(),
+            Reinteract = reinteract,
+        });
     }
 
     [MessageHandler(typeof(GAME_5_PROTOCOL.MSG_INTERACTOPTION))]
