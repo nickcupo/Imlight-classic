@@ -207,8 +207,7 @@ internal sealed class InteractServiceMementoComponent(ZoneEntity entity)
             return;
         }
 
-        SendLeaveServiceRange(message.PlayerActor);
-        SendActorServiceOptions(message.PlayerActor);
+        RefreshServiceOptions(message.PlayerActor);
     }
 
     public override void OnPlayerLeave(IActorRef playerActor, ulong id) {
@@ -316,8 +315,7 @@ internal sealed class InteractServiceMementoComponent(ZoneEntity entity)
 
         // If this is a reinteract scenario, send service range messages first.
         if (reinteract == 2) {
-            SendLeaveServiceRange(playerActor);
-            SendActorServiceOptions(playerActor, reinteract);
+            RefreshServiceOptions(playerActor, reinteract);
         }
 
         // Route to the component that owns this option index.
@@ -334,8 +332,7 @@ internal sealed class InteractServiceMementoComponent(ZoneEntity entity)
             // dropping the click silently (the dialog then shows what the NPC offers now).
             Logger.Debug("No component owns service index {0} for NPC {1} with service name {2}; re-sent the options.",
                 Logger.Args(serviceIndex, Entity.ActiveGameObject.m_debugName, serviceName));
-            SendLeaveServiceRange(playerActor);
-            SendActorServiceOptions(playerActor, 2);
+            RefreshServiceOptions(playerActor, 2);
 
             return;
         }
@@ -418,8 +415,7 @@ internal sealed class InteractServiceMementoComponent(ZoneEntity entity)
         var reopen = _lastInteraction.TryGetValue(playerActor, out var at) && DateTime.UtcNow - at < ReInteractWindow;
         Logger.Debug("ResReInteract: {0} {1} its options to {2}.",
             Logger.Args(Entity.ActiveGameObject?.m_debugName, reopen ? "reopens" : "refreshes", playerActor.Path.Name));
-        SendLeaveServiceRange(playerActor);
-        SendActorServiceOptions(playerActor, reopen ? 2 : 0);
+        RefreshServiceOptions(playerActor, reopen ? 2 : 0);
     }
 
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_WIZBANGUPDATEINTERVAL))]
@@ -483,8 +479,7 @@ internal sealed class InteractServiceMementoComponent(ZoneEntity entity)
             // opens it is done had an empty list sent on coming into range; send it again once something is on offer.
             if (_sentTeleportOptions.TryGetValue(playerActor, out var before) && before == 0
                     && _serviceComponents.Sum(component => component.GetServiceOptions(wizard).Count()) > 0) {
-                SendLeaveServiceRange(playerActor);
-                SendActorServiceOptions(playerActor);
+                RefreshServiceOptions(playerActor);
             }
 
             return;
@@ -496,8 +491,7 @@ internal sealed class InteractServiceMementoComponent(ZoneEntity entity)
         }
 
         if (_sentTeleportOptions.ContainsKey(playerActor)) {
-            SendLeaveServiceRange(playerActor);
-            SendActorServiceOptions(playerActor);
+            RefreshServiceOptions(playerActor);
         }
 
         _sentTeleportOptions[playerActor] = count;
@@ -569,6 +563,25 @@ internal sealed class InteractServiceMementoComponent(ZoneEntity entity)
     /// </summary>
     internal static bool OnlyAnswersOptions(string serviceName, int reinteract, bool classicEngine)
         => IsOptionsRequest(serviceName, reinteract) || classicEngine && reinteract != 0;
+
+    /// <summary>
+    /// CLASSIC: sends a wizard who is still in range this NPC's options again (the join-range resend, ResReInteract, a
+    /// teleport stone or quest object with new options, a click on a stale list). r806919's NewNPCInteraction
+    /// (0x14172ad00) replaces a known NPC's options in place, while MSG_LEAVESERVICERANGE (0x14172b6a0) runs
+    /// RemoveInteraction and CancelInteraction, which closes whatever the wizard has open at this NPC (qa-s164: Sergeant
+    /// Muldoon's services menu closed 2 s after X when the join-range resend came). So no LEAVE with the classic engine;
+    /// only a real exit from range sends one. The stock engine keeps its LEAVE first.
+    /// </summary>
+    private void RefreshServiceOptions(IActorRef playerActor, int reinteract = 0) {
+        if (RefreshLeavesRange(ClassicQuestEngine.IsActive)) {
+            SendLeaveServiceRange(playerActor);
+        }
+
+        SendActorServiceOptions(playerActor, reinteract);
+    }
+
+    /// <summary>CLASSIC: whether a refresh of a wizard still in range sends MSG_LEAVESERVICERANGE first.</summary>
+    internal static bool RefreshLeavesRange(bool classicEngine) => !classicEngine;
 
     private void SendLeaveServiceRange(IActorRef playerActor) {
         var msg = new GAME_5_PROTOCOL.MSG_LEAVESERVICERANGE {
