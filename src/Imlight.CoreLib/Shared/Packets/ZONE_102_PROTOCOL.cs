@@ -1222,4 +1222,33 @@ public class ZONE_102_PROTOCOL : IServerProtocol {
 
     }
 
+    /// <summary>
+    /// CLASSIC: a spawner's creature finished loading while wizards were already in the zone (a dormant spawner started for a
+    /// joining wizard, an informant a trigger brings). The zone answers the creature with a <see cref="MSG_LATEPLAYER"/> per
+    /// wizard present, since it never saw their <see cref="MSG_ADDPLAYER"/>.
+    /// </summary>
+    public sealed class MSG_INTRODUCEPLAYERS : IServerMessage {
+
+        public byte MessageOrder { get; } = 143;
+        public byte ServiceID { get; } = 102;
+
+        public IActorRef Entity;
+
+    }
+
+    /// <summary>
+    /// CLASSIC: a wizard who was already in the zone when this entity started (<see cref="MSG_INTRODUCEPLAYERS"/>). Its
+    /// service and quest components take the wizard on as on a join, so a wizard who never moves is still offered the NPC.
+    /// </summary>
+    public sealed class MSG_LATEPLAYER : IServerMessage {
+
+        public byte MessageOrder { get; } = 144;
+        public byte ServiceID { get; } = 102;
+
+        public IActorRef PlayerActor;
+        public CoreObject PlayerObject;
+        public Wizard Wizard;
+
+    }
+
 }

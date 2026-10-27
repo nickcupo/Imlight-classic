@@ -410,6 +410,22 @@ public class Zone : ReceiveProtocolDispatcher, IWithTimers {
         ReceiveRemovePlayer(remove);
     }
 
+    // CLASSIC: a creature that started after these wizards joined never saw their MSG_ADDPLAYER (ZonePath.ReceiveCreatureLoaded).
+    [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_INTRODUCEPLAYERS))]
+    protected void ReceiveIntroducePlayers(ZONE_102_PROTOCOL.MSG_INTRODUCEPLAYERS message) {
+        if (message.Entity is null) {
+            return;
+        }
+
+        foreach (var playerActor in _players) {
+            if (_playerAdds.TryGetValue(playerActor, out var add) && add?.PlayerObject is not null) {
+                message.Entity.Tell(new ZONE_102_PROTOCOL.MSG_LATEPLAYER {
+                    PlayerActor = playerActor, PlayerObject = add.PlayerObject, Wizard = add.Wizard,
+                });
+            }
+        }
+    }
+
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_PLAYERMOVE))]
     protected virtual void ReceivePlayerMove(ZONE_102_PROTOCOL.MSG_PLAYERMOVE message) {
         if (_isLoading) {

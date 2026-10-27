@@ -192,6 +192,10 @@ internal sealed class InteractServiceMementoComponent(ZoneEntity entity)
         public byte ServiceID => 102;
     }
 
+    // CLASSIC: a wizard already in the zone when this NPC spawned (a dormant or trigger-started spawner) is taken on as on a join.
+    public override void OnLatePlayer(CoreObject playerObj, IActorRef playerActor, Wizard playerWizard)
+        => OnPlayerJoin(playerObj, playerActor, playerWizard);
+
     public override void OnPlayerJoin(CoreObject playerObj, IActorRef playerActor, Wizard playerWizard) {
         if (_serviceComponents.Count <= 0) {
             return;

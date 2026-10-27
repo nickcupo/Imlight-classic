@@ -148,6 +148,9 @@ public sealed class ZonePath : ZoneEntity {
     private void ReceiveCreatureLoaded() {
         if (_loadingCreatures.Remove(Sender, out var creature)) {
             Timers.Cancel(Sender);
+            if (ClassicQuestEngine.IsActive) { // CLASSIC: wizards already here never joined it (an NPC is offered only on join or move).
+                ZoneRef.Tell(new ZONE_102_PROTOCOL.MSG_INTRODUCEPLAYERS { Entity = Sender });
+            }
             if (_lateCreatures.Remove(Sender)) {
                 Logger.Information("Path creature {Name} loaded late (after more than {Timeout} ms).",
                     Logger.Args(creature.Name, OBJECT_CREATION_TIMEOUT_IN_MS));
