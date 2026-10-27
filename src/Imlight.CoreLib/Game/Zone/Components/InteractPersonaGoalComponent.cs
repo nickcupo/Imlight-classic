@@ -174,6 +174,10 @@ internal sealed class InteractPersonaGoalComponent(ZoneEntity entity)
         }
     }
 
+    // CLASSIC: a wizard already in the zone when this NPC spawned (a dormant or trigger-started spawner) is taken on as on a join.
+    public override void OnLatePlayer(CoreObject playerObj, IActorRef playerActor, Wizard playerWizard)
+        => OnPlayerJoin(playerObj, playerActor, playerWizard);
+
     public override void OnPlayerJoin(CoreObject playerObj, IActorRef playerActor, Wizard playerWizard) {
         if (_personaGoalsByQuest.Count <= 0) {
             WizBang = WizBangs.None;

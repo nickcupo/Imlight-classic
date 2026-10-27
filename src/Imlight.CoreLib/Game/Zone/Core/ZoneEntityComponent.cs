@@ -152,6 +152,9 @@ public abstract class ZoneEntityComponent(ZoneEntity entity) : IZoneComponent {
     public virtual void OnPlayerJoin(CoreObject playerObj, IActorRef playerActor, Wizard playerWizard) { }
     public virtual void OnPlayerLeave(IActorRef playerActor, ulong id) { }
     public virtual void OnPlayerMove(CoreObject playerObj, IActorRef playerActor, Wizard playerWizard) { }
+    // CLASSIC: a wizard already in the zone when this entity started (ZONE_102_PROTOCOL.MSG_LATEPLAYER); only the service and
+    // quest components take one on, the rest keep their own late handling (RenderComponent.TakeOnLatePlayer).
+    public virtual void OnLatePlayer(CoreObject playerObj, IActorRef playerActor, Wizard playerWizard) { }
     public virtual void OnCreatureMove(CoreObject creature, IActorRef suspect, ZoneEntity entity) { }
     public virtual void OnEnabled() { }
     public virtual void OnDisabled() { }
@@ -215,6 +218,15 @@ public abstract class ZoneEntityComponent(ZoneEntity entity) : IZoneComponent {
         }
 
         OnPlayerMove(message.PlayerObject, message.PlayerActor, message.PlayerWizard);
+    }
+
+    [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_LATEPLAYER))]
+    public void ReceiveLatePlayer(ZONE_102_PROTOCOL.MSG_LATEPLAYER message) { // CLASSIC
+        if (!_enabled) {
+            return;
+        }
+
+        OnLatePlayer(message.PlayerObject, message.PlayerActor, message.Wizard);
     }
 
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_CREATUREMOVE))]

@@ -167,6 +167,10 @@ internal sealed class InteractQuestUnderwayComponent(ZoneEntity entity)
         _givesQuests.Sort((a, b) => string.Compare(a.m_questTitle, b.m_questTitle, StringComparison.Ordinal));
     }
 
+    // CLASSIC: a wizard already in the zone when this NPC spawned (a dormant or trigger-started spawner) is taken on as on a join.
+    public override void OnLatePlayer(CoreObject playerObj, IActorRef playerActor, Wizard playerWizard)
+        => OnPlayerJoin(playerObj, playerActor, playerWizard);
+
     public override void OnPlayerJoin(CoreObject playerObj, IActorRef playerActor, Wizard playerWizard) {
         if (_givesQuests.Count <= 0) {
             WizBang = WizBangs.None;
