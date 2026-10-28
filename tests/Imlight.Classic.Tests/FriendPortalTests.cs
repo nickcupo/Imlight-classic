@@ -44,7 +44,7 @@ public sealed class FriendPortalTests {
         using var body = JsonDocument.Parse(await state.Content.ReadAsStringAsync());
         Assert.False(body.RootElement.GetProperty("unlocked").GetBoolean());
         Assert.True(body.RootElement.GetProperty("downloads").GetProperty("mac").GetBoolean());
-        Assert.Equal(new[] { "downloads", "unlocked" }, body.RootElement.EnumerateObject().Select(p => p.Name).Order().ToArray());
+        Assert.Equal(new[] { "downloads", "invite", "unlocked" }, body.RootElement.EnumerateObject().Select(p => p.Name).Order().ToArray());
     }
 
     [Fact]
@@ -82,6 +82,34 @@ public sealed class FriendPortalTests {
         using var result = JsonDocument.Parse(await signup.Content.ReadAsStringAsync());
         Assert.Equal("friend_one", result.RootElement.GetProperty("username").GetString());
         Assert.Single(result.RootElement.EnumerateObject());
+    }
+
+    // CLASSIC (outside-access): [Classic] FriendSignupInviteRequired, one account per invite code.
+    [Fact]
+    public async Task WithInvitesRequiredEachCodeMakesExactlyOneAccount() {
+        var created = new List<string>();
+        var book = new InviteBook(new MemoryInviteStore());
+        var (code, _) = book.Create("for a friend");
+        var backend = new FriendPortalBackend(Verifier.Value, Files(), create: (username, _, _) => { created.Add(username); return true; },
+            invites: book);
+        using var server = new HttpFixture(backend);
+        var cookie = await server.Unlock();
+        using var state = await server.Send(HttpMethod.Get, "friends/api/state", cookie: cookie);
+        Assert.Contains("\"invite\":true", await state.Content.ReadAsStringAsync());
+        using var without = await server.Send(HttpMethod.Post, "friends/api/register", Signup(), cookie);
+        Assert.Equal(HttpStatusCode.Forbidden, without.StatusCode);
+        using var with = await server.Send(HttpMethod.Post, "friends/api/register",
+            new { username = "friend_one", password = TestPassword, passwordConfirm = TestPassword, invite = code.ToLowerInvariant() }, cookie);
+        Assert.Equal(HttpStatusCode.Created, with.StatusCode);
+        using var reused = await server.Send(HttpMethod.Post, "friends/api/register",
+            new { username = "friend_two", password = TestPassword, passwordConfirm = TestPassword, invite = code }, cookie);
+        Assert.Equal(HttpStatusCode.Forbidden, reused.StatusCode);
+        Assert.Equal(new[] { "friend_one" }, created);
+        Assert.Equal("friend_one", Assert.Single(book.List()).UsedBy);
+        // The admin page's own account form needs no invite.
+        using var admin = JsonDocument.Parse(JsonSerializer.Serialize(Signup("made_by_owner")));
+        Assert.Equal(201, backend.Register(admin.RootElement, "192.168.1.2", byAdministrator: true).Status);
+        Assert.Equal(new[] { "friend_one", "made_by_owner" }, created);
     }
 
     [Fact]

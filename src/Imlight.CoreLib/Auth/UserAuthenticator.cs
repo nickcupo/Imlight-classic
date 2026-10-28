@@ -80,7 +80,7 @@ internal static class UserAuthenticator {
     private static readonly string s_serverRevision 
         = ConfigurationManager.Settings["Global Settings.GameRevision"].AsString();
     // CLASSIC: private two-player server. When true, any password (even an empty one) logs
-    // in to an existing account; only the username has to match.
+    // in to an existing account; only the username has to match. CLASSIC (outside-access): only from the home LAN.
     private static readonly bool s_anyPasswordLogin
         = ConfigurationManager.Settings["Classic.AnyPasswordLogin"].AsBool(false);
 
@@ -146,8 +146,10 @@ internal static class UserAuthenticator {
         // thing the client's ClientKey1 can be checked against; see Imlight.Classic.Net.PasswordHashing), in constant
         // time. An account without H (in-client password login off) never matches.
         var protocolHash = matchedAccount is null ? null : PasswordStore.ProtocolHashOf(matchedAccount);
+        // CLASSIC (outside-access): AnyPasswordLogin only for a client on the home LAN ([Classic] LanNetworks).
+        var anyPassword = SecuritySettings.AnyPasswordFor(s_anyPasswordLogin, address, publicListener: false);
         var doesPasswordMatch = matchedAccount is not null
-            && (s_anyPasswordLogin || ClientKey1Matches(protocolHash, sessionId, offerTime, offerMilli, clientKey1));
+            && (anyPassword || ClientKey1Matches(protocolHash, sessionId, offerTime, offerMilli, clientKey1));
         if (!doesPasswordMatch) {
             var lockedOut = throttle.Failure(matchedAccount is null ? null : username, address);
             Logger.Warning("Login failed for {0} from {1}{2}",
@@ -186,7 +188,7 @@ internal static class UserAuthenticator {
 
         details._account = matchedAccount;
         throttle.Success(username);
-        if (!s_anyPasswordLogin) {
+        if (!anyPassword) {
             PasswordStore.AfterProtocolLogin(matchedAccount);
         }
 

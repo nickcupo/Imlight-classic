@@ -1,5 +1,7 @@
 // CLASSIC: a password-protected friend page on the existing LAN dashboard listener.
 // The site verifier and allowlisted installer/logo files are operator-managed private files, never game credentials.
+// CLASSIC (outside-access): [Classic] FriendSignupInviteRequired = true makes every sign-up spend a per-friend invite
+// code (FriendInvites.cs; made on the admin page). The off switch (OutsideSwitch) closes the page to outside visitors.
 
 #nullable enable
 
@@ -51,6 +53,13 @@ internal static class FriendPortal {
                 || !OriginAllowed(request.Headers["Origin"], request.Url, backend.PublicOrigin)) {
                 Json(response, 403, new { error = "This request is not allowed." }); return;
             }
+            // CLASSIC (outside-access): while outside access is off, only the home LAN (behind the tunnel or the HTTPS
+            // front: the visitor it names) gets the page.
+            var visitorHeader = Setting("Classic.TrustedProxyHeader");
+            if (!Imlight.CoreLib.Auth.SecuritySettings.Outside.Value.AdmitsRequest(request.RemoteEndPoint?.Address,
+                    visitorHeader is null ? null : request.Headers[visitorHeader], behindLocalProxy: backend.PublicOrigin is not null)) {
+                Json(response, 503, new { error = "The friend page is offline right now." }); return;
+            }
             var path = request.Url?.AbsolutePath ?? "";
             var method = request.HttpMethod;
             if (method is not ("GET" or "POST")) { MethodNotAllowed(response); return; }
@@ -67,7 +76,7 @@ internal static class FriendPortal {
                 case ("/friends/spiral.png", "GET"):
                     ServeFile(context, backend, "spiral.png", false); break;
                 case ("/friends/api/state", "GET"):
-                    Json(response, 200, new { unlocked = backend.IsUnlocked(token), downloads = backend.Downloads() }); break;
+                    Json(response, 200, new { unlocked = backend.IsUnlocked(token), downloads = backend.Downloads(), invite = backend.InviteRequired }); break;
                 case ("/friends/api/unlock", "POST"): {
                     var body = ReadBody(request);
                     if (!HasFields(body, "password") || Text(body, "password") is not { Length: > 0 and <= 128 } password
@@ -120,7 +129,35 @@ internal static class FriendPortal {
             if (path == "/api/friends/state" && context.Request.HttpMethod == "GET") {
                 Json(context.Response, 200, new { enabled = backend.Enabled, downloads = backend.Downloads() });
             } else if (path == "/api/friends/account" && context.Request.HttpMethod == "POST") {
-                Register(context, backend);
+                Register(context, backend, byAdministrator: true);
+            } else if (path == "/api/friends/invites" && context.Request.HttpMethod == "GET") {
+                // CLASSIC (outside-access): ids, labels, dates and states only; codes are shown once, at creation.
+                var now = DateTime.UtcNow;
+                Json(context.Response, 200, new {
+                    required = FriendInvites.Required,
+                    invites = FriendInvites.Book.Value.List().Select(r => new {
+                        id = r.ShortId, label = r.Label, createdUtc = r.CreatedUtc, expiresUtc = r.ExpiresUtc,
+                        state = r.State(now), usedBy = r.UsedBy,
+                    }).ToArray(),
+                });
+            } else if (path == "/api/friends/invite" && context.Request.HttpMethod == "POST") {
+                var body = ReadBody(context.Request);
+                var label = InviteCodes.CleanLabel(HasFields(body, "label", "days") ? Text(body, "label") : null);
+                var days = !body.TryGetProperty("days", out var d) ? 7 : d.ValueKind == JsonValueKind.Number && d.TryGetInt32(out var n) ? n : 0;
+                if (label is null || days is < 1 or > 30) {
+                    Json(context.Response, 400, new { error = "Give a name of 1–40 characters and 1–30 days." }); return;
+                }
+                var (code, record) = FriendInvites.Book.Value.Create(label, TimeSpan.FromDays(days));
+                Logger.Information("[FRIENDS] Invite {0} made for {1}, valid {2} day(s).", Logger.Args(record.ShortId, record.Label, days));
+                Json(context.Response, 201, new { code, id = record.ShortId, label = record.Label, expiresUtc = record.ExpiresUtc });
+            } else if (path == "/api/friends/invite/revoke" && context.Request.HttpMethod == "POST") {
+                var body = ReadBody(context.Request);
+                var id = HasFields(body, "id") ? Text(body, "id") : null;
+                if (id is null || !FriendInvites.Book.Value.Revoke(id)) {
+                    Json(context.Response, 404, new { error = "No open invite with that id." }); return;
+                }
+                Logger.Information("[FRIENDS] Invite {0} revoked.", Logger.Args(id));
+                Json(context.Response, 200, new { id, state = "revoked" });
             } else MethodNotAllowed(context.Response);
         } catch (PortalRequestException ex) {
             TryJson(context.Response, ex.Status, new { error = ex.Status == 413 ? "The request is too large." : "Check the form and try again." });
@@ -132,8 +169,8 @@ internal static class FriendPortal {
         }
     }
 
-    private static void Register(HttpListenerContext context, FriendPortalBackend backend) {
-        var result = backend.Register(ReadBody(context.Request), ClientAddress(context.Request));
+    private static void Register(HttpListenerContext context, FriendPortalBackend backend, bool byAdministrator = false) {
+        var result = backend.Register(ReadBody(context.Request), ClientAddress(context.Request), byAdministrator);
         if (result.Status == 201) Json(context.Response, 201, new { username = result.Username });
         else Json(context.Response, result.Status, new { error = result.Error });
     }
@@ -241,10 +278,11 @@ internal static class FriendPortal {
         var verifier = LoadVerifier(Setting("Classic.FriendPortalPasswordFile"));
         var files = Setting("Classic.FriendPortalFilesPath");
         var origin = ParsePublicOrigin(Setting("Classic.FriendPortalPublicOrigin"));
-        var identity = string.Join('\n', verifier, files, origin?.AbsoluteUri);
+        var invites = FriendInvites.Required; // CLASSIC (outside-access)
+        var identity = string.Join('\n', verifier, files, origin?.AbsoluteUri, invites);
         lock (s_configurationGate) {
             if (s_backend is null || identity != s_configurationIdentity) {
-                s_backend = new FriendPortalBackend(verifier, files, origin);
+                s_backend = new FriendPortalBackend(verifier, files, origin, invites: invites ? FriendInvites.Book.Value : null);
                 s_configurationIdentity = identity; // rotation discards every old site session immediately
             }
             return s_backend;
@@ -293,14 +331,17 @@ internal sealed class FriendPortalBackend {
     private readonly string? _verifier, _filesRoot;
     private readonly Func<DateTime> _now;
     private readonly Func<string, string, AuthLevel, bool> _create;
+    private readonly InviteBook? _invites; // CLASSIC (outside-access): null = no invite needed
     internal Uri? PublicOrigin { get; }
     internal bool Enabled => _verifier is not null;
+    internal bool InviteRequired => _invites is not null;
 
     internal FriendPortalBackend(string? verifier, string? filesRoot, Uri? publicOrigin = null,
-        Func<DateTime>? now = null, Func<string, string, AuthLevel, bool>? create = null) {
+        Func<DateTime>? now = null, Func<string, string, AuthLevel, bool>? create = null, InviteBook? invites = null) {
         _verifier = ValidVerifier(verifier) ? verifier : null;
         _filesRoot = filesRoot;
         PublicOrigin = publicOrigin;
+        _invites = invites;
         _now = now ?? (() => DateTime.UtcNow);
         _create = create ?? ((username, password, auth) => DatabaseUtilities.CreateEmbeddedDatabaseAccount(username, "", password, auth) is not null);
     }
@@ -360,7 +401,8 @@ internal sealed class FriendPortalBackend {
     internal (int Sessions, int RateKeys) Counts { get { lock (_gate) { Cleanup(); return (_sessions.Count, _rates.Count); } } }
 
     internal readonly record struct RegistrationResult(int Status, string? Username, string? Error);
-    internal RegistrationResult Register(JsonElement body, string address) {
+    /// <param name="byAdministrator">The admin page's own account form: no invite is needed there.</param>
+    internal RegistrationResult Register(JsonElement body, string address, bool byAdministrator = false) {
         lock (_gate) {
             Cleanup();
             if (Limited("r:" + address) || Limited("r:global", 30)) return new(429, null, "Too many attempts. Wait a minute and try again.");
@@ -370,6 +412,7 @@ internal sealed class FriendPortalBackend {
         if (error is not null) return new(400, null, error);
         if (!s_passwordWork.Wait(0)) return new(429, null, "Please wait a moment and try again.");
         try {
+            if (_invites is not null && !byAdministrator) return RegisterWithInvite(FriendPortal.Text(body, "invite"), username!, password!, address);
             return _create(username!, password!, AuthLevel.None) ? new(201, username, null) : new(409, null, "That username is unavailable.");
         } catch (Exception) {
             Logger.Warning("[FRIENDS] Account creation could not be completed.");
@@ -377,10 +420,28 @@ internal sealed class FriendPortalBackend {
         } finally { s_passwordWork.Release(); }
     }
 
+    /// <summary>CLASSIC (outside-access): one account per invite; the code is spent only when the account was created.</summary>
+    private RegistrationResult RegisterWithInvite(string? invite, string username, string password, string address) {
+        var outcome = _invites!.Redeem(invite, username, () => _create(username, password, AuthLevel.None), out var id);
+        switch (outcome) {
+            case InviteRedeem.Created:
+                Logger.Information("[FRIENDS] Invite {0} made account {1}.", Logger.Args(id, username));
+                return new(201, username, null);
+            case InviteRedeem.NotCreated:
+                return new(409, null, "That username is unavailable.");
+            default:
+                // Never the code itself; the id only when the code was a real one.
+                Logger.Information("[FRIENDS] Sign-up for {0} from {1} refused: invite {2} ({3}).",
+                    Logger.Args(username, address, id ?? "unknown", outcome.ToString().ToLowerInvariant()));
+                return new(403, null, "That invite code is not valid (used, expired or mistyped). Ask the owner for a new one.");
+        }
+    }
+
     internal static string? ValidateSignup(JsonElement body, out string? username, out string? password) {
         username = null; password = null;
         // A caller-provided role is ignored: every creation below uses the fixed AuthLevel.None.
-        if (!FriendPortal.HasFields(body, "username", "password", "passwordConfirm", "role")) return "Check the form and try again.";
+        // CLASSIC (outside-access): "invite" is the friend's invite code (checked by RegisterWithInvite when required).
+        if (!FriendPortal.HasFields(body, "username", "password", "passwordConfirm", "role", "invite")) return "Check the form and try again.";
         username = FriendPortal.Text(body, "username"); password = FriendPortal.Text(body, "password");
         if (username is not { Length: >= 3 and <= 24 } || username.Any(c => !(c is >= 'a' and <= 'z' or >= '0' and <= '9' or '_' or '-')))
             return "Use a username of 3–24 lowercase letters, numbers, underscores or hyphens.";

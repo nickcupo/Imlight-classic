@@ -32,6 +32,7 @@
 #nullable enable
 
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using Imlight.Classic.Net;
 using Imlight.Common;
@@ -115,5 +116,31 @@ internal static class SecuritySettings {
         FirstLockout = TimeSpan.FromSeconds(Int("Login Server.FirstLockoutSeconds", 60)),
         MaxLockout = TimeSpan.FromMinutes(Int("Login Server.MaxLockoutMinutes", 30)),
     }));
+
+    /// <summary>
+    /// CLASSIC (outside-access): [Classic] LanNetworks, the home LAN for the off switch and AnyPasswordLogin; null
+    /// (unset or invalid) = every private address.
+    /// </summary>
+    internal static readonly Lazy<IReadOnlyList<(System.Net.IPAddress Network, int Bits)>?> LanNetworks = new(() => {
+        var text = Text("Classic.LanNetworks");
+        var parsed = PublicAccess.ParseNetworks(text);
+        if (parsed is null && !string.IsNullOrWhiteSpace(text)) {
+            Logger.Warning("Classic.LanNetworks '{0}' is not a CIDR list; every private address counts as the LAN.", Logger.Args(text));
+        }
+
+        return parsed;
+    });
+
+    /// <summary>
+    /// CLASSIC (outside-access): the off switch ([Classic] OutsideAccess = off, or while [Classic] OutsideAccessOffFile
+    /// exists). Never off when neither is set.
+    /// </summary>
+    internal static readonly Lazy<OutsideSwitch> Outside = new(() => new OutsideSwitch(
+        Text("Classic.OutsideAccess")?.Trim().ToLowerInvariant() is "off" or "false" or "no" or "0" or "disabled",
+        Text("Classic.OutsideAccessOffFile"), LanNetworks.Value));
+
+    /// <summary>CLASSIC (outside-access): whether [Classic] AnyPasswordLogin applies to this client and listener.</summary>
+    internal static bool AnyPasswordFor(bool configured, string? clientAddress, bool publicListener)
+        => OutsideAccess.AnyPasswordApplies(configured, clientAddress, publicListener, LanNetworks.Value);
 
 }

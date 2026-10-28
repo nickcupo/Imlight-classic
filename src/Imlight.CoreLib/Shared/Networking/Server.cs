@@ -74,6 +74,10 @@ public abstract class Server : ReceiveProtocolDispatcher {
     private readonly int _maxConnections = Auth.SecuritySettings.Int("Network.MaxConnections", 2000);
     private readonly bool _limitLoopback = Auth.SecuritySettings.Bool("Network.ConnectionLimitLoopback", false);
     private long _refusedConnections;
+    // CLASSIC (outside-access): the off switch (Auth/SecuritySettings.Outside); swept only when a setting names it.
+    private readonly Imlight.Classic.Net.OutsideSwitch _outside = Auth.SecuritySettings.Outside.Value;
+    private ICancelable? _outsideSweep;
+    private sealed class OutsideSweep { internal static readonly OutsideSweep Instance = new(); }
 
     public Server(string name, int port, Props factoryProps, string ip = null) {
         this.Name = name;
@@ -107,11 +111,42 @@ public abstract class Server : ReceiveProtocolDispatcher {
 
         CreateTcpListener();
         _actorFactoryRef = CreateActorFactory();
+        if (_outside.Configured) {
+            _outsideSweep = Context.System.Scheduler.ScheduleTellRepeatedlyCancelable(TimeSpan.FromSeconds(5),
+                TimeSpan.FromSeconds(5), Self, OutsideSweep.Instance, ActorRefs.NoSender);
+        }
+    }
+
+    protected override void PostStop() {
+        _outsideSweep?.Cancel();
+        base.PostStop();
+    }
+
+    /// <summary>CLASSIC (outside-access): while the switch is off, close every session from outside the home LAN.</summary>
+    private void SweepOutside() {
+        if (!_outside.IsOff) {
+            return;
+        }
+
+        var closed = 0;
+        foreach (var (child, address) in _connectionIps) {
+            if (_outside.IsLan(address)) {
+                continue;
+            }
+
+            child.Tell("Close");
+            closed++;
+        }
+
+        if (closed > 0) {
+            Logger.Warning("{Name}: outside access is off; closing {Count} outside connection(s).", Logger.Args(Name, closed));
+        }
     }
 
     protected override void ConfigureReceivers() {
         // CLASSIC: a session actor that stopped (however it stopped) frees its address's connection slot.
         Receive<Terminated>(terminated => ReleaseConnection(terminated.ActorRef));
+        Receive<OutsideSweep>(_ => SweepOutside());
         base.ConfigureReceivers();
     }
 
@@ -133,8 +168,9 @@ public abstract class Server : ReceiveProtocolDispatcher {
 
         var address = Imlight.Classic.Net.GameSessionKeys.NormalizeAddress(
             (endPoint as System.Net.IPEndPoint)?.Address.ToString()) ?? "?";
-        var refusal = Imlight.Classic.Net.ConnectionLimits.Refuse(address, _connectionsPerIp.GetValueOrDefault(address),
-            _connectionIps.Count, _maxConnectionsPerIp, _maxConnections, _limitLoopback);
+        var refusal = !_outside.Admits(address) ? "outside access is off" // CLASSIC (outside-access)
+            : Imlight.Classic.Net.ConnectionLimits.Refuse(address, _connectionsPerIp.GetValueOrDefault(address),
+                _connectionIps.Count, _maxConnectionsPerIp, _maxConnections, _limitLoopback);
         if (refusal is not null) {
             if (_refusedConnections++ % 100 == 0) {
                 Logger.Warning("{Name} refused a connection from {Ip}: {Reason} ({Count} refused so far)",

@@ -84,6 +84,11 @@ input:focus-visible,button:focus-visible,a:focus-visible { outline:3px solid var
           <h2 id="accountTitle">Create your game account</h2>
           <p>Choose your own game password. It is separate from the shared site password you just used.</p>
           <form id="registerForm">
+            <div id="inviteField" hidden>
+              <label for="invite">Invite code</label>
+              <input id="invite" name="invite" type="text" autocomplete="off" autocapitalize="characters" spellcheck="false" maxlength="20" placeholder="XXXX-XXXX-XXXX" aria-describedby="inviteHint">
+              <p id="inviteHint" class="hint">The code the owner gave you. It works once.</p>
+            </div>
             <label for="username">Username</label>
             <input id="username" name="username" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" minlength="3" maxlength="24" pattern="[a-z0-9_\-]{3,24}" aria-describedby="usernameHint" required>
             <p id="usernameHint" class="hint">3–24 lowercase letters, numbers, underscores or hyphens.</p>
@@ -141,6 +146,9 @@ function clearGamePasswords() {
 }
 function showState(state) {
   unlocked = state.unlocked === true;
+  // CLASSIC (outside-access): the invite field appears only when the server requires one.
+  $('inviteField').hidden = state.invite !== true;
+  $('invite').required = state.invite === true;
   $('gate').hidden = unlocked;
   $('welcome').hidden = !unlocked;
   $('pageStatus').hidden = true;
@@ -238,6 +246,7 @@ $('registerForm').addEventListener('submit', async event => {
     password:$('gamePassword').value,
     passwordConfirm:$('passwordConfirm').value,
   };
+  if (!$('inviteField').hidden) account.invite = $('invite').value.trim();
   busy('registerForm', 'registerButton', true, 'Creating…');
   status('accountStatus', '');
   try {

@@ -54,6 +54,16 @@
  *       the password login is refused ("https-required") and the helper is closed.
  *   All three are off by default.
  *
+ * CLASSIC (outside-access, docs/runbooks/outside-access.md): the server's own HTTPS
+ *   [Classic] HttpsPort = 12443             TLS on [Classic] HttpsListenAddress (default
+ *       Network.ListenAddress): POST /launcher/login, GET /classic/... and /launcher/...,
+ *       and /friends/... forwarded to FriendPortalProxyPort with the visitor in
+ *       TrustedProxyHeader. Nothing else (no helper page, no line protocol).
+ *   [Classic] HttpsCertificateFile / HttpsKeyFile   PEM (chain first-leaf / key, mode 600),
+ *       re-read when they change. Off by default.
+ *   The off switch (Imlight.Classic.Net.OutsideSwitch) refuses outside clients on this
+ *   port, the HTTPS port and the tunnel's login, and closes open outside downloads.
+ *
  * NOTE:
  * Plain TCP for a home LAN. The token is the only secret; it is checked on
  * every connection, and every order is re-checked by the duel.
@@ -295,6 +305,88 @@ internal static class MinionHelperListener {
         Logger.Information("Minion Helper listening on port {0}.", Logger.Args(port));
         _ = Task.Run(() => AcceptLoop(listener, viaProxy: false));
         StartProxyListener();
+        StartHttpsListener();
+        if (Imlight.CoreLib.Auth.SecuritySettings.Outside.Value.Configured) {
+            s_outsideSweep = new Timer(_ => SweepOutside(), null, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(5));
+        }
+    }
+
+    /// <summary>CLASSIC (outside-access): [Classic] HttpsPort, or 0 (off).</summary>
+    internal static int HttpsPort {
+        get {
+            var value = ConfigurationManager.GetSetting("Classic.HttpsPort");
+            return int.TryParse(value?.Trim(), out var port) && port is > 0 and < 65536 ? port : 0;
+        }
+    }
+
+    private static Imlight.Classic.Net.HttpsFront s_https;
+    private static Timer s_outsideSweep;
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<TcpClient, IPAddress> s_direct = new();
+
+    /// <summary>CLASSIC (outside-access): the self-hosted HTTPS listener, when HttpsPort and both PEM files are set.</summary>
+    private static void StartHttpsListener() {
+        var port = HttpsPort;
+        if (port == 0) return;
+        var certFile = ConfigurationManager.GetSetting("Classic.HttpsCertificateFile")?.Trim();
+        var keyFile = ConfigurationManager.GetSetting("Classic.HttpsKeyFile")?.Trim();
+        if (string.IsNullOrEmpty(certFile) || string.IsNullOrEmpty(keyFile)) {
+            Logger.Error("HTTPS: Classic.HttpsPort is set but HttpsCertificateFile or HttpsKeyFile is not; HTTPS stays off.");
+            return;
+        }
+
+        var certificates = new Imlight.Classic.Net.TlsCertificateSource(certFile, keyFile);
+        if (certificates.Current(out var problem) is null) {
+            Logger.Error("HTTPS: {0}; it answers nobody until that is fixed (the files are re-read when they change).",
+                Logger.Args(problem));
+        } else if (certificates.Leaf is { } leaf) {
+            Logger.Information("HTTPS certificate {0}, valid until {1:yyyy-MM-dd}, SHA-256 {2}.",
+                Logger.Args(leaf.Subject, leaf.NotAfter.ToUniversalTime(), leaf.GetCertHashString(HashAlgorithmName.SHA256)));
+        }
+
+        var listenAddress = ConfigurationManager.GetSetting("Classic.HttpsListenAddress")?.Trim() is { Length: > 0 } configured
+            ? configured : ConfigurationManager.GetSetting("Network.ListenAddress");
+        var outside = Imlight.CoreLib.Auth.SecuritySettings.Outside.Value;
+        try {
+            var front = new Imlight.Classic.Net.HttpsFront(TcpListenerActor.ParseListenAddress(listenAddress), port, certificates,
+                outside.Admits, (stream, peer) => ServeStream(stream, peer.Address, Exposure.Https),
+                message => Logger.Warning("{0}", Logger.Args(message)));
+            front.Start();
+            s_https = front;
+            Logger.Information("HTTPS (launcher sign-in, signed downloads, friend page) listening on {0}:{1}.",
+                Logger.Args(listenAddress ?? "*", port));
+        } catch (Exception ex) {
+            Logger.Error("HTTPS could not listen on port {0}: {1}", Logger.Args(port, ex.Message));
+            return;
+        }
+
+        if (ConfigurationManager.Settings["Classic.AnyPasswordLogin"].AsBool(false)) {
+            Logger.Warning("Classic.AnyPasswordLogin is on: it applies only to home-LAN addresses on the LAN ports, never over HTTPS. "
+                           + "Turn it off before friends sign in from outside.");
+        }
+    }
+
+    /// <summary>CLASSIC (outside-access): while the switch is off, close open connections on this port from outside.</summary>
+    private static void SweepOutside() {
+        try {
+            var outside = Imlight.CoreLib.Auth.SecuritySettings.Outside.Value;
+            if (!outside.IsOff) return;
+            var closed = 0;
+            foreach (var (client, peer) in s_direct) {
+                if (outside.IsLan(peer)) continue;
+                try {
+                    client.Client.Close(0);
+                } catch (Exception) {
+                    // already gone
+                }
+
+                closed++;
+            }
+
+            if (closed > 0) Logger.Warning("Minion Helper port: outside access is off; closed {0} outside connection(s).", Logger.Args(closed));
+            s_https?.Sweep();
+        } catch (Exception ex) {
+            Logger.Warning("Outside-access sweep failed: {0}", Logger.Args(ex.GetType().Name));
+        }
     }
 
     /// <summary>CLASSIC (go-live): [Classic] LauncherProxyPort, or 0 (off).</summary>
@@ -327,7 +419,7 @@ internal static class MinionHelperListener {
     }
 
     /// <summary>What one connection may use (go-live). Pure, for tests.</summary>
-    internal enum Exposure { Full, DownloadsOnly, ProxyLogin }
+    internal enum Exposure { Full, DownloadsOnly, ProxyLogin, Https } // CLASSIC (outside-access): Https
 
     internal static Exposure ExposureFor(bool viaProxy, IPAddress peer, bool downloadsOnly)
         => viaProxy ? Exposure.ProxyLogin
@@ -352,8 +444,10 @@ internal static class MinionHelperListener {
             // local tunnel or proxy in front of the page shows every visitor as loopback).
             var address = Imlight.Classic.Net.GameSessionKeys.NormalizeAddress(
                 (client.Client.RemoteEndPoint as System.Net.IPEndPoint)?.Address.ToString()) ?? "?";
-            var refusal = Imlight.Classic.Net.ConnectionLimits.Refuse(address, s_perAddress.GetValueOrDefault(address),
-                Volatile.Read(ref s_open), MaxPerAddress, MaxConnections, limitLoopback: false);
+            // CLASSIC (outside-access): the off switch; the tunnel's listener is checked per request (its visitor).
+            var refusal = !viaProxy && !Imlight.CoreLib.Auth.SecuritySettings.Outside.Value.Admits(address) ? "outside access is off"
+                : Imlight.Classic.Net.ConnectionLimits.Refuse(address, s_perAddress.GetValueOrDefault(address),
+                    Volatile.Read(ref s_open), MaxPerAddress, MaxConnections, limitLoopback: false);
             if (refusal is not null) {
                 if (Interlocked.Increment(ref s_refused) % 100 == 1) {
                     Logger.Warning("Minion Helper port refused {0}: {1}", Logger.Args(address, refusal));
@@ -365,10 +459,13 @@ internal static class MinionHelperListener {
 
             Interlocked.Increment(ref s_open);
             s_perAddress.AddOrUpdate(address, 1, (_, n) => n + 1);
+            var peerAddress = (client.Client.RemoteEndPoint as IPEndPoint)?.Address;
+            if (!viaProxy && peerAddress is not null) s_direct[client] = peerAddress;
             _ = Task.Run(async () => {
                 try {
                     await Serve(client, viaProxy);
                 } finally {
+                    s_direct.TryRemove(client, out _);
                     Interlocked.Decrement(ref s_open);
                     if (s_perAddress.AddOrUpdate(address, 0, (_, n) => n - 1) <= 0) {
                         s_perAddress.TryRemove(new KeyValuePair<string, int>(address, 0));
@@ -387,18 +484,27 @@ internal static class MinionHelperListener {
     private static async Task Serve(TcpClient client, bool viaProxy) {
         using var _ = client;
         client.NoDelay = true;
-        var stream = client.GetStream();
-        var remote = client.Client.RemoteEndPoint?.ToString();
         var peer = (client.Client.RemoteEndPoint as IPEndPoint)?.Address;
-        var exposure = ExposureFor(viaProxy, peer, s_downloadsOnly.Value); // CLASSIC (go-live)
+        await ServeStream(client.GetStream(), peer, ExposureFor(viaProxy, peer, s_downloadsOnly.Value)); // CLASSIC (go-live)
+    }
+
+    /// <summary>One connection's conversation: plain TCP from Serve, or TLS from the HTTPS front (outside-access).</summary>
+    private static async Task ServeStream(Stream stream, IPAddress peer, Exposure exposure) {
+        var remote = peer?.ToString();
         var outbox = Channel.CreateBounded<string>(new BoundedChannelOptions(512) { FullMode = BoundedChannelFullMode.DropOldest });
         var session = new MinionHelperSession(line => outbox.Writer.TryWrite(line), MinionHelperHub.Shared, MinionHelperPairing.Shared,
-            Imlight.Classic.Net.GameSessionKeys.NormalizeAddress((client.Client.RemoteEndPoint as System.Net.IPEndPoint)?.Address.ToString()));
+            Imlight.Classic.Net.GameSessionKeys.NormalizeAddress(peer?.ToString()));
         try {
             // A browser (the helper page or its WebSocket) starts with "GET "; the line protocol starts with "{".
             var head = new byte[MinionHelperSession.MaxLineBytes];
             var filled = await ReadSomeAsync(stream, head, 0);
             if (filled == 0) return;
+            if (exposure == Exposure.Https) {
+                // CLASSIC (outside-access): the whole head first; the friend page goes to its own loopback listener.
+                (filled, var forwarded) = await ServeHttpsFriends(stream, head, filled, peer);
+                if (forwarded || filled == 0) return;
+            }
+
             if (filled >= 4 && head[0] == 'G' && head[1] == 'E' && head[2] == 'T' && head[3] == ' ') {
                 if (exposure == Exposure.ProxyLogin) {
                     await Respond(stream, "404 Not Found", "text/plain", "Not found"u8.ToArray());
@@ -429,7 +535,8 @@ internal static class MinionHelperListener {
         return await stream.ReadAsync(buffer.AsMemory(offset), idle.Token);
     }
 
-    private static async Task ServeLines(NetworkStream stream, byte[] buffer, int filled, MinionHelperSession session, Channel<string> outbox) {
+    // CLASSIC (outside-access): Stream (was NetworkStream), so the HTTPS front's SslStream uses it too.
+    private static async Task ServeLines(Stream stream, byte[] buffer, int filled, MinionHelperSession session, Channel<string> outbox) {
         var writer = Task.Run(async () => {
             await foreach (var line in outbox.Reader.ReadAllAsync()) {
                 var bytes = Encoding.UTF8.GetBytes(line + "\n");
@@ -458,7 +565,8 @@ internal static class MinionHelperListener {
         }
     }
 
-    private static async Task ServeHttp(NetworkStream stream, byte[] buffer, int filled, MinionHelperSession session, Channel<string> outbox,
+    // CLASSIC (outside-access): Stream (was NetworkStream), so the HTTPS front's SslStream uses it too.
+    private static async Task ServeHttp(Stream stream, byte[] buffer, int filled, MinionHelperSession session, Channel<string> outbox,
                                         Exposure exposure = Exposure.Full) {
         int end;
         while ((end = IndexOf(buffer, filled, "\r\n\r\n"u8)) < 0) {
@@ -477,7 +585,7 @@ internal static class MinionHelperListener {
             if (colon > 0) headers[line[..colon].Trim()] = line[(colon + 1)..].Trim();
         }
 
-        if (exposure == Exposure.DownloadsOnly && !PublicDownloadPath(path)) {
+        if (exposure is (Exposure.DownloadsOnly or Exposure.Https) && !PublicDownloadPath(path)) {
             // CLASSIC (go-live): the helper page and its socket stay on the home network.
             await Respond(stream, "404 Not Found", "text/plain", "Not found"u8.ToArray());
             return;
@@ -528,7 +636,8 @@ internal static class MinionHelperListener {
     }
 
     /// <summary>CLASSIC: POST /launcher/login (Classic/Launcher/LauncherLogin.cs); a small JSON body.</summary>
-    private static async Task ServePost(NetworkStream stream, byte[] buffer, int filled, IPAddress peer, Exposure exposure) {
+    // CLASSIC (outside-access): Stream (was NetworkStream), so the HTTPS front's SslStream uses it too.
+    private static async Task ServePost(Stream stream, byte[] buffer, int filled, IPAddress peer, Exposure exposure) {
         int end;
         while ((end = IndexOf(buffer, filled, "\r\n\r\n"u8)) < 0) {
             if (filled == buffer.Length) return;
@@ -563,7 +672,16 @@ internal static class MinionHelperListener {
             return;
         }
 
+        // CLASSIC (outside-access): with the off switch off, the tunnel's login answers only a home-LAN visitor.
+        if (exposure == Exposure.ProxyLogin && !Imlight.CoreLib.Auth.SecuritySettings.Outside.Value.AdmitsRequest(peer,
+                TrustedProxyHeader is { } visitorHeader && headers.TryGetValue(visitorHeader, out var visitor) ? visitor : null,
+                behindLocalProxy: true)) {
+            await Respond(stream, "403 Forbidden", "application/json", "{\"ok\":false,\"error\":\"offline\"}"u8.ToArray());
+            return;
+        }
+
         var (address, keyAddress) = LoginAddresses(exposure, peer, headers);
+        var publicListener = exposure is Exposure.ProxyLogin or Exposure.Https;
 
         var bodyStart = end + 4;
         if (length is < 0 or > 4096 || bodyStart + length > buffer.Length) {
@@ -580,7 +698,7 @@ internal static class MinionHelperListener {
         var body = Encoding.UTF8.GetString(buffer, bodyStart, length);
         string answer;
         try {
-            answer = await Task.Run(() => Launcher.LauncherLogin.Shared.Handle(body, address, keyAddress));
+            answer = await Task.Run(() => Launcher.LauncherLogin.Shared.Handle(body, address, keyAddress, publicListener));
         } catch (Exception ex) {
             // CLASSIC: a failing login must say so in the log (it used to drop the connection silently).
             // Exception messages can include account input or database connection details.
@@ -606,8 +724,42 @@ internal static class MinionHelperListener {
         return (Imlight.Classic.Net.PublicAccess.ClientAddress(peer, visitor), direct);
     }
 
+    /// <summary>
+    /// CLASSIC (outside-access): reads the whole request head from the HTTPS front; a /friends request is forwarded to
+    /// [Classic] FriendPortalProxyPort with the visitor's address in [Classic] TrustedProxyHeader (404 when either is not
+    /// set). Returns (bytes now in <paramref name="buffer"/>, 0 for a bad head; whether it was forwarded).
+    /// </summary>
+    private static async Task<(int Filled, bool Forwarded)> ServeHttpsFriends(Stream stream, byte[] buffer, int filled, IPAddress peer) {
+        int end;
+        while ((end = IndexOf(buffer, filled, "\r\n\r\n"u8)) < 0) {
+            if (filled == buffer.Length) return (0, false);
+            var read = await ReadSomeAsync(stream, buffer, filled);
+            if (read == 0) return (0, false);
+            filled += read;
+        }
+
+        var head = Imlight.Classic.Net.HttpRequestHead.Parse(buffer.AsSpan(0, end));
+        if (head is null) {
+            await Respond(stream, "400 Bad Request", "text/plain", "Bad request"u8.ToArray());
+            return (0, false);
+        }
+
+        if (head.Path != "/friends" && !head.Path.StartsWith("/friends/", StringComparison.Ordinal)) return (filled, false);
+        var port = int.TryParse(ConfigurationManager.GetSetting("Classic.FriendPortalProxyPort")?.Trim(), out var p) && p is > 0 and < 65536 ? p : 0;
+        var header = TrustedProxyHeader;
+        if (port == 0 || header is null) {
+            await Respond(stream, "404 Not Found", "text/plain", "Not found"u8.ToArray());
+            return (filled, true);
+        }
+
+        await Imlight.Classic.Net.LoopbackForwarder.ForwardAsync(stream, head, buffer, filled, end + 4, port, header,
+            Imlight.Classic.Net.PublicAccess.NormalizeAddress(peer?.ToString()) ?? "?");
+        return (filled, true);
+    }
+
     /// <summary>CLASSIC: what KingsIsle's own launcher fetches from us (LauncherPatchServer, LauncherNewsPage).</summary>
-    private static async Task ServeLauncher(NetworkStream stream, string path,
+    // CLASSIC (outside-access): Stream (was NetworkStream), so the HTTPS front's SslStream uses it too.
+    private static async Task ServeLauncher(Stream stream, string path,
                                             System.Collections.Generic.Dictionary<string, string> headers) {
         if (path == "/launcher/" + Launcher.LauncherFileList.FileName) {
             await Respond(stream, "200 OK", "application/octet-stream", Launcher.LauncherFileList.Bytes);
@@ -632,7 +784,8 @@ internal static class MinionHelperListener {
     }
 
     /// <summary>CLASSIC: one published client-patch file, whole or from a byte offset (resumed downloads).</summary>
-    private static async Task ServePatchFile(NetworkStream stream, string path,
+    // CLASSIC (outside-access): Stream (was NetworkStream), so the HTTPS front's SslStream uses it too.
+    private static async Task ServePatchFile(Stream stream, string path,
                                              System.Collections.Generic.Dictionary<string, string> headers) {
         var file = ClientPatchFiles.Resolve(ClientPatchFiles.ConfiguredRoot, path);
         if (file is null) {
@@ -705,7 +858,8 @@ internal static class MinionHelperListener {
         }
     }
 
-    private static async Task Respond(NetworkStream stream, string status, string type, byte[] body) {
+    // CLASSIC (outside-access): Stream (was NetworkStream), so the HTTPS front's SslStream uses it too.
+    private static async Task Respond(Stream stream, string status, string type, byte[] body) {
         var head = $"HTTP/1.1 {status}\r\nContent-Type: {type}\r\nContent-Length: {body.Length}\r\n" +
                    "Cache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\n\r\n";
         await stream.WriteAsync(Encoding.ASCII.GetBytes(head));
