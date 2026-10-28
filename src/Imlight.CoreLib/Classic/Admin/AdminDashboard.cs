@@ -228,6 +228,9 @@ public static class AdminDashboard {
             switch (path, request.HttpMethod) {
                 case ("/api/friends/state", "GET"):
                 case ("/api/friends/account", "POST"):
+                case ("/api/friends/invites", "GET"):        // CLASSIC (outside-access): per-friend invite codes
+                case ("/api/friends/invite", "POST"):
+                case ("/api/friends/invite/revoke", "POST"):
                     Friends.FriendPortal.HandleAdmin(context, path);
                     break;
                 case ("/api/state", "GET"):

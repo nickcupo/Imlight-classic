@@ -36,7 +36,9 @@
  *   -> {"ok":false,"error":"bad-login"|"locked"|"busy"|"bad-request"}
  *
  * The password is checked like the game's own login (SHA-512 hash in the
- * account, or [Classic] AnyPasswordLogin); the session key is stored for the
+ * account, or [Classic] AnyPasswordLogin: CLASSIC (outside-access) only for a
+ * home-LAN address on a LAN listener, never over HTTPS or the tunnel, see
+ * Imlight.Classic.Net.OutsideAccess); the session key is stored for the
  * account with machine id 0, which is what the r806919 client reports when
  * it validates a key it was given on its command line. Tokens are kept as
  * SHA-256 hashes only (RavenDB LauncherTokens/<hash>).
@@ -164,7 +166,10 @@ internal sealed class LauncherLogin {
     /// <paramref name="remote"/>. Behind the local tunnel <paramref name="remote"/> is the visitor (CF-Connecting-IP,
     /// for lockouts and logs) and this is loopback: the visitor's game may connect over IPv4 while its HTTPS login came
     /// over IPv6, so the key stays unbound there (LoginKeyPolicy.SameClient) instead of failing every attach.</param>
-    internal string Handle(string body, string remote, string? keyAddress = null) {
+    /// <param name="publicListener">CLASSIC (outside-access): the request came through the HTTPS front or the tunnel's
+    /// listener (AnyPasswordLogin never applies there; the sign-in counts as one through the public address).</param>
+    internal string Handle(string body, string remote, string? keyAddress = null, bool publicListener = false) {
+        publicListener |= keyAddress is not null;
         string user, password, token, server;
         bool remember, forget;
         try {
@@ -206,7 +211,7 @@ internal sealed class LauncherLogin {
                 accountId = found.Id;
             }
         } else if (account is { } withPassword && password.Length > 0
-                   && (_anyPassword() || _accounts.CheckPassword(user, password))) {
+                   && (AnyPassword(remote, publicListener) || _accounts.CheckPassword(user, password))) {
             accountId = withPassword.Id;
         }
 
@@ -228,7 +233,7 @@ internal sealed class LauncherLogin {
         _throttle?.Success(user);
         var sessionKey = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
         _accounts.StoreSessionKey(accountId, sessionKey, keyAddress ?? remote);
-        _signedIn?.Invoke(accountId, sessionKey, server.Length > 0 ? server : null, keyAddress is not null);
+        _signedIn?.Invoke(accountId, sessionKey, server.Length > 0 ? server : null, publicListener);
         string? newToken = null;
         if (remember && tokenHash is null) {
             newToken = Convert.ToHexString(RandomNumberGenerator.GetBytes(24)).ToLowerInvariant();
@@ -241,6 +246,10 @@ internal sealed class LauncherLogin {
             token = newToken ?? (tokenHash is null ? null : token),
         });
     }
+
+    /// <summary>CLASSIC (outside-access): AnyPasswordLogin is on, and this address and listener are the home LAN.</summary>
+    private bool AnyPassword(string remote, bool publicListener)
+        => _anyPassword() && Imlight.CoreLib.Auth.SecuritySettings.AnyPasswordFor(true, remote, publicListener);
 
     /// <summary>The account's stored form: Base64(SHA-512(UTF-8 password)), as DatabaseUtilities.CreateHashedPassword.</summary>
     internal static string HashPassword(string password)

@@ -164,8 +164,13 @@ public sealed class LauncherServicesTests : IDisposable {
     public void AnyPasswordLoginStillNeedsTheAccount() {
         _anyPassword = true;
         var login = Login();
-        Assert.True(Parse(login.Handle("{\"user\":\"ada\",\"password\":\"x\"}", "a")).GetProperty("ok").GetBoolean());
-        Assert.False(Parse(login.Handle("{\"user\":\"bob\",\"password\":\"x\"}", "a")).GetProperty("ok").GetBoolean());
+        // CLASSIC (outside-access): only a home-LAN address on a LAN listener.
+        Assert.True(Parse(login.Handle("{\"user\":\"ada\",\"password\":\"x\"}", "192.168.1.20")).GetProperty("ok").GetBoolean());
+        Assert.False(Parse(login.Handle("{\"user\":\"bob\",\"password\":\"x\"}", "192.168.1.20")).GetProperty("ok").GetBoolean());
+        Assert.False(Parse(login.Handle("{\"user\":\"ada\",\"password\":\"x\"}", "203.0.113.9")).GetProperty("ok").GetBoolean());
+        Assert.False(Parse(login.Handle("{\"user\":\"ada\",\"password\":\"x\"}", "192.168.1.21", publicListener: true)).GetProperty("ok").GetBoolean());
+        Assert.False(Parse(login.Handle("{\"user\":\"ada\",\"password\":\"x\"}", "192.168.1.22", keyAddress: "127.0.0.1")).GetProperty("ok").GetBoolean());
+        Assert.True(Parse(login.Handle("{\"user\":\"ada\",\"password\":\"wand-of-oak\"}", "203.0.113.10")).GetProperty("ok").GetBoolean());
     }
 
     [Fact]

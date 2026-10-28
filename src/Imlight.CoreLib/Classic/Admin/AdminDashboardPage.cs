@@ -134,6 +134,15 @@ button.danger { background:var(--bad); }
     </form>
     <p id="friendAccountStatus" class="muted" role="status" aria-live="polite"></p>
     <p id="friendPortalState" class="muted" role="status" aria-live="polite"></p>
+    <h3>Invites</h3>
+    <p class="muted" id="inviteMode">One code per friend; each makes one account on the friend page. A code is shown only once.</p>
+    <form id="inviteForm">
+      <div class="row"><label for="inviteLabel">For</label><input id="inviteLabel" type="text" maxlength="40" placeholder="Friend's name" required>
+        <label for="inviteDays">Days</label><input id="inviteDays" type="number" min="1" max="30" value="7" required>
+        <button id="inviteBtn" type="submit">Make invite</button></div>
+    </form>
+    <p id="inviteCode" class="muted" role="status" aria-live="polite"></p>
+    <table><thead><tr><th>For</th><th>State</th><th>Used by</th><th>Expires</th><th></th></tr></thead><tbody id="invites"></tbody></table>
   </section>
   <section class="wide">
     <h2>Online</h2>
@@ -204,6 +213,32 @@ async function refreshFriendState() {
       : 'Friend page is not enabled.';
   } catch (error) { $('friendPortalState').textContent = 'Friend page status is unavailable.'; }
 }
+// CLASSIC (outside-access): per-friend invite codes (FriendInvites.cs).
+async function refreshInvites() {
+  try {
+    const data = await api('/api/friends/invites');
+    $('inviteMode').textContent = (data.required ? 'Sign-up on the friend page needs an invite.' : 'Invites are not required yet (Classic.FriendSignupInviteRequired).')
+      + ' One code per friend; each makes one account. A code is shown only once.';
+    rows('invites', data.invites, i => {
+      let action = '';
+      if (i.state === 'open') {
+        action = el('button', 'Revoke');
+        action.addEventListener('click', async () => { try { await api('/api/friends/invite/revoke', { id:i.id }); refreshInvites(); } catch (e) { toast(e.message); } });
+      }
+      return [i.label, i.state, i.usedBy || '', fmtTime(i.expiresUtc), action];
+    }, 'No invites yet.');
+  } catch (error) { $('inviteMode').textContent = 'Invites are unavailable.'; }
+}
+$('inviteForm').addEventListener('submit', async event => {
+  event.preventDefault();
+  if (!$('inviteForm').reportValidity()) return;
+  try {
+    const made = await api('/api/friends/invite', { label:$('inviteLabel').value, days:Number($('inviteDays').value) });
+    $('inviteCode').textContent = 'Invite for ' + made.label + ': ' + made.code + ' (valid until ' + fmtTime(made.expiresUtc) + '). Give it to them privately; it will not be shown again.';
+    $('inviteLabel').value = '';
+    refreshInvites();
+  } catch (error) { $('inviteCode').textContent = error.message; }
+});
 function checkFriendConfirmation() {
   $('friendPasswordConfirm').setCustomValidity($('friendPasswordConfirm').value && $('friendPasswordConfirm').value !== $('friendPassword').value
     ? 'The game passwords must match.' : '');
@@ -285,7 +320,7 @@ async function refresh() {
   for (const e of s.recentLog) { const d = el('div', null, e.level); d.append(el('span', fmtTime(e.time) + ' ', 'muted')); d.append(document.createTextNode(e.message)); log.append(d); }
   renderSettings(s.settings);
   renderExtras(s.sections);
-  if (!friendStateLoaded) { friendStateLoaded = true; refreshFriendState(); }
+  if (!friendStateLoaded) { friendStateLoaded = true; refreshFriendState(); refreshInvites(); }
 }
 $('loginBtn').onclick = async () => { try { await api('/api/login', { username:$('u').value, password:$('p').value }); $('p').value = ''; $('loginErr').textContent = ''; refresh(); } catch (e) { $('loginErr').textContent = e.message; } };
 $('p').addEventListener('keydown', e => { if (e.key === 'Enter') $('loginBtn').click(); });
