@@ -51,6 +51,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Linq;
 
 namespace Imlight.Classic.Quests;
 
@@ -157,6 +158,43 @@ public static class ObjectStateRules {
         tag = body[..dot];
         state = body[(dot + 1)..];
         return true;
+    }
+
+    /// <summary>
+    /// The trigger objects whose start state (m_startState) the zone tracks from load: those whose every ReqState names a
+    /// state the zone can reach, its start state or one a ResModifyTriggerObject sets. Untracked, an object passes every
+    /// check, so MB_Ironworks' plates read both "Idle Up" and "Idle Down" before their first step and the plaque puzzle
+    /// behind Gate2 and Gate3 could not be followed. An object with a check nothing satisfies stays untracked, as before
+    /// (KT_KaranahnPalace's Gate4 starts "Open_Idle" and Gate4Control1 waits for "Closed_Idle", which nothing sets).
+    /// </summary>
+    /// <param name="objects">The zone's trigger objects: zone tag and start state.</param>
+    /// <param name="sets">The (tag, state) pairs the zone's ResModifyTriggerObject results set.</param>
+    /// <param name="checks">The zone's ReqState checks: tag, state and m_applyNOT.</param>
+    public static Dictionary<string, string> TrackedStartStates(IEnumerable<(string Tag, string Start)> objects,
+                                                                IEnumerable<(string Tag, string State)> sets,
+                                                                IEnumerable<(string Tag, string State, bool Not)> checks) {
+        var reachable = new HashSet<(string, string)>(sets);
+        var starts = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var (tag, start) in objects) {
+            if (!string.IsNullOrEmpty(tag) && !string.IsNullOrEmpty(start) && starts.TryAdd(tag, start)) {
+                reachable.Add((tag, start));
+            }
+        }
+
+        foreach (var (tag, state, not) in checks) {
+            if (!starts.ContainsKey(tag ?? "")) {
+                continue;
+            }
+
+            var satisfiable = not
+                ? reachable.Any(r => r.Item1 == tag && !string.Equals(r.Item2, state, StringComparison.Ordinal))
+                : reachable.Contains((tag!, state));
+            if (!satisfiable) {
+                starts.Remove(tag!);
+            }
+        }
+
+        return starts;
     }
 
     /// <summary>The zone tags whose state events <paramref name="events"/> (a zone's trigger events) listen for.</summary>

@@ -72,6 +72,9 @@ internal sealed partial class ZoneTriggerSupervisor(Core.Zone zone) : ZoneEntity
                     .SelectMany(t => (t.m_fireEvents ?? []).Concat(t.m_activateEvents ?? []))
                     .Select(name => (string) name)));
             }
+            if (ClassicQuestEngine.IsActive) { // CLASSIC: and the trigger objects' start states (MB_Ironworks' plate puzzle).
+                ZoneObjectStates.TrackStartStates(ZoneRef, replacedTriggers);
+            }
             var spawners = message.SpawnData.m_spawners;
             UpdateSpawnResultTriggers(ref replacedTriggers, spawners, message.PathData.m_pathList, message.NodeData.m_nodeList);
         }

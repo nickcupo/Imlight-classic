@@ -36,7 +36,9 @@
 
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Linq;
 using Akka.Actor;
+using Imcodec.ObjectProperty.TypeCache;
 using Imlight.Classic.Quests;
 
 namespace Imlight.CoreLib.Classic;
@@ -65,6 +67,42 @@ internal static class ZoneObjectStates {
     /// <summary>True when one of the zone's triggers listens to a state event of <paramref name="tag"/>.</summary>
     internal static bool IsListened(IActorRef zone, string tag)
         => zone is not null && !string.IsNullOrEmpty(tag) && s_listened.TryGetValue(zone, out var tags) && tags.Contains(tag);
+
+    /// <summary>
+    /// The start states of the zone's trigger objects that it tracks from load (ObjectStateRules.TrackedStartStates): the
+    /// plaques of MB_Ironworks' plate puzzle start "Idle Up".
+    /// </summary>
+    /// <param name="triggers">The zone's triggers.</param>
+    internal static Dictionary<string, string> StartStates(IEnumerable<Trigger> triggers) {
+        var list = (triggers ?? []).Where(t => t is not null).ToList();
+        var objects = list.Select(t => t.m_triggerObjInfo as ClassicTriggerObjectInfo)
+            .Where(info => info is not null)
+            .Select(info => ((string) info.m_zoneTag ?? "", (string) info.m_startState ?? ""));
+        var sets = list.SelectMany(t => t.m_results?.m_results ?? [])
+            .OfType<ClassicResModifyTriggerObject>()
+            .Select(m => (m.ObjectName ?? "", m.State ?? ""));
+        var checks = list.SelectMany(t => StateChecks(t.m_requirements))
+            .Select(r => ((string) r.m_triggerObjName ?? "", (string) r.m_triggerObjState ?? "", r.m_applyNOT));
+
+        return ObjectStateRules.TrackedStartStates(objects, sets, checks);
+    }
+
+    /// <summary>Tracks the zone's trigger objects from their start states (<see cref="StartStates"/>).</summary>
+    internal static void TrackStartStates(IActorRef zone, IEnumerable<Trigger> triggers) {
+        if (For(zone) is not { } table) {
+            return;
+        }
+
+        foreach (var (tag, state) in StartStates(triggers)) {
+            table.Track(tag, state);
+        }
+    }
+
+    private static IEnumerable<ClassicReqState> StateChecks(Requirement requirement) => requirement switch {
+        ClassicReqState state => [state],
+        RequirementList list => (list.m_requirements ?? []).SelectMany(StateChecks),
+        _ => [],
+    };
 
     internal static void Remove(IActorRef zone) {
         if (zone is not null) {
