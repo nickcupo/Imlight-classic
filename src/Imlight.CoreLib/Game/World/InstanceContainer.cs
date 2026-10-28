@@ -61,6 +61,10 @@ internal sealed class InstanceContainer(ulong instanceOwnerId, ulong housingDeed
     public static Props Props(ulong instanceOwnerId, ulong housingDeedId = 0)
         => Akka.Actor.Props.Create(() => new InstanceContainer(instanceOwnerId, housingDeedId));
 
+    // CLASSIC: a restarted container stopped all its zones, with players inside (SharedActorFaults).
+    protected override bool OnHandlerFault(object message, Exception exception)
+        => SharedActorFaults.Handle($"InstanceContainer {_instanceOwnerId}", message, exception, Sender);
+
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_ZONETRANSFER))]
     public void ReceiveZoneTransfer(ZONE_102_PROTOCOL.MSG_ZONETRANSFER message) {
         if (message.OwnerCharId != _instanceOwnerId || message.HousingDeedId != _housingDeedId) { // CLASSIC
@@ -70,9 +74,14 @@ internal sealed class InstanceContainer(ulong instanceOwnerId, ulong housingDeed
         Logger.Debug("Container (owned by: {0}) received zone transfer request for zone: {1}",
             Logger.Args(_instanceOwnerId, message.DestinationZone));
 
-        // Throw an exception if we don't have this zone.
+        // CLASSIC: a zone dropped after GameWorld's "has the zone" question (a sigil entry's reset, an empty zone dropping
+        // itself) fails this transfer. It threw: the container restarted, stopping all its zones with players inside,
+        // and the transfer was never answered.
         if (!_zones.ContainsKey(message.DestinationZone)) {
-            throw new Exception($"Zone {message.DestinationZone} not found in instance container {_instanceOwnerId}");
+            Logger.Warning("Instance container {OwnerId} no longer holds zone {ZoneName}; the transfer fails.",
+                Logger.Args(_instanceOwnerId, message.DestinationZone));
+            Sender.Tell(new ZONE_102_PROTOCOL.MSG_ZONETRANSFERRSP { ErrorCode = 1 });
+            return;
         }
 
         // Otherwise, forward this transfer message to the zone.
