@@ -35,11 +35,13 @@
  */
 
 using System;
-using System.IO;
+using System.Collections.Concurrent;
 using System.Linq;
 using System.Reflection;
 using System.Runtime.CompilerServices;
-using Imlight.Common;
+using System.Threading.Tasks;
+using Akka.Actor;
+using Imlight.CoreLib.Login.Services;
 using Imlight.CoreLib.Shared.Networking;
 using Xunit;
 
@@ -47,6 +49,8 @@ namespace Imlight.Classic.Tests;
 
 [Collection(nameof(ClassicRuntimeCollection))]
 public sealed class CrashProofingTests {
+
+    private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(10);
 
     /// <summary>
     /// An exception in an async void method is rethrown on the thread pool and ends the process (.NET has no way to
@@ -63,6 +67,60 @@ public sealed class CrashProofingTests {
             .ToList();
 
         Assert.Empty(asyncVoid);
+    }
+
+    /// <summary>
+    /// LoginAFKService's System.Timers.Timer was never stopped. Every login session that ended without a HALT (a failed
+    /// login, a quit at the character screen) kept a timer firing for the life of the process, and after the AFK timeout
+    /// its CloseSession took off the online list whichever live game session had the same session number.
+    /// </summary>
+    [Fact]
+    public async Task ALoginSessionsAfkTimerStopsWithTheSession() {
+        EquipmentAttachConcurrencyTests.Configure("[Login Server]\nLoginAfkTimeout = 3600\nLoginAfkCheckInterval = 1\n");
+        var system = ActorSystem.Create("crash-afk-" + Guid.NewGuid().ToString("N"), "akka.actor.provider = local");
+        try {
+            var socket = system.ActorOf(Props.Create(() => new Sink()), "socket");
+            var session = system.ActorOf(Props.CreateBy(new SessionProducer(socket, [typeof(LoginAFKService)])), "session");
+            var stopped = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            system.ActorOf(Props.Create(() => new Watcher(session, stopped)));
+            var instance = await session.Ask<SessionActor>("Identify", Timeout, TestContext.Current.CancellationToken);
+
+            var services = (ConcurrentDictionary<IActorRef, MessageService>) typeof(SessionActor)
+                .GetField("_services", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(instance)!;
+            var deadline = DateTime.UtcNow + Timeout;
+            while (services.Values.OfType<LoginAFKService>().FirstOrDefault() is null && DateTime.UtcNow < deadline) {
+                await Task.Delay(20, TestContext.Current.CancellationToken);
+            }
+            var afk = Assert.Single(services.Values.OfType<LoginAFKService>());
+            var timer = (System.Timers.Timer) typeof(LoginAFKService)
+                .GetField("_timer", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(afk)!;
+            Assert.True(timer.Enabled);
+
+            session.Tell("Close");
+            var done = await Task.WhenAny(stopped.Task, Task.Delay(Timeout, TestContext.Current.CancellationToken));
+            Assert.True(done == stopped.Task, "timed out waiting for the session to stop");
+
+            Assert.False(timer.Enabled, "the AFK timer outlived its login session");
+        } finally {
+            await system.Terminate();
+        }
+    }
+
+    private sealed class Sink : ReceiveActor {
+        public Sink() => ReceiveAny(_ => { });
+    }
+
+    private sealed class Watcher : ReceiveActor {
+        public Watcher(IActorRef target, TaskCompletionSource<bool> stopped) {
+            Context.Watch(target);
+            Receive<Terminated>(_ => stopped.TrySetResult(true));
+        }
+    }
+
+    private sealed class SessionProducer(IActorRef socket, Type[] services) : IIndirectActorProducer {
+        public Type ActorType => typeof(SessionActor);
+        public ActorBase Produce() => new SessionActor(socket, services);
+        public void Release(ActorBase actor) { }
     }
 
 }

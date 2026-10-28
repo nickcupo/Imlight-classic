@@ -72,6 +72,14 @@ internal class LoginAFKService : MessageService {
         CloseSession();
     }
 
+    // CLASSIC: the timer was never stopped. A login session that ended without a HALT kept it firing for the life of the
+    // process, and after the AFK timeout its CloseSession took whichever live session had this session number off the
+    // online list. Disposing it also stops a restarted instance's old timer.
+    protected override void PostStop() {
+        _timer.Dispose();
+        base.PostStop();
+    }
+
     [MessageHandler(typeof(LOGIN_7_PROTOCOL.MSG_LOGIN_NOT_AFK))]
     private void ReceiveLoginNotAfk(LOGIN_7_PROTOCOL.MSG_LOGIN_NOT_AFK message) {
         _lastReceivedSeconds = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
