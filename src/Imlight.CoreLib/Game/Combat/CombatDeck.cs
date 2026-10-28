@@ -38,6 +38,7 @@
 using Imcodec.ObjectProperty.TypeCache;
 using Imlight.CoreLib.Game.Spells;
 using Imlight.Classic;
+using Imlight.Common;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -140,7 +141,6 @@ internal class CombatDeck {
     /// Gets a new hand of spells, discarding any used or discarded cards.
     /// </summary>
     /// <returns>A new hand of spells.</returns>
-    /// <exception cref="InvalidOperationException">Thrown when a spell cannot be created from the template id.</exception>
     internal Hand GetHand(bool refill = true) {
         var newCards = new List<Spell>();
         // Discard the cards that were used up or discarded.
@@ -177,9 +177,17 @@ internal class CombatDeck {
             var spellData = _usedUpSpellData[randomIndex];
             var spellTemplateId = spellData.TemplateId;
 
-            // Create a new spell from the template id
-            var spell = SpellFactory.GetSpell(spellTemplateId)
-                ?? throw new InvalidOperationException("Spell could not be created from template id.");
+            // Create a new spell from the template id. CLASSIC: an entry that is not a spell (a gear card pointing at an
+            // item, a lost template) leaves the draw pile and the draw goes on. It threw: the planning phase draws before
+            // it sets its timer, so the duel's round chain stopped and every wizard in it froze.
+            var spell = SpellFactory.GetSpell(spellTemplateId);
+            if (spell is null) {
+                Logger.Warning("CombatDeck: template {0} is not a spell; dropping its {1} card(s) from the draw.",
+                    Logger.Args(spellTemplateId, spellData.Quantity));
+                _usedUpSpellData.RemoveAt(randomIndex);
+                i--;
+                continue;
+            }
             spell.m_itemCard = spellData.IsItemCard;
             spell.m_battleCard = spellData.IsBattleCard;
 
