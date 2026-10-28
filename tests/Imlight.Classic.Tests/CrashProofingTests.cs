@@ -287,7 +287,7 @@ public sealed class CrashProofingTests {
         public Recorder(TaskCompletionSource<object> first) => ReceiveAny(message => first.TrySetResult(message));
     }
 
-    private static void SetField(Type type, object instance, string name, object value)
+    private static void SetField(System.Type type, object instance, string name, object value)
         => type.GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(instance, value);
 
     private sealed class Sink : ReceiveActor {
@@ -301,8 +301,8 @@ public sealed class CrashProofingTests {
         }
     }
 
-    private sealed class SessionProducer(IActorRef socket, Type[] services) : IIndirectActorProducer {
-        public Type ActorType => typeof(SessionActor);
+    private sealed class SessionProducer(IActorRef socket, System.Type[] services) : IIndirectActorProducer {
+        public System.Type ActorType => typeof(SessionActor);
         public ActorBase Produce() => new SessionActor(socket, services);
         public void Release(ActorBase actor) { }
     }
