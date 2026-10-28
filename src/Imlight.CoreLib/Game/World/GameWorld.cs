@@ -89,6 +89,10 @@ public class GameWorld : ReceiveProtocolDispatcher, IWithTimers {
     public static Props Props(GameServer server)
         => Akka.Actor.Props.Create(() => new GameWorld(server));
 
+    // CLASSIC: GameWorld's parent stops it on any exception, and every zone of the server with it (SharedActorFaults).
+    protected override bool OnHandlerFault(object message, Exception exception)
+        => SharedActorFaults.Handle(nameof(GameWorld), message, exception, Sender);
+
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_ZONETRANSFER))]
     private void ReceiveZoneTransfer(ZONE_102_PROTOCOL.MSG_ZONETRANSFER message) {
         // First, make sure this zone is valid by checking the AccessPassManager.
@@ -309,8 +313,16 @@ public class GameWorld : ReceiveProtocolDispatcher, IWithTimers {
             return;
         }
 
-        // Instance container has the zone; forward the transfer to it.
-        _instanceContainers[new(message.OwnerCharId, message.HousingDeedId)].Tell(message, result.OriginalSender);
+        // Instance container has the zone; forward the transfer to it. CLASSIC: a sigil run's container that dropped its
+        // last zone since it answered is forgotten (ReceiveRunContainerEmpty); indexing it threw and stopped GameWorld.
+        if (!_instanceContainers.TryGetValue(new(message.OwnerCharId, message.HousingDeedId), out var container)) {
+            Logger.Warning("{Name}: the instance container of {OwnerId} is gone; the transfer to {ZoneName} fails.",
+                Logger.Args(nameof(GameWorld), message.OwnerCharId, message.DestinationZone));
+            result.OriginalSender?.Tell(new ZONE_102_PROTOCOL.MSG_ZONETRANSFERRSP { ErrorCode = 1 });
+            return;
+        }
+
+        container.Tell(message, result.OriginalSender);
     }
 
     /// <summary>
