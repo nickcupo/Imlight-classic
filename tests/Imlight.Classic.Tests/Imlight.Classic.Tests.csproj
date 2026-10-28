@@ -78,6 +78,7 @@
     <ServerIntegrationTest Include="TcpListenerLifecycleTests.cs" />
     <ServerIntegrationTest Include="TriggerObjectResultTests.cs" />
     <ServerIntegrationTest Include="DoorLightRuntimeTests.cs" />
+    <ServerIntegrationTest Include="CrashProofingTests.cs" />
     <ServerIntegrationTest Include="LegacyDoorRuntimeTests.cs" />
     <ServerIntegrationTest Include="LegacyDoorOrderingTests.cs" />
     <ServerIntegrationTest Include="ZoneMarkerLifecycleTests.cs" />
