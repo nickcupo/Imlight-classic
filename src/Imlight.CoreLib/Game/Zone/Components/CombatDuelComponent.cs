@@ -759,6 +759,11 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
 
     [MessageHandler(typeof(GAME_5_PROTOCOL.MSG_CLIENT_DISCONNECT))]
     private void ReceiveClientDisconnect(GAME_5_PROTOCOL.MSG_CLIENT_DISCONNECT message) {
+        // CLASSIC: an ended duel is not fled (see ReceiveQueryLogout).
+        if (!_isActive) {
+            return;
+        }
+
         // Find the sub circle that the client was in and remove them from the duel.
         var subCircle = SubCircles?.FirstOrDefault(x => x.ParticipantActor == Sender);
         if (subCircle is null) {
@@ -776,8 +781,15 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
 
     [MessageHandler(typeof(GAME_5_PROTOCOL.MSG_QUERY_LOGOUT))]
     private void ReceiveQueryLogout(GAME_5_PROTOCOL.MSG_QUERY_LOGOUT message) {
+        // CLASSIC: a wizard who walked in during the last round was never told the duel ended (not yet added: no win,
+        // defeat or release) and its logout reached the ended duel: a defeat home with no mana, and a second EndDuel
+        // that reset the old creatures (perhaps in another fight by then) and reported the party lost again.
+        if (!_isActive) {
+            return;
+        }
+
         // Find the sub circle that the client was in and remove them from the duel.
-        var subCircle = SubCircles.FirstOrDefault(x => x.ParticipantActor == Sender);
+        var subCircle = SubCircles?.FirstOrDefault(x => x.ParticipantActor == Sender);
         if (subCircle is null) {
             return;
         }
