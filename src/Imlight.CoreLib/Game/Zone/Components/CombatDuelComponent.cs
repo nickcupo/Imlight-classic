@@ -461,6 +461,12 @@ internal sealed partial class CombatDuelComponent(ZoneEntity entity)
 
     [MessageHandler(typeof(COMBAT_106_PROTOCOL.MSG_PLANNINGPHASEBEGIN))]
     private void ReceivePlanningPhaseBegin() {
+        // CLASSIC: like the other phases. A duel that ended in the pre-planning window (a logout, a rejoin expiry) was set
+        // back to Planning: hands to the seats left over and a planning timer for a duel that is over.
+        if (!_isActive) {
+            return;
+        }
+
         // Planning phase is when each participant notices their new stats and "plans" accordingly.
         Duel.m_duelPhase = kDuelPhase.kPhase_Planning;
         _ownedMinionPlanningDeadline = DateTime.UtcNow.AddSeconds(PLANNING_TIME);

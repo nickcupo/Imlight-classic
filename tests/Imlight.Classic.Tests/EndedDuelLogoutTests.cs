@@ -1,4 +1,5 @@
-// CLASSIC (crash review 2026-10-28): a logout or dropped connection that reaches a duel which already ended does nothing.
+// CLASSIC (crash review 2026-10-28): a logout, dropped connection or phase timer that reaches a duel which already ended
+// does nothing.
 // A wizard who walked into a fight in its last round was never told it ended (no win, defeat or release: not yet added
 // to the duel) and kept it as its duel. Its later logout ran the flee on the ended duel: a defeat home with no mana,
 // and a second EndDuel that reset the old creatures (by then perhaps in another fight) and reported the party lost again.
@@ -62,6 +63,20 @@ public sealed class EndedDuelLogoutTests : IDisposable {
         Assert.Empty(await player.Ask<object[]>(new GetMessages(), Timeout, ct));
         Assert.Empty(await zone.Ask<object[]>(new GetMessages(), Timeout, ct));
         Assert.True(duel.SubCircles[4].Occupied);
+    }
+
+    /// <summary>
+    /// The pre-planning timer of a duel that ended in its 2.5 s window (a logout, a rejoin expiry) set the ended duel
+    /// back to Planning, sent hands to the seats left over and started a planning timer.
+    /// </summary>
+    [Fact]
+    public void APrePlanningTimerThatFiresAfterTheDuelEndedDoesNothing() {
+        var duel = CombatRegressionTests.MakeDuel();
+        CombatRegressionTests.SetProperty(duel, "Duel", new Duel { m_duelID = Sigil, m_duelPhase = kDuelPhase.kPhase_Ended });
+
+        CombatRegressionTests.Invoke(duel, "ReceivePlanningPhaseBegin");
+
+        Assert.Equal(kDuelPhase.kPhase_Ended, duel.Duel.m_duelPhase);
     }
 
     private sealed record GetDuel;
