@@ -168,9 +168,10 @@ public sealed class LostLieutenantTests {
 
     [Fact]
     public void OnlyTheLateProfileHasIt() {
-        Assert.Empty(ClassicDataFixture.LoadProfile("late-2009").DisabledQuests);
+        Assert.DoesNotContain(Quest, ClassicDataFixture.LoadProfile("late-2009").DisabledQuests);
         Assert.Empty(ClassicDataFixture.LoadProfile("dev-unrestricted").DisabledQuests);
-        Assert.Equal([Quest], ClassicDataFixture.LoadProfile("arc1-2009h1").DisabledQuests);
+        // A child's list replaces its parent's, so arc1-2009h1 repeats late-2009's retired Clockwork it Out.
+        Assert.Equal([Quest, "MB-YARD3-C01-001"], ClassicDataFixture.LoadProfile("arc1-2009h1").DisabledQuests);
     }
 
     [Fact]

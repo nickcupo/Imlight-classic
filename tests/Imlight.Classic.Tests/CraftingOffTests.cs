@@ -47,7 +47,7 @@ public sealed class CraftingOffTests : IDisposable {
         var disabled = ClassicDataFixture.LoadProfile("october-2010-arc1").DisabledQuests;
         Assert.Contains("WC-CRAFT-C01-001", disabled);
         Assert.Contains("WC-CLASSIC-SIDE-063", disabled);
-        Assert.Empty(ClassicDataFixture.LoadProfile("late-2009").DisabledQuests);
+        Assert.DoesNotContain("WC-CRAFT-C01-001", ClassicDataFixture.LoadProfile("late-2009").DisabledQuests);
         foreach (var quest in disabled) {
             Assert.True(File.Exists(Path.Combine(ClassicDataFixture.Root, "spiraldb-overlay", "QuestTemplates", quest + ".json")), quest);
         }
