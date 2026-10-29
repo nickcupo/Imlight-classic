@@ -127,6 +127,10 @@ internal sealed partial class TutorialService(SessionActor sessionActor) : Messa
         }
 
         if (!IsTutorialZone(wizard.Zone)) {
+            // CLASSIC: a finished wizard sent back into Tutorial_Exterior gets the control quests again from the
+            // client's script, and leaving without its Skip or Finale kept them: title-less, goal-less journal rows
+            // (playbot-ios finbot02, WC-TUT-C05-001 and WC-TUT-C08-001 held since 2026-10-22).
+            if (wizard.HasCompletedQuest(TUTORIAL_INTRO_QUEST_NAME) && !RemoveControlQuests(wizard)) return;
             // CLASSIC: retry a pending saved deck after an earlier intro retirement or partial starter write.
             if (ClassicStart.IsActive && wizard.HasRegistryValue(ClassicStart.StarterKitGivenEntry)
                 && !wizard.HasRegistryValue(ClassicStart.CompletedEntry) && !CompleteClassicStart(wizard)) {

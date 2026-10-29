@@ -143,6 +143,31 @@ public sealed class TutorialProgressionAcknowledgementTests {
         Assert.Empty(await actor.Drain()); Assert.False(actor.Session.IsDisposed);
     }
 
+    // playbot-ios finbot02: a finished wizard sent back into Tutorial_Exterior got WC-TUT-C05-001 and WC-TUT-C08-001
+    // again and left without Skip or Finale; every later login sent them as title-less, goal-less quests.
+    [Fact]
+    public async Task OutsideAttachRetiresControlQuestsAWizardWhoFinishedTheIntroStillHolds() {
+        using var scope = new Scope("WC-TUT-C08-001", "Teleport"); var f = scope.F; f.Live.Zone = "WizardCity/Interiors/WC_Hatchery";
+        f.Saved.QuestBehavior.Registry[Intro + "_Complete"] = 1; f.Live.QuestBehavior.Registry[Intro + "_Complete"] = 1;
+        using var actor = await TutorialFixture.Create(f);
+        await actor.Call("ReceiveAttachComplete", new SERVICE_101_PROTOCOL.MSG_ATTACHCOMPLETE());
+        var removed = Assert.IsType<QUEST_MESSAGES_52_PROTOCOL.MSG_REMOVEQUEST>(Assert.Single(await actor.Drain()));
+        Assert.Equal(TerminalClaimFixture.QuestId, removed.QuestID); Assert.Equal(1, f.Saves); Assert.Empty(f.Quests);
+        Assert.Empty(f.Live.QuestBehavior.CurrentQuestInstances); Assert.False(actor.Session.IsDisposed);
+    }
+
+    [Theory]
+    [InlineData("WizardCity/Interiors/WC_Hatchery", false)] // the intro is not finished
+    [InlineData("WizardCity/Tutorial_Exterior", true)] // the client's script owns them in the tutorial
+    public async Task AttachKeepsControlQuestsDuringTheTutorial(string zone, bool introDone) {
+        using var scope = new Scope("WC-TUT-C08-001", "Teleport"); var f = scope.F; f.Live.Zone = zone;
+        if (introDone) { f.Saved.QuestBehavior.Registry[Intro + "_Complete"] = 1; f.Live.QuestBehavior.Registry[Intro + "_Complete"] = 1; }
+        using var actor = await TutorialFixture.Create(f);
+        await actor.Call("ReceiveAttachComplete", new SERVICE_101_PROTOCOL.MSG_ATTACHCOMPLETE());
+        Assert.DoesNotContain(await actor.Drain(), message => message is QUEST_MESSAGES_52_PROTOCOL.MSG_REMOVEQUEST);
+        Assert.Single(f.Quests); Assert.Single(f.Live.QuestBehavior.CurrentQuestInstances);
+    }
+
     [Theory]
     [InlineData("event")] [InlineData("remove")] [InlineData("action")] [InlineData("stage")]
     [InlineData("unknown-goal")] [InlineData("wrong-pair")] [InlineData("case")]
