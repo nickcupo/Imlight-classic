@@ -143,4 +143,11 @@ public sealed class DatamineGateFixesTests {
             (string?) Teleport("DragonSpire-DS_A3_Kings-DS_A3Z1_CrystalGrove", "ToTower7FromDS_CrystalGrove")["m_destinationZone"]);
     }
 
+    [Fact]
+    public void BurningBooksDoorLeadsToMrIncineratorsTower() {
+        // r806919 poi.dat pairs this door with Ice C04's W1; SpiralDB's W2 is the McTavish Hideout (ios-parity, qa-s350).
+        Assert.Equal("Marleybone/MB_Station/Interiors/MB_ChelseaCourt_T9",
+            (string?) Teleport("Marleybone-MB_Station-MB_ChelseaCourt", "TriggerTeleportFire-C04")["m_destinationZone"]);
+    }
+
 }
