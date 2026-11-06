@@ -264,6 +264,12 @@ internal sealed partial class PetGameService {
         }
     }
 
+    /// <summary>CLASSIC: the START that shows an ambient partner's side (its one pet), or null if it cannot be made.</summary>
+    internal static PET_9_PROTOCOL.MSG_PETGAMESTART AmbientPartnerStart(ulong charId, WizClientObjectItem pet)
+        => pet is not null && TryPrepareMorphPartner(charId, [pet], out var data)
+            ? new PET_9_PROTOCOL.MSG_PETGAMESTART { Game = MorphGame, Data = data }
+            : null;
+
     private static bool TryPrepareMorphPartner(Wizard wizard, out Imcodec.IO.ByteString data)
         => TryPrepareMorphPartner(wizard.CharId,
             (wizard.EquipmentBehavior?.EquippedItems ?? []).Concat(wizard.InventoryBehavior?.Items ?? [])
@@ -570,6 +576,12 @@ internal sealed partial class PetGameService {
         if (ambient is null) {
             return;
         }
+
+        // CLASSIC: the client fills the partner's side from START's PetGameMorphPartner, as for a sigil pair's real
+        // partner; without it the ambient's PETMORPHSET names a pet the client never got (ios-parity, playbot-ios).
+        if (AmbientPartnerStart(ambient.CharId, AmbientHatching.PetOf(ambient)) is { } start) SendToSocket(start);
+        else Logger.Warning("Pet hatching: ambient wizard {0}'s pet could not be prepared for the partner window.",
+            Logger.Args(ambient.Name));
 
         Timers.StartSingleTimer("ambientMorphPick", new AmbientMorphPick(),
             AmbientPets.Wait(Random.Shared, AmbientPets.PickMinSeconds, AmbientPets.PickMaxSeconds));
