@@ -20,6 +20,7 @@ namespace Imlight.Classic.Tests;
 [Collection(nameof(ClassicRuntimeCollection))]
 public sealed class ClassicDeckRegressionTests : IDisposable {
     private const uint Regular = uint.MaxValue - 401, Reshuffle = uint.MaxValue - 402, Treasure = uint.MaxValue - 403;
+    private const uint NotASpell = uint.MaxValue - 404; // CLASSIC: a deck entry whose template is not a spell
     private readonly IDictionary<ulong, CoreTemplate> _templates;
 
     public ClassicDeckRegressionTests() {
@@ -39,10 +40,11 @@ public sealed class ClassicDeckRegressionTests : IDisposable {
                 m_effects = id == Reshuffle ? [new SpellEffect { m_effectType = kSpellEffects.kReshuffle, m_effectTarget = kEffectTarget.kFriendlySingle }] : [],
             });
         }
+        _templates.Add(NotASpell, new GameObjectTemplate());
     }
 
     public void Dispose() {
-        foreach (uint id in new[] { Regular, Reshuffle, Treasure }) _templates.Remove(id);
+        foreach (uint id in new[] { Regular, Reshuffle, Treasure, NotASpell }) _templates.Remove(id);
         ClassicRuntime.ResetForTests();
     }
 
@@ -232,6 +234,22 @@ public sealed class ClassicDeckRegressionTests : IDisposable {
         Assert.Equal(0, deck.RemainingCardCount);
         Assert.Equal(0, (int) Assert.Single(actions.m_actionList).m_spellHits);
         Assert.Equal(7, (int) caster.CombatParticipant.m_pipCount.m_genericPips);
+    }
+
+    /// <summary>
+    /// CLASSIC (crash review 2026-10-28): a deck entry whose template is not a spell (a gear card pointing at an item, a
+    /// creature spellbook entry the data lost) made GetHand throw. It is drawn in the planning phase's start, before the
+    /// planning timer is set, so the round chain stopped: every wizard in that duel froze. The entry is now dropped.
+    /// </summary>
+    [Fact]
+    public void ADeckEntryThatIsNotASpellIsDroppedInsteadOfFreezingTheDuel() {
+        var deck = new CombatDeck([Card(NotASpell, 3), Card(Regular, 1)], [], 7);
+
+        var hand = deck.GetHand().m_spellList;
+
+        Assert.Equal(Regular, Assert.Single(hand).m_templateID);
+        Assert.Equal(0, deck.RemainingCardCount);
+        Assert.Single(deck.GetHand().m_spellList); // a later draw does not throw either
     }
 
     private static CombatDuelSubCircle Occupy(CombatDuelComponent actor, int slot, CombatDeck deck) {

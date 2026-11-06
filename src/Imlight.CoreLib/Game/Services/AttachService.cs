@@ -451,13 +451,13 @@ internal class AttachService(SessionActor sessionActor) : MessageService(session
         return AskOtherService<ZONE_102_PROTOCOL.MSG_ADDPLAYERRSP>(msg);
     }
 
-#pragma warning disable CS1998 // Async method lacks 'await' operators and will run synchronously
-    private async void AddPlayerToOnlineCollection(Wizard wizard,
-#pragma warning restore CS1998 // Async method lacks 'await' operators and will run synchronously
-                                                   string zoneName,
-                                                   string zoneDisplayName,
-                                                   string realmName,
-                                                   IActorRef playerActor) {
+    // CLASSIC: was async void. It runs on a pool thread (Task.Run), where an async void method's exception is rethrown
+    // and ends the process: a RavenDB error while storing the online row took the server down for everyone.
+    private void AddPlayerToOnlineCollection(Wizard wizard,
+                                             string zoneName,
+                                             string zoneDisplayName,
+                                             string realmName,
+                                             IActorRef playerActor) {
         var onlinePlayerRef = new OnlinePlayer {
             SessionId = SessionActor.SessionID,
             AccountId = wizard.AccountId,
@@ -470,12 +470,18 @@ internal class AttachService(SessionActor sessionActor) : MessageService(session
             ZoneHardLimit = _zoneHardLimit, // CLASSIC
         };
 
-        OnlinePlayerCollection.AddOnlinePlayer(onlinePlayerRef);
+        try {
+            OnlinePlayerCollection.AddOnlinePlayer(onlinePlayerRef);
 
-        // CLASSIC: this runs on a pool thread; a session that disposed meanwhile already cleared its entries, so take
-        // this late one back off (else the list keeps a dead session until restart).
-        if (SessionActor.IsDisposed) {
-            OnlinePlayerCollection.RemoveSessionByActorPath(onlinePlayerRef.ActorPath);
+            // CLASSIC: this runs on a pool thread; a session that disposed meanwhile already cleared its entries, so take
+            // this late one back off (else the list keeps a dead session until restart).
+            if (SessionActor.IsDisposed) {
+                OnlinePlayerCollection.RemoveSessionByActorPath(onlinePlayerRef.ActorPath);
+            }
+        }
+        catch (Exception ex) { // CLASSIC: see above; the in-memory list already has the player (AddOnlinePlayer).
+            Logger.Error("AttachService could not store the online row of {CharId}: {Error}",
+                Logger.Args(wizard.CharId, ex.Message));
         }
     }
 

@@ -52,6 +52,11 @@ internal abstract class ZoneEntitySupervisor(Core.Zone zone) : ReceiveProtocolDi
     private int _startedEntityCount;
     private long _creationMs;
 
+    // CLASSIC: a restarted supervisor stopped every entity it had (all combat sigils, objects or creatures of the zone)
+    // and never loaded them again (SharedActorFaults).
+    protected override bool OnHandlerFault(object message, Exception exception)
+        => SharedActorFaults.Handle($"{GetType().Name} of {Zone?.ZonePath}", message, exception, Sender);
+
     // CLASSIC: the PERF log's mailbox probe ([Classic] PerfLogSeconds): a timer message stamped with when it is due.
     protected override void PreStart() {
         base.PreStart();

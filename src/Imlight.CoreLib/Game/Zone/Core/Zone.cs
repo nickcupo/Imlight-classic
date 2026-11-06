@@ -238,6 +238,10 @@ public class Zone : ReceiveProtocolDispatcher, IWithTimers {
         base.PreRestart(reason, message);
     }
 
+    // CLASSIC: a restarted zone stopped its supervisors and entities and never loaded again (SharedActorFaults).
+    protected override bool OnHandlerFault(object message, Exception exception)
+        => SharedActorFaults.Handle($"Zone {ZonePath}", message, exception, Sender);
+
     /// <summary>
     /// Closes the zone and stops all child actors.
     /// </summary>
