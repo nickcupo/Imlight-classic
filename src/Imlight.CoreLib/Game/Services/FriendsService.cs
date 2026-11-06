@@ -829,7 +829,18 @@ internal class FriendsService(SessionActor sessionActor) : MessageService(sessio
     /// <param name="add">When true, sends as a single-entry confirmation (Add=1);
     /// when false, sends the full list (Add=0).</param>
     private void SendIgnoreListConfirmation(Wizard wizard, bool add) {
-        var ignoredList = wizard.FriendsBehavior.GetIgnoredPlayers(wizard.CharId);
+        var ignoredList = wizard.FriendsBehavior.GetIgnoredPlayers(wizard.CharId, out var packedNames);
+
+        // CLASSIC: r806919 decodes m_ignoreName as packed name bytes, which a string property's UTF-8 mangles.
+        if (IgnoreListNames.TrySerialize(ignoredList, packedNames, 1, out var packedBytes)) {
+            SendToSocket(new GAME_5_PROTOCOL.MSG_IGNORELIST {
+                ListOwnerGID = wizard.GameObjectID, ListData = packedBytes, Add = add ? (byte) 1 : (byte) 0 });
+            return;
+        }
+        if (packedNames.Count > 0) {
+            Logger.Warning("Ignore list of {0}: the packed names could not be placed; sending the names as text.",
+                Logger.Args(wizard.CharId));
+        }
 
         var serializer = new ObjectSerializer(
             Versionable: false,

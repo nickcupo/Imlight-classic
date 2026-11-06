@@ -302,7 +302,11 @@ public class ServerFriendBehavior : IClientBehaviorProvider<BehaviorInstance> {
     /// </summary>
     /// <param name="ownerId">The character ID of the player whose ignore list is being requested.</param>
     /// <returns>A list of ignored players.</returns>
-    public IgnoreEntryDataList GetIgnoredPlayers(ulong ownerId) {
+    public IgnoreEntryDataList GetIgnoredPlayers(ulong ownerId) => GetIgnoredPlayers(ownerId, out _);
+
+    /// <param name="packedNames">CLASSIC: each entry's packed name bytes, in list order (IgnoreListNames).</param>
+    public IgnoreEntryDataList GetIgnoredPlayers(ulong ownerId, out List<byte[]> packedNames) {
+        packedNames = [];
         var ignoreList = new IgnoreEntryDataList() {
             m_ignoreDataList = []
         };
@@ -325,6 +329,7 @@ public class ServerFriendBehavior : IClientBehaviorProvider<BehaviorInstance> {
             };
 
             ignoreList.m_ignoreDataList.Add(ignoreEntry);
+            packedNames.Add(otherPlayerByteName);
         }
 
         return ignoreList;
