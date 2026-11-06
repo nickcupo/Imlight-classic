@@ -91,6 +91,7 @@ internal sealed class InteractTeleportObjectComponent(ZoneEntity entity)
     public string StateName => null;
     public string InteractWizBang => null;
     public string DisplayKey => null;
+    public float DEFAULT_INTERACTION_RADIUS => Entry?.Classic?.Radius is > 0 and var radius ? radius : 300.0f; // CLASSIC
 
     private WizardTeleportData _entry;
     private bool _resolved;

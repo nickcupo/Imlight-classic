@@ -3,6 +3,9 @@
 using System.IO;
 using System.Linq;
 using System.Text.Json;
+using System.Numerics;
+using Imlight.CoreLib.WizardData.Models.World;
+using Newtonsoft.Json;
 using Imlight.Classic.Quests;
 using Xunit;
 
@@ -50,4 +53,21 @@ public sealed class ClassicRidesTests {
         Assert.False(ClassicRides.FallbackApplies(ride, null, 7, 7));
     }
 
+
+    // r806919 places the Sphinx island's boat (KT-New-BoatRide2) at z 1537.6, 318 above its deck, past the default 300
+    // interaction sphere; its entry's Radius reaches a wizard on the deck beside it (ios-qa qa-s415). The Oasis boat sits
+    // at ground height and keeps the default.
+    [Fact]
+    public void TheSphinxBoatIsReachableFromItsDeck() {
+        static WizardTeleportData Entry(string file, string trigger) => JsonConvert.DeserializeObject<WizardZoneData>(
+            File.ReadAllText(Path.Combine(ClassicDataFixture.Root, "spiraldb-overlay", "ZoneTransfer", file + ".travel.json")),
+            new JsonSerializerSettings { TypeNameHandling = TypeNameHandling.Auto })!.Teleports.Single(t => t.TriggerName == trigger);
+
+        var radius = Entry("Krokotopia-KT_Hub_Sphinx", "KT-New-BoatRide2 instance").Classic!.Radius;
+        var boat = new Vector3(11816.6f, -88.4f, 1537.6f);
+        var onDeck = new Vector3(11826f, -70f, 1220f); // where finbot04 stood beside it
+        Assert.NotNull(radius);
+        Assert.True(Vector3.Distance(boat, onDeck) <= radius);
+        Assert.Null(Entry("Krokotopia-KT_Hub", "KT-New-BoatRide instance").Classic!.Radius);
+    }
 }
