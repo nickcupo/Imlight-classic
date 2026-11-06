@@ -87,6 +87,7 @@ public class GameServiceFactory : ServiceFactory {
         typeof(ClassicCinematicService), // CLASSIC
         typeof(BadgeService), // CLASSIC
         typeof(TutorialTipService), // CLASSIC (2026-10-17): read tutorial tips stay read after a relog.
+        typeof(MapRequirementsService), // CLASSIC: the spellbook map's requirement-gated doodles.
         typeof(RideService), // CLASSIC: the Great Spyre lift and the Oasis boat rides.
         typeof(AmbientGroupService), // CLASSIC (2026-10-09): group invites, Leave Group and group chat with ambient wizards.
     ];
