@@ -15,6 +15,7 @@ public sealed class ClassicRidesTests {
     [InlineData("DragonSpire-DS_A3_Kings-DS_A3Z3_Volcano-DS_Volcano2", "DS_ElevatorActivator instance", "DragonSpire/DS_A3_Kings/DS_A3Z3_Volcano/DS_Volcano_Elevator_Down")]
     [InlineData("Krokotopia-KT_Hub", "KT-New-BoatRide instance", "Krokotopia/KT_HubFlyingShip_ToIsland")]
     [InlineData("Krokotopia-KT_Hub_Sphinx", "TeleporttoSphinxShip", "Krokotopia/KT_HubFlyingShip_ToMainland")]
+    [InlineData("Krokotopia-KT_Hub_Sphinx", "KT-New-BoatRide2 instance", "Krokotopia/KT_HubFlyingShip_ToMainland")]
     public void TheTravelOverlaySendsWizardsOntoEachRide(string file, string trigger, string rideZone) {
         var path = Path.Combine(ClassicDataFixture.Root, "spiraldb-overlay", "ZoneTransfer", file + ".travel.json");
         using var doc = JsonDocument.Parse(File.ReadAllText(path));
