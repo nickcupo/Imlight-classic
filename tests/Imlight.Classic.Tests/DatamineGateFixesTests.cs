@@ -144,6 +144,34 @@ public sealed class DatamineGateFixesTests {
     }
 
     [Fact]
+    public void MuseumSigilLandsOnBigBensFirstLevel() {
+        // r806919's 'BigBen Hub TowerLevel1 Entrance'; the final room (0, -1934) left Level 1's Travis Pawman unreachable.
+        var location = ((string?) Teleport("Marleybone-MB_BigBen-MB_Museum", "ToBigBen")["m_destinationLoc"])!.Split(',');
+        Assert.InRange(double.Parse(location[0], System.Globalization.CultureInfo.InvariantCulture), -32000, -31000);
+        Assert.InRange(double.Parse(location[1], System.Globalization.CultureInfo.InvariantCulture), 20500, 21500);
+    }
+
+    // r806919 lays Big Ben's floors out in two rows: Levels 1-10 along y 21000 (x rising every ~6000), Levels 11-20
+    // along y 12000. Going up from level N lands at level N+1's start; going down lands at level N-1's end. SpiralDB's
+    // later entries skipped floors and sent Level 15's exit to the Museum (ios-qa qa-s391).
+    [Theory]
+    [InlineData(2)] [InlineData(5)] [InlineData(7)] [InlineData(9)] [InlineData(10)] [InlineData(11)] [InlineData(14)]
+    [InlineData(15)] [InlineData(16)] [InlineData(17)] [InlineData(19)]
+    public void BigBenFloorsLeadToTheNextAndPreviousFloor(int level) {
+        AssertFloor(Teleport("Marleybone-MB_BigBen-MB_BigBen", $"Trigger (Level{level} Level{level + 1} Entrance)"), level + 1);
+        AssertFloor(Teleport("Marleybone-MB_BigBen-MB_BigBen", $"Teleport location (Level{level + 1} Level{level} Exit)"), level);
+    }
+
+    private static void AssertFloor(JToken teleport, int level) {
+        Assert.Equal("Marleybone/MB_BigBen/MB_BigBen", (string?) teleport["m_destinationZone"]);
+        var location = ((string?) teleport["m_destinationLoc"])!.Split(',')
+            .Select(v => double.Parse(v, System.Globalization.CultureInfo.InvariantCulture)).ToArray();
+        var column = (level - 1) % 10;
+        Assert.InRange(location[0], -32000 + 6000 * column, -26000 + 6000 * column);
+        Assert.InRange(location[1], level <= 10 ? 20500 : 11500, level <= 10 ? 21500 : 12500);
+    }
+
+    [Fact]
     public void BurningBooksDoorLeadsToMrIncineratorsTower() {
         // r806919 poi.dat pairs this door with Ice C04's W1; SpiralDB's W2 is the McTavish Hideout (ios-parity, qa-s350).
         Assert.Equal("Marleybone/MB_Station/Interiors/MB_ChelseaCourt_T9",
