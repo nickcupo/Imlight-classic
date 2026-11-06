@@ -74,6 +74,12 @@ public interface IServiceComponent {
 
     float DEFAULT_INTERACTION_RADIUS => 300.0f;
 
+    /// <summary>
+    /// CLASSIC: a range the classic data sets for this object on purpose (a travel entry's Classic.Radius), which wins over
+    /// the smaller defaults of the other services on the same object. Null when the data sets none.
+    /// </summary>
+    float? ClassicInteractionRadius => null;
+
 }
 
 /// <summary>
@@ -234,7 +240,7 @@ internal sealed class InteractServiceMementoComponent(ZoneEntity entity)
 
         // Effective interaction radius = the SMALLEST any attached service asks for (default 300).
         var interactionRadius = _serviceComponents.Count > 0
-            ? _serviceComponents.Min(c => c.DEFAULT_INTERACTION_RADIUS)
+            ? EffectiveInteractionRadius(_serviceComponents)
             : _interactionRadius;
 
         // Handle interaction range (for service options).
@@ -252,6 +258,22 @@ internal sealed class InteractServiceMementoComponent(ZoneEntity entity)
 
         // Handle render range (for wizbangs).
         _playersInRenderRange.Update(playerId, playerActor, IsInRadius(playerObj, _renderDistance));
+    }
+
+    /// <summary>
+    /// The smallest default range of the object's services, raised to any range the classic data sets on purpose. CLASSIC: the
+    /// Sphinx island's boat (KT-New-BoatRide2) also has a WizardSelectBehavior, so InteractQuestSelectComponent's default 300
+    /// undid its travel entry's Radius 400 and the boat, 318 above its deck, was never in range (ios-qa qa-s426, 2026-11-06).
+    /// </summary>
+    internal static float EffectiveInteractionRadius(IReadOnlyCollection<IServiceComponent> components) {
+        var radius = components.Min(c => c.DEFAULT_INTERACTION_RADIUS);
+        foreach (var component in components) {
+            if (component.ClassicInteractionRadius is > 0 and var set && set > radius) {
+                radius = set;
+            }
+        }
+
+        return radius;
     }
 
     [MessageHandler(typeof(ZONE_102_PROTOCOL.MSG_ZONEINTERACTION))]

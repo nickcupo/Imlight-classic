@@ -70,4 +70,33 @@ public sealed class ClassicRidesTests {
         Assert.True(Vector3.Distance(boat, onDeck) <= radius);
         Assert.Null(Entry("Krokotopia-KT_Hub", "KT-New-BoatRide instance").Classic!.Radius);
     }
+
+    // The boat also has a WizardSelectBehavior, so InteractQuestSelectComponent rides along with the default 300; the
+    // object's range was the smallest of its services' and the entry's Radius never applied (ios-qa qa-s426).
+    [Fact]
+    public void AnEntrysRadiusWinsOverAnotherServicesDefault() {
+        var boat = new FakeService(400f, 400f);
+        var questSelect = new FakeService(300f, null);
+        Assert.Equal(400f, Imlight.CoreLib.Game.Zone.Components.InteractServiceMementoComponent.EffectiveInteractionRadius([questSelect, boat]));
+        // Without a set radius the smallest default still decides, as before.
+        Assert.Equal(150f, Imlight.CoreLib.Game.Zone.Components.InteractServiceMementoComponent.EffectiveInteractionRadius(
+            [new FakeService(150f, null), questSelect]));
+    }
+
+    private sealed class FakeService(float radius, float? set) : Imlight.CoreLib.Game.Zone.Components.IServiceComponent {
+        public System.Collections.Generic.IEnumerable<Imcodec.ObjectProperty.TypeCache.ServiceOptionBase> GetServiceOptions(
+            Imlight.CoreLib.WizardData.Models.Player.Wizard playerCharacter) => [];
+        public void OnServiceInteraction(Akka.Actor.IActorRef playerActor, Imlight.CoreLib.WizardData.Models.Player.Wizard playerCharacter,
+            Imcodec.ObjectProperty.TypeCache.CoreObject playerObject, uint serviceOptionIndex) { }
+        public string ServiceName => "Fake";
+        public string NpcIcon => "";
+        public string NpcNameKey => "";
+        public string NpcTextKey => "";
+        public Imlight.CoreLib.Game.WizBang.WizBangs WizBang => default;
+        public string StateName => null;
+        public string InteractWizBang => null;
+        public string DisplayKey => null;
+        public float DEFAULT_INTERACTION_RADIUS => radius;
+        public float? ClassicInteractionRadius => set;
+    }
 }
