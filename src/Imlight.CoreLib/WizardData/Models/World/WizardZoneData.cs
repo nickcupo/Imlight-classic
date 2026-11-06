@@ -68,6 +68,10 @@ public class ClassicTeleportObject {
     // or the object must be placed in it.
     public string RequiresState { get; set; }
 
+    // The interaction radius when the default 300 cannot reach it: the range test is 3D, and the Sphinx island's boat
+    // (KT-New-BoatRide2) is placed 318 above its deck in r806919. Null or 0 keeps the default.
+    public float? Radius { get; set; }
+
     // The template InteractableBehavior's icon, title key and prompt key (the client's "Teleport Stone" / "Press X").
     public string Icon { get; set; }
     public string TitleKey { get; set; }
