@@ -144,6 +144,14 @@ public sealed class DatamineGateFixesTests {
     }
 
     [Fact]
+    public void MuseumSigilLandsOnBigBensFirstLevel() {
+        // r806919's 'BigBen Hub TowerLevel1 Entrance'; the final room (0, -1934) left Level 1's Travis Pawman unreachable.
+        var location = ((string?) Teleport("Marleybone-MB_BigBen-MB_Museum", "ToBigBen")["m_destinationLoc"])!.Split(',');
+        Assert.InRange(double.Parse(location[0], System.Globalization.CultureInfo.InvariantCulture), -32000, -31000);
+        Assert.InRange(double.Parse(location[1], System.Globalization.CultureInfo.InvariantCulture), 20500, 21500);
+    }
+
+    [Fact]
     public void BurningBooksDoorLeadsToMrIncineratorsTower() {
         // r806919 poi.dat pairs this door with Ice C04's W1; SpiralDB's W2 is the McTavish Hideout (ios-parity, qa-s350).
         Assert.Equal("Marleybone/MB_Station/Interiors/MB_ChelseaCourt_T9",
