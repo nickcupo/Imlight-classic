@@ -89,6 +89,24 @@ public sealed class HatcherySigilTests {
         Assert.Equal([2ul, 3ul], partner.m_pets.Select(p => p.m_globalID.Full).Order());    // Adult (3) or older only
     }
 
+    // An ambient partner's side is filled the same way: its START carries the pet its PETMORPHSET then names, so the
+    // client knows that pet (ios-parity, playbot-ios: the lone-JOIN path sent only PETMORPHSET).
+    [Fact]
+    public void AnAmbientPartnersStartCarriesThePetItOffers() {
+        var pet = new WizClientObjectItem {
+            m_globalID = 9001, m_templateID = 1, m_inactiveBehaviors = [new ClientPetItemBehavior { m_level = 3 }] };
+        var start = PetGameService.AmbientPartnerStart(777, pet);
+        Assert.NotNull(start);
+        Assert.Equal("PetGameMorph", start!.Game);
+        var data = start.Data;
+        var reader = new ObjectSerializer(Versionable: false, Behaviors: SerializerFlags.None);
+        Assert.True(reader.Deserialize<PetGameMorphPartner>((byte[]) data,
+            PropertyFlags.Prop_Transmit | PropertyFlags.Prop_AuthorityTransmit, out var partner));
+        Assert.Equal(777ul, partner!.m_characterId.Full);
+        Assert.Equal(9001ul, Assert.Single(partner.m_pets).m_globalID.Full);
+        Assert.Null(PetGameService.AmbientPartnerStart(777, null!));
+    }
+
     // The partner-left notice (MSG_PETGAMEEND) goes only to sigil pairs; the client-JOIN path keeps its messages.
     [Fact]
     public void OnlyARunKeyedLobbyIsASigilPair() {
