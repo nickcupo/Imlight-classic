@@ -223,19 +223,32 @@ internal class PetService(SessionActor sessionActor) : MessageService(sessionAct
         );
     }
 
-    private static ByteString SerializeBehaviorBlob(ServerPetOwnerBehavior behavior) {
-        var clientBehavior = behavior.GetClientBehaviorInstance();
+    // CLASSIC: MSG_PETUPDATEBEHAVIOR carries the pet item's behavior. r806919 handles it on the item
+    // (ClientPetItemBehavior::MSG_PetUpdateBehavior 0x142108120) and applies Data only when it is a BasePetItemBehavior
+    // (type check 0x1420eac90, apply 0x1420eb150); the owner's ClientPetOwnerBehavior is not one, so the client dropped it.
+    internal const PropertyFlags PetItemBehaviorMask = PropertyFlags.Prop_Transmit | PropertyFlags.Prop_AuthorityTransmit;
+
+    internal static bool TrySerializePetItemBehavior(ClientPetItemBehavior behavior, out ByteString blob) {
+        blob = default;
+        if (behavior is null) {
+            return false;
+        }
+
         var serializer = new ObjectSerializer(
             Versionable: false,
             Behaviors: SerializerFlags.None
         );
-        if (!serializer.Serialize(clientBehavior, (PropertyFlags) 31, out var blob)) {
-            Logger.Error("Failed to serialize ClientPetOwnerBehavior for MSG_PETUPDATEBEHAVIOR.");
+        // The pet item reaches the client with Transmit | AuthorityTransmit (ClassicPetProgressTransactions.SerializePet);
+        // for this class it selects the same properties as mask 31 (r806919 flags), so the bytes are the same either way.
+        if (!serializer.Serialize(behavior, PetItemBehaviorMask, out var bytes)) {
+            Logger.Error("Failed to serialize ClientPetItemBehavior for MSG_PETUPDATEBEHAVIOR.");
 
-            return string.Empty;
+            return false;
         }
 
-        return blob;
+        blob = bytes;
+
+        return true;
     }
 
     private void HatchEgg(Wizard wizard, CraftingSlot egg) {
@@ -288,12 +301,18 @@ internal class PetService(SessionActor sessionActor) : MessageService(sessionAct
             Display = 1
         });
 
-        // 2. MSG_PETUPDATEBEHAVIOR — updated PetOwnerBehavior blob (egg removed).
-        var behaviorBlob = SerializeBehaviorBlob(wizard.PetOwnerBehavior);
-        SendToSocket(new PET_9_PROTOCOL.MSG_PETUPDATEBEHAVIOR {
-            GlobalID = egg.m_globalID,
-            Data = behaviorBlob
-        });
+        // 2. MSG_PETUPDATEBEHAVIOR — the hatched pet item's behavior (CLASSIC: not the owner's; see
+        // TrySerializePetItemBehavior).
+        if (TrySerializePetItemBehavior(Game.Pet.PetProgress.Behavior(eggItem), out var behaviorBlob)) {
+            SendToSocket(new PET_9_PROTOCOL.MSG_PETUPDATEBEHAVIOR {
+                GlobalID = egg.m_globalID,
+                Data = behaviorBlob
+            });
+        }
+        else {
+            Logger.Debug("HatchEgg: no pet item behavior for egg {0}; MSG_PETUPDATEBEHAVIOR not sent.",
+                Logger.Args(egg.m_globalID.Full));
+        }
 
         // 3. MSG_PETHATCHED — tells client the egg hatched into this pet template.
         SendToSocket(new PET_9_PROTOCOL.MSG_PETHATCHED {
